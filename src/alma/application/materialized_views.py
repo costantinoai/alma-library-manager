@@ -93,8 +93,7 @@ def register(view: View) -> None:
         # change behaviour for everything that already imported the
         # registry. Loud-fail instead.
         raise RuntimeError(
-            f"materialized view {view.key!r} is already registered "
-            f"with a different definition"
+            f"materialized view {view.key!r} is already registered with a different definition"
         )
     _REGISTRY[view.key] = view
 
@@ -341,6 +340,37 @@ def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None
     )
 
 
+def stored_version(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
+    """Identity of the stored artifact WITHOUT reading its payload blob.
+
+    A graph payload is tens of megabytes; `_read_row` selects it, so anything
+    built on that has already paid for the read, the JSON decode, and the
+    re-serialize. Conditional requests need none of that — only enough to say
+    "still the same artifact". This is the cheap half, so a revalidation costs
+    a few microseconds instead of a full render (2026-07-26).
+
+    Returns ``None`` when nothing is stored, including a row whose build failed
+    before it ever wrote a payload.
+    """
+    try:
+        row = conn.execute(
+            "SELECT fingerprint, computed_at, compute_ms, build_status, "
+            "       payload IS NOT NULL AS has_payload "
+            "FROM materialized_views WHERE view_key = ?",
+            (view_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None or not row["has_payload"]:
+        return None
+    return {
+        "fingerprint": str(row["fingerprint"] or ""),
+        "computed_at": str(row["computed_at"] or ""),
+        "compute_ms": int(row["compute_ms"] or 0),
+        "build_status": str(row["build_status"] or ""),
+    }
+
+
 def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
     """Delete the stored row for ``view_key`` so ``get_stored`` returns ``None``.
 
@@ -361,9 +391,7 @@ def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
     """
     get_view(view_key)  # loud KeyError on unregistered keys
     try:
-        conn.execute(
-            "DELETE FROM materialized_views WHERE view_key = ?", (view_key,)
-        )
+        conn.execute("DELETE FROM materialized_views WHERE view_key = ?", (view_key,))
     except sqlite3.OperationalError:
         # Table missing — nothing stored, nothing to invalidate.
         return

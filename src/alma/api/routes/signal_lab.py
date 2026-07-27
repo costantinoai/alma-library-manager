@@ -1,11 +1,13 @@
 """Signal Lab routes — ONE family, generic over ``game_id`` (task 54).
 
 * ``GET  /signal-lab/games``                — the explicit roster.
-* ``GET  /signal-lab/{game}/round``         — one round. ZERO writes: the
-  round is client state until answered; the response carries a signed
-  token binding (game, shown, region context) so the answer POST cannot be
-  forged into a different triplet.
+* ``GET  /signal-lab/{game}/queue``         — a 10–30 round deck. ZERO writes:
+  every round is client state until answered; each carries a signed token
+  binding (game, shown, region context) so the answer POST cannot be forged
+  into a different triplet.
 * ``POST /signal-lab/{game}/round/answer``  — one INSERT via the layer.
+* ``GET  /signal-lab/summary``              — unique/fitted observations,
+  structural coverage, freshness, and direction evidence for Home.
 * ``GET  /signal-lab/model``                — fitted heads + holdout
   metrics (pure ``get_stored`` read — a GET never fits).
 * ``POST /signal-lab/purge``                — the one destructive control
@@ -25,10 +27,11 @@ import secrets
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from alma.api.deps import get_db
+from alma.api.models import SignalLabSummaryResponse
 from alma.application import materialized_views as mv
 from alma.application import signal_lab as lab
 from alma.application.signal_lab import eval as lab_eval  # noqa: F401 — registers the eval view
@@ -36,6 +39,7 @@ from alma.application.signal_lab import policy as lab_policy
 from alma.application.signal_lab import purge as lab_purge
 from alma.application.signal_lab import rounds as lab_rounds
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+from alma.application.signal_lab.settings import SignalLabSettings
 from alma.core.db_write import run_write_unit
 from alma.core.time import utcnow
 
@@ -73,14 +77,16 @@ def _verify_round(token: str) -> dict:
 @router.get("/games")
 def list_games(db: sqlite3.Connection = Depends(get_db)) -> dict:
     """The explicit game roster. What is not listed cannot reach your signal."""
+    from alma.application.signal_lab import settings as lab_settings
+
+    enabled = lab_settings.is_enabled(db)
     rounds = 0
     try:
-        rounds = int(
-            db.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0] or 0
-        )
+        rounds = int(db.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0] or 0)
     except sqlite3.OperationalError:
         pass
     return {
+        "enabled": enabled,
         "games": [
             {
                 "id": g.id,
@@ -89,72 +95,115 @@ def list_games(db: sqlite3.Connection = Depends(get_db)) -> dict:
                 "options": list(g.options),
             }
             for g in lab.available_games()
+            if enabled
         ],
         "rounds_recorded": rounds,
     }
 
 
-@router.get("/{game_id}/round")
-def get_round(game_id: str, db: sqlite3.Connection = Depends(get_db)) -> dict:
-    """One round for ``game_id``. Zero writes — durable only when answered.
+def _paper_payloads(
+    db: sqlite3.Connection,
+    shown_ids: list[str],
+) -> dict[str, dict]:
+    """Load every paper needed by a queue in one query."""
+    if not shown_ids:
+        return {}
+    placeholders = ",".join("?" for _ in shown_ids)
+    rows = db.execute(
+        f"""
+        SELECT id, title, authors, year, journal, abstract, tldr
+        FROM papers WHERE id IN ({placeholders})
+        """,
+        shown_ids,
+    ).fetchall()
+    return {
+        str(row["id"]): {
+            "id": str(row["id"]),
+            "title": row["title"],
+            "authors": row["authors"],
+            "year": row["year"],
+            "journal": row["journal"],
+            "summary": (row["tldr"] or row["abstract"] or "")[:400],
+        }
+        for row in rows
+    }
+
+
+@router.get("/summary", response_model=SignalLabSummaryResponse)
+def get_summary(db: sqlite3.Connection = Depends(get_db)) -> SignalLabSummaryResponse:
+    """Unique/fitted evidence, structural coverage, and effects. Pure read."""
+    from alma.application.signal_lab.summary import build_summary
+
+    return SignalLabSummaryResponse.model_validate(build_summary(db))
+
+
+@router.get("/{game_id}/queue")
+def get_queue(
+    game_id: str,
+    count: int = Query(default=12, ge=10, le=30),
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict:
+    """A signed round deck for ``game_id``. Zero writes until each answer.
 
     ``available: False`` (with a reason) when the substrate isn't ready or
     no region has a judgeable pool; never an error. The paper payload is the
-    tile-rendering minimum; the token binds everything the answer needs.
+    tile-rendering minimum; every token binds what its answer needs. Home asks
+    for twelve, and the API contract never permits fewer than ten.
     """
+    from alma.application.signal_lab import settings as lab_settings
+
+    if not lab_settings.is_enabled(db):
+        return {
+            "available": False,
+            "reason": "Signal Lab is switched off in Settings.",
+        }
     try:
         game = lab.get_game(game_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown game {game_id!r}") from exc
 
-    spec = lab_policy.build_round(db, k=game.draw.k, region_mode=game.draw.region_mode)
-    if spec is None:
+    specs = lab_policy.build_queue(
+        db,
+        game_id=game.id,
+        count=count,
+        k=game.draw.k,
+        region_mode=game.draw.region_mode,
+    )
+    if len(specs) < 10:
         return {
             "available": False,
             "reason": "The corpus map hasn't been built yet, or no region has "
             "enough judgeable papers.",
         }
 
-    placeholders = ",".join("?" for _ in spec["shown"])
-    rows = db.execute(
-        f"""
-        SELECT id, title, authors, year, journal, abstract, tldr
-        FROM papers WHERE id IN ({placeholders})
-        """,
-        spec["shown"],
-    ).fetchall()
-    by_id = {str(r["id"]): r for r in rows}
-    papers = []
-    for pid in spec["shown"]:  # preserve the policy's shuffled order
-        row = by_id.get(pid)
-        if row is None:
+    all_ids = list(dict.fromkeys(pid for spec in specs for pid in spec["shown"]))
+    by_id = _paper_payloads(db, all_ids)
+    rounds = []
+    for spec in specs:
+        papers = [by_id.get(pid) for pid in spec["shown"]]
+        if any(paper is None for paper in papers):
             return {"available": False, "reason": "Round papers vanished; retry."}
-        papers.append(
+        claims = {
+            "game": game.id,
+            "shown": spec["shown"],
+            "region_id": spec["region_id"],
+            "pair_region_id": spec["pair_region_id"],
+            "region_version": spec["region_version"],
+            "ring": spec["ring"],
+            "nonce": uuid.uuid4().hex,
+        }
+        rounds.append(
             {
-                "id": pid,
-                "title": row["title"],
-                "authors": row["authors"],
-                "year": row["year"],
-                "journal": row["journal"],
-                "summary": (row["tldr"] or row["abstract"] or "")[:400],
+                "papers": papers,
+                "token": _sign_round(claims),
             }
         )
-
-    claims = {
-        "game": game.id,
-        "shown": spec["shown"],
-        "region_id": spec["region_id"],
-        "pair_region_id": spec["pair_region_id"],
-        "region_version": spec["region_version"],
-        "ring": spec["ring"],
-        "nonce": uuid.uuid4().hex,
-    }
     return {
         "available": True,
+        "game_id": game.id,
         "question": game.question,
         "options": list(game.options),
-        "papers": papers,
-        "token": _sign_round(claims),
+        "rounds": rounds,
     }
 
 
@@ -165,10 +214,15 @@ class RoundAnswer(BaseModel):
 
 
 @router.post("/{game_id}/round/answer")
-def answer_round(
-    game_id: str, body: RoundAnswer, db: sqlite3.Connection = Depends(get_db)
-) -> dict:
+def answer_round(game_id: str, body: RoundAnswer, db: sqlite3.Connection = Depends(get_db)) -> dict:
     """Persist one answered round — one INSERT through the layer's writer."""
+    from alma.application.signal_lab import settings as lab_settings
+
+    if not lab_settings.is_enabled(db):
+        raise HTTPException(
+            status_code=409,
+            detail="Signal Lab is switched off; retained signals were not changed.",
+        )
     try:
         lab.get_game(game_id)
     except KeyError as exc:
@@ -189,19 +243,44 @@ def answer_round(
             if value is not None and value not in shown:
                 raise HTTPException(status_code=422, detail=f"{key!r} not in shown set")
 
-    round_id = lab_rounds.record_answer(
-        db,
-        game_id=game_id,
-        shown=shown,
-        answer=answer,
-        skipped=skipped,
-        region_id=claims.get("region_id"),
-        pair_region_id=claims.get("pair_region_id"),
-        region_version=claims.get("region_version"),
-        ring=claims.get("ring"),
-        reaction_ms=body.reaction_ms,
-    )
+    try:
+        round_id = lab_rounds.record_answer(
+            db,
+            nonce=str(claims.get("nonce") or ""),
+            game_id=game_id,
+            shown=shown,
+            answer=answer,
+            skipped=skipped,
+            region_id=claims.get("region_id"),
+            pair_region_id=claims.get("pair_region_id"),
+            region_version=claims.get("region_version"),
+            ring=claims.get("ring"),
+            reaction_ms=body.reaction_ms,
+        )
+    except lab_rounds.RoundReplayConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "recorded", "round_id": round_id, "skipped": skipped}
+
+
+@router.get("/settings", response_model=SignalLabSettings)
+def get_signal_lab_settings(
+    db: sqlite3.Connection = Depends(get_db),
+) -> SignalLabSettings:
+    """Read first-class Signal Lab feature settings."""
+    from alma.application.signal_lab import settings as lab_settings
+
+    return lab_settings.read(db)
+
+
+@router.put("/settings", response_model=SignalLabSettings)
+def update_signal_lab_settings(
+    body: SignalLabSettings,
+    db: sqlite3.Connection = Depends(get_db),
+) -> SignalLabSettings:
+    """Replace Signal Lab settings after strict Pydantic validation."""
+    from alma.application.signal_lab import settings as lab_settings
+
+    return lab_settings.write(db, body)
 
 
 @router.get("/model")
@@ -266,9 +345,7 @@ def purge_signal_lab(db: sqlite3.Connection = Depends(get_db)) -> dict:
             started_at=now,
             finished_at=now,
             status="completed",
-            message=(
-                f"Signal Lab purged — {result['rounds_deleted']} round(s) deleted"
-            ),
+            message=(f"Signal Lab purged — {result['rounds_deleted']} round(s) deleted"),
             result=result,
         )
         run_write_unit(

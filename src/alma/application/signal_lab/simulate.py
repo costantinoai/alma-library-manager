@@ -6,16 +6,16 @@ policies, on either synthetic geometry or the real corpus's vectors. The
 output is judgments-to-accuracy curves per policy, and each measurement
 carries a CUT DECISION:
 
-* ``bald`` must clearly beat ``stratified_random`` by N=200 judgments or
-  the ensemble layer is deleted from the design (it is the largest single
-  chunk of complexity in the policy).
+* full-outcome ``eig`` is compared with stratified-random and margin selection
+  at the same judgment budgets;
 * offset-recovery error vs judgment count sets the §3 coverage threshold
   empirically instead of a guess.
 
-Everything runs through the SHIPPING code paths — ``policy.select_triplet``
-/ ``policy.bald_scores`` for selection and ``fit.fit_model`` for learning —
-so what the simulator measures is what production does. No DB writes, no
-clock, fully seeded.
+Everything runs through the shipping pure primitives:
+``policy.draw_triplets`` / ``policy.expected_information_scores`` for
+selection and ``fit.fit_model`` for learning. The runtime additionally applies
+hierarchical region/edge allocation and deck diversity around those primitives.
+No DB writes, no clock, fully seeded.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import numpy as np
 
 from alma.application.signal_lab.fit import decode_head_vector, fit_model
 from alma.application.signal_lab.games.stub import BEST_WORST_SIM_GAME
-from alma.application.signal_lab.policy import bald_scores, draw_triplets
+from alma.application.signal_lab.policy import draw_triplets, expected_information_scores
 from alma.application.signal_lab.spec import RoundRow
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ class SimWorld:
     paper_regions: dict[str, int]
     w_true: np.ndarray
     region_pools: dict[int, list[str]] = field(default_factory=dict)
+    source_dimensions: int | None = None
 
     def __post_init__(self) -> None:
         if not self.region_pools:
@@ -75,20 +76,27 @@ def synthetic_world(
     for r in range(n_regions):
         for i in range(papers_per_region):
             pid = f"r{r}_p{i}"
-            vectors[pid] = (
-                centers[r] + rng.normal(scale=0.35, size=dim).astype(np.float32)
-            )
+            vectors[pid] = centers[r] + rng.normal(scale=0.35, size=dim).astype(np.float32)
             paper_regions[pid] = r
     w_true = rng.normal(size=dim).astype(np.float32)
     w_true /= np.linalg.norm(w_true)
     return SimWorld(vectors=vectors, paper_regions=paper_regions, w_true=w_true)
 
 
-def world_from_corpus(conn, *, max_papers: int = 2000, seed: int = 0) -> SimWorld | None:
+def world_from_corpus(
+    conn,
+    *,
+    max_papers: int = 1000,
+    max_dimensions: int = 64,
+    seed: int = 0,
+) -> SimWorld | None:
     """The real corpus's geometry with the Library centroid as ``w*``.
 
     Read-only. Returns None when the substrate/vectors are too thin — the
-    caller falls back to :func:`synthetic_world`.
+    caller falls back to :func:`synthetic_world`. High-dimensional embeddings
+    use one seeded Gaussian random projection for this repeated-fit benchmark.
+    It approximately preserves pairwise geometry while keeping the three-policy
+    simulation bounded; production acquisition always uses the full vectors.
     """
     from alma.application import materialized_views as mv
     from alma.application import super_regions as sr
@@ -122,18 +130,31 @@ def world_from_corpus(conn, *, max_papers: int = 2000, seed: int = 0) -> SimWorl
     if len(paper_regions) < 100:
         return None
 
-    lib_rows = conn.execute(
-        "SELECT id FROM papers WHERE status = 'library' LIMIT 2000"
-    ).fetchall()
+    lib_rows = conn.execute("SELECT id FROM papers WHERE status = 'library' LIMIT 2000").fetchall()
     lib_vecs = load_vectors_by_id(conn, [str(r[0]) for r in lib_rows], model)
     if len(lib_vecs) < 5:
         return None
+    source_dimensions = int(next(iter(vectors.values())).shape[0])
+    if source_dimensions > max_dimensions:
+        projection = rng.normal(
+            scale=1.0 / np.sqrt(max_dimensions),
+            size=(source_dimensions, max_dimensions),
+        ).astype(np.float32)
+
+        def _project(vector: np.ndarray) -> np.ndarray:
+            projected = vector @ projection
+            return (projected / (np.linalg.norm(projected) or 1.0)).astype(np.float32)
+
+        vectors = {paper_id: _project(vector) for paper_id, vector in vectors.items()}
+        lib_vecs = {paper_id: _project(vector) for paper_id, vector in lib_vecs.items()}
+
     w_true = np.mean(np.stack(list(lib_vecs.values())), axis=0)
     w_true = (w_true / (np.linalg.norm(w_true) or 1.0)).astype(np.float32)
     return SimWorld(
         vectors={k: v for k, v in vectors.items() if k in paper_regions},
         paper_regions=paper_regions,
         w_true=w_true,
+        source_dimensions=source_dimensions,
     )
 
 
@@ -178,8 +199,8 @@ def _select(
         return None
     if policy == "stratified_random":
         return triplets[int(rng.integers(len(triplets)))]
-    if policy == "bald":
-        scores = bald_scores(triplets, world.vectors, ensemble)
+    if policy == "eig":
+        scores = expected_information_scores(triplets, world.vectors, ensemble)
         if scores.max() <= 0:
             return triplets[int(rng.integers(len(triplets)))]
         return triplets[int(np.argmax(scores))]
@@ -281,11 +302,7 @@ def run_policy(
                 paper_regions=world.paper_regions,
                 prior=None,
             )
-            w_fit = (
-                decode_head_vector(payload["utility_b64"])
-                if payload["utility_b64"]
-                else None
-            )
+            w_fit = decode_head_vector(payload["utility_b64"]) if payload["utility_b64"] else None
             curve[next_cp] = _holdout_accuracy(w_fit, world, np.random.default_rng(99))
             next_cp = next(checkpoints, None)
         if next_cp is None and answered >= max(CHECKPOINTS):
@@ -313,8 +330,7 @@ def offset_recovery(
     }
     spread = max(true_means.values()) - min(true_means.values()) or 1.0
     normalised_true = {
-        r: 2.0 * (v - min(true_means.values())) / spread - 1.0
-        for r, v in true_means.items()
+        r: 2.0 * (v - min(true_means.values())) / spread - 1.0 for r, v in true_means.items()
     }
 
     out: dict[int, float] = {}
@@ -324,21 +340,29 @@ def offset_recovery(
         while sum(1 for h in history if h.answer) < target * len(world.region_pools):
             i += 1
             all_ids = sorted(world.vectors)
-            trip = tuple(
-                all_ids[j] for j in rng.choice(len(all_ids), size=3, replace=False)
-            )
+            trip = tuple(all_ids[j] for j in rng.choice(len(all_ids), size=3, replace=False))
             answer = _synthetic_answer(trip, world, rng)
             history.append(
                 RoundRow(
-                    id=i, game_id=BEST_WORST_SIM_GAME.id, region_id=None,
-                    pair_region_id=None, region_version=1, ring=0,
-                    policy_version=1, shown=list(trip), answer=answer,
-                    skipped=answer is None, holdout=False,
+                    id=i,
+                    game_id=BEST_WORST_SIM_GAME.id,
+                    region_id=None,
+                    pair_region_id=None,
+                    region_version=1,
+                    ring=0,
+                    policy_version=1,
+                    shown=list(trip),
+                    answer=answer,
+                    skipped=answer is None,
+                    holdout=False,
                 )
             )
         payload = fit_model(
-            history, games=games, vectors=world.vectors,
-            paper_regions=world.paper_regions, prior=None,
+            history,
+            games=games,
+            vectors=world.vectors,
+            paper_regions=world.paper_regions,
+            prior=None,
         )
         offsets = {int(k): v for k, v in payload["region_offsets"].items()}
         if not offsets:
@@ -358,7 +382,7 @@ def offset_recovery(
 def run_stage0(world: SimWorld, *, seeds: tuple[int, ...] = (1, 2, 3)) -> dict[str, Any]:
     """The full stage-0 report: policy curves (seed-averaged) + gates."""
     curves: dict[str, dict[int, list[float]]] = {}
-    for policy in ("stratified_random", "bald", "margin"):
+    for policy in ("stratified_random", "eig", "margin"):
         for seed in seeds:
             result = run_policy(world, policy, seed=seed)
             for cp, acc in result["accuracy_at"].items():
@@ -370,30 +394,28 @@ def run_stage0(world: SimWorld, *, seeds: tuple[int, ...] = (1, 2, 3)) -> dict[s
         for policy, cps in curves.items()
     }
     final_cp = max(CHECKPOINTS)
-    bald_final = summary.get("bald", {}).get(final_cp)
+    eig_final = summary.get("eig", {}).get(final_cp)
     random_final = summary.get("stratified_random", {}).get(final_cp)
-    # Two reads of the BALD gate. The final-checkpoint one is the strict
+    # Two reads of the EIG gate. The final-checkpoint one is the strict
     # asymptotic test; the EARLY one is the user-relevant regime — a real
     # user answers tens of rounds, not hundreds, and active-learning gains
     # are largest exactly there (they converge as the pool saturates).
     early_cps = [cp for cp in CHECKPOINTS if cp < final_cp]
     early_deltas = [
-        summary["bald"][cp] - summary["stratified_random"][cp]
+        summary["eig"][cp] - summary["stratified_random"][cp]
         for cp in early_cps
-        if cp in summary.get("bald", {}) and cp in summary.get("stratified_random", {})
+        if cp in summary.get("eig", {}) and cp in summary.get("stratified_random", {})
     ]
     gates = {
-        "bald_beats_random_at_200": (
+        "eig_beats_random_at_200": (
             None
-            if bald_final is None or random_final is None
-            else bool(bald_final > random_final + 0.02)
+            if eig_final is None or random_final is None
+            else bool(eig_final > random_final + 0.02)
         ),
-        "bald_early_advantage_mean": (
+        "eig_early_advantage_mean": (
             round(float(np.mean(early_deltas)), 4) if early_deltas else None
         ),
-        "bald_beats_random_early": (
-            bool(np.mean(early_deltas) > 0.02) if early_deltas else None
-        ),
+        "eig_beats_random_early": (bool(np.mean(early_deltas) > 0.02) if early_deltas else None),
     }
     return {
         "accuracy_curves": summary,

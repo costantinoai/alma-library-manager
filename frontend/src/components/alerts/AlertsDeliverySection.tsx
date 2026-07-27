@@ -16,6 +16,7 @@ import {
 import {
   api,
   evaluateAlert,
+  listPlugins,
   type AlertRule,
   type Alert,
   type AlertEvaluationResult,
@@ -54,7 +55,7 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
   const [evalResult, setEvalResult] = useState<AlertEvaluationResult | null>(null)
 
   const [formName, setFormName] = useState('')
-  const [formChannels, setFormChannels] = useState<string[]>(['slack'])
+  const [formChannels, setFormChannels] = useState<string[]>([])
   const [formSchedule, setFormSchedule] = useState<string>('manual')
   const [formScheduleTime, setFormScheduleTime] = useState('09:00')
   const [formScheduleDay, setFormScheduleDay] = useState('monday')
@@ -73,6 +74,10 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
     queryKey: ['alert-rules'],
     queryFn: () => api.get<AlertRule[]>('/alerts/rules'),
     retry: 1,
+  })
+  const integrationsQuery = useQuery({
+    queryKey: ['plugins'],
+    queryFn: listPlugins,
   })
 
   const createMutation = useMutation({
@@ -191,10 +196,16 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
 
   const alerts = alertsQuery.data ?? []
   const allRules = rulesQuery.data ?? []
+  const deliveryIntegrations = (integrationsQuery.data ?? []).filter(
+    (plugin) => plugin.capabilities.includes('send'),
+  )
+  const defaultChannel = deliveryIntegrations.find(
+    (plugin) => plugin.enabled && plugin.can_send,
+  )?.id
 
   function resetForm() {
     setFormName('')
-    setFormChannels(['slack'])
+    setFormChannels(defaultChannel ? [defaultChannel] : [])
     setFormSchedule('manual')
     setFormScheduleTime('09:00')
     setFormScheduleDay('monday')
@@ -262,32 +273,30 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
       </div>
       <div className="space-y-2">
         <label className="text-sm font-medium text-slate-700">Channels</label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            checked={formChannels.includes('slack')}
-            onCheckedChange={(checked) =>
-              setFormChannels(
-                checked === true
-                  ? [...formChannels, 'slack']
-                  : formChannels.filter((c) => c !== 'slack'),
-              )
-            }
-          />
-          <span className="text-sm text-slate-700">Slack</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            checked={formChannels.includes('email')}
-            onCheckedChange={(checked) =>
-              setFormChannels(
-                checked === true
-                  ? [...formChannels, 'email']
-                  : formChannels.filter((c) => c !== 'email'),
-              )
-            }
-          />
-          <span className="text-sm text-slate-700">Email</span>
-        </label>
+        {deliveryIntegrations.map((integration) => (
+          <label key={integration.id} className="flex items-center gap-2">
+            <Checkbox
+              checked={formChannels.includes(integration.id)}
+              onCheckedChange={(checked) =>
+                setFormChannels(
+                  checked === true
+                    ? [...formChannels, integration.id]
+                    : formChannels.filter((channel) => channel !== integration.id),
+                )
+              }
+            />
+            <span className="text-sm text-slate-700">{integration.display_name}</span>
+            {!integration.enabled && (
+              <span className="text-xs text-warning-700">inactive</span>
+            )}
+          </label>
+        ))}
+        {integrationsQuery.isLoading && (
+          <p className="text-xs text-slate-500">Loading delivery integrations…</p>
+        )}
+        {integrationsQuery.isError && (
+          <p className="text-xs text-critical-600">Delivery integrations unavailable.</p>
+        )}
         {formChannels.length === 0 && (
           <p className="flex items-center gap-1.5 text-xs text-warning-700">
             <AlertCircle className="h-3.5 w-3.5" />

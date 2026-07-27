@@ -4,11 +4,17 @@ import { ArrowRight } from 'lucide-react'
 import { JargonHint } from '@/components/shared/JargonHint'
 import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { Card } from '@/components/ui/card'
+import {
+  HOME_SECTION_THEMES,
+  type HomeSectionThemeKey,
+} from '@/lib/palette'
 import { cn } from '@/lib/utils'
 
 export interface PaperTileProps {
   /** Where the tile hands the paper off — always the surface that OWNS it.
-   *  Omit ONLY with `onSelect`: a selection tile navigates nowhere. */
+   *  Omit with `onSelect` (a selection tile navigates nowhere), or omit both
+   *  for a tile whose paper is the subject of a question and whose only
+   *  interaction is its `actions` strip (Signal Lab). */
   href?: string
   /** Selection variant (Signal Lab calibration): the whole tile is one
    *  stretched BUTTON instead of a link. Mutually exclusive with `href`. */
@@ -39,6 +45,8 @@ export interface PaperTileProps {
    * Omit it and the tile stays what it is everywhere else: navigation only.
    */
   actions?: ReactNode
+  /** Home-only sticky-note category. Omit elsewhere for ordinary paper. */
+  noteTheme?: HomeSectionThemeKey
   className?: string
 }
 
@@ -73,17 +81,32 @@ export function PaperTile({
   reason,
   explanation,
   actions,
+  noteTheme,
   className,
 }: PaperTileProps) {
   const hasFooter = Boolean(reason || explanation)
+  const note = noteTheme ? HOME_SECTION_THEMES[noteTheme] : null
   return (
     // `border-edge-0` (the desk's own hairline, one step darker than the card
     // level's) is deliberate: a grid of tiles needs a readable boundary in two
     // directions, where a stacked list gets its structure from row dividers.
     <Card
       interactive
-      className={cn('group flex h-full flex-col overflow-hidden border-edge-0 p-0', className)}
+      className={cn(
+        'group flex h-full flex-col overflow-hidden border-edge-0 p-0',
+        note?.noteSurface,
+        className,
+      )}
     >
+      {note && (
+        <span
+          className={cn(
+            'pointer-events-none absolute right-0 top-0 z-[1] h-0 w-0 border-l-[18px] border-t-[18px] border-l-transparent',
+            note.noteFold,
+          )}
+          aria-hidden
+        />
+      )}
       <div className="flex flex-1 flex-col gap-2 p-4">
         {(eyebrow || score != null) && (
           <div className="flex items-start justify-between gap-2">
@@ -100,13 +123,20 @@ export function PaperTile({
             >
               {title}
             </button>
-          ) : (
+          ) : href ? (
             <a
               href={href}
               className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
               {title}
             </a>
+          ) : (
+            // Neither a destination nor a selection: the paper is the SUBJECT
+            // of a question and the tile's `actions` are the only interaction
+            // (Signal Lab). Plain text — an `<a>` with no href is unfocusable
+            // and inert, and its stretched `::after` would still sit over the
+            // card swallowing clicks meant for the actions strip.
+            <span className="line-clamp-3">{title}</span>
           )}
         </h3>
         {byline && <p className="line-clamp-1 text-xs text-slate-500">{byline}</p>}
@@ -118,7 +148,12 @@ export function PaperTile({
           affordance, and the navigation arrow. Not rendered without a reason:
           an empty plate is a dead strip. */}
       {hasFooter && (
-        <div className="mt-auto flex items-center justify-between gap-2 border-t border-edge-1 bg-control-quiet px-4 py-2.5">
+        <div
+          className={cn(
+            'mt-auto flex items-center justify-between gap-2 border-t border-edge-1 bg-control-quiet px-4 py-2.5',
+            note?.notePlate,
+          )}
+        >
           <span className="min-w-0 truncate text-[11px] font-medium text-slate-500">
             {reason}
           </span>
@@ -144,7 +179,12 @@ export function PaperTile({
           click. `mt-auto` keeps it pinned to the bottom when there is no
           reason footer to do that job. */}
       {actions && (
-        <div className="relative z-10 mt-auto border-t border-edge-1 bg-control-quiet px-3 py-2">
+        <div
+          className={cn(
+            'relative z-10 mt-auto border-t border-edge-1 bg-control-quiet px-3 py-2',
+            note?.notePlate,
+          )}
+        >
           {actions}
         </div>
       )}

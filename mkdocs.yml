@@ -132,7 +132,7 @@ nav:
       - Analytics: concepts/analytics.md
       - Health: concepts/health.md
       - Alerts: concepts/alerts.md
-      - Delivery channels: concepts/channels.md
+      - External integrations: concepts/channels.md
       - AI capabilities: concepts/ai.md
   - User guide:
       - user-guide/index.md
@@ -163,6 +163,7 @@ nav:
   - Development:
       - development/index.md
       - Architecture: development/architecture.md
+      - Building an integration: development/integrations.md
       - Frontend: development/frontend.md
       - Testing: development/testing.md
       - Contributing: development/contributing.md

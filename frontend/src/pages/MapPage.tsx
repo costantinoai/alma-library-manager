@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, LassoSelect, Map as MapIcon, X } from 'lucide-react'
 
 import { MapRegionCard } from '@/components/map/MapRegionCard'
+import { CreateSelectionLensButton } from '@/components/map/CreateSelectionLensButton'
 
 import {
   api,
@@ -55,6 +56,8 @@ import { MetricTile } from '@/components/shared/MetricTile'
 import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { MetaLine, PageIntro } from '@/components/ui/page-intro'
+import { PageTour, MAP_TOUR } from '@/components/onboarding'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useHashRoute } from '@/lib/hashRoute'
@@ -116,6 +119,11 @@ export function MapPage() {
     'dotOpacity',
     PAPER_MAP_DEFAULTS.dotOpacity,
   )
+  const [terrainOpacity, setTerrainOpacity] = useMapSessionState(
+    'paper-map',
+    'terrainOpacity',
+    PAPER_MAP_DEFAULTS.terrainOpacity,
+  )
   const [wordScale, setWordScale] = useMapSessionState(
     'paper-map',
     'wordScale',
@@ -164,9 +172,13 @@ export function MapPage() {
       toast({ title: 'Cluster relabelling queued', description: 'Watch Activity for progress.' })
     },
   })
+  const visibleMapIds = useMemo(
+    () => new Set((payload?.nodes ?? []).map((node) => node.id)),
+    [payload],
+  )
   // Shared region primitive — the SAME select→describe lifecycle as
   // Discovery's "Select a direction" (useRegionSelection).
-  const regionSel = useRegionSelection()
+  const regionSel = useRegionSelection({ visibleIds: visibleMapIds })
   const regionIds = regionSel.ids
   const regionDesc = regionSel.description
 
@@ -335,18 +347,46 @@ export function MapPage() {
   }
 
   return (
-    <div className="space-y-4 p-6">
-      <header>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold text-alma-800">
-          <MapIcon className="h-6 w-6 text-alma-600" />
-          Map
-        </h1>
-        <p className="text-sm text-slate-500">
-          Your corpus as territory — click a paper to inspect it, its cluster, and its neighbourhood.
-        </p>
-      </header>
+    <div className="space-y-6">
+      <PageIntro
+        icon={MapIcon}
+        lede="Your corpus as territory."
+        detail="Every paper placed by what it is about — click one to inspect it, its cluster, and its neighbourhood."
+        tour={<PageTour pageKey="map" steps={MAP_TOUR} />}
+        meta={<MetaLine items={[<span>Layout rebuilt under Fine tuning, never per visit</span>]} />}
+        guide={{
+          /* The map has more vocabulary than any other surface — territory,
+             regions, clusters, scope, layout blend. One explainer at the top so
+             the words are learnable in place. */
+          summary:
+            'Papers are placed by what they are about: near neighbours are semantically close, and the words name the region under them.',
+          children: (
+            <>
+              <p className="mb-2">
+                The layout is a <span className="font-medium text-alma-900">durable artifact</span>, not
+                something recomputed per visit — so the same paper sits in the same place every time you
+                come back, and a new paper is placed next to its nearest neighbours as soon as it has a
+                vector. Rebuilding it is a deliberate act, under Fine tuning.
+              </p>
+              <p className="mb-2">
+                <span className="font-medium text-alma-900">Corpus</span> and{' '}
+                <span className="font-medium text-alma-900">Library</span> are the same territory at two
+                scopes — every tracked paper, or only what you saved. A{' '}
+                <span className="font-medium text-alma-900">cluster</span> is a region the layout found on
+                its own; its label is drawn from the words its papers share.
+              </p>
+              <p>
+                <span className="font-medium text-alma-900">Select region</span> is the question-asking
+                tool: drag a box around any patch and ALMa characterises what lives there — vocabulary,
+                strongest papers, top authors — which you can then turn into a lens for Discovery.
+              </p>
+            </>
+          ),
+        }}
+      />
 
       <div className="space-y-4">
+        <div data-tour="map-plate">
         <GraphMapView
           endpoint="paper-map"
           params={params}
@@ -360,6 +400,7 @@ export function MapPage() {
           }
           sizeScale={sizeScale}
           dotOpacity={dotOpacity}
+          terrainOpacity={terrainOpacity}
           toponymScale={wordScale}
           toponymWordCount={wordCount}
           // Popup-primary click semantics: the shared mini-card opens at the
@@ -393,6 +434,15 @@ export function MapPage() {
                 insufficient={region.papers.length < 5}
                 insufficientMessage="Too few papers to characterize — drag a larger patch (5+)."
                 onClose={() => regionSel.clear()}
+                actions={
+                  <CreateSelectionLensButton
+                    ids={regionIds ?? []}
+                    scope={scope}
+                    selectionKind="papers"
+                    name={`${regionSel.description?.label ?? 'Map selection'} · map selection`}
+                    onCreated={() => regionSel.clear()}
+                  />
+                }
               >
                 <p className="text-sm font-semibold capitalize text-alma-800">
                   {regionSel.description?.label ?? `${region.papers.length} papers`}
@@ -500,19 +550,25 @@ export function MapPage() {
           height={620}
           toolbarExtras={
             <>
-              <MapModeSwitch
-                value={scope}
-                onChange={(v) => {
-                  setScope(v)
-                  setSelected(null)
-                }}
-                options={[
-                  { value: 'corpus', label: 'Corpus', title: 'Every tracked paper' },
-                  { value: 'library', label: 'Library', title: 'Only papers you saved' },
-                ]}
-              />
+              {/* Real box, not `display:contents` — a spotlight needs a
+                  measurable rect, and the child is inline-flex either way. */}
+              <span data-tour="map-scope" className="inline-flex">
+                <MapModeSwitch
+                  value={scope}
+                  onChange={(v) => {
+                    setScope(v)
+                    setSelected(null)
+                    regionSel.clear()
+                  }}
+                  options={[
+                    { value: 'corpus', label: 'Corpus', title: 'Every tracked paper' },
+                    { value: 'library', label: 'Library', title: 'Only papers you saved' },
+                  ]}
+                />
+              </span>
               <button
                 type="button"
+                data-tour="map-select"
                 onClick={() => {
                   setSelectMode((s) => !s)
                   regionSel.clear()
@@ -527,7 +583,7 @@ export function MapPage() {
                 <LassoSelect className="h-3.5 w-3.5" />
                 Select region
               </button>
-              <MapTuningPopover title="Fine tuning — cluster detail, dot size, dot opacity, words, layout blend, rebuilds">
+              <MapTuningPopover title="Fine tuning — terrain opacity, cluster detail, dot size, dot opacity, words, layout blend, rebuilds">
                 <SliderRow
                   label="Cluster detail"
                   value={resolution}
@@ -542,6 +598,8 @@ export function MapPage() {
                   onSizeScale={setSizeScale}
                   dotOpacity={dotOpacity}
                   onDotOpacity={setDotOpacity}
+                  terrainOpacity={terrainOpacity}
+                  onTerrainOpacity={setTerrainOpacity}
                   wordScale={wordScale}
                   onWordScale={setWordScale}
                   wordCount={wordCount}
@@ -577,6 +635,7 @@ export function MapPage() {
             </>
           }
         />
+        </div>
 
         {/* Drilldowns live BELOW the full-width plate. Selecting a paper
             reveals two balanced columns: paper/relationships and
@@ -894,7 +953,7 @@ export function MapPage() {
             </Card>
           </div>
         ) : (
-          <Card>
+          <Card data-tour="map-inspector">
             <CardContent className="space-y-4 p-4 text-xs">
               <p className="text-sm font-semibold text-alma-800">Map overview</p>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">

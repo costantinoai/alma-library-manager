@@ -22,11 +22,19 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { JargonHint, MetricTile } from '@/components/shared'
+import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/useToast'
 import { useBranchControls } from '@/hooks/useBranchControls'
 
 interface BranchExplorerPanelProps {
   lens: Lens | null
+  /**
+   * The host already carries the title. Drops the panel's own "Branch Studio"
+   * heading, its subtitle, and its sheet, keeping only the controls: hosted
+   * inside the Discovery "Branch Studio" fold, the panel printed the section's
+   * own name a second time, three lines under it.
+   */
+  bare?: boolean
 }
 
 // Branch palette — pinned to the v3 brand. Eight distinguishable slots
@@ -86,7 +94,7 @@ function closestPreset(temperature: number) {
   }, BRANCH_PRESETS[1])
 }
 
-export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
+export function BranchExplorerPanel({ lens, bare = false }: BranchExplorerPanelProps) {
   const { toast } = useToast()
   const [temperature, setTemperature] = useState(0.28)
   const [resolution, setResolution] = useState(BRANCH_RESOLUTION_DEFAULT)
@@ -201,6 +209,12 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
   const activePreset = useMemo(() => closestPreset(temperature), [temperature])
 
   if (!lens?.id) {
+    const emptyLine = (
+      <p className="text-sm text-slate-500">
+        Select a lens to inspect and steer the branch structure.
+      </p>
+    )
+    if (bare) return <div className="p-4">{emptyLine}</div>
     return (
       <Card className="overflow-hidden">
         <CardHeader>
@@ -209,14 +223,22 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
             Branch Studio
           </CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-slate-500">Select a lens to inspect and steer the branch structure.</CardContent>
+        <CardContent>{emptyLine}</CardContent>
       </Card>
     )
   }
 
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
+    <Card
+      variant={bare ? 'flat' : 'default'}
+      className={cn('overflow-hidden', bare && 'rounded-none border-0')}
+    >
+      <CardHeader
+        className={cn(
+          'border-b border-[var(--color-border)]',
+          bare ? 'px-4 py-3' : 'bg-surface-2',
+        )}
+      >
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -233,30 +255,32 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                 </Badge>
               ) : null}
             </div>
-            <div>
-              <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
-                <GitBranch className="h-5 w-5 text-alma-folio" />
-                Branch Studio
-                <JargonHint
-                  title="Branch Studio"
-                  description={
-                    <>
-                      Each lens keeps a set of <strong>branches</strong> — clusters of related
-                      papers, authors, and topics that Discovery pursues independently. A branch
-                      is <strong>pinned</strong> to guarantee continued coverage,
-                      <strong> boosted</strong> to expand its surface area in the next refresh,
-                      or <strong>muted</strong> to stop spending retrieval budget on it. The
-                      Studio is where you steer those choices for this lens.
-                    </>
-                  }
-                  side="right"
-                />
-              </CardTitle>
-              <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                Steer where Discovery spends retrieval budget for <span className="font-medium text-alma-800">{lens.name}</span>.
-                Pin keeps a branch alive, boost gives it more surface area, mute removes it from refresh.
-              </p>
-            </div>
+            {!bare && (
+              <div>
+                <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
+                  <GitBranch className="h-5 w-5 text-alma-folio" />
+                  Branch Studio
+                  <JargonHint
+                    title="Branch Studio"
+                    description={
+                      <>
+                        Each lens keeps a set of <strong>branches</strong> — clusters of related
+                        papers, authors, and topics that Discovery pursues independently. A branch
+                        is <strong>pinned</strong> to guarantee continued coverage,
+                        <strong> boosted</strong> to expand its surface area in the next refresh,
+                        or <strong>muted</strong> to stop spending retrieval budget on it. The
+                        Studio is where you steer those choices for this lens.
+                      </>
+                    }
+                    side="right"
+                  />
+                </CardTitle>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  Steer where Discovery spends retrieval budget for <span className="font-medium text-alma-800">{lens.name}</span>.
+                  Pin keeps a branch alive, boost gives it more surface area, mute removes it from refresh.
+                </p>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => branchQuery.refetch()} disabled={branchQuery.isFetching}>
@@ -286,7 +310,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-6 p-5">
+      <CardContent className={cn('space-y-6', bare ? 'p-4' : 'p-5')}>
         {/* In-page explainer — uses the canonical ConceptCallout so
             similar "What is this?" boxes elsewhere in the app (Signal
             Lab, Insights graph clusters, etc.) all look the same. */}
@@ -331,12 +355,38 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
             // need to double-count it.
             { label: 'Pinned', value: summary.pinnedCount },
             { label: 'Muted', value: summary.mutedCount },
-            { label: 'Auto-tuned', value: summary.autoTunedCount },
+            {
+              label: 'Auto-tuned',
+              value: summary.autoTunedCount,
+              // The explanation lives ON the number it explains. It used to be
+              // a whole panel further down that restated this tile as a badge
+              // ("0 auto-tuned"), added a second badge for the arithmetic
+              // complement ("6 neutral"), and carried two paragraphs of prose —
+              // an orphan third child in a two-column grid, explaining a figure
+              // the reader had already passed.
+              hint: (
+                <JargonHint
+                  title="Auto-tuned branches"
+                  description={
+                    <>
+                      Branch budgets adapt on their own from your past saves and dismisses. A
+                      branch counts as auto-tuned once outcomes pushed its retrieval budget off
+                      the neutral <strong>1.0×</strong> baseline — up if you have been saving from
+                      it, down if you have been dismissing it. Each branch tile below shows its
+                      live weight and the reason behind it, and manual{' '}
+                      <strong>Pin / Boost / Mute</strong> always overrides.
+                    </>
+                  }
+                  side="bottom"
+                />
+              ),
+            },
           ].map((tile) => (
             <MetricTile
               key={tile.label}
               label={tile.label}
               value={tile.value}
+              labelSuffix={tile.hint}
               align="center"
             />
           ))}
@@ -449,34 +499,6 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
             </div>
           </div>
 
-          {/* Auto-tuning explainer — replaces the old "smart suggestions"
-              panel with a one-glance summary of what the engine is doing on
-              its own. No buttons: each branch tile carries its own
-              auto-weight badge and reason, so the user can drill in there. */}
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-brand text-sm font-semibold text-alma-800">Auto-tuning</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Branch budgets adapt automatically from your past saves and
-                  dismisses. Manual Pin / Boost / Mute below stay available
-                  as overrides.
-                </p>
-              </div>
-              <Sparkles className="h-4 w-4 text-alma-folio" />
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2 text-xs">
-              <Badge variant="outline">{summary.autoTunedCount} auto-tuned</Badge>
-              <Badge variant="outline">{summary.branchCount - summary.autoTunedCount} neutral</Badge>
-            </div>
-            <p className="mt-3 text-xs text-slate-500">
-              An auto-tuned branch is one where past outcomes pushed its
-              retrieval budget off the neutral 1.0× baseline (up if you've
-              been saving from it, down if you've been dismissing). Look at
-              the badge on each branch tile to see the live weight and the
-              reason behind it.
-            </p>
-          </div>
         </div>
 
         {coldStart ? (

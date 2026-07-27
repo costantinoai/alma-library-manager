@@ -55,9 +55,9 @@ def inbox_status(
         channels = []
 
     waiting = int(
-        db.execute(
-            "SELECT COUNT(*) AS c FROM papers WHERE status = ?", (INBOX_STATUS,)
-        ).fetchone()["c"]
+        db.execute("SELECT COUNT(*) AS c FROM papers WHERE status = ?", (INBOX_STATUS,)).fetchone()[
+            "c"
+        ]
         or 0
     )
 
@@ -66,14 +66,11 @@ def inbox_status(
     if table_exists(db, "inbox_messages"):
         unresolved = int(
             db.execute(
-                "SELECT COUNT(*) AS c FROM inbox_messages "
-                "WHERE outcome IN ('unresolved', 'error')"
+                "SELECT COUNT(*) AS c FROM inbox_messages WHERE outcome IN ('unresolved', 'error')"
             ).fetchone()["c"]
             or 0
         )
-        row = db.execute(
-            "SELECT MAX(created_at) AS last FROM inbox_messages"
-        ).fetchone()
+        row = db.execute("SELECT MAX(created_at) AS last FROM inbox_messages").fetchone()
         last_captured_at = row["last"] if row else None
 
     return {
@@ -107,7 +104,7 @@ def sweep_inbox_now(
             status_code=400,
             detail=(
                 "No capture channel is configured. Set a Slack capture channel "
-                "in Settings → Channels first."
+                "in Settings → Plugins first."
             ),
         )
 
@@ -181,7 +178,7 @@ _CHANNEL_ERROR_HELP: dict[str, str] = {
     ),
     "invalid_auth": (
         "Slack rejected the bot token. Re-copy the Bot User OAuth Token from "
-        "OAuth & Permissions into Settings → Channels."
+        "OAuth & Permissions into Settings → Plugins."
     ),
     "account_inactive": (
         "The Slack app was uninstalled or disabled. Reinstall it to your "

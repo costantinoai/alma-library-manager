@@ -131,7 +131,9 @@ def _aggregate_http_source_diagnostics(
                     int(raw.get("http_errors") or 0) > 0
                     or int(raw.get("transport_errors") or 0) > 0
                 )
-                if had_errors and (target["last_error_at"] is None or op_ts > target["last_error_at"]):
+                if had_errors and (
+                    target["last_error_at"] is None or op_ts > target["last_error_at"]
+                ):
                     target["last_error_at"] = op_ts
             requests = int(raw.get("requests") or 0)
             target["requests"] += requests
@@ -149,7 +151,7 @@ def _aggregate_http_source_diagnostics(
             for status_key, count in (raw.get("status_counts") or {}).items():
                 counts = target["status_counts"]
                 counts[str(status_key)] = int(counts.get(str(status_key)) or 0) + int(count or 0)
-            for endpoint in (raw.get("top_endpoints") or []):
+            for endpoint in raw.get("top_endpoints") or []:
                 if not isinstance(endpoint, dict):
                     continue
                 path = str(endpoint.get("path") or "").strip()
@@ -162,7 +164,9 @@ def _aggregate_http_source_diagnostics(
     out: list[dict[str, Any]] = []
     for source, raw in merged.items():
         requests = int(raw.get("requests") or 0)
-        avg_latency_ms = round(float(raw.get("latency_sum") or 0.0) / requests, 2) if requests else 0.0
+        avg_latency_ms = (
+            round(float(raw.get("latency_sum") or 0.0) / requests, 2) if requests else 0.0
+        )
         top_endpoints = sorted(
             (raw.get("endpoint_counts") or {}).items(),
             key=lambda item: (-int(item[1]), str(item[0])),
@@ -179,8 +183,7 @@ def _aggregate_http_source_diagnostics(
                 "avg_latency_ms": avg_latency_ms,
                 "status_counts": dict(raw.get("status_counts") or {}),
                 "top_endpoints": [
-                    {"path": str(path), "count": int(count)}
-                    for path, count in top_endpoints
+                    {"path": str(path), "count": int(count)} for path, count in top_endpoints
                 ],
                 "last_error": raw.get("last_error"),
                 "first_seen": raw.get("first_seen"),
@@ -204,7 +207,9 @@ def _aggregate_openalex_usage(operation_results: list[dict[str, Any]]) -> dict[s
     }
     for entry in operation_results:
         source_diagnostics = entry.get("source_diagnostics") or {}
-        openalex = source_diagnostics.get("openalex") if isinstance(source_diagnostics, dict) else None
+        openalex = (
+            source_diagnostics.get("openalex") if isinstance(source_diagnostics, dict) else None
+        )
         if not isinstance(openalex, dict):
             continue
         summary["refreshes"] += 1
@@ -219,7 +224,6 @@ def _aggregate_openalex_usage(operation_results: list[dict[str, Any]]) -> dict[s
     return summary
 
 
-
 def _bool_setting(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -232,8 +236,10 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
     # real reading-progress states (reading/done/excluded) + the uncollected
     # count, and never scores or nags about a triage backlog (I-22).
     _defaults = {
-        "total_library": 0, "reading_count": 0,
-        "done_count": 0, "excluded_count": 0,
+        "total_library": 0,
+        "reading_count": 0,
+        "done_count": 0,
+        "excluded_count": 0,
         "uncollected_count": 0,
     }
     if not table_exists(db, "papers"):
@@ -246,7 +252,7 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
             COALESCE(SUM(CASE WHEN reading_status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
             COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count
         FROM papers
-        WHERE {standalone_paper_sql('papers')}
+        WHERE {standalone_paper_sql("papers")}
         """
     ).fetchone()
     uncollected_count = 0
@@ -259,7 +265,7 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
                         SELECT COUNT(*) AS c
                         FROM papers p
                         WHERE p.status = 'library'
-                          AND {standalone_paper_sql('p')}
+                          AND {standalone_paper_sql("p")}
                           AND NOT EXISTS (
                             SELECT 1 FROM collection_items ci WHERE ci.paper_id = p.id
                           )
@@ -314,7 +320,9 @@ def _build_refresh_trend(
     return [rows[day] for day in sorted(rows.keys())]
 
 
-def _build_recommendation_action_trend(db: sqlite3.Connection, *, days: int = 30) -> list[dict[str, Any]]:
+def _build_recommendation_action_trend(
+    db: sqlite3.Connection, *, days: int = 30
+) -> list[dict[str, Any]]:
     """Daily engagement trend from the canonical outcome projection (I-21/D6).
 
     ``liked`` / ``dismissed`` no longer read ``recommendations.user_action``
@@ -344,7 +352,9 @@ def _build_recommendation_action_trend(db: sqlite3.Connection, *, days: int = 30
     return out
 
 
-def _compute_alert_usefulness_score(*, total_runs: int, failed_runs: int, empty_runs: int, papers_sent: int, sent_runs: int) -> int:
+def _compute_alert_usefulness_score(
+    *, total_runs: int, failed_runs: int, empty_runs: int, papers_sent: int, sent_runs: int
+) -> int:
     reliability = 1.0 - safe_div(failed_runs, max(1, total_runs))
     non_empty_rate = 1.0 - safe_div(empty_runs, max(1, total_runs))
     volume_score = min(safe_div(papers_sent, max(1, sent_runs)) / 4.0, 1.0) if sent_runs else 0.0
@@ -384,7 +394,10 @@ def _build_alert_history_trend(
                 "failed": int(row["failed"] or 0),
                 "empty": int(row["empty"] or 0),
                 "skipped": int(row["skipped"] or 0),
-                "total": int(row["sent"] or 0) + int(row["failed"] or 0) + int(row["empty"] or 0) + int(row["skipped"] or 0),
+                "total": int(row["sent"] or 0)
+                + int(row["failed"] or 0)
+                + int(row["empty"] or 0)
+                + int(row["skipped"] or 0),
                 "publication_count": int(row["publication_count"] or 0),
             }
             for row in rows
@@ -414,7 +427,10 @@ def _build_alert_history_trend(
             "failed": int(row["failed"] or 0),
             "empty": int(row["empty"] or 0),
             "skipped": int(row["skipped"] or 0),
-            "total": int(row["sent"] or 0) + int(row["failed"] or 0) + int(row["empty"] or 0) + int(row["skipped"] or 0),
+            "total": int(row["sent"] or 0)
+            + int(row["failed"] or 0)
+            + int(row["empty"] or 0)
+            + int(row["skipped"] or 0),
             "publication_count": int(row["publication_count"] or 0),
         }
         for row in rows
@@ -533,11 +549,7 @@ def _build_author_follow_trend(
         ).fetchall()
     except sqlite3.OperationalError:
         return []
-    return [
-        {"date": row["day"], "follows": int(row["follows"] or 0)}
-        for row in rows
-        if row["day"]
-    ]
+    return [{"date": row["day"], "follows": int(row["follows"] or 0)} for row in rows if row["day"]]
 
 
 def _build_signal_lab_trend(
@@ -642,7 +654,9 @@ def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> 
             "empty_runs_30d": int((row["empty_runs"] if row else 0) or 0),
             "skipped_runs_30d": int((row["skipped_runs"] if row else 0) or 0),
             "papers_sent_30d": papers_sent,
-            "avg_papers_per_sent": round(safe_div(papers_sent, max(1, sent_runs)), 2) if sent_runs else 0.0,
+            "avg_papers_per_sent": round(safe_div(papers_sent, max(1, sent_runs)), 2)
+            if sent_runs
+            else 0.0,
         }
     )
 
@@ -674,8 +688,12 @@ def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> 
         papers_sent = int(row["papers_sent"] or 0)
         reliability = 1.0 - safe_div(failed_runs, max(1, total_runs))
         non_empty_rate = 1.0 - safe_div(empty_runs, max(1, total_runs))
-        volume_score = min(safe_div(papers_sent, max(1, sent_runs)) / 4.0, 1.0) if sent_runs else 0.0
-        usefulness_score = round(((reliability * 0.45) + (non_empty_rate * 0.30) + (volume_score * 0.25)) * 100)
+        volume_score = (
+            min(safe_div(papers_sent, max(1, sent_runs)) / 4.0, 1.0) if sent_runs else 0.0
+        )
+        usefulness_score = round(
+            ((reliability * 0.45) + (non_empty_rate * 0.30) + (volume_score * 0.25)) * 100
+        )
         top_alerts.append(
             {
                 "alert_id": row["alert_id"] or None,
@@ -756,7 +774,9 @@ def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> 
     }
 
 
-def _build_cold_start_topic_validation(db: sqlite3.Connection, *, limit: int = 12) -> dict[str, Any]:
+def _build_cold_start_topic_validation(
+    db: sqlite3.Connection, *, limit: int = 12
+) -> dict[str, Any]:
     if not (table_exists(db, "suggestion_sets") and table_exists(db, "discovery_lenses")):
         return {"total_runs": 0, "validated_runs": 0, "state_counts": {}, "recent": []}
     try:
@@ -779,7 +799,9 @@ def _build_cold_start_topic_validation(db: sqlite3.Connection, *, limit: int = 1
     validated_runs = 0
     for row in rows:
         retrieval_summary = json_loads(row["retrieval_summary"])
-        cold_start = retrieval_summary.get("cold_start") if isinstance(retrieval_summary, dict) else None
+        cold_start = (
+            retrieval_summary.get("cold_start") if isinstance(retrieval_summary, dict) else None
+        )
         if not isinstance(cold_start, dict):
             continue
         state = str(cold_start.get("state") or "unknown")
@@ -810,7 +832,9 @@ class BranchTuningActionRequest(BaseModel):
     action: str
 
 
-def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_authors_snapshot(
+    db: sqlite3.Connection, monitors: list[dict[str, Any]]
+) -> dict[str, Any]:
     # Degraded monitors, corpus-backfill states, and identity attention all
     # come from the canonical alma.services.author_attention builders — the
     # SAME source the Authors page's /needs-attention endpoint composes from,
@@ -847,10 +871,18 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
         summary["tracked_authors"] = int((row["c"] if row else 0) or 0)
     summary["provenance_only_authors"] = max(0, summary["total_rows"] - summary["tracked_authors"])
 
-    author_monitors = [monitor for monitor in monitors if str(monitor.get("monitor_type") or "") == "author"]
-    summary["ready_tracked"] = sum(1 for monitor in author_monitors if monitor.get("health") == "ready")
-    summary["degraded_tracked"] = sum(1 for monitor in author_monitors if monitor.get("health") == "degraded")
-    summary["disabled_tracked"] = sum(1 for monitor in author_monitors if monitor.get("health") == "disabled")
+    author_monitors = [
+        monitor for monitor in monitors if str(monitor.get("monitor_type") or "") == "author"
+    ]
+    summary["ready_tracked"] = sum(
+        1 for monitor in author_monitors if monitor.get("health") == "ready"
+    )
+    summary["degraded_tracked"] = sum(
+        1 for monitor in author_monitors if monitor.get("health") == "degraded"
+    )
+    summary["disabled_tracked"] = sum(
+        1 for monitor in author_monitors if monitor.get("health") == "disabled"
+    )
     summary["bridge_gap_count"] = sum(
         1
         for monitor in author_monitors
@@ -930,7 +962,10 @@ def _build_signal_lab_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
     next_actions: list[str] = []
 
     try:
-        from alma.services.feedback_substrate import compute_signal_stats, get_signal_results_summary
+        from alma.services.feedback_substrate import (
+            compute_signal_stats,
+            get_signal_results_summary,
+        )
 
         stats = compute_signal_stats(db)
         results = get_signal_results_summary(db, days=14)
@@ -943,7 +978,9 @@ def _build_signal_lab_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
                 "streak_days": int(stats.get("streak_days") or 0),
                 "topic_coverage": int(stats.get("topic_coverage") or 0),
                 "source_diversity_7d": int(behavioral.get("source_diversity_7d") or 0),
-                "recommendation_engagement_rate": round(float(outcomes.get("engagement_rate") or 0.0), 3),
+                "recommendation_engagement_rate": round(
+                    float(outcomes.get("engagement_rate") or 0.0), 3
+                ),
                 "xp": int(stats.get("xp") or 0),
                 "level": int(stats.get("level") or 1),
                 "background_corpus_papers": int(stats.get("background_corpus_papers") or 0),
@@ -952,7 +989,9 @@ def _build_signal_lab_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
         )
         top_topics = list(stats.get("top_topics") or [])[:5]
         top_authors = list(stats.get("top_authors") or [])[:5]
-        next_actions = [str(item) for item in (results.get("next_actions") or [])[:4] if str(item).strip()]
+        next_actions = [
+            str(item) for item in (results.get("next_actions") or [])[:4] if str(item).strip()
+        ]
     except Exception:
         pass
 
@@ -1006,7 +1045,9 @@ def _build_ai_snapshot(
         provider = get_active_provider(db)
         summary["embeddings_ready"] = provider is not None
         if provider is not None:
-            summary["embedding_provider"] = str(getattr(provider, "name", None) or provider.__class__.__name__).lower()
+            summary["embedding_provider"] = str(
+                getattr(provider, "name", None) or provider.__class__.__name__
+            ).lower()
     except Exception:
         summary["embeddings_ready"] = False
 
@@ -1044,13 +1085,15 @@ def _build_ai_snapshot(
                 FROM papers p
                 LEFT JOIN publication_embeddings active_pe
                   ON active_pe.paper_id = p.id AND active_pe.model = ?
-                WHERE {standalone_paper_sql('p')}
+                WHERE {standalone_paper_sql("p")}
                 """,
                 (summary["embedding_model"], summary["embedding_model"]),
             ).fetchone()
             summary["missing_embeddings"] = int((row["missing_embeddings"] if row else 0) or 0)
             summary["stale_embeddings"] = int((row["stale_embeddings"] if row else 0) or 0)
-            summary["up_to_date_embeddings"] = int((row["up_to_date_embeddings"] if row else 0) or 0)
+            summary["up_to_date_embeddings"] = int(
+                (row["up_to_date_embeddings"] if row else 0) or 0
+            )
             summary["embedding_coverage_pct"] = round(
                 (summary["up_to_date_embeddings"] / float(total_papers)) * 100.0,
                 1,
@@ -1073,7 +1116,7 @@ def _build_ai_snapshot(
                 JOIN papers p ON p.id = pe.paper_id
                 WHERE pe.embedding IS NOT NULL
                   AND pe.model = ?
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 GROUP BY CAST(LENGTH(pe.embedding) / 2 AS INTEGER)
                 ORDER BY count DESC, embedding_dim DESC
                 """,
@@ -1094,7 +1137,7 @@ def _build_ai_snapshot(
                 JOIN papers p ON p.id = r.paper_id
                 WHERE r.score_breakdown IS NOT NULL
                   AND COALESCE(r.score_breakdown, '') <> ''
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 ORDER BY r.created_at DESC
                 LIMIT 500
                 """
@@ -1139,25 +1182,71 @@ def _build_ai_snapshot(
             except Exception:
                 pass
             try:
-                semantic_support_values.append(float(breakdown.get("semantic_similarity_support_raw") or 0.0))
+                semantic_support_values.append(
+                    float(breakdown.get("semantic_similarity_support_raw") or 0.0)
+                )
             except Exception:
                 pass
             try:
-                lexical_term_values.append(float(breakdown.get("lexical_similarity_term_raw") or 0.0))
+                lexical_term_values.append(
+                    float(breakdown.get("lexical_similarity_term_raw") or 0.0)
+                )
             except Exception:
                 pass
         analyzed = max(1, summary["recent_recommendations_analyzed"])
-        summary["hybrid_text_rate"] = round(mode_breakdown["hybrid"] / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["semantic_only_rate"] = round(mode_breakdown["semantic"] / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["lexical_only_rate"] = round(mode_breakdown["lexical"] / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["embedding_candidate_ready_rate"] = round(candidate_embedding_ready / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["low_similarity_rate"] = round(low_similarity / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["compressed_similarity_rate"] = round(compressed_similarity / float(analyzed), 3) if summary["recent_recommendations_analyzed"] else 0.0
-        summary["avg_text_similarity"] = round(sum(text_values) / max(1, len(text_values)), 3) if text_values else 0.0
-        summary["avg_semantic_raw"] = round(sum(semantic_raw_values) / max(1, len(semantic_raw_values)), 4) if semantic_raw_values else 0.0
-        summary["avg_semantic_support_raw"] = round(sum(semantic_support_values) / max(1, len(semantic_support_values)), 4) if semantic_support_values else 0.0
-        summary["avg_lexical_raw"] = round(sum(lexical_raw_values) / max(1, len(lexical_raw_values)), 4) if lexical_raw_values else 0.0
-        summary["avg_lexical_term_raw"] = round(sum(lexical_term_values) / max(1, len(lexical_term_values)), 4) if lexical_term_values else 0.0
+        summary["hybrid_text_rate"] = (
+            round(mode_breakdown["hybrid"] / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["semantic_only_rate"] = (
+            round(mode_breakdown["semantic"] / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["lexical_only_rate"] = (
+            round(mode_breakdown["lexical"] / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["embedding_candidate_ready_rate"] = (
+            round(candidate_embedding_ready / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["low_similarity_rate"] = (
+            round(low_similarity / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["compressed_similarity_rate"] = (
+            round(compressed_similarity / float(analyzed), 3)
+            if summary["recent_recommendations_analyzed"]
+            else 0.0
+        )
+        summary["avg_text_similarity"] = (
+            round(sum(text_values) / max(1, len(text_values)), 3) if text_values else 0.0
+        )
+        summary["avg_semantic_raw"] = (
+            round(sum(semantic_raw_values) / max(1, len(semantic_raw_values)), 4)
+            if semantic_raw_values
+            else 0.0
+        )
+        summary["avg_semantic_support_raw"] = (
+            round(sum(semantic_support_values) / max(1, len(semantic_support_values)), 4)
+            if semantic_support_values
+            else 0.0
+        )
+        summary["avg_lexical_raw"] = (
+            round(sum(lexical_raw_values) / max(1, len(lexical_raw_values)), 4)
+            if lexical_raw_values
+            else 0.0
+        )
+        summary["avg_lexical_term_raw"] = (
+            round(sum(lexical_term_values) / max(1, len(lexical_term_values)), 4)
+            if lexical_term_values
+            else 0.0
+        )
 
     # LLM-backed capabilities (query planner, recommendation explanations,
     # signal-lab coaching, narrative reports) were removed in 2026-04 (see
@@ -1192,7 +1281,11 @@ def _build_ai_snapshot(
                 "severity": "warning",
             }
         )
-    if summary["recent_recommendations_analyzed"] >= 20 and summary["avg_semantic_raw"] < 0.08 and summary["avg_text_similarity"] < 0.24:
+    if (
+        summary["recent_recommendations_analyzed"] >= 20
+        and summary["avg_semantic_raw"] < 0.08
+        and summary["avg_text_similarity"] < 0.24
+    ):
         recommendations.append(
             {
                 "id": "tune_similarity_representation",
@@ -1201,7 +1294,10 @@ def _build_ai_snapshot(
                 "severity": "warning",
             }
         )
-    if summary["recent_recommendations_analyzed"] >= 20 and float(summary["compressed_similarity_rate"] or 0.0) >= 0.45:
+    if (
+        summary["recent_recommendations_analyzed"] >= 20
+        and float(summary["compressed_similarity_rate"] or 0.0) >= 0.45
+    ):
         recommendations.append(
             {
                 "id": "recompute_similarity_inputs",
@@ -1240,17 +1336,6 @@ def _build_operational_snapshot(
         if not _bool_setting(discovery_settings.get(f"sources.{source}.enabled"), True)
     ]
 
-    # "Is Slack set up?" has ONE owner (`alma.slack.client.slack_status`).
-    # Alerts need the SEND direction specifically: a token plus a channel to
-    # post into. A capture-only Slack is configured, but not for delivery.
-    slack_configured = False
-    try:
-        from alma.slack.client import slack_status
-
-        slack_configured = bool(slack_status()["can_send"])
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Could not read Slack status for the health card: %s", exc)
-
     ai_summary = ai_snapshot.get("summary") or {}
     provider_present = False
     try:
@@ -1266,7 +1351,9 @@ def _build_operational_snapshot(
     try:
         from alma.services.health import HEALTH_CORPUS_VIEW_KEY
 
-        _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get("totals") or {}
+        _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get(
+            "totals"
+        ) or {}
         coverage_ready = bool(_health_totals.get("embeddings_ready"))
     except Exception:
         pass
@@ -1284,9 +1371,11 @@ def _build_operational_snapshot(
     try:
         from alma.api.deps import get_plugin_registry
 
-        for entry in get_plugin_registry().describe_all():
+        for entry in get_plugin_registry().describe_all(db):
             capabilities = entry.get("capabilities") or []
-            half_configured = bool(entry["is_configured"]) and (
+            if entry.get("kind") != "integration" or not entry.get("enabled"):
+                continue
+            half_configured = bool(entry["configured"]) and (
                 ("send" in capabilities and not entry["can_send"])
                 or ("receive" in capabilities and not entry["can_receive"])
             )
@@ -1294,10 +1383,10 @@ def _build_operational_snapshot(
                 misconfigured_channels += 1
             plugins.append(
                 {
-                    "name": entry["name"],
+                    "name": entry["id"],
                     "display_name": entry["display_name"],
                     "capabilities": capabilities,
-                    "is_configured": entry["is_configured"],
+                    "is_configured": entry["configured"],
                     "can_send": entry["can_send"],
                     "can_receive": entry["can_receive"],
                     "half_configured": half_configured,
@@ -1336,7 +1425,10 @@ def _build_operational_snapshot(
                     "message": str(r["message"] or "").strip() or None,
                     "error": str(r["error"] or "").strip() or None,
                     "trigger_source": str(r["trigger_source"] or "").strip() or None,
-                    "finished_at": str(r["finished_at"] or r["updated_at"] or r["started_at"] or "").strip() or None,
+                    "finished_at": str(
+                        r["finished_at"] or r["updated_at"] or r["started_at"] or ""
+                    ).strip()
+                    or None,
                 }
                 for r in db.execute(
                     """
@@ -1381,7 +1473,10 @@ def _build_operational_snapshot(
         degraded_targets = [
             {
                 "id": str(monitor.get("id") or ""),
-                "label": str(monitor.get("label") or monitor.get("author_name") or monitor.get("id") or "").strip() or "Monitor",
+                "label": str(
+                    monitor.get("label") or monitor.get("author_name") or monitor.get("id") or ""
+                ).strip()
+                or "Monitor",
                 "kind": "monitor",
                 "action": "refresh_monitor",
                 "monitor_id": str(monitor.get("id") or ""),
@@ -1408,7 +1503,8 @@ def _build_operational_snapshot(
         author_targets = [
             {
                 "id": str(monitor.get("author_id") or ""),
-                "label": str(monitor.get("author_name") or monitor.get("label") or "").strip() or "Tracked author",
+                "label": str(monitor.get("author_name") or monitor.get("label") or "").strip()
+                or "Tracked author",
                 "kind": "author",
                 "action": "repair_author",
                 "author_id": str(monitor.get("author_id") or ""),
@@ -1445,7 +1541,8 @@ def _build_operational_snapshot(
     stale_backfill_targets = [
         {
             "id": str(author.get("author_id") or ""),
-            "label": str(author.get("author_name") or author.get("author_id") or "").strip() or "Tracked author",
+            "label": str(author.get("author_name") or author.get("author_id") or "").strip()
+            or "Tracked author",
             "kind": "author",
             "action": "backfill_author",
             "author_id": str(author.get("author_id") or ""),
@@ -1522,16 +1619,38 @@ def _build_operational_snapshot(
 
     alert_summary = alert_snapshot.get("summary") or {}
     alert_top = alert_snapshot.get("top_alerts") or []
+    enabled_alerts = int(alert_summary.get("enabled_alerts") or 0)
+    alert_delivery_ready = enabled_alerts == 0
+    unavailable_alerts = 0
+    if enabled_alerts > 0:
+        try:
+            from alma.application.alerts import configured_delivery_integrations
 
-    if int(alert_summary.get("enabled_alerts") or 0) > 0 and not slack_configured:
+            ready_integrations = set(configured_delivery_integrations())
+            enabled_rows = db.execute("SELECT channels FROM alerts WHERE enabled = 1").fetchall()
+            unavailable_alerts = sum(
+                1
+                for row in enabled_rows
+                if not ready_integrations.intersection(json_loads(row["channels"]) or [])
+            )
+            alert_delivery_ready = unavailable_alerts == 0
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Could not derive Alert delivery readiness: %s", exc)
+            unavailable_alerts = enabled_alerts
+
+    if not alert_delivery_ready:
         states.append(
             {
-                "id": "slack_unconfigured",
-                "label": "Alerts are enabled but Slack is not configured",
+                "id": "alert_delivery_unavailable",
+                "label": "Some enabled Alerts have no active delivery integration",
                 "severity": "critical",
-                "detail": "Delivery is degraded because the default Slack channel or token is missing.",
+                "detail": (
+                    f"{unavailable_alerts} enabled "
+                    f"{'Alert has' if unavailable_alerts == 1 else 'Alerts have'} "
+                    "no activated and configured sender."
+                ),
                 "page": "settings",
-                "params": {"section": "channels"},
+                "params": {"anchor": "plugins"},
             }
         )
     if misconfigured_channels > 0:
@@ -1550,7 +1669,10 @@ def _build_operational_snapshot(
             f"{plugin['display_name']} cannot "
             + " or ".join(
                 direction
-                for direction, ok in (("send", plugin["can_send"]), ("receive", plugin["can_receive"]))
+                for direction, ok in (
+                    ("send", plugin["can_send"]),
+                    ("receive", plugin["can_receive"]),
+                )
                 if not ok and direction in (plugin.get("capabilities") or [])
             )
             for plugin in half
@@ -1560,9 +1682,9 @@ def _build_operational_snapshot(
                 "id": "misconfigured_channels",
                 "label": "A delivery channel is only half set up",
                 "severity": "warning",
-                "detail": f"{missing}. Finish it in Settings -> Channels.",
+                "detail": f"{missing}. Finish it in Settings → Plugins.",
                 "page": "settings",
-                "params": {"section": "channels"},
+                "params": {"anchor": "plugins"},
                 "targets": plugin_targets,
             }
         )
@@ -1637,7 +1759,7 @@ def _build_operational_snapshot(
             int(author_summary.get("bridge_gap_count") or 0) == 0,
             embeddings_ready,
             int(ai_summary.get("stale_embeddings") or 0) == 0,
-            slack_configured or int(alert_summary.get("enabled_alerts") or 0) == 0,
+            alert_delivery_ready,
             misconfigured_channels == 0,
             recent_failed_operations_24h == 0,
         )
@@ -1651,7 +1773,7 @@ def _build_operational_snapshot(
             "warning_count": warning_count,
             "healthy_checks": healthy_checks,
             "embeddings_ready": embeddings_ready,
-            "slack_configured": slack_configured,
+            "alert_delivery_ready": alert_delivery_ready,
             "degraded_monitors": degraded_monitor_count,
             "disabled_sources": len(disabled_sources),
             "misconfigured_channels": misconfigured_channels,
@@ -1774,8 +1896,12 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
     ),
 )
 def get_insights_papers(
-    filter_type: str = Query(..., description="cluster | topic | journal | institution | country | year | source | all"),
-    filter_value: str = Query(..., description="the figure's value (cluster id, topic name, …); ignored for 'all'"),
+    filter_type: str = Query(
+        ..., description="cluster | topic | journal | institution | country | year | source | all"
+    ),
+    filter_value: str = Query(
+        ..., description="the figure's value (cluster id, topic name, …); ignored for 'all'"
+    ),
     scope: str = Query("library", description="library | corpus — only affects cluster"),
     limit: int = Query(30, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -2046,9 +2172,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "total_countries": total_countries,
             "total_topics": total_topics,
             "total_institutions": total_institutions,
-            "avg_citations_per_paper": round(total_citations / total_pubs, 1) if total_pubs else 0.0,
+            "avg_citations_per_paper": round(total_citations / total_pubs, 1)
+            if total_pubs
+            else 0.0,
             "median_citations_per_paper": round(median_citations, 1),
-            "avg_papers_per_author": round(author_paper_links / total_authors, 1) if total_authors else 0.0,
+            "avg_papers_per_author": round(author_paper_links / total_authors, 1)
+            if total_authors
+            else 0.0,
         }
 
         # ── Publications by year (Library-scoped) ──
@@ -2106,9 +2236,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                     )
                 else:
                     row["median_citations"] = 0.0
-                row["seminal_count"] = sum(
-                    1 for c in cites if c > seminal_threshold and c > 0
-                )
+                row["seminal_count"] = sum(1 for c in cites if c > seminal_threshold and c > 0)
                 best = best_per_year.get(y)
                 if best and best[0] > 0:
                     row["top_paper_citations"] = best[0]
@@ -2345,14 +2473,16 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         authors = []
         for ar in author_rows:
             aid = ar["id"]
-            authors.append({
-                "id": aid,
-                "name": ar["name"],
-                "papers": ar["papers"] or 0,
-                "citations": ar["citations"] or 0,
-                "h_index": ar["h_index"] or 0,
-                "top_topic": author_top_topics.get(aid),
-            })
+            authors.append(
+                {
+                    "id": aid,
+                    "name": ar["name"],
+                    "papers": ar["papers"] or 0,
+                    "citations": ar["citations"] or 0,
+                    "h_index": ar["h_index"] or 0,
+                    "top_topic": author_top_topics.get(aid),
+                }
+            )
 
         # ── Recommendations (Discovery-layer, intentionally NOT Library-scoped) ──
         # This block reports Discovery engine engagement (seen / liked /
@@ -2361,7 +2491,10 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         # "Insights" screen; if this block grows, consider moving it to a
         # Discovery-specific insight tab.
         rec_data = {
-            "total": 0, "seen": 0, "liked": 0, "dismissed": 0,
+            "total": 0,
+            "seen": 0,
+            "liked": 0,
+            "dismissed": 0,
             "engagement_rate": 0.0,
             "by_lens": [],
         }
@@ -2380,7 +2513,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                        ROUND(AVG(r.score), 3) AS avg_score
                 FROM recommendations r
                 JOIN papers p ON p.id = r.paper_id
-                WHERE {standalone_paper_sql('p')}
+                WHERE {standalone_paper_sql("p")}
                 GROUP BY r.lens_id
                 ORDER BY count DESC
                 """
@@ -2483,10 +2616,10 @@ mv.register(
         fingerprint_sql=with_version(
             f"""
             SELECT
-              (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
-              (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
-              (SELECT COUNT(*) FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql('p')}),
-              (SELECT COALESCE(MAX(r.created_at), '') FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql('p')}),
+              (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
+              (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
+              (SELECT COUNT(*) FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql("p")}),
+              (SELECT COALESCE(MAX(r.created_at), '') FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql("p")}),
               (SELECT COUNT(*) FROM followed_authors),
               (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
               (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')

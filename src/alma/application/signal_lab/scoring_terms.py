@@ -21,6 +21,11 @@ def load_lab_scoring_context(
     conn: sqlite3.Connection, settings: dict[str, str]
 ) -> dict[str, Any] | None:
     """One-shot load of everything scoring needs. None ⇒ lab contributes 0."""
+    from alma.application.signal_lab.map_terms import utility_confidence
+    from alma.application.signal_lab.settings import is_enabled
+
+    if not is_enabled(conn):
+        return None
     w_offset = float(settings.get("weights.lab_region_offset", "0.0") or 0.0)
     w_utility = float(settings.get("weights.lab_utility", "0.0") or 0.0)
     if w_offset <= 0 and w_utility <= 0:
@@ -36,7 +41,9 @@ def load_lab_scoring_context(
     payload = model_stored["payload"]
     offsets = {int(k): float(v) for k, v in (payload.get("region_offsets") or {}).items()}
     utility = (
-        decode_head_vector(payload["utility_b64"]) if payload.get("utility_b64") else None
+        decode_head_vector(payload["utility_delta_b64"])
+        if payload.get("utility_delta_b64")
+        else None
     )
     centroids: dict[int, np.ndarray] = {}
     if regions_stored is not None and offsets:
@@ -49,6 +56,7 @@ def load_lab_scoring_context(
         "w_utility": w_utility,
         "offsets": offsets,
         "utility": utility,
+        "utility_confidence": utility_confidence(payload),
         "centroids": centroids,
     }
 
@@ -72,6 +80,8 @@ def compute_lab_adjustments(embedding, lab_ctx: dict[str, Any]) -> tuple[float, 
     utility_raw = 0.0
     utility = lab_ctx.get("utility")
     if utility is not None and utility.shape[0] == vec.shape[0]:
-        norm = float(np.linalg.norm(vec)) or 1.0
-        utility_raw = float(np.clip((utility @ vec) / norm, -1.0, 1.0))
+        norm = float(np.linalg.norm(vec)) * float(np.linalg.norm(utility))
+        if norm > 1e-8:
+            confidence = float(lab_ctx.get("utility_confidence", 1.0))
+            utility_raw = float(np.clip(((utility @ vec) / norm) * confidence, -1.0, 1.0))
     return offset_raw, utility_raw

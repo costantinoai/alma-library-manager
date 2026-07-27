@@ -44,6 +44,11 @@ _PROJECT_ROOT: Path | None = None
 _PROJECT_ROOT_MARKERS = ("settings.json", "pyproject.toml", "docker-compose.yml", ".git")
 
 DEFAULT_SETTINGS: dict[str, Any] = {
+    # Forward-only settings schema. Startup runs the matching migrator and
+    # validator before any plugin can be consumed.
+    "settings_schema_version": 1,
+    "plugins.slack.enabled": False,
+    "plugins.email.enabled": False,
     # NOTE: `database` is deliberately NOT defaulted here. The DB location
     # is a computed path (DB_PATH env → explicit settings value →
     # get_data_dir()/scholar.db), so a fresh install resolves to the
@@ -67,6 +72,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # message with a `bot_id`, so pointing both at one channel is safe. A
     # dedicated channel is simply nicer — digests bury the links you send.
     "slack_inbox_channel": None,
+    "smtp_host": None,
+    "smtp_port": 587,
+    "smtp_username": None,
+    "smtp_from": None,
+    "smtp_to": None,
+    "smtp_use_tls": True,
     "id_resolution_semantic_scholar_enabled": True,
     "id_resolution_orcid_enabled": True,
     # Google Scholar scraping is opt-in and OFF by default everywhere (D14):
@@ -99,7 +110,8 @@ def _write_default_settings_file(settings_path: Path) -> bool:
             "Could not write default settings to %s (%s) — using "
             "in-memory defaults; Settings UI changes will not persist "
             "until the file is writable",
-            settings_path, exc,
+            settings_path,
+            exc,
         )
         return False
 
@@ -129,7 +141,9 @@ def _find_project_root() -> Path:
         return _PROJECT_ROOT
 
     _PROJECT_ROOT = current
-    logger.warning(f"Project root markers not found, using current directory as root: {_PROJECT_ROOT}")
+    logger.warning(
+        f"Project root markers not found, using current directory as root: {_PROJECT_ROOT}"
+    )
     return _PROJECT_ROOT
 
 
@@ -418,7 +432,7 @@ def update_settings(updates: dict[str, Any]) -> None:
     settings.update(updates)
 
     # Write back to file
-    with open(settings_path, 'w', encoding="utf-8") as f:
+    with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
         f.write("\n")
 
@@ -448,6 +462,70 @@ def delete_settings_keys(keys: list[str]) -> None:
             f.write("\n")
         reload_settings()
         logger.info("Deleted settings keys: %s", removed)
+
+
+def migrate_settings_schema() -> None:
+    """Upgrade settings.json to the current forward-only schema.
+
+    Version 1 introduces explicit external-integration activation. Existing
+    configured transports stay active; unconfigured transports stay inactive.
+    No runtime caller infers activation from credentials after this migration.
+    """
+    raw = get_all_settings()
+    try:
+        version = int(raw.get("settings_schema_version", 0))
+    except (TypeError, ValueError):
+        version = 0
+    if version > int(DEFAULT_SETTINGS["settings_schema_version"]):
+        raise RuntimeError(f"settings.json was written by a newer ALMa version (schema {version})")
+    if version == 0:
+        from alma.core.secrets import (
+            SECRET_SLACK_BOT_TOKEN,
+            SECRET_SMTP_PASSWORD,
+            get_secret,
+        )
+
+        slack_configured = bool(
+            get_secret(SECRET_SLACK_BOT_TOKEN)
+            and (raw.get("slack_channel") or raw.get("slack_inbox_channel"))
+        )
+        email_configured = bool(
+            raw.get("smtp_host")
+            and raw.get("smtp_to")
+            and (not raw.get("smtp_username") or get_secret(SECRET_SMTP_PASSWORD))
+        )
+        update_settings(
+            {
+                "settings_schema_version": 1,
+                "plugins.slack.enabled": slack_configured,
+                "plugins.email.enabled": email_configured,
+            }
+        )
+        # An unfinished pre-schema implementation used these keys locally.
+        # Migration removes them; runtime never reads both shapes.
+        delete_settings_keys(
+            [
+                "plugin_signal_lab_enabled",
+                "plugins.signal_lab.enabled",
+                "plugin_slack_enabled",
+                "plugin_email_enabled",
+            ]
+        )
+
+
+def validate_settings_schema() -> None:
+    """Fail startup when canonical plugin activation is absent or malformed."""
+    raw = get_all_settings()
+    expected = int(DEFAULT_SETTINGS["settings_schema_version"])
+    if raw.get("settings_schema_version") != expected:
+        raise RuntimeError(
+            "settings.json schema migration incomplete: "
+            f"expected {expected}, got {raw.get('settings_schema_version')!r}"
+        )
+    for plugin_id in ("slack", "email"):
+        key = f"plugins.{plugin_id}.enabled"
+        if not isinstance(raw.get(key), bool):
+            raise RuntimeError(f"settings.json key {key!r} must be boolean")
 
 
 def get_backend() -> str:
@@ -636,6 +714,7 @@ def get_slack_token() -> str | None:
         return token
     try:
         from alma.core.secrets import SECRET_SLACK_BOT_TOKEN, get_secret
+
         return get_secret(SECRET_SLACK_BOT_TOKEN)
     except Exception:
         return None
@@ -684,12 +763,7 @@ def get_smtp_username() -> str | None:
 
 def get_smtp_from() -> str | None:
     """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
-    return (
-        os.getenv("SMTP_FROM")
-        or get_setting("smtp_from")
-        or get_smtp_username()
-        or None
-    )
+    return os.getenv("SMTP_FROM") or get_setting("smtp_from") or get_smtp_username() or None
 
 
 def get_smtp_recipients() -> list[str]:
@@ -717,6 +791,7 @@ def get_smtp_password() -> str | None:
         return env_pw
     try:
         from alma.core.secrets import SECRET_SMTP_PASSWORD, get_secret
+
         return get_secret(SECRET_SMTP_PASSWORD)
     except Exception:
         return None
@@ -734,6 +809,7 @@ def get_openai_api_key() -> str | None:
         return env_key
     try:
         from alma.core.secrets import SECRET_OPENAI_API_KEY, get_secret
+
         return get_secret(SECRET_OPENAI_API_KEY)
     except Exception:
         return None
@@ -787,7 +863,8 @@ def _load_env_files() -> None:
         except (PermissionError, OSError, UnicodeDecodeError) as exc:
             logger.warning(
                 "Could not load .env at %s (%s) — using environment vars only",
-                env_path, exc,
+                env_path,
+                exc,
             )
 
 

@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertCircle,
+  BookMarked,
   Heart,
   BookOpen,
   FolderOpen,
@@ -14,6 +16,8 @@ import { getApiErrorMessage, getLibraryWorkflowSummary, getPaperById, type Publi
 import { errorToast } from '@/hooks/useToast'
 import { PaperCard } from '@/components/shared'
 import { PageTour, LIBRARY_TOUR } from '@/components/onboarding'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { PaperDetailPanel } from '@/components/discovery'
 import { SavedTab } from '@/components/library/SavedTab'
 import { ReadingListTab } from '@/components/library/ReadingListTab'
@@ -21,7 +25,6 @@ import { CollectionsTab } from '@/components/library/CollectionsTab'
 import { TagsTab } from '@/components/library/TagsTab'
 import { TopicsTab } from '@/components/library/TopicsTab'
 import { ImportsTab } from '@/components/library/ImportsTab'
-import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { type TabId, type TabDefinition } from '@/components/library/types'
@@ -44,6 +47,13 @@ const TABS: TabDefinition[] = [
   { id: 'imports', label: 'Imports', icon: UploadCloud },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
 ]
+
+/** Which tab buttons the Library page tour points at (`onboarding/tours.ts`). */
+const TAB_TOUR_ANCHOR: Partial<Record<TabId, string>> = {
+  saved: 'library-saved',
+  imports: 'library-imports',
+  analytics: 'library-analytics',
+}
 
 const DEFAULT_TAB: TabId = 'saved'
 const VALID_TABS = new Set<TabId>(['saved', 'reading', 'collections', 'tags', 'topics', 'imports', 'analytics'])
@@ -218,81 +228,87 @@ export function LibraryPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header — inline metadata line carries the three landing
-          numbers (papers · reading · collections) so they cost zero
-          extra rows. Folio-blue accent on Currently Reading > 0 marks
-          the only number that's actionable; everything else stays
-          alma-800. The reading workflow lives entirely on the Reading
-          List tab now (per beta feedback 2026-05-06 — see
-          tasks/01_BETA_FEEDBACK.md Workstream B). */}
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="font-brand text-2xl font-semibold text-alma-800">Library</h1>
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-slate-500">
-            <span>
-              <strong className="font-medium text-alma-800 tabular-nums">
-                {totalLibrary ?? '—'}
-              </strong>{' '}
-              papers
-            </span>
-            <span aria-hidden className="text-slate-300">·</span>
-            <span>
-              <strong
-                className={cn(
-                  'font-medium tabular-nums',
-                  (readingCount ?? 0) > 0 ? 'text-alma-folio' : 'text-alma-800',
+      <PageIntro
+        icon={BookMarked}
+        lede="Everything you've saved."
+        detail="Collections group it, reading status tracks what you're working through, and every rating you give teaches Discovery."
+        tour={<PageTour pageKey="library" steps={LIBRARY_TOUR} />}
+        meta={
+          <MetaLine
+            items={[
+              <span>
+                <strong className="font-medium text-alma-800 tabular-nums">
+                  {totalLibrary ?? '—'}
+                </strong>{' '}
+                papers
+              </span>,
+              <span>
+                <strong
+                  className={cn(
+                    'font-medium tabular-nums',
+                    (readingCount ?? 0) > 0 ? 'text-alma-folio' : 'text-alma-800',
+                  )}
+                >
+                  {readingCount ?? '—'}
+                </strong>{' '}
+                reading
+              </span>,
+              <span>
+                <strong className="font-medium text-alma-800 tabular-nums">
+                  {collectionsTotal ?? '—'}
+                </strong>{' '}
+                collections
+                {uncollected > 0 && (
+                  <span className="text-slate-400"> · {uncollected} uncategorised</span>
                 )}
-              >
-                {readingCount ?? '—'}
-              </strong>{' '}
-              reading
-            </span>
-            <span aria-hidden className="text-slate-300">·</span>
-            <span>
-              <strong className="font-medium text-alma-800 tabular-nums">
-                {collectionsTotal ?? '—'}
-              </strong>{' '}
-              collections
-              {uncollected > 0 && (
-                <span className="text-slate-400">
-                  {' '}· {uncollected} uncategorised
-                </span>
-              )}
-            </span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <PageTour pageKey="library" steps={LIBRARY_TOUR} />
-        </div>
-      </header>
+              </span>,
+            ]}
+          />
+        }
+        guide={{
+          summary:
+            'Saving a paper puts it here; what you do with it afterwards is what Discovery learns from.',
+          children: (
+            <>
+              <p className="mb-2">
+                <strong>Saved</strong> is everything in your Library.{' '}
+                <strong>Collections</strong> are the folders you file papers into — a collection can
+                also become a Discovery lens, so a reading project can grow itself.{' '}
+                <strong>Reading list</strong> is the shorter queue of what you are actually working
+                through: membership IS the reading state, so a paper is either on the list or not.
+              </p>
+              <p>
+                <strong>Removing</strong> a paper is a soft transition, never a delete — it stays in
+                the corpus as a negative signal so Discovery stops offering you papers like it.
+                <strong> Needs attention</strong> below lists saved papers with concrete metadata
+                gaps, each row saying why and what to do.
+              </p>
+            </>
+          ),
+        }}
+      />
 
       {/* Needs Attention — collapsed by default. Each row carries an
           inline reasons strip explaining WHY the paper is flagged + a
           suggested action verb so the user can act without thinking. */}
-      <details
+      <DisclosurePanel
         data-tour="library-workflow"
-        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+        icon={AlertCircle}
+        title="Needs attention"
+        description={
+          needsAttentionCount === 0
+            ? 'Every saved paper is cleanly identified.'
+            : 'Library papers with concrete metadata gaps — each row says why and what to do.'
+        }
+        meta={
+          needsAttentionCount > 0 ? (
+            <StatusBadge tone="warning" size="sm">
+              {needsAttentionCount} to fix
+            </StatusBadge>
+          ) : undefined
+        }
+        contentClassName="space-y-3 p-3"
       >
-        <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span className="font-brand text-sm font-semibold text-alma-800">Needs attention</span>
-              {needsAttentionCount > 0 && (
-                <Badge variant="outline" className={needsAttentionCount > 0 ? 'text-warning-700' : ''}>
-                  {needsAttentionCount}
-                </Badge>
-              )}
-            </div>
-            <span className="text-xs text-slate-500">
-              {needsAttentionCount === 0
-                ? 'Every saved paper is cleanly identified.'
-                : 'Library papers with concrete metadata gaps — each row says why and what to do.'}
-            </span>
-          </div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-          <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-        </summary>
-        <div className="space-y-3 border-t border-[var(--color-border)] px-3 pb-3 pt-3">
           {(workflow?.needs_attention ?? []).length === 0 ? (
             <p className="text-sm text-slate-400">No metadata gaps right now.</p>
           ) : (
@@ -325,8 +341,7 @@ export function LibraryPage() {
               />
             ))
           )}
-        </div>
-      </details>
+      </DisclosurePanel>
 
       {/* ── Tab bar ──────────────────────────────────────────────────────
           Segmented-chip strip (matches the Feed control-bar pattern) so
@@ -343,7 +358,7 @@ export function LibraryPage() {
             <button
               key={tab.id}
               role="tab"
-              data-tour={tab.id === 'saved' ? 'library-saved' : tab.id === 'imports' ? 'library-imports' : undefined}
+              data-tour={TAB_TOUR_ANCHOR[tab.id]}
               aria-selected={isActive}
               onClick={() => {
                 setActiveTab(tab.id)

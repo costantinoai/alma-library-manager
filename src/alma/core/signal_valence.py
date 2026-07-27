@@ -16,6 +16,10 @@ point must carry a value (no holes in the terrain).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Literal
+
 # ── Named weights (the contract) ──────────────────────────────────────────
 # User signals — full authority.
 VALENCE_REMOVED = -0.8
@@ -57,6 +61,7 @@ def rating_is_expressed(rating: int) -> bool:
     """
     return rating > 0 and rating != RATING_NEUTRAL
 
+
 RATING_HALF_RANGE = 2.0
 """Stars from neutral to either end (3★→1★ or 3★→5★)."""
 
@@ -69,6 +74,24 @@ SCORE_HALF_RANGE = 50.0
 
 ENGINE_AUTHORITY = 0.5
 """How much an engine opinion counts relative to a user signal."""
+
+ENGINE_EVIDENCE_WEIGHT = 0.25
+"""Confidence mass of an engine-only paper in an author-level aggregate.
+
+The score already has reduced amplitude through ``ENGINE_AUTHORITY``; this
+second, separate quantity says how much evidence it provides that the user
+likes an *author*. One recommendation must not paint a person strongly green.
+"""
+
+USER_EVIDENCE_WEIGHT = 1.0
+"""Confidence mass of one explicit user-derived paper signal."""
+
+AUTHOR_NEUTRAL_PRIOR_WEIGHT = 2.0
+"""Neutral prior used when paper evidence is lifted to author preference.
+
+It prevents one paper from reading as a settled verdict while allowing
+repeated, consistent user evidence to converge toward its underlying valence.
+"""
 
 VALENCE_NO_SIGNAL = 0.0
 """Papers with no signal at all still occupy the space: they contribute
@@ -104,6 +127,51 @@ def score_valence(score: float) -> float:
     return max(-1.0, min(1.0, raw)) * ENGINE_AUTHORITY
 
 
+ValenceSource = Literal["removed", "rating", "negative_action", "library", "engine"]
+
+
+@dataclass(frozen=True)
+class ValenceEvidence:
+    """One paper's resolved valence plus its author-aggregation confidence."""
+
+    value: float
+    source: ValenceSource
+    weight: float
+
+    @property
+    def is_user_signal(self) -> bool:
+        return self.source != "engine"
+
+
+def paper_valence_evidence(
+    *,
+    status: str,
+    rating: int,
+    n_negative_actions: int,
+    rec_score: float | None,
+) -> ValenceEvidence | None:
+    """Resolve one paper to strongest-first valence evidence.
+
+    The paper-map value and author-level confidence travel together so routes
+    cannot silently invent a second hierarchy or set of weights.
+    """
+    if status in NEGATIVE_STATUSES:
+        return ValenceEvidence(VALENCE_REMOVED, "removed", USER_EVIDENCE_WEIGHT)
+    if rating_is_expressed(rating):
+        return ValenceEvidence(rating_valence(rating), "rating", USER_EVIDENCE_WEIGHT)
+    if n_negative_actions > 0:
+        return ValenceEvidence(
+            VALENCE_NEGATIVE_ACTION,
+            "negative_action",
+            USER_EVIDENCE_WEIGHT,
+        )
+    if status == "library":
+        return ValenceEvidence(VALENCE_LIBRARY, "library", USER_EVIDENCE_WEIGHT)
+    if rec_score is not None:
+        return ValenceEvidence(score_valence(rec_score), "engine", ENGINE_EVIDENCE_WEIGHT)
+    return None
+
+
 def paper_valence(
     *,
     status: str,
@@ -113,18 +181,26 @@ def paper_valence(
 ) -> float | None:
     """Resolve a paper's signals to one valence, strongest-user-first.
 
-    Returns None when the paper carries no signal at all; the field
-    endpoint substitutes `VALENCE_NO_SIGNAL` so the terrain has no
-    holes, while other callers can still tell "no info" apart.
+    Returns None when the paper carries no signal at all; the field endpoint
+    substitutes ``VALENCE_NO_SIGNAL`` so the terrain has no holes.
     """
-    if status in NEGATIVE_STATUSES:
-        return VALENCE_REMOVED
-    if rating_is_expressed(rating):
-        return rating_valence(rating)
-    if n_negative_actions > 0:
-        return VALENCE_NEGATIVE_ACTION
-    if status == "library":
-        return VALENCE_LIBRARY
-    if rec_score is not None:
-        return score_valence(rec_score)
-    return None
+    evidence = paper_valence_evidence(
+        status=status,
+        rating=rating,
+        n_negative_actions=n_negative_actions,
+        rec_score=rec_score,
+    )
+    return evidence.value if evidence is not None else None
+
+
+def aggregate_author_valence(evidence: Iterable[ValenceEvidence]) -> float | None:
+    """Evidence-weighted paper valence shrunk toward a neutral author prior."""
+    items = tuple(evidence)
+    if not items:
+        return None
+    evidence_mass = sum(item.weight for item in items)
+    if evidence_mass <= 0:
+        return None
+    weighted_sum = sum(item.value * item.weight for item in items)
+    value = weighted_sum / (evidence_mass + AUTHOR_NEUTRAL_PRIOR_WEIGHT)
+    return max(-1.0, min(1.0, value))

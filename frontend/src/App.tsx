@@ -6,8 +6,9 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { PageReveal } from '@/components/ui/reveal'
 import { OnboardingGate } from '@/components/onboarding'
 import { prefetchMapPage } from '@/components/map/mapQueries'
-import { parseHashRoute, navigateTo } from '@/lib/hashRoute'
+import { parseHashRoute, navigateTo, type HashRoute } from '@/lib/hashRoute'
 import { pageLoaders, preloadPage } from '@/lib/pageLoaders'
+import NotFoundPage from '@/pages/NotFoundPage'
 
 const HomePage = lazy(pageLoaders.home)
 const FeedPage = lazy(pageLoaders.feed)
@@ -36,10 +37,6 @@ const queryClient = new QueryClient({
   },
 })
 
-function getPageFromHash(): Page {
-  return parseHashRoute().page
-}
-
 function PageLoader() {
   return (
     <div className="flex items-center justify-center py-24">
@@ -49,11 +46,12 @@ function PageLoader() {
 }
 
 function AppContent() {
-  const [currentPage, setCurrentPage] = useState<Page>(getPageFromHash)
+  const [route, setRoute] = useState<HashRoute>(() => parseHashRoute())
+  const currentPage = route.page
 
   useEffect(() => {
     const onHashChange = () => {
-      setCurrentPage(getPageFromHash())
+      setRoute(parseHashRoute())
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -61,7 +59,7 @@ function AppContent() {
 
   const navigate = useCallback((page: Page) => {
     navigateTo(page)
-    setCurrentPage(page)
+    setRoute(parseHashRoute())
   }, [])
 
   const handleRefresh = useCallback(() => {
@@ -79,6 +77,7 @@ function AppContent() {
   }, [])
 
   const renderPage = () => {
+    if (!route.found) return <NotFoundPage />
     switch (currentPage) {
       case 'home':
         return <HomePage />

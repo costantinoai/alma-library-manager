@@ -138,8 +138,11 @@ export function AuthorsNeedsAttentionSection({
 }
 
 function SectionHeader({ total, action }: { total: number | null; action?: ReactNode }) {
+  // Tour anchor (`onboarding/tours.ts`) sits on the HEADER, not the section:
+  // the section runs thousands of pixels tall once rows accumulate, and a
+  // spotlight taller than the screen dims nothing.
   return (
-    <header className="flex items-center gap-2">
+    <header data-tour="authors-attention-header" className="flex items-center gap-2">
       <AlertTriangle className="h-4 w-4 text-warning-600" />
       <h2 className="text-sm font-semibold text-alma-800">Needs attention</h2>
       <span className="text-xs text-slate-500">

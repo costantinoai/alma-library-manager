@@ -47,6 +47,14 @@ interface ConceptCalloutProps {
   children: React.ReactNode
   /** Start expanded. Default: false. */
   defaultOpen?: boolean
+  /**
+   * Weld the callout to the bottom edge of its host instead of floating as
+   * its own card: hairline on top only, no radius. Used by `PageIntro`, where
+   * the guide is part of the masthead object rather than a second box under
+   * it — a page whose first two elements are both bordered cards reads as two
+   * things to get past before the content.
+   */
+  flush?: boolean
   className?: string
 }
 
@@ -55,11 +63,19 @@ export function ConceptCallout({
   summary,
   children,
   defaultOpen = false,
+  flush = false,
   className,
 }: ConceptCalloutProps) {
   return (
     <Collapsible defaultOpen={defaultOpen} className={cn('w-full', className)}>
-      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2">
+      <div
+        className={cn(
+          'bg-surface-2',
+          flush
+            ? 'border-t border-[var(--color-border)]'
+            : 'rounded-sm border border-[var(--color-border)]',
+        )}
+      >
         <CollapsibleTrigger
           className={cn(
             'group flex w-full cursor-pointer select-none items-start gap-3 px-4 py-3 text-left',

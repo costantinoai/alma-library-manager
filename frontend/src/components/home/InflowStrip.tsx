@@ -1,6 +1,6 @@
 import type { HomeTrendPoint } from '@/api/client'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { HOME_TREND_SERIES } from '@/lib/palette'
+import { HOME_SECTION_THEMES, HOME_TREND_SERIES } from '@/lib/palette'
 import { cn } from '@/lib/utils'
 
 /** Tallest a column may draw, in px. Matches the strip's numeral height, so
@@ -116,7 +116,11 @@ export function InflowStrip({ trend, className }: InflowStripProps) {
         </span>
       </div>
       <p className="mt-1.5 truncate text-xs text-slate-600">in the last 7 days</p>
-      <p className="mt-0.5 text-[11px] text-slate-400">Feed + Discovery</p>
+      <p className="mt-0.5 text-[11px]">
+        <span className={HOME_SECTION_THEMES.feed.title}>Feed</span>
+        <span className="text-slate-400"> + </span>
+        <span className={HOME_SECTION_THEMES.discovery.title}>Discovery</span>
+      </p>
     </div>
   )
 }

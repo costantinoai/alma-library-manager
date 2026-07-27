@@ -38,9 +38,16 @@ shared space:
 tracked paper. **Colour** shows communities (clusters) or the engine's
 score; the **Terrain** overlay washes the space by how you actually feel
 about each author's papers — saves, ratings and removals first, engine
-score as weaker evidence, on the [same weights](analytics.md) the paper
-map's terrain uses. Authors you have no signal on leave the paper bare
-rather than flattening the whole picture toward neutral.
+score as weaker evidence, from the same central per-paper valence primitive as
+the paper map.
+
+The author aggregate is evidence-weighted and shrunk toward a neutral two-paper
+prior. An engine-only paper has one quarter of an explicit user signal's
+evidence, so one plausible recommendation does not imply that you like the
+author. Authors with no evidence do not contribute a splat. The colourbar
+always spans the canonical `[-1,+1]` domain instead of restretching the current
+population, making Authors comparable with the paper maps and keeping weak
+positive evidence near neutral.
 
 There are **no link lines**: on an author map adjacency already *is*
 semantic similarity, and drawing a dense collaboration graph would bury the

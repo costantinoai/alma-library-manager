@@ -4,7 +4,14 @@ import { buildHashRoute, parseHashRoute } from './hashRoute'
 
 describe('hashRoute', () => {
   it('routes Map instead of silently falling back to Home', () => {
-    expect(parseHashRoute('#/map').page).toBe('map')
+    expect(parseHashRoute('#/map')).toMatchObject({ page: 'map', found: true })
+  })
+
+  it('marks unknown addresses for the branded not-found page', () => {
+    expect(parseHashRoute('#/missing-paper')).toMatchObject({
+      page: 'home',
+      found: false,
+    })
   })
 
   it('preserves owner deep-link parameters', () => {

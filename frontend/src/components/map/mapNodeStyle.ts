@@ -257,11 +257,11 @@ export function summarizeValues(values: number[]): { min: number; max: number; m
 }
 
 /** Terrain ramp — the ONE owner of the preference-field colours (splat and
- *  legend both read THIS). Contract (user, 2026-07-25): the scale is
- *  SYMMETRIC about zero at the field's real max |value| (dynamic, shown on
- *  the bar), the centre is yellow, and the yellow band is NARROW
- *  (±TERRAIN_YELLOW_BAND of the scale) — colour ramps to strong red/green
- *  quickly off zero so differences from neutral read clearly. */
+ *  legend both read THIS). Valence has a semantic domain of [-1, +1], so the
+ *  scale is fixed across every map. A weak +0.03 must remain weak rather than
+ *  becoming the green endpoint merely because it is the largest value in an
+ *  author population (user catch, 2026-07-26). */
+export const TERRAIN_SCALE_ABS_MAX = 1
 export const TERRAIN_YELLOW_BAND = 0.12
 
 const TERRAIN_STOPS = {
@@ -272,7 +272,7 @@ const TERRAIN_STOPS = {
   deepPos: [0, 104, 55] as const, // +1 — strongest for
 }
 
-/** Terrain colour for a NORMALISED t in [-1, +1] (t = mean / absMax). */
+/** Terrain colour for a semantic valence in [-1, +1]. */
 export function terrainColor(t: number): [number, number, number] {
   const x = Math.max(-1, Math.min(1, t))
   const mix = (a: readonly number[], b: readonly number[], k: number): [number, number, number] => [

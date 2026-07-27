@@ -4,6 +4,7 @@ import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { LassoSelect, Plus, Share2, UserPlus, Users, X } from 'lucide-react'
 
 import { MapRegionCard } from '@/components/map/MapRegionCard'
+import { CreateSelectionLensButton } from '@/components/map/CreateSelectionLensButton'
 
 import {
   api,
@@ -28,6 +29,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
+import { PageIntro } from '@/components/ui/page-intro'
+import { PageSection } from '@/components/ui/page-section'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import {
   authorSuggestionReasons,
@@ -42,10 +45,11 @@ import {
   useMapSessionState,
 } from '@/components/map/mapSessionState'
 import { useAuthorField } from '@/components/map/useAuthorField'
+import { selectionWithinVisible } from '@/components/map/useRegionSelection'
 import { MetricTile } from '@/components/shared/MetricTile'
 import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { SignalChip } from '@/components/shared/SignalChip'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { StatusBadge } from '@/components/ui/status-badge'
 import {
@@ -133,6 +137,11 @@ export function AuthorsPage() {
     'dotOpacity',
     AUTHOR_MAP_DEFAULTS.dotOpacity,
   )
+  const [networkTerrainOpacity, setNetworkTerrainOpacity] = useMapSessionState(
+    'author-map',
+    'terrainOpacity',
+    AUTHOR_MAP_DEFAULTS.terrainOpacity,
+  )
   const [networkWordScale, setNetworkWordScale] = useMapSessionState(
     'author-map',
     'wordScale',
@@ -150,11 +159,21 @@ export function AuthorsPage() {
   const [networkRegionIds, setNetworkRegionIds] = useState<string[] | null>(null)
   const [networkSelected, setNetworkSelected] = useState<GraphNode | null>(null)
   const [networkPayload, setNetworkPayload] = useState<GraphData | null>(null)
+  const networkVisibleIds = useMemo(
+    () => new Set((networkPayload?.nodes ?? []).map((node) => node.id)),
+    [networkPayload],
+  )
+  useEffect(() => {
+    setNetworkRegionIds((current) => {
+      if (!current) return current
+      const scoped = selectionWithinVisible(current, networkVisibleIds)
+      return scoped.length === current.length ? current : scoped.length ? scoped : null
+    })
+  }, [networkVisibleIds])
   // Do not build the expensive author field in parallel with a missing map.
   // Once a payload exists it stays live for popup/drilldown scores, and the map
   // itself shares this exact React Query cache when Score/Terrain is active.
   const networkAuthorField = useAuthorField(
-    networkScope,
     networkPayload !== null || networkSelected !== null,
   )
 
@@ -724,23 +743,39 @@ export function AuthorsPage() {
   const hasError = authorsQuery.isError || followedAuthorsQuery.isError
 
   return (
-    <div className="space-y-8 p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-alma-800">Authors</h1>
-          <p className="text-sm text-slate-500">
-            Suggestions drawn from your Library, followed authors that own their Feed monitor, and
-            the full corpus view.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="space-y-6">
+      <PageIntro
+        icon={Users}
+        lede="The people behind your corpus."
+        detail="Follow an author and every new paper of theirs lands in your Feed. Who to follow next is suggested from who you already read."
+        tour={<PageTour pageKey="authors" steps={AUTHORS_TOUR} />}
+        actions={
           <Button size="sm" onClick={() => setAddAuthorOpen(true)}>
             <Plus className="h-4 w-4" />
             Add author
           </Button>
-          <PageTour pageKey="authors" steps={AUTHORS_TOUR} />
-        </div>
-      </header>
+        }
+        guide={{
+          summary:
+            'Following an author is a standing Feed monitor; suggestions come from your own Library and co-authorship.',
+          children: (
+            <>
+              <p className="mb-2">
+                <strong>Following</strong> an author creates a Feed monitor that owns them: new work
+                of theirs arrives in your Feed automatically, and unfollowing retires the monitor
+                with it. <strong>Suggestions</strong> are authors you do not follow yet, drawn from
+                several sources at once — who you already save, who they publish with, and who works
+                on the same topics — with the reason shown on each card.
+              </p>
+              <p>
+                One person can arrive from several sources under slightly different names, so ALMa
+                keeps an <strong>identity</strong> per author and merges duplicates when it is
+                confident. Anything it is not sure about is listed for you to decide.
+              </p>
+            </>
+          ),
+        }}
+      />
 
       {hasError ? (
         <Alert variant="negative">
@@ -752,23 +787,17 @@ export function AuthorsPage() {
           FIRST-CLASS citizen — top of the page, always visible, like the
           Discovery frontier map. Membership reads on the SAME channels as the
           paper maps (filled = yours, hollow = suggested, faint = context). */}
-      <section data-tour="authors-network">
-      {/* Proper section box in the Branch Studio idiom (user call
-          2026-07-25): Card with a tinted header band, brand-face title,
-          subtitle — the map is a first-class section, never a floating
-          plate. */}
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
-          <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
-            <Share2 className="h-5 w-5 text-alma-folio" />
-            Author Map
-          </CardTitle>
-          <p className="mt-1 max-w-3xl text-sm text-slate-600">
-            One shared space for the people behind your corpus — the authors you already follow,
-            the ones being suggested, and everyone else, placed by what they write about.
-          </p>
-        </CardHeader>
-      <CardContent className="space-y-3 p-4">
+      {/* The banded section is the shared primitive now — this used to be a
+          hand-rolled Card + tinted CardHeader, character for character the same
+          markup as Discovery's Suggestions Map. */}
+      <div data-tour="authors-network">
+      <PageSection
+        id="authors-network-heading"
+        variant="banded"
+        icon={Share2}
+        title="Author Map"
+        description="One shared space for the people behind your corpus — the authors you already follow, the ones being suggested, and everyone else, placed by what they write about."
+      >
         <ConceptCallout
           eyebrow="How to read this map"
           summary="Every author in scope on one plate — filled dots are yours, gold outlines are current suggestions, faint dots are context."
@@ -819,6 +848,7 @@ export function AuthorsPage() {
                   setNetworkScope(next)
                   setNetworkSelected(null)
                   setNetworkPayload(null)
+                  setNetworkRegionIds(null)
                 }}
                 options={[
                   { value: 'library', label: 'Library', title: 'Authors of papers you saved' },
@@ -841,7 +871,7 @@ export function AuthorsPage() {
                 <LassoSelect className="h-3.5 w-3.5" />
                 Select region
               </button>
-              <MapTuningPopover title="Fine tuning — cluster detail, dot size, dot opacity, words">
+              <MapTuningPopover title="Fine tuning — terrain opacity, cluster detail, dot size, dot opacity, words">
                 <SliderRow
                   label="Cluster detail"
                   value={networkResolution}
@@ -856,6 +886,8 @@ export function AuthorsPage() {
                   onSizeScale={setNetworkSizeScale}
                   dotOpacity={networkDotOpacity}
                   onDotOpacity={setNetworkDotOpacity}
+                  terrainOpacity={networkTerrainOpacity}
+                  onTerrainOpacity={setNetworkTerrainOpacity}
                   wordScale={networkWordScale}
                   onWordScale={setNetworkWordScale}
                   wordCount={networkWordCount}
@@ -866,6 +898,7 @@ export function AuthorsPage() {
           }
           sizeScale={networkSizeScale}
           dotOpacity={networkDotOpacity}
+          terrainOpacity={networkTerrainOpacity}
           toponymScale={networkWordScale}
           toponymWordCount={networkWordCount}
           onPayload={setNetworkPayload}
@@ -897,7 +930,8 @@ export function AuthorsPage() {
           onLasso={(ids) => {
             setNetworkSelected(null)
             setNetworkSelectMode(false)
-            setNetworkRegionIds(ids)
+            const scoped = selectionWithinVisible(ids, networkVisibleIds)
+            setNetworkRegionIds(scoped.length ? scoped : null)
           }}
           plateOverlay={
             networkRegion && (
@@ -906,6 +940,15 @@ export function AuthorsPage() {
                 icon={<LassoSelect className="h-3.5 w-3.5 text-alma-folio" />}
                 count={networkRegion.members.length}
                 onClose={() => setNetworkRegionIds(null)}
+                actions={
+                  <CreateSelectionLensButton
+                    ids={networkRegion.members.map((node) => node.id)}
+                    scope={networkScope}
+                    selectionKind="authors"
+                    name={`${networkRegion.topics[0]?.[0] ?? 'Author area'} · map selection`}
+                    onCreated={() => setNetworkRegionIds(null)}
+                  />
+                }
               >
                 <p className="text-sm font-semibold text-alma-800">
                   {networkRegion.members.length} author
@@ -1471,16 +1514,18 @@ export function AuthorsPage() {
             . All of them stay in the rail below.
           </p>
         )}
-      </CardContent>
-      </Card>
-      </section>
+      </PageSection>
+      </div>
 
       <div data-tour="authors-suggestions">
         <SuggestedAuthorsRail onOpenDetail={openSuggestionDetail} />
       </div>
 
-      <section className="space-y-3" data-tour="authors-followed">
-        <header className="flex items-center gap-2">
+      {/* The tour anchors on the HEADER, not the section: with 90 followed
+          authors the section measured 6005px, and a spotlight taller than the
+          screen dims nothing (2026-07-27 audit). */}
+      <section className="space-y-3">
+        <header data-tour="authors-followed-header" className="flex items-center gap-2">
           <Users className="h-4 w-4 text-alma-600" />
           <h2 className="text-sm font-semibold text-alma-800">Followed authors</h2>
           <span className="text-xs text-slate-500">
@@ -1530,7 +1575,6 @@ export function AuthorsPage() {
       <div
         ref={needsAttentionRef}
         id="authors-needs-attention"
-        data-tour="authors-attention"
         className={cn(
           'scroll-mt-6 rounded-lg transition-shadow',
           // Transient accent ring on arrival from a Health drilldown, so the

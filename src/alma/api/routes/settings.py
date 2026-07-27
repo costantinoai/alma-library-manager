@@ -33,7 +33,7 @@ from pathlib import Path
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from alma.api.deps import get_current_user
 from alma.config import (
@@ -55,10 +55,7 @@ from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
     SECRET_OPENALEX_API_KEY,
     SECRET_SEMANTIC_SCHOLAR_API_KEY,
-    SECRET_SLACK_BOT_TOKEN,
-    SECRET_SMTP_PASSWORD,
     delete_secret,
-    get_secret,
     mask_secret,
     set_secret,
 )
@@ -66,7 +63,6 @@ from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.openalex.http import get_client as get_openalex_client
 from alma.openalex.http import reset_client as reset_openalex_client
-from alma.slack.client import get_slack_notifier
 
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
 _SEMANTIC_SCHOLAR_ENV_KEY = "SEMANTIC_SCHOLAR_API_KEY"
@@ -119,7 +115,9 @@ def _try_write_dotenv_rotation(env_key: str, new_value: str, previous: str) -> N
         logger.info(
             "Skipping `.env` rotation for `%s` (`%s` not writable: %s) — "
             "value is still persisted in the secret store",
-            env_key, dotenv_path, exc,
+            env_key,
+            dotenv_path,
+            exc,
         )
         return
 
@@ -201,44 +199,35 @@ router = APIRouter(
 
 
 class SettingsModel(BaseModel):
-    backend: str = Field("openalex", pattern="^(scholar|openalex)$", description="Publication backend")
-    openalex_email: str | None = Field(None, description="Optional contact email sent with OpenAlex requests")
-    fetch_full_history: bool | None = Field(False, description="Fetch full author history (OpenAlex)")
-    from_year: int | None = Field(None, description="Fetch from this year onward; ignored if fetch_full_history is true")
+    model_config = ConfigDict(extra="forbid")
+
+    backend: str = Field(
+        "openalex", pattern="^(scholar|openalex)$", description="Publication backend"
+    )
+    openalex_email: str | None = Field(
+        None, description="Optional contact email sent with OpenAlex requests"
+    )
+    fetch_full_history: bool | None = Field(
+        False, description="Fetch full author history (OpenAlex)"
+    )
+    from_year: int | None = Field(
+        None, description="Fetch from this year onward; ignored if fetch_full_history is true"
+    )
     api_call_delay: str | None = Field("1.0", description="Legacy UI delay; kept for compatibility")
     # Paths (exposed for convenience; prefer env-vars in production)
     # IMPORTANT: All paths MUST be relative (e.g., ./data/scholar.db)
     database: str | None = Field(None, description="Relative path to the unified scholar database")
-    # Slack notification settings
-    slack_token: str | None = Field(None, description="Slack Bot User OAuth Token")
-    slack_channel: str | None = Field(None, description="Default Slack channel for notifications")
-    # Inbox capture (INBOUND) — a separate FIELD from `slack_channel`
-    # (outbound alerts) because they are opposite directions. They MAY point at
-    # the same channel: the poller skips messages with a `bot_id`, so ALMa never
-    # re-reads its own alerts. A dedicated channel is just cleaner. Empty =
-    # capture off. See docs/concepts/inbox.md.
-    slack_inbox_channel: str | None = Field(
-        None,
-        description=(
-            "Slack channel ALMa POLLS for papers you send yourself "
-            "(e.g. alma-inbox). Empty disables Inbox capture."
-        ),
-    )
-    # Email / SMTP digest channel (sibling of Slack). Add "email" to an alert's
-    # channels to receive digests here. Password lives in the secret store.
-    smtp_host: str | None = Field(None, description="SMTP server host for email digests")
-    smtp_port: int | None = Field(587, description="SMTP port (587 = STARTTLS, 465 = implicit TLS)")
-    smtp_username: str | None = Field(None, description="SMTP auth username")
-    smtp_password: str | None = Field(None, description="SMTP auth password (stored in the secret store)")
-    smtp_from: str | None = Field(None, description="From address for digest emails")
-    smtp_to: str | None = Field(None, description="Recipient list (comma / newline separated)")
-    smtp_use_tls: bool | None = Field(True, description="Use STARTTLS (ignored on port 465)")
     # OpenAlex API key — REQUIRED since 2026-02-13 (the email "polite pool"
     # was discontinued; keyless requests get 100 credits/day then HTTP 409).
-    openalex_api_key: str | None = Field(None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)")
+    openalex_api_key: str | None = Field(
+        None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)"
+    )
     # Semantic Scholar API key — strongly recommended; without it S2 uses the
     # shared anonymous worldwide pool and 429s frequently (stalls Discovery).
-    semantic_scholar_api_key: str | None = Field(None, description="Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)")
+    semantic_scholar_api_key: str | None = Field(
+        None,
+        description="Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)",
+    )
     # Identifier resolution strategy settings
     id_resolution_semantic_scholar_enabled: bool | None = Field(
         True,
@@ -257,7 +246,7 @@ class SettingsModel(BaseModel):
         description="Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default — D14)",
     )
 
-    @field_validator('database')
+    @field_validator("database")
     @classmethod
     def validate_relative_path(cls, v: str | None) -> str | None:
         """Ensure paths are relative, not absolute."""
@@ -291,18 +280,9 @@ def _is_masked_secret_value(value: object) -> bool:
     return isinstance(value, str) and value.startswith("****")
 
 
-def _is_masked_slack_token(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    token = value.strip()
-    # Current GET response mask format is "<prefix>...<suffix>".
-    return "..." in token
-
-
 def _export_settings_sanitized(raw: dict) -> dict:
     """Return settings safe for export payloads."""
     out = dict(raw or {})
-    out["slack_token"] = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
     # `get_openalex_api_key` / `get_semantic_scholar_api_key` resolve
     # env-then-secret-store, so the masked display reflects whichever
     # location actually holds the value — consistent with how each client
@@ -316,14 +296,11 @@ def _export_settings_sanitized(raw: dict) -> dict:
 def get_settings():
     """Retrieve core settings.
 
-    Note: slack_token is masked for security -- only the first 10 characters
-    are returned so the UI can show whether a token is configured.
+    Plugin configuration has its own schema-driven routes.
     """
     raw = _read_settings()
-    slack_token_masked = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
     openalex_api_key_masked = mask_secret(get_openalex_api_key(), suffix=4)
     semantic_scholar_api_key_masked = mask_secret(get_semantic_scholar_api_key(), suffix=4)
-    smtp_password_masked = mask_secret(get_secret(SECRET_SMTP_PASSWORD), suffix=4)
 
     return SettingsModel(
         backend=raw.get("backend", "openalex"),
@@ -332,16 +309,6 @@ def get_settings():
         from_year=raw.get("from_year"),
         api_call_delay=str(raw.get("api_call_delay", "1.0")),
         database=raw.get("database"),
-        slack_token=slack_token_masked,
-        slack_channel=raw.get("slack_channel"),
-        slack_inbox_channel=raw.get("slack_inbox_channel"),
-        smtp_host=raw.get("smtp_host"),
-        smtp_port=int(raw.get("smtp_port", 587) or 587),
-        smtp_username=raw.get("smtp_username"),
-        smtp_password=smtp_password_masked,
-        smtp_from=raw.get("smtp_from"),
-        smtp_to=raw.get("smtp_to"),
-        smtp_use_tls=bool(raw.get("smtp_use_tls", True)),
         openalex_api_key=openalex_api_key_masked,
         semantic_scholar_api_key=semantic_scholar_api_key_masked,
         id_resolution_semantic_scholar_enabled=bool(
@@ -386,7 +353,9 @@ def export_data_snapshot():
 
     dump: dict[str, list[dict]] = {}
     try:
-        conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S)
+        conn = sqlite3.connect(
+            str(get_db_path()), check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S
+        )
         conn.row_factory = sqlite3.Row
         apply_busy_timeout(conn)
         try:
@@ -430,8 +399,6 @@ def update_settings(payload: SettingsModel):
         # Secrets are persisted in the secret store, not settings.json.
         incoming_openalex_key = data.pop("openalex_api_key", None)
         incoming_s2_key = data.pop("semantic_scholar_api_key", None)
-        incoming_slack_token = data.pop("slack_token", None)
-        incoming_smtp_password = data.pop("smtp_password", None)
 
         if incoming_openalex_key is not None and not _is_masked_secret_value(incoming_openalex_key):
             clean_openalex_key = str(incoming_openalex_key).strip()
@@ -445,26 +412,14 @@ def update_settings(payload: SettingsModel):
         if incoming_s2_key is not None and not _is_masked_secret_value(incoming_s2_key):
             clean_s2_key = str(incoming_s2_key).strip()
             if clean_s2_key:
-                _rotate_env_secret(_SEMANTIC_SCHOLAR_ENV_KEY, SECRET_SEMANTIC_SCHOLAR_API_KEY, clean_s2_key)
+                _rotate_env_secret(
+                    _SEMANTIC_SCHOLAR_ENV_KEY, SECRET_SEMANTIC_SCHOLAR_API_KEY, clean_s2_key
+                )
             else:
                 _delete_env_secret(_SEMANTIC_SCHOLAR_ENV_KEY, SECRET_SEMANTIC_SCHOLAR_API_KEY)
             # No client reset needed: `core.http_sources._semantic_headers`
             # reads `get_semantic_scholar_api_key()` fresh on every request,
             # and the in-process env was just updated.
-
-        if incoming_slack_token is not None and not _is_masked_slack_token(incoming_slack_token):
-            clean_slack_token = str(incoming_slack_token).strip()
-            if clean_slack_token:
-                set_secret(SECRET_SLACK_BOT_TOKEN, clean_slack_token)
-            else:
-                delete_secret(SECRET_SLACK_BOT_TOKEN)
-
-        if incoming_smtp_password is not None and not _is_masked_secret_value(incoming_smtp_password):
-            clean_smtp_password = str(incoming_smtp_password).strip()
-            if clean_smtp_password:
-                set_secret(SECRET_SMTP_PASSWORD, clean_smtp_password)
-            else:
-                delete_secret(SECRET_SMTP_PASSWORD)
 
         # Write settings first (this validates that paths are relative)
         _write_settings(data)
@@ -487,7 +442,9 @@ def update_settings(payload: SettingsModel):
                     conn.close()
             except Exception as e:
                 logger.warning("Invalid database path: %s", redact_sensitive_text(str(e)))
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid database path")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid database path"
+                )
 
         # Reload settings to get updated paths
         reload_settings()
@@ -495,20 +452,6 @@ def update_settings(payload: SettingsModel):
         # Ensure shared OpenAlex client picks up changed credentials/settings.
         if incoming_openalex_key is not None or "openalex_email" in data:
             reset_openalex_client()
-
-        if incoming_slack_token is not None or "slack_channel" in data:
-            # Nothing to mirror: the secret store is the token's single owner
-            # (task 55). Nothing else is written here.
-            #
-            # Slack config feeds the cached operational diagnostics (the
-            # slack_unconfigured state); its fingerprint cannot see settings.json,
-            # so force a rebuild for instant Health-page feedback.
-            try:
-                from alma.application import materialized_views as mv
-
-                mv.enqueue_rebuild("insights:diag:operational")
-            except Exception as exc:  # noqa: BLE001 — best-effort freshness, never block the save
-                logger.warning("operational diagnostics rebuild enqueue failed: %s", exc)
 
         if data.get("database"):
             _ensure_db(get_db_path())
@@ -521,7 +464,9 @@ def update_settings(payload: SettingsModel):
     except ValueError as e:
         # Path validation errors from pydantic
         logger.warning("Invalid settings payload: %s", redact_sensitive_text(str(e)))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid settings payload")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid settings payload"
+        )
     except Exception as e:
         logger.error(f"Failed to update settings: {e}")
         raise HTTPException(
@@ -727,51 +672,9 @@ def test_scholar_connectivity():
     """Best-effort test for scholarly availability (no real scrape)."""
     try:
         import scholarly  # noqa: F401
+
         # We avoid real requests to Scholar here to be respectful.
         return {"success": True, "message": "scholarly library available"}
     except Exception as e:
         logger.error("Scholar connectivity test failed: %s", e)
         return {"success": False, "error": "Scholar connectivity test failed"}
-
-
-@router.post("/test/slack")
-async def test_slack_connectivity():
-    """Send a test message to the configured Slack channel.
-
-    Uses Slack credentials from the unified secret store plus
-    ``SLACK_TOKEN``/``SLACK_CHANNEL`` environment overrides.
-
-    Returns a JSON object with ``success`` (bool), ``message`` (str),
-    and optionally ``error`` (str) on failure.
-    """
-    try:
-        notifier = get_slack_notifier()
-
-        if not notifier.is_configured:
-            return {
-                "success": False,
-                "error": (
-                    "Slack is not configured. Set slack_token in Settings "
-                    "or SLACK_TOKEN environment variable."
-                ),
-            }
-
-        result = await notifier.send_test_message()
-
-        if result:
-            return {
-                "success": True,
-                "message": "Test message sent successfully to Slack",
-                "channel": notifier.resolve_channel(),
-            }
-        else:
-            return {
-                "success": False,
-                "error": "Failed to send test message. Check token and channel.",
-            }
-    except ValueError as e:
-        logger.error("Slack test validation failed: %s", e)
-        return {"success": False, "error": "Slack connectivity test failed"}
-    except Exception as e:
-        logger.error("Slack test failed: %s", e)
-        return {"success": False, "error": "Slack connectivity test failed"}

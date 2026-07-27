@@ -46,7 +46,7 @@ const STEPS: StepComponent[] = [
  * OnboardingFlow — the step machine. Owns persisted state + navigation, renders
  * the active step inside the OnboardingShell. `finish` marks onboarding done on
  * the server (so the gate stops showing), clears local state, and drops the user
- * into Discovery.
+ * on Home.
  */
 export function OnboardingFlow() {
   const qc = useQueryClient()
@@ -81,7 +81,10 @@ export function OnboardingFlow() {
       )
       reset()
       void invalidateQueries(qc, ['bootstrap'], ['onboarding-status'])
-      navigateTo('discovery')
+      // Land on Home, the daily brief and the app's default route (task 47).
+      // The flow used to drop straight into Discovery, which skipped the page
+      // the user will open every day afterwards — and its first-visit tour.
+      navigateTo('home')
     } catch (err) {
       finishingRef.current = false
       setFinishing(false)

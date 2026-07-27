@@ -31,6 +31,8 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # refit_every_rounds: model-refit debounce on the answer path.
     # holdout_percent: rounds reserved for evaluation, stamped at creation.
     # override_min_votes: consistent boundary votes before a region override.
+    "signal_lab.enabled": "true",
+    "signal_lab.map_tint_strength": "0.45",
     "signal_lab.gamma_start": "0.35",
     "signal_lab.epsilon": "0.20",
     "signal_lab.coverage_target": "20",

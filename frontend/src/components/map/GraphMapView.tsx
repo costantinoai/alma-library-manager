@@ -11,11 +11,12 @@
  */
 import { useCallback, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Loader2, Mountain, Search, Share2, Type } from 'lucide-react'
+import { Loader2, Mountain, Search, Share2, Type } from 'lucide-react'
 
 import { type GraphData, type GraphNode } from '@/api/client'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
+import { ErrorState } from '@/components/ui/ErrorState'
 import {
   ClusterLegendChips,
   ColourBarLegend,
@@ -28,10 +29,12 @@ import {
 } from './MapChrome'
 import { graphQueryOptions } from './mapQueries'
 import {
+  PAPER_MAP_DEFAULTS,
   useMapSessionSet,
   useMapSessionState,
 } from './mapSessionState'
 import { SemanticMap, type SemanticMapNode } from './SemanticMap'
+import { buildTerrainField } from './terrainField'
 import { useAuthorField } from './useAuthorField'
 import { useSignalField } from './useSignalField'
 import {
@@ -91,6 +94,7 @@ export interface GraphMapViewProps {
   focusClusterId?: number | null
   sizeScale?: number
   dotOpacity?: number
+  terrainOpacity?: number
   toponymScale?: number
   toponymWordCount?: number
   /** Colour modes this host offers (default: all). Authors drop Year —
@@ -125,6 +129,7 @@ export function GraphMapView({
   focusClusterId,
   sizeScale = 1,
   dotOpacity = 1,
+  terrainOpacity = 1,
   toponymScale = 1,
   toponymWordCount = 3,
   colourModes = ['clusters', 'year', 'score'],
@@ -179,9 +184,24 @@ export function GraphMapView({
   const nodes = useMemo(() => data?.nodes ?? [], [data])
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
-  // Cluster hue map — largest first on the SAME ramp every host uses, so the
-  // biggest cluster is always hue #0 wherever you meet it.
+  // Cluster hue map. The hue identifies WHICH region of the space a cluster is,
+  // so it belongs to the space, not to the current selection: the backend ranks
+  // clusters over the whole layout and ships `hue_index`, and Library — a subset
+  // of the very same corpus layout — therefore paints every cluster exactly as
+  // Corpus does. Ranking the RENDERED nodes here instead recoloured the entire
+  // map on a scope switch (measured 2026-07-26: the top Library cluster was hue
+  // #0 in Library and #194 in Corpus). Local ranking survives only as the
+  // fallback for a payload built before `hue_index` existed.
   const clusterColors = useMemo(() => {
+    const spaceHue = new Map<number, number>()
+    for (const cluster of (data?.metadata?.clusters ?? []) as Array<{
+      id?: number
+      hue_index?: number
+    }>) {
+      if (typeof cluster?.id === 'number' && typeof cluster?.hue_index === 'number') {
+        spaceHue.set(cluster.id, cluster.hue_index)
+      }
+    }
     const tally = new Map<number, { label: string; count: number }>()
     for (const n of nodes) {
       if (typeof n.cluster_id !== 'number' || n.cluster_id < 0) continue
@@ -191,8 +211,13 @@ export function GraphMapView({
       else tally.set(n.cluster_id, { label, count: 1 })
     }
     const ordered = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)
-    return new Map(ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i) }]))
-  }, [nodes])
+    return new Map(
+      ordered.map(([id, v], i) => [
+        id,
+        { ...v, color: branchMapColor(spaceHue.get(id) ?? i) },
+      ]),
+    )
+  }, [nodes, data])
 
   const yearRange = useMemo(
     () => yearRampLimits(nodes.map((n) => Number(n.metadata?.year))),
@@ -210,7 +235,24 @@ export function GraphMapView({
   const isPaperMap = endpoint === 'paper-map'
   const fieldNeeded = showTerrain || colourMode === 'score'
   const signalField = useSignalField(fieldNeeded && isPaperMap)
-  const authorField = useAuthorField(String(params.scope ?? 'library'), fieldNeeded && !isPaperMap)
+  const authorField = useAuthorField(fieldNeeded && !isPaperMap)
+
+  // Which coordinate space this payload's dots live in. The Advanced knobs can
+  // re-fit the layout (cluster detail → fresh UMAP, layout blend → fused
+  // positions), and terrain painted at SUBSTRATE coordinates over a re-fitted
+  // layout is one map's landscape on another map's land (user report
+  // 2026-07-26). The backend declares the frame; the fallback covers payloads
+  // cached before it did, and only the default request can claim substrate.
+  const layoutFrame = (data?.metadata?.layout as { frame?: string } | undefined)?.frame
+  const requestedDefaultLayout = useMemo(() => {
+    const resolution = Number(params.cluster_resolution ?? PAPER_MAP_DEFAULTS.resolution)
+    const blended = ['w_coauthorship', 'w_bibliographic', 'w_cocitation'].some(
+      (key) => Number(params[key] ?? 0) > 0,
+    )
+    return (
+      Math.abs(resolution - PAPER_MAP_DEFAULTS.resolution) < 1e-6 && !blended
+    )
+  }, [params])
 
   /** OpenAlex author ids are case-insensitive and the payload's casing does
    *  not match the authors table's — fold before every id lookup. */
@@ -261,15 +303,34 @@ export function GraphMapView({
   // flat yellow (user catch 2026-07-26). Pale paper where you have no opinion
   // is the honest render; the paper map can afford neutral filler because its
   // substrate must stay hole-free, the author map cannot.
-  const terrainValues = useMemo(() => {
-    if (!showTerrain || isPaperMap) return undefined
-    const m = new Map<string, number>()
-    for (const n of nodes) {
-      const v = authorField.valenceById.get(n.id.trim().toLowerCase())
-      if (typeof v === 'number') m.set(n.id, v)
-    }
-    return m
-  }, [showTerrain, isPaperMap, nodes, authorField.valenceById])
+  // ONE builder for both families (`terrainField.ts`): space-owned when the
+  // payload is in the substrate frame, joined onto THIS payload's nodes by id
+  // when it fitted its own. The author network was always the id-keyed case —
+  // its own layout space, payload always complete — which is exactly why it
+  // never had the frame bug the paper map did.
+  const terrain = useMemo(
+    () =>
+      buildTerrainField({
+        frame: isPaperMap ? layoutFrame : 'substrate',
+        fallbackIsSubstrate: !isPaperMap || requestedDefaultLayout,
+        nodes,
+        // Both families hand over the WHOLE space's points, at the space's own
+        // coordinates. Scope filters dots, never the field — the Library view of
+        // either map is a subset of the same terrain, not a smaller terrain.
+        spacePoints: isPaperMap ? signalField.points : authorField.points,
+        valenceById: isPaperMap ? signalField.valenceById : authorField.valenceById,
+      }),
+    [
+      isPaperMap,
+      layoutFrame,
+      requestedDefaultLayout,
+      nodes,
+      signalField.points,
+      signalField.valenceById,
+      authorField.points,
+      authorField.valenceById,
+    ],
+  )
 
   // Colourbar stats — the numbers the legend owes the reader.
   const yearStats = useMemo(
@@ -283,13 +344,11 @@ export function GraphMapView({
       ),
     [nodes, liveScore],
   )
-  // Terrain bar: for paper maps the SPACE's own stats (stable across view
-  // state). For the author map, the stats of the values actually splatted —
-  // so the ±max the bar labels is the ±max the plate normalised against.
-  const terrainStats = useMemo(() => {
-    if (isPaperMap) return signalField.stats
-    return terrainValues?.size ? summarizeValues([...terrainValues.values()]) : null
-  }, [isPaperMap, signalField.stats, terrainValues])
+  // Terrain bar: always the stats of the values ACTUALLY splatted, so the ±max
+  // the bar labels is the ±max the plate normalised against. On the substrate
+  // frame that is the space's own stats (stable across every layer toggle);
+  // on a re-fitted layout it is that layout's own population.
+  const terrainStats = terrain.stats
 
   const query = search.trim().toLowerCase()
   const mapNodes = useMemo<SemanticMapNode[]>(
@@ -377,20 +436,22 @@ export function GraphMapView({
   const layoutComputedAt = layout?.computed_at || delivery?.computed_at
   const omittedUnplaced =
     typeof metadata?.omitted_unplaced === 'number' ? metadata.omitted_unplaced : 0
+  // Dots positioned by interpolation since the last full fit rather than by the
+  // fit itself. Same contract as omittedUnplaced: an approximation the reader
+  // can SEE, because an approximate dot renders identically to a computed one.
+  const approximatePositions =
+    typeof metadata?.approximate_positions === 'number' ? metadata.approximate_positions : 0
 
   if (graphQuery.isError && !data) {
     return (
-      <div className="flex h-[420px] flex-col items-center justify-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
-        <AlertTriangle className="h-5 w-5 text-slate-500" />
-        <span>The map could not be loaded.</span>
-        <button
-          type="button"
-          onClick={() => void graphQuery.refetch()}
-          className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-        >
-          Try again
-        </button>
-      </div>
+      <ErrorState
+        title="The map could not be loaded"
+        message="Its saved layout is still intact. Retry the map request."
+        actionLabel="Try again"
+        onAction={() => void graphQuery.refetch()}
+        actionPending={graphQuery.isFetching}
+        className="min-h-[420px]"
+      />
     )
   }
 
@@ -485,10 +546,10 @@ export function GraphMapView({
         height={height}
         sizeScale={sizeScale}
         dotOpacity={dotOpacity}
+        terrainOpacity={terrainOpacity}
         toponymScale={toponymScale}
         toponymWordCount={toponymWordCount}
-        heatValues={terrainValues}
-        heatField={showTerrain && isPaperMap ? signalField.points : undefined}
+        heatField={showTerrain ? terrain.points : undefined}
         lassoMode={lassoMode}
         onLasso={onLasso}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
@@ -557,6 +618,14 @@ export function GraphMapView({
               · {omittedUnplaced} not placed (no embedded paper)
             </span>
           )}
+          {approximatePositions > 0 && (
+            <span
+              className="text-slate-400"
+              title="These papers gained a vector after the last full layout, so their position is interpolated from their nearest already-placed neighbours rather than computed by the fit. The next full rebuild places them exactly."
+            >
+              · {approximatePositions} placed approximately
+            </span>
+          )}
           {colourMode === 'year' && yearRange && yearStats && (
             // Ramp clamps at p10–p90 for contrast; the labels say so with
             // extend notation ("≤2004" = everything older saturates at the
@@ -580,17 +649,24 @@ export function GraphMapView({
             />
           )}
           {showTerrain && terrainStats && (
-            // SYMMETRIC about zero at the field's REAL max |value| —
-            // dynamic, the exact scale the splat uses (user contract
-            // 2026-07-25). Narrow yellow band = neutral; strong red/green
-            // right off zero.
+            // Fixed semantic valence domain: weak populations stay weak and
+            // every map uses a directly comparable colour.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.terrain}
-              min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
+              min="-1"
               mid="0"
-              max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+              max="1"
               mean={terrainStats.mean.toFixed(2)}
             />
+          )}
+          {showTerrain && terrain.frame === 'own' && (
+            // A tuned layout is its own space. The terrain follows it — and
+            // only papers WITH a place in it can appear, so say which
+            // population the bar above describes instead of implying the
+            // whole corpus.
+            <span className="text-slate-400">
+              terrain over this layout&rsquo;s {terrain.coverage.total.toLocaleString()} papers
+            </span>
           )}
           {layoutComputedAt && (
             <span

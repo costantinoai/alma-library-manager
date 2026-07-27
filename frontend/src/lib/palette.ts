@@ -20,6 +20,175 @@
  */
 
 /**
+ * Home category → title, pill, sticky-note, and chart families.
+ *
+ * These are categorical, not status colours: green always means Inbox,
+ * violet Reading list, gold the editorial Picked shelf, teal Discovery, and
+ * magenta Feed. Every consumer derives from this registry.
+ */
+export type HomeSectionThemeKey =
+  | 'inbox'
+  | 'reading'
+  | 'picked'
+  | 'discovery'
+  | 'feed'
+
+export interface HomeSectionTheme {
+  title: string
+  icon: string
+  chip: string
+  noteSurface: string
+  notePlate: string
+  noteFold: string
+  series: string
+}
+
+export const HOME_SECTION_THEMES: Record<HomeSectionThemeKey, HomeSectionTheme> = {
+  inbox: {
+    title: 'text-success-800',
+    icon: 'text-success-700',
+    chip: 'border-success-700/10 bg-success-700/10 text-success-800',
+    noteSurface: '!border-success-700/20 !bg-success-700/[0.07]',
+    notePlate: '!border-success-700/20 !bg-success-700/[0.11]',
+    noteFold: 'border-t-success-700/25',
+    series: 'bg-success-500',
+  },
+  reading: {
+    title: 'text-violet-800',
+    icon: 'text-violet-700',
+    chip: 'border-violet-700/10 bg-violet-700/10 text-violet-800',
+    noteSurface: '!border-violet-700/20 !bg-violet-700/[0.065]',
+    notePlate: '!border-violet-700/20 !bg-violet-700/[0.1]',
+    noteFold: 'border-t-violet-700/25',
+    series: 'bg-violet-500',
+  },
+  picked: {
+    title: 'text-gold-700',
+    icon: 'text-gold-600',
+    chip: 'border-gold-700/10 bg-gold-700/10 text-gold-700',
+    noteSurface: '!border-gold-700/20 !bg-gold-700/[0.075]',
+    notePlate: '!border-gold-700/20 !bg-gold-700/[0.115]',
+    noteFold: 'border-t-gold-700/25',
+    series: 'bg-gold-400',
+  },
+  discovery: {
+    title: 'text-cyan-800',
+    icon: 'text-cyan-700',
+    chip: 'border-cyan-700/10 bg-cyan-700/10 text-cyan-800',
+    noteSurface: '!border-cyan-700/20 !bg-cyan-700/[0.07]',
+    notePlate: '!border-cyan-700/20 !bg-cyan-700/[0.105]',
+    noteFold: 'border-t-cyan-700/25',
+    series: 'bg-cyan-600',
+  },
+  feed: {
+    title: 'text-fuchsia-800',
+    icon: 'text-fuchsia-700',
+    chip: 'border-fuchsia-700/10 bg-fuchsia-700/10 text-fuchsia-800',
+    noteSurface: '!border-fuchsia-700/20 !bg-fuchsia-700/[0.06]',
+    notePlate: '!border-fuchsia-700/20 !bg-fuchsia-700/[0.095]',
+    noteFold: 'border-t-fuchsia-700/25',
+    series: 'bg-fuchsia-500',
+  },
+}
+
+/**
+ * Page → identity colour.
+ *
+ * Answers *which surface am I on*, never *how good is this* — the documented
+ * identity-colour exception, same rule as Feed monitor chips and Library
+ * provenance chips. The hue appears in exactly one place per page: the glyph
+ * medallion in that page's `PageIntro`, plus the banded sections that belong
+ * to it. Everything else on the page keeps colour for valence.
+ *
+ * Reuses the hues the app had already settled on where one existed — Feed is
+ * magenta and Discovery teal because `HOME_SECTION_THEMES` already says so on
+ * the desk, Authors is indigo because `CATEGORY_ICON_COLORS.author` is, and
+ * Library is violet because that is the Reading hue. Deriving them here rather
+ * than re-typing the classes is what keeps the desk and the page agreeing.
+ *
+ * Settings is deliberately hueless: it is plumbing, not a subject.
+ */
+export type PageThemeKey =
+  | 'home'
+  | 'feed'
+  | 'discovery'
+  | 'map'
+  | 'authors'
+  | 'library'
+  | 'alerts'
+  | 'health'
+  | 'insights'
+  | 'settings'
+
+export interface PageTheme {
+  /** Glyph tint. */
+  icon: string
+  /** Wash behind the glyph — the shared chip formula, `hue-700 @ 10%`. */
+  medallion: string
+  /** Count-pill classes, shaped to drop straight into `PageSection`'s
+   *  `categoryTheme` so a page's bands inherit its identity. */
+  chip: string
+}
+
+export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
+  home: {
+    icon: HOME_SECTION_THEMES.picked.icon,
+    medallion: 'bg-gold-700/10',
+    chip: HOME_SECTION_THEMES.picked.chip,
+  },
+  feed: {
+    icon: HOME_SECTION_THEMES.feed.icon,
+    medallion: 'bg-fuchsia-700/10',
+    chip: HOME_SECTION_THEMES.feed.chip,
+  },
+  // Green, not the cyan the Home desk uses for the Discovery *category*
+  // (user call 2026-07-27). NOTE the hazard: `success` is emerald, and a
+  // Discovery card is full of emerald valence chips ("Matches what you save").
+  // Identity green and success green sit on the same page, so this hue is kept
+  // to structural chrome only — never a chip, never a meter.
+  discovery: {
+    icon: 'text-green-700',
+    medallion: 'bg-green-700/10',
+    chip: 'border-green-700/10 bg-green-700/10 text-green-800',
+  },
+  map: {
+    icon: 'text-teal-700',
+    medallion: 'bg-teal-700/10',
+    chip: 'border-teal-700/10 bg-teal-700/10 text-teal-800',
+  },
+  authors: {
+    icon: 'text-indigo-700',
+    medallion: 'bg-indigo-700/10',
+    chip: 'border-indigo-700/10 bg-indigo-700/10 text-indigo-800',
+  },
+  library: {
+    icon: HOME_SECTION_THEMES.reading.icon,
+    medallion: 'bg-violet-700/10',
+    chip: HOME_SECTION_THEMES.reading.chip,
+  },
+  alerts: {
+    icon: 'text-orange-700',
+    medallion: 'bg-orange-700/10',
+    chip: 'border-orange-700/10 bg-orange-700/10 text-orange-800',
+  },
+  health: {
+    icon: 'text-emerald-700',
+    medallion: 'bg-emerald-700/10',
+    chip: 'border-emerald-700/10 bg-emerald-700/10 text-emerald-800',
+  },
+  insights: {
+    icon: 'text-sky-700',
+    medallion: 'bg-sky-700/10',
+    chip: 'border-sky-700/10 bg-sky-700/10 text-sky-800',
+  },
+  settings: {
+    icon: 'text-slate-600',
+    medallion: 'bg-slate-700/10',
+    chip: 'border-slate-700/10 bg-slate-700/10 text-slate-700',
+  },
+}
+
+/**
  * Signal-score component → progress-dot color. Where a component's meaning
  * lines up with a semantic state we reuse that token (topic=success,
  * similarity=info, recency=warning, feedback=critical); the remainder are true
@@ -52,11 +221,11 @@ export const SIGNAL_FALLBACK_COLOR = 'bg-slate-400'
  */
 export const SOURCE_COLORS: Record<string, string> = {
   import: 'bg-indigo-700/10 text-indigo-800',
-  feed: 'bg-info-700/10 text-info-800',
-  discovery: 'bg-violet-700/10 text-violet-800',
-  discovery_save: 'bg-violet-700/10 text-violet-800',
-  discovery_like: 'bg-violet-700/10 text-violet-800',
-  discovery_manual: 'bg-violet-700/10 text-violet-800',
+  feed: HOME_SECTION_THEMES.feed.chip,
+  discovery: HOME_SECTION_THEMES.discovery.chip,
+  discovery_save: HOME_SECTION_THEMES.discovery.chip,
+  discovery_like: HOME_SECTION_THEMES.discovery.chip,
+  discovery_manual: HOME_SECTION_THEMES.discovery.chip,
   library_similarity: 'bg-teal-700/10 text-teal-800',
   online_search: 'bg-cyan-700/10 text-cyan-800',
   // `manual` has no identity hue — it falls through to the shell's neutral.
@@ -135,8 +304,8 @@ export const CAPTURE_CHANNEL_LABEL: Record<string, string> = {
  * colour learned on one page still means the same surface on another.
  */
 export const HOME_TREND_SERIES = {
-  feed: 'bg-info-500',
-  discovery: 'bg-violet-500',
+  feed: HOME_SECTION_THEMES.feed.series,
+  discovery: HOME_SECTION_THEMES.discovery.series,
 } as const
 
 /**
@@ -180,4 +349,3 @@ export function branchMapColor(index: number): string {
   const n = BRANCH_MAP_COLORS.length
   return BRANCH_MAP_COLORS[((index % n) + n) % n]
 }
-

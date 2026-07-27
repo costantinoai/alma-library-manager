@@ -1,5 +1,8 @@
 import { useState, useEffect, type ReactNode } from 'react'
+import { PageThemeProvider } from '@/components/ui/page-theme'
+import { PAGE_THEMES } from '@/lib/palette'
 import { Sidebar, type Page } from './Sidebar'
+import { SIDEBAR_CONTENT_INSET, sidebarInset } from './sidebarMetrics'
 import { TopBar } from './TopBar'
 import { ActivityPanel } from '@/components/ActivityPanel'
 import { CommandPalette } from '@/components/CommandPalette'
@@ -92,15 +95,16 @@ export function AppShell({
         onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
       />
 
-      {/* Main content area shifts to clear the fixed sidebar. The
-          left padding tracks the sidebar's actual desktop width
-          (260px expanded, 72px collapsed) so they stay flush. The
-          transition runs on the same 200ms curve as the sidebar
-          width change for a unified motion. */}
+      {/* Main content area shifts to clear the fixed sidebar. The left
+          padding tracks the rail's actual desktop width, read from
+          `sidebarMetrics` so the rail, this column and the Activity dock
+          cannot drift apart. The transition runs on the same 200ms curve as
+          the sidebar width change for a unified motion. */}
       <div
-        className={`transition-[padding] duration-200 ${
-          sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[260px]'
-        }`}
+        className={`transition-[padding] duration-200 ${sidebarInset(
+          SIDEBAR_CONTENT_INSET,
+          sidebarCollapsed,
+        )}`}
       >
         <TopBar
           currentPage={currentPage}
@@ -110,10 +114,17 @@ export function AppShell({
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
 
-        <main className="p-4 pb-16 lg:p-6 lg:pb-16">{children}</main>
+        {/* One assignment for the whole app: the routed page decides the
+            identity hue, and every piece of structural chrome under `main`
+            reads it from context. No page passes a colour prop. */}
+        <PageThemeProvider theme={PAGE_THEMES[currentPage] ?? null}>
+          <main className="p-4 pb-16 lg:p-6 lg:pb-16">{children}</main>
+        </PageThemeProvider>
       </div>
 
-      <ActivityPanel />
+      {/* The dock is `fixed`, so it can't inherit the column's padding — it
+          needs the rail's width told to it directly. */}
+      <ActivityPanel sidebarCollapsed={sidebarCollapsed} />
 
       <CommandPalette
         isOpen={commandPaletteOpen}

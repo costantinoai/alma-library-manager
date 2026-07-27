@@ -18,6 +18,7 @@ from typing import Any
 
 from alma.ai.graph_versions import SIGNAL_LAB_POLICY_VERSION
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import RoundRow
 from alma.core.db_write import run_after_gate_release, run_write_unit
 
@@ -33,14 +34,19 @@ HOLDOUT_PERCENT = 15
 REFIT_EVERY_N_ROUNDS = 5
 
 
+class RoundReplayConflictError(ValueError):
+    """Signed round nonce was already answered with different content."""
+
+
 def _holdout_stamp(game_id: str, shown: list[str], percent: int = HOLDOUT_PERCENT) -> bool:
-    digest = hashlib.sha1(f"{game_id}|{'|'.join(shown)}".encode()).hexdigest()
+    digest = hashlib.sha1(canonical_query_key(game_id, shown).encode()).hexdigest()
     return int(digest[:8], 16) % 100 < percent
 
 
 def record_answer(
     db: sqlite3.Connection,
     *,
+    nonce: str,
     game_id: str,
     shown: list[str],
     answer: dict[str, Any] | None,
@@ -59,19 +65,46 @@ def record_answer(
     """
     if not shown:
         raise ValueError("a round must show at least one paper")
+    nonce = str(nonce).strip()
+    if not nonce:
+        raise ValueError("a signed round nonce is required")
 
     from alma.application.signal_lab import lab_tuning
 
     tuning = lab_tuning(db)
 
     def _unit() -> int:
+        existing = db.execute(
+            """
+            SELECT id, game_id, shown_json, answer_json, skipped
+            FROM signal_lab_rounds WHERE nonce = ?
+            """,
+            (nonce,),
+        ).fetchone()
+        encoded_answer = json.dumps(answer) if answer is not None else None
+        if existing is not None:
+            same = (
+                str(existing["game_id"]) == game_id
+                and canonical_query_key(
+                    str(existing["game_id"]),
+                    list(json.loads(existing["shown_json"] or "[]")),
+                )
+                == canonical_query_key(game_id, shown)
+                and existing["answer_json"] == encoded_answer
+                and bool(existing["skipped"]) == bool(skipped)
+            )
+            if same:
+                return int(existing["id"])
+            raise RoundReplayConflictError(
+                "round token was already answered with different content"
+            )
         cur = db.execute(
             """
             INSERT INTO signal_lab_rounds
                 (game_id, region_id, pair_region_id, region_version, ring,
-                 policy_version, shown_json, answer_json, skipped,
+                 policy_version, nonce, shown_json, answer_json, skipped,
                  reaction_ms, holdout)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game_id,
@@ -80,8 +113,9 @@ def record_answer(
                 region_version,
                 ring,
                 SIGNAL_LAB_POLICY_VERSION,
+                nonce,
                 json.dumps(shown),
-                json.dumps(answer) if answer is not None else None,
+                encoded_answer,
                 1 if skipped else 0,
                 reaction_ms,
                 1 if _holdout_stamp(game_id, shown, tuning["holdout_percent"]) else 0,

@@ -111,10 +111,22 @@ class GraphHttpCacheMiddleware:
         if status == 202:
             # Never cache a transient "building" envelope.
             headers = _set_header(headers, b"cache-control", b"no-store")
+        elif status == 304:
+            # The route answered conditionally from the artifact's identity,
+            # without ever rendering a body. Pass it straight through.
+            pass
         elif status == 200 and b"application/json" in content_type:
-            digest = hashlib.sha256(body).hexdigest().encode("ascii")
-            etag = b'W/"' + digest + b'"'
-            headers = _set_header(headers, b"etag", etag)
+            # A route that knows its artifact's identity supplies its own
+            # validator and can then answer 304 BEFORE rendering. Hashing the
+            # body here is the fallback for routes that don't — it works, but
+            # by the time it runs the expensive part is already paid for.
+            route_etag = _header_value(headers, b"etag")
+            if route_etag:
+                etag = route_etag
+            else:
+                digest = hashlib.sha256(body).hexdigest().encode("ascii")
+                etag = b'W/"' + digest + b'"'
+                headers = _set_header(headers, b"etag", etag)
             # Store privately, but always validate before reuse. This lets the
             # browser answer a 304 with its body while React Query remains the
             # authority over when a request occurs.
@@ -126,9 +138,7 @@ class GraphHttpCacheMiddleware:
             request_headers = list(scope.get("headers") or [])
             if_none_match = _header_value(request_headers, b"if-none-match")
             validators = {
-                item.strip()
-                for item in (if_none_match or b"").split(b",")
-                if item.strip()
+                item.strip() for item in (if_none_match or b"").split(b",") if item.strip()
             }
             if etag in validators or b"*" in validators:
                 headers = _drop_headers(

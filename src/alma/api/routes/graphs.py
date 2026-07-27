@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -27,16 +27,24 @@ from alma.ai.graph_versions import (
 )
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
+from alma.api.models import MapSelectionLensCreate, MapSelectionLensResponse
+from alma.application import map_selection
 from alma.application import materialized_views as mv
+from alma.application.graph_process import graph_build_in_flight
 from alma.application.graph_substrate import (
-    INCREMENTAL_MIN_COSINE,
+    ADMISSION_PERCENTILE,
+    MAX_ADMISSION_COSINE,
+    MIN_ADMISSION_SAMPLE,
     OUTLIER_CLUSTER_ID,
     OUTLIER_LABEL,
+    PLACEMENT_INTERPOLATED,
+    PLACEMENT_LAYOUT,
     SUBSTRATE_CLUSTER_RESOLUTION,
     SUBSTRATE_SCOPE,
+    PlacementContext,
+    PlacementField,
     SubstrateUnavailableError,
-    assign_to_centroids,
-    cluster_jitter,
+    place_vectors,
 )
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
@@ -54,7 +62,11 @@ router = APIRouter(
 # materialized/variant payloads cannot keep serving obsolete geometry. The
 # 2026-07-26 v2 aggregates authors over the durable paper substrate and admits
 # only authors with at least two embedded/placed papers.
-_AUTHOR_NETWORK_LAYOUT_VERSION = "author-layout-paper-substrate-v2"
+# v3: placement, eligibility, communities and labels are computed over the whole
+# corpus and scope only filters which nodes are emitted. A v2 payload placed each
+# author at the centroid of their IN-SCOPE papers, so its coordinates are wrong
+# under the subset rule and must not survive the change.
+_AUTHOR_NETWORK_LAYOUT_VERSION = "author-layout-one-space-v3"
 
 
 def _author_network_placeable_count(
@@ -131,6 +143,28 @@ class GraphData(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     metadata: dict = {}
+
+
+@router.post(
+    "/selection/lens",
+    response_model=MapSelectionLensResponse,
+    summary="Create a collection-backed lens from a visible map selection",
+)
+def create_selection_lens(
+    body: MapSelectionLensCreate,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Atomically save selected papers into a new collection and lens."""
+    try:
+        return map_selection.create_collection_lens(
+            conn,
+            name=body.name,
+            selection_kind=body.selection_kind,
+            ids=body.ids,
+            scope=Scope(body.scope),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +344,10 @@ def _serve_graph_variant(
         is_fresh=lambda stored: gauge.is_fresh(conn, stored),
         job_label=job_label,
         process_spec=process_spec,
+        # Single-flight across all layout work: a tuning slider must not stack a
+        # second UMAP on top of a running corpus fit. Returning None here keeps
+        # the route on its normal 202 + poll path.
+        may_enqueue=lambda: graph_build_in_flight(conn) is None,
     )
     if payload is None:
         return None
@@ -325,11 +363,178 @@ def _serve_graph_variant(
     return graph
 
 
-def _enqueue_graph_view_build(view_key: str) -> dict:
+def _enqueue_graph_view_build(conn: sqlite3.Connection, view_key: str) -> dict:
     """First-run bootstrap for a registered graph view: enqueue ONE background
-    build (deduped by the view's operation key) and describe it for the 202."""
+    build (deduped by the view's operation key) and describe it for the 202.
+
+    Single-flight across ALL layout work: while another fit is running this
+    reports "queued" without adding a second one. The client polls every few
+    seconds, so the build starts the moment the machine is free — no queue to
+    keep, and never two UMAP children on the same corpus.
+    """
+    busy = graph_build_in_flight(conn)
+    if busy:
+        return {"job_id": "", "message": "Queued behind another layout build…"}
     job_id = mv.enqueue_rebuild(view_key)
     return {"job_id": job_id or "", "message": "Building the graph…"}
+
+
+def _graph_etag(view_key: str, version: dict, annotations: dict) -> str:
+    """A weak validator derived from the artifact identity, not from its bytes.
+
+    Hashing the rendered response is what the HTTP-cache middleware does, and
+    it is why a revalidation still cost a full render: decode 25 MB, rebuild
+    every node, re-serialize, hash, then answer 304 with no body. Everything
+    that can change this response is cheap to read — the stored fingerprint /
+    computed_at plus the live annotations — so the validator is computed from
+    those and a matching request never touches the payload.
+    """
+    blob = json.dumps(
+        {
+            "view": view_key,
+            "fingerprint": version.get("fingerprint"),
+            "computed_at": version.get("computed_at"),
+            "annotations": annotations,
+        },
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8")
+    return 'W/"' + hashlib.sha1(blob).hexdigest() + '"'
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC-7232 If-None-Match test against ONE validator."""
+    if not if_none_match:
+        return False
+    candidates = {item.strip() for item in if_none_match.split(",") if item.strip()}
+    return etag in candidates or "*" in candidates
+
+
+_GRAPH_CACHE_HEADERS = {"Cache-Control": "private, no-cache"}
+
+
+def _serve_stored_graph(
+    conn: sqlite3.Connection,
+    *,
+    view_key: str,
+    annotations: dict,
+    if_none_match: str | None,
+    envelope: dict | None = None,
+) -> Response | None:
+    """Serve a durable graph artifact, or ``None`` when nothing is stored yet.
+
+    Two deliberate departures from the ordinary route return:
+
+    * **Conditional first.** The validator comes from `_graph_etag`, so an
+      unchanged layout answers 304 without reading its payload at all.
+    * **No Pydantic round-trip.** The stored payload was produced by
+      ``GraphData.model_dump()`` at build time and validating it again on every
+      read costs ~0.5 s on the corpus map for no new information. The
+      annotations are merged into the decoded dict and sent as-is.
+
+    Pass ``envelope`` when the caller already had to decode the payload for its
+    own gate (the author network inspects its layout version); that skips the
+    cheap-read path rather than decoding twice.
+    """
+    if envelope is None:
+        version = mv.stored_version(conn, view_key)
+        if version is None:
+            return None
+        etag = _graph_etag(view_key, version, annotations)
+        if _etag_matches(if_none_match, etag):
+            return Response(status_code=304, headers={"ETag": etag, **_GRAPH_CACHE_HEADERS})
+        envelope = mv.get_stored(conn, view_key)
+        if envelope is None:
+            return None
+    else:
+        etag = _graph_etag(
+            view_key,
+            {
+                "fingerprint": envelope.get("fingerprint"),
+                "computed_at": envelope.get("computed_at"),
+            },
+            annotations,
+        )
+        if _etag_matches(if_none_match, etag):
+            return Response(status_code=304, headers={"ETag": etag, **_GRAPH_CACHE_HEADERS})
+
+    payload = dict(envelope.get("payload") or {})
+    stored_meta = dict(payload.get("metadata") or {})
+    # One-level MERGE, never replace: `layout` carries the payload's own
+    # coordinate-frame declaration (which the terrain overlay depends on) AND
+    # the live freshness read. A flat overwrite dropped the frame.
+    merged_annotations = {
+        key: (
+            {**(stored_meta.get(key) or {}), **value}
+            if isinstance(value, dict) and isinstance(stored_meta.get(key), dict)
+            else value
+        )
+        for key, value in annotations.items()
+    }
+    payload["metadata"] = {
+        **stored_meta,
+        **merged_annotations,
+        "stale": bool(envelope.get("stale", False)),
+        "rebuilding": bool(envelope.get("rebuilding", False)),
+        "computed_at": str(envelope.get("computed_at") or ""),
+        "delivery": {
+            "source": "materialized_view",
+            "computed_at": str(envelope.get("computed_at") or ""),
+            "compute_ms": int(envelope.get("compute_ms") or 0),
+            "stale": bool(envelope.get("stale", False)),
+            "rebuilding": bool(envelope.get("rebuilding", False)),
+        },
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"ETag": etag, **_GRAPH_CACHE_HEADERS},
+    )
+
+
+# Coordinate frames a paper-map payload can be expressed in. The terrain
+# overlay keys on this: a valence field drawn at SUBSTRATE coordinates is
+# meaningless on a layout that was fitted somewhere else (user report
+# 2026-07-26 — "give shared authorship more weight and the terrain stays put").
+LAYOUT_FRAME_SUBSTRATE = "substrate"
+LAYOUT_FRAME_OWN = "own"
+
+
+def _layout_frame(
+    *,
+    layout_mode: str,
+    requested_resolution: float,
+    layout_weights: dict | None,
+    node_count: int,
+) -> dict:
+    """Declare which coordinate space this payload's x/y live in.
+
+    ``substrate`` means the coordinates ARE the durable ``publication_clusters``
+    layout — read from it, or placed against its centroids, which is the same
+    frame. ``own`` means this build fitted its own projection (a non-default
+    cluster detail re-fits UMAP; a layout blend re-solves positions from fused
+    distances) and nothing outside this payload has a position in it.
+
+    Hosts use this to decide whether the space-owned signal field can be splatted
+    at its stored coordinates or must be joined onto these nodes by paper id.
+    """
+    blend = {
+        key: float((layout_weights or {}).get(key) or 0.0)
+        for key in ("semantic", "coauthorship", "bibliographic_coupling", "co_citation")
+    }
+    # The MODE is the whole truth about the frame, and the only honest source:
+    # a non-default cluster detail marks every paper stale (→ a full re-fit),
+    # and an applied blend stamps ``fused``. Deriving this from the REQUESTED
+    # options instead would lie whenever the fused path declined (over its paper
+    # cap, or it raised) and the substrate coordinates actually survived.
+    substrate_frame = layout_mode in ("embeddings_cached", "embeddings_incremental")
+    return {
+        "frame": LAYOUT_FRAME_SUBSTRATE if substrate_frame else LAYOUT_FRAME_OWN,
+        "method": layout_mode,
+        "blend_applied": layout_mode == "fused",
+        "cluster_resolution": round(float(requested_resolution), 3),
+        "blend": blend,
+        "node_count": int(node_count),
+    }
 
 
 def _layout_freshness(conn: sqlite3.Connection, scope: Scope, computed_at: str) -> dict:
@@ -369,9 +574,7 @@ def _build_graph_variant_payload(
             layout_weights={
                 "semantic": float(options.get("w_semantic") or 0.0),
                 "coauthorship": float(options.get("w_coauthorship") or 0.0),
-                "bibliographic_coupling": float(
-                    options.get("w_bibliographic") or 0.0
-                ),
+                "bibliographic_coupling": float(options.get("w_bibliographic") or 0.0),
             },
         )
 
@@ -391,9 +594,7 @@ def _build_graph_variant_payload(
         "layout_weights": {
             "semantic": float(options.get("w_semantic") or 0.0),
             "coauthorship": float(options.get("w_coauthorship") or 0.0),
-            "bibliographic_coupling": float(
-                options.get("w_bibliographic") or 0.0
-            ),
+            "bibliographic_coupling": float(options.get("w_bibliographic") or 0.0),
             "co_citation": float(options.get("w_cocitation") or 0.0),
         },
     }
@@ -428,16 +629,43 @@ def _build_graph_variant_payload(
 
 @router.get("/paper-map", response_model=GraphData)
 def get_paper_map(
-    label_mode: str = Query("cluster", description="Label mode: cluster (c-TF-IDF over title text)"),
+    label_mode: str = Query(
+        "cluster", description="Label mode: cluster (c-TF-IDF over title text)"
+    ),
     color_by: str = Query("cluster", description="Color by: cluster, year, rating, citations"),
     size_by: str = Query("citations", description="Size by: citations, uniform, rating"),
     show_edges: bool = Query(True, description="Show edges between nodes"),
-    scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
-    cluster_resolution: float = Query(SUBSTRATE_CLUSTER_RESOLUTION, ge=0.5, le=3.0, description="Cluster detail (default = the substrate resolution, 1.5): >1 finer (more clusters), <1 coarser. Non-default builds a variant in the background (202 while building)."),
-    w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
-    w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
-    w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
-    w_cocitation: float = Query(0.0, ge=0.0, le=1.0, description="Citation influence: co-citation weight in the fused layout (shared citers)"),
+    scope: str = Query(
+        "library",
+        description="library (default: Library-only papers) or corpus (every stored paper)",
+    ),
+    cluster_resolution: float = Query(
+        SUBSTRATE_CLUSTER_RESOLUTION,
+        ge=0.5,
+        le=3.0,
+        description="Cluster detail (default = the substrate resolution, 1.5): >1 finer (more clusters), <1 coarser. Non-default builds a variant in the background (202 while building).",
+    ),
+    w_semantic: float = Query(
+        1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"
+    ),
+    w_coauthorship: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)",
+    ),
+    w_bibliographic: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="PROTOTYPE: bibliographic-coupling weight in the fused layout",
+    ),
+    w_cocitation: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="Citation influence: co-citation weight in the fused layout (shared citers)",
+    ),
     prefetch: bool = Query(
         False,
         description=(
@@ -445,6 +673,14 @@ def get_paper_map(
             "reports 'building' and returns. Set by speculative callers "
             "(sidebar hover) so brushing a nav item cannot start minutes of "
             "background work the user never asked for."
+        ),
+    ),
+    if_none_match: str | None = Header(
+        default=None,
+        alias="if-none-match",
+        description=(
+            "Conditional read. A layout is an immutable artifact, so a matching "
+            "validator answers 304 without ever decoding the stored payload."
         ),
     ),
     conn: sqlite3.Connection = Depends(get_db),
@@ -480,26 +716,32 @@ def get_paper_map(
         # by the request path — no fingerprint compute, no rebuild enqueue,
         # and NEVER an inline UMAP.
         view_key = scope.view_key("paper_map")
-        envelope = mv.get_stored(conn, view_key)
-        if envelope is None:
-            return JSONResponse(
-                status_code=202,
-                content=(
-                    {"status": "building", "message": "Building the graph…"}
-                    if prefetch
-                    else {"status": "building", **_enqueue_graph_view_build(view_key)}
-                ),
+        version = mv.stored_version(conn, view_key)
+        if version is not None:
+            # Citation coverage and layout freshness are cheap live stats, not
+            # cached data — computed on the read so they track reference
+            # backfills and newly vectored papers immediately. Both ride in the
+            # validator, so a change in either still invalidates the client's
+            # copy. Pure reads.
+            response = _serve_stored_graph(
+                conn,
+                view_key=view_key,
+                annotations={
+                    "citation_coverage": _citation_edge_coverage(conn, scope),
+                    "layout": _layout_freshness(conn, scope, str(version.get("computed_at") or "")),
+                },
+                if_none_match=if_none_match,
             )
-        graph = _graph_data_from_envelope(envelope)
-        # Citation-edge coverage is a cheap live stat, not cached data — compute
-        # it fresh on the read so it tracks reference backfills immediately
-        # (and so a pre-annotation cached payload still carries it). Pure read.
-        graph.metadata = {
-            **(graph.metadata or {}),
-            "citation_coverage": _citation_edge_coverage(conn, scope),
-            "layout": _layout_freshness(conn, scope, str(envelope.get("computed_at") or "")),
-        }
-        return graph
+            if response is not None:
+                return response
+        return JSONResponse(
+            status_code=202,
+            content=(
+                {"status": "building", "message": "Building the graph…"}
+                if prefetch
+                else {"status": "building", **_enqueue_graph_view_build(conn, view_key)}
+            ),
+        )
 
     # Custom-options path: build live, but cache durably + proportionally (task
     # #20) so a repeat request (the same slider position, a fused layout you already
@@ -529,9 +771,13 @@ def get_paper_map(
         conn,
         base_view_key=scope.view_key("paper_map"),
         options=(
-            label_mode, color_by, size_by,
-            round(cluster_resolution, 3), round(w_semantic, 3),
-            round(w_coauthorship, 3), round(w_bibliographic, 3),
+            label_mode,
+            color_by,
+            size_by,
+            round(cluster_resolution, 3),
+            round(w_semantic, 3),
+            round(w_coauthorship, 3),
+            round(w_bibliographic, 3),
             round(w_cocitation, 3),
         ),
         scope=scope,
@@ -559,7 +805,7 @@ def get_paper_map(
     return graph
 
 
-def _enqueue_corpus_layout_build() -> dict:
+def _enqueue_corpus_layout_build(conn: sqlite3.Connection) -> dict:
     """Enqueue a background corpus-scope graph rebuild so the frontier map has
     persisted 2-D coordinates. Deduped by operation key (won't double-schedule),
     mirrors the rebuild-graphs enqueue. Returns the job envelope bits."""
@@ -568,7 +814,16 @@ def _enqueue_corpus_layout_build() -> dict:
     operation_key = f"graphs.rebuild_all:{Scope.corpus}"
     existing = find_active_job(operation_key)
     if existing:
-        return {"job_id": str(existing.get("job_id") or ""), "message": "Building the semantic layout…"}
+        return {
+            "job_id": str(existing.get("job_id") or ""),
+            "message": "Building the semantic layout…",
+        }
+    # Single-flight (see `_enqueue_graph_view_build`): the frontier's substrate
+    # is the corpus paper map, so if that fit is already running this request
+    # has nothing to add — the client's poll picks up the finished layout.
+    busy = graph_build_in_flight(conn, exclude_operation_key=operation_key)
+    if busy:
+        return {"job_id": "", "message": "Queued behind another layout build…"}
 
     job_id = f"frontier_layout_{uuid.uuid4().hex[:10]}"
     set_job_status(
@@ -629,7 +884,7 @@ def _score_seen_candidates(
         JOIN papers p ON pe.paper_id = p.id
         WHERE pe.model = ?
           AND COALESCE(p.status, '') NOT IN ('library', 'removed', 'dismissed')
-          AND {standalone_paper_sql('p')}
+          AND {standalone_paper_sql("p")}
         """,
         (model,),
     ).fetchall()
@@ -657,7 +912,9 @@ def _score_seen_candidates(
 def get_frontier(
     lens_id: str = Query(..., description="Discovery lens whose CURRENT suggestions to plot"),
     seen_limit: int = Query(
-        0, ge=0, le=1000,
+        0,
+        ge=0,
+        le=1000,
         description="Top-N seen-but-unacted papers by centroid similarity (0 = hide the seen layer)",
     ),
     include_edges: bool = Query(
@@ -676,11 +933,15 @@ def get_frontier(
     202 `{status:'building'}` (the sanctioned cache-build path).
     """
     coord_count = int(
-        conn.execute("SELECT COUNT(*) FROM publication_clusters WHERE scope = 'corpus'").fetchone()[0]
+        conn.execute("SELECT COUNT(*) FROM publication_clusters WHERE scope = 'corpus'").fetchone()[
+            0
+        ]
         or 0
     )
     if coord_count == 0:
-        return JSONResponse(status_code=202, content={"status": "building", **_enqueue_corpus_layout_build()})
+        return JSONResponse(
+            status_code=202, content={"status": "building", **_enqueue_corpus_layout_build(conn)}
+        )
 
     coords: dict[str, tuple[float, float]] = {}
     # Corpus cluster identity travels with the coordinates so the map can offer
@@ -708,11 +969,18 @@ def get_frontier(
     for r in lib_rows:
         c = coords.get(str(r["id"]))
         if c:
-            nodes.append({
-                "paper_id": str(r["id"]), "x": c[0], "y": c[1], "in_library": True,
-                "layer": "library", "title": r["title"], "year": r["year"],
-                **clusters.get(str(r["id"]), {}),
-            })
+            nodes.append(
+                {
+                    "paper_id": str(r["id"]),
+                    "x": c[0],
+                    "y": c[1],
+                    "in_library": True,
+                    "layer": "library",
+                    "title": r["title"],
+                    "year": r["year"],
+                    **clusters.get(str(r["id"]), {}),
+                }
+            )
     library_shown = len(nodes)
 
     # (b) Recommendation layer — the lens's CURRENT suggestion set.
@@ -727,7 +995,7 @@ def get_frontier(
           )
           AND COALESCE(r.user_action, '') NOT IN ('dismiss', 'dismissed', 'remove', 'removed')
           AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed')
-          AND {standalone_paper_sql('p')}
+          AND {standalone_paper_sql("p")}
         """,
         (lens_id, lens_id),
     ).fetchall()
@@ -739,12 +1007,21 @@ def get_frontier(
         rec_ids.add(pid)
         c = coords.get(pid)
         if c:
-            nodes.append({
-                "paper_id": pid, "x": c[0], "y": c[1], "in_library": False, "layer": "rec",
-                "branch_id": r["branch_id"], "branch_label": r["branch_label"],
-                "score": r["score"], "title": r["title"], "year": r["year"],
-                **clusters.get(pid, {}),
-            })
+            nodes.append(
+                {
+                    "paper_id": pid,
+                    "x": c[0],
+                    "y": c[1],
+                    "in_library": False,
+                    "layer": "rec",
+                    "branch_id": r["branch_id"],
+                    "branch_label": r["branch_label"],
+                    "score": r["score"],
+                    "title": r["title"],
+                    "year": r["year"],
+                    **clusters.get(pid, {}),
+                }
+            )
             recs_shown += 1
         else:
             recs_unplaced += 1
@@ -784,15 +1061,26 @@ def get_frontier(
             centroid = compute_centroid_from_ids(conn, library_ids)
         if centroid is not None:
             taken, seen_total = _score_seen_candidates(
-                conn, centroid, exclude_ids=rec_ids | set(library_ids), coords=coords, limit=seen_limit
+                conn,
+                centroid,
+                exclude_ids=rec_ids | set(library_ids),
+                coords=coords,
+                limit=seen_limit,
             )
             for _sim, pid, title, year in taken:
                 c = coords[pid]
-                nodes.append({
-                    "paper_id": pid, "x": c[0], "y": c[1], "in_library": False,
-                    "layer": "seen", "title": title, "year": year,
-                    **clusters.get(pid, {}),
-                })
+                nodes.append(
+                    {
+                        "paper_id": pid,
+                        "x": c[0],
+                        "y": c[1],
+                        "in_library": False,
+                        "layer": "seen",
+                        "title": title,
+                        "year": year,
+                        **clusters.get(pid, {}),
+                    }
+                )
                 seen_shown += 1
 
     # (d) Optional citation-fabric edges — the coupling (shared references) +
@@ -806,22 +1094,24 @@ def get_frontier(
     if include_edges:
         focus_ids = [n["paper_id"] for n in nodes if n["layer"] != "seen"]
     if include_edges and len(focus_ids) >= 2:
-        for (a, b), c in _paper_bibliographic_coupling(
-            conn, focus_ids, min_shared_refs=3
-        ).items():
-            edges.append({
-                "source": a, "target": b,
-                "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
-                "edge_type": "bibliographic_coupling",
-            })
-        for (a, b), c in _paper_cocitation(
-            conn, focus_ids, min_shared_citers=2
-        ).items():
-            edges.append({
-                "source": a, "target": b,
-                "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
-                "edge_type": "co_citation",
-            })
+        for (a, b), c in _paper_bibliographic_coupling(conn, focus_ids, min_shared_refs=3).items():
+            edges.append(
+                {
+                    "source": a,
+                    "target": b,
+                    "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
+                    "edge_type": "bibliographic_coupling",
+                }
+            )
+        for (a, b), c in _paper_cocitation(conn, focus_ids, min_shared_citers=2).items():
+            edges.append(
+                {
+                    "source": a,
+                    "target": b,
+                    "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
+                    "edge_type": "co_citation",
+                }
+            )
 
     return {
         "status": "ready",
@@ -838,6 +1128,10 @@ def get_frontier(
         # Which centroid ranked the seen layer — "lens" or "library". The
         # legend states it rather than letting the user assume.
         "seen_ranked_by": seen_ranked_by,
+        # Cluster hues belong to the SPACE, not to this deck. Discovery draws a
+        # different subset of the substrate than the Map page does, so both read
+        # the same ranking instead of each ranking what it happens to render.
+        "cluster_hues": {str(cid): index for cid, index in substrate_cluster_hues(conn).items()},
     }
 
 
@@ -860,7 +1154,9 @@ def describe_region(
     seen), and a `sufficient` flag (false below 5 papers → the UI shows "too few
     papers to characterize" and disables actions).
     """
-    ids = list(dict.fromkeys(str(p).strip() for p in (body.paper_ids or []) if str(p).strip()))[:300]
+    ids = list(dict.fromkeys(str(p).strip() for p in (body.paper_ids or []) if str(p).strip()))[
+        :300
+    ]
     sufficient = len(ids) >= 5
     if not ids:
         return {
@@ -923,9 +1219,7 @@ def describe_region(
             cluster = Cluster(cluster_id=0, member_keys=list(texts.keys()), label="", centroid=None)
             labels = label_clusters_tfidf([cluster], texts, top_n=4)
             label = labels[0] if labels else ""
-            scored = score_cluster_terms(
-                {0: [t for t in texts.values() if t]}, top_k=10
-            )
+            scored = score_cluster_terms({0: [t for t in texts.values() if t]}, top_k=10)
             top_terms = [term for term, _ in scored.get(0, [])][:8]
         except Exception:
             logger.debug("region describe labeling failed", exc_info=True)
@@ -946,11 +1240,26 @@ def get_author_network(
         # Author network stays at 1.0 (the precomputed MV layout). Unlike the
         # paper map, its non-default variant re-clusters AND re-lays-out the
         # whole graph live — too slow to default on a large corpus.
-        1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"
+        1.0,
+        ge=0.5,
+        le=3.0,
+        description="Cluster detail: >1 finer (more clusters), <1 coarser",
     ),
-    w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic weight in the fused author layout"),
-    w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused author layout"),
-    w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused author layout"),
+    w_semantic: float = Query(
+        1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic weight in the fused author layout"
+    ),
+    w_coauthorship: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="PROTOTYPE: co-authorship weight in the fused author layout",
+    ),
+    w_bibliographic: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="PROTOTYPE: bibliographic-coupling weight in the fused author layout",
+    ),
     prefetch: bool = Query(
         False,
         description=(
@@ -958,6 +1267,14 @@ def get_author_network(
             "reports 'building' and returns. Set by speculative callers "
             "(sidebar hover) so brushing a nav item cannot start minutes of "
             "background work the user never asked for."
+        ),
+    ),
+    if_none_match: str | None = Header(
+        default=None,
+        alias="if-none-match",
+        description=(
+            "Conditional read. A layout is an immutable artifact, so a matching "
+            "validator answers 304 without ever decoding the stored payload."
         ),
     ),
     conn: sqlite3.Connection = Depends(get_db),
@@ -979,9 +1296,9 @@ def get_author_network(
         # never the GET's (see get_paper_map).
         view_key = scope.view_key("author_network")
         envelope = mv.get_stored(conn, view_key)
-        stored_layout_version = (
-            ((envelope or {}).get("payload") or {}).get("metadata") or {}
-        ).get("layout_version")
+        stored_layout_version = (((envelope or {}).get("payload") or {}).get("metadata") or {}).get(
+            "layout_version"
+        )
         cached_nodes = ((envelope or {}).get("payload") or {}).get("nodes") or []
         from alma.ai.projections import MIN_AUTHOR_LAYOUT_NODES
 
@@ -996,8 +1313,7 @@ def get_author_network(
         empty_cache_is_invalid = (
             envelope is not None
             and not cached_nodes
-            and _author_network_placeable_count(conn, scope)
-            >= MIN_AUTHOR_LAYOUT_NODES
+            and _author_network_placeable_count(conn, scope) >= MIN_AUTHOR_LAYOUT_NODES
         )
         if (
             envelope is None
@@ -1015,10 +1331,18 @@ def get_author_network(
                 content=(
                     {"status": "building", "message": "Building the graph…"}
                     if prefetch
-                    else {"status": "building", **_enqueue_graph_view_build(view_key)}
+                    else {"status": "building", **_enqueue_graph_view_build(conn, view_key)}
                 ),
             )
-        return _graph_data_from_envelope(envelope)
+        # The compatibility gate above already needed the decoded payload, so
+        # hand it over rather than reading it a second time.
+        return _serve_stored_graph(
+            conn,
+            view_key=view_key,
+            annotations={},
+            if_none_match=if_none_match,
+            envelope=envelope,
+        )
 
     variant_options = {
         "cluster_resolution": cluster_resolution,
@@ -1093,7 +1417,7 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
     try:
         rows = conn.execute(
             f"""
-            SELECT pc.paper_id, pc.x, pc.y, p.status,
+            SELECT pc.paper_id, pc.cluster_id, pc.x, pc.y, p.status,
                    COALESCE(p.rating, 0) AS rating,
                    latest.score AS rec_score,
                    COALESCE(neg.n_neg, 0) AS n_neg
@@ -1116,6 +1440,12 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
     except sqlite3.OperationalError:
         rows = []
 
+    from alma.application.signal_lab.map_terms import (
+        apply_lab_map_tint,
+        load_lab_map_context,
+    )
+
+    lab_context = load_lab_map_context(conn)
     points: list[dict] = []
     vmin = float("inf")
     vmax = float("-inf")
@@ -1129,6 +1459,12 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
         )
         if v is None:
             v = VALENCE_NO_SIGNAL
+        v = apply_lab_map_tint(
+            v,
+            paper_id=str(row["paper_id"]),
+            cluster_id=int(row["cluster_id"]),
+            context=lab_context,
+        )
         points.append(
             {
                 "id": str(row["paper_id"]),
@@ -1159,18 +1495,49 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
     return {"status": "ready", "points": points, "stats": stats}
 
 
+def _author_space_coordinates(conn: sqlite3.Connection) -> dict[str, tuple[float, float]]:
+    """Author id (folded) → position in THE author space.
+
+    The author space is the corpus author layout — the only one there is. A
+    Library view draws a subset of its nodes, so anything that describes the
+    space (the terrain) must read the whole thing from here rather than from
+    whichever nodes the current payload happens to carry.
+
+    Read from the durable corpus materialized view; empty while it has never
+    been built, which simply means no terrain yet.
+    """
+    envelope = mv.get_stored(conn, Scope.corpus.view_key("author_network"))
+    if not envelope:
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    for node in (envelope.get("payload") or {}).get("nodes") or []:
+        aid = str(node.get("id") or "").strip().lower()
+        if not aid:
+            continue
+        try:
+            out[aid] = (float(node["x"]), float(node["y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 @router.get("/author-field")
-def get_author_field(
-    scope: str = Query("library", description="library | corpus"),
-    conn: sqlite3.Connection = Depends(get_db),
-):
+def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
     """The LIVE preference + score field for the author map.
 
     The author analogue of `/graphs/signal-field`, and deliberately built from
-    the SAME contract: an author's valence is the mean `paper_valence` over the
-    in-scope papers of theirs you have an opinion about. So "how do I feel about
+    the SAME contract: an author's valence aggregates `paper_valence` evidence
+    over the papers of theirs you have an opinion about. User evidence carries
+    full confidence, engine-only evidence is weak, and a neutral prior prevents
+    one paper from reading as a settled author verdict. So "how do I feel about
     this author" is derived from "how do I feel about their papers" — one owner
-    of the weights (`alma.core.signal_valence`), no second scale to keep in sync.
+    of the hierarchy, confidence, and weights (`alma.core.signal_valence`).
+
+    **Not scoped.** How you feel about an author is a fact about the author, not
+    about which view is open, so this is computed over ALL of their papers. It
+    used to take a scope and average only the in-scope ones, which recoloured 48
+    authors when you switched between Corpus and Library (measured 2026-07-26) —
+    two different opinions about the same person depending on where you stood.
 
     Two reasons this is an endpoint rather than a field baked into the network
     payload (user catch 2026-07-26 — "terrain is all yellow and no scores"):
@@ -1193,9 +1560,12 @@ def get_author_field(
 
     Pure read.
     """
-    from alma.core.signal_valence import NEGATIVE_REC_ACTIONS, paper_valence
+    from alma.core.signal_valence import (
+        NEGATIVE_REC_ACTIONS,
+        aggregate_author_valence,
+        paper_valence_evidence,
+    )
 
-    scope_filter = Scope.parse(scope).paper_filter("p")
     neg_actions_sql = ",".join(f"'{a}'" for a in NEGATIVE_REC_ACTIONS)
     try:
         rows = conn.execute(
@@ -1216,18 +1586,22 @@ def get_author_field(
                 WHERE COALESCE(user_action, '') IN ({neg_actions_sql})
                 GROUP BY paper_id
             ) neg ON neg.paper_id = pa.paper_id
-            WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''{scope_filter}
+            WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''
             """
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
 
-    # Two independent means per author: valence over SIGNALLED papers only, and
-    # the internal score over SCORED papers only. Averaging each over the papers
-    # that actually carry it keeps a prolific author from being diluted toward
-    # neutral by their unread back catalogue.
-    agg: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"v_sum": 0.0, "v_n": 0.0, "s_sum": 0.0, "s_n": 0.0, "papers": 0.0}
+    # Valence only sees papers that carry evidence; an unread back catalogue
+    # must not dilute it. Confidence and neutral shrinkage are owned centrally.
+    agg: dict[str, dict] = defaultdict(
+        lambda: {
+            "evidence": [],
+            "user_signal_papers": 0,
+            "s_sum": 0.0,
+            "s_n": 0.0,
+            "papers": 0,
+        }
     )
     for row in rows:
         entry = agg[str(row["aid"])]
@@ -1236,15 +1610,22 @@ def get_author_field(
         if rec_score is not None:
             entry["s_sum"] += float(rec_score)
             entry["s_n"] += 1
-        v = paper_valence(
+        evidence = paper_valence_evidence(
             status=str(row["status"] or ""),
             rating=int(row["rating"] or 0),
             n_negative_actions=int(row["n_neg"] or 0),
             rec_score=rec_score,
         )
-        if v is not None:
-            entry["v_sum"] += v
-            entry["v_n"] += 1
+        if evidence is not None:
+            entry["evidence"].append(evidence)
+            if evidence.is_user_signal:
+                entry["user_signal_papers"] += 1
+
+    # Coordinates come from the ONE author space (the corpus layout), so the
+    # field covers every placed author whether or not the current view draws
+    # them. Same contract as `/graphs/signal-field` for papers: the terrain is a
+    # property of the space, and a Library view is a subset of its DOTS only.
+    coords = _author_space_coordinates(conn)
 
     authors: list[dict] = []
     vmin = float("inf")
@@ -1252,7 +1633,9 @@ def get_author_field(
     vsum = 0.0
     n_valenced = 0
     for aid, entry in agg.items():
-        v = round(entry["v_sum"] / entry["v_n"], 3) if entry["v_n"] else None
+        raw_v = aggregate_author_valence(entry["evidence"])
+        v = round(raw_v, 3) if raw_v is not None else None
+        point = coords.get(aid.strip().lower())
         authors.append(
             {
                 "id": aid,
@@ -1260,8 +1643,11 @@ def get_author_field(
                 "score": round(entry["s_sum"] / entry["s_n"], 1) if entry["s_n"] else None,
                 # How much evidence the valence rests on — the hover card says so
                 # rather than presenting a 1-paper opinion as an author verdict.
-                "signal_papers": int(entry["v_n"]),
+                "signal_papers": len(entry["evidence"]),
+                "user_signal_papers": int(entry["user_signal_papers"]),
                 "papers": int(entry["papers"]),
+                "x": point[0] if point else None,
+                "y": point[1] if point else None,
             }
         )
         if v is not None:
@@ -1471,7 +1857,9 @@ def _rebuild_graphs_impl(
             )
     except sqlite3.OperationalError:
         if job_id:
-            add_job_log(job_id, "Graph cache table missing; skipping clear step", step="clear_cache")
+            add_job_log(
+                job_id, "Graph cache table missing; skipping clear step", step="clear_cache"
+            )
 
     if _cancelled():
         if job_id:
@@ -1498,7 +1886,9 @@ def _rebuild_graphs_impl(
     except Exception as e:
         logger.warning("Failed to rebuild paper_map: %s", e)
         if job_id:
-            add_job_log(job_id, f"Failed rebuilding paper_map: {e}", level="ERROR", step="paper_map")
+            add_job_log(
+                job_id, f"Failed rebuilding paper_map: {e}", level="ERROR", step="paper_map"
+            )
 
     if _cancelled():
         if job_id:
@@ -1508,13 +1898,20 @@ def _rebuild_graphs_impl(
     _mark_progress(2, "author_network")
     try:
         if job_id:
-            add_job_log(job_id, f"Rebuilding author network ({scope.label()})", step="author_network")
+            add_job_log(
+                job_id, f"Rebuilding author network ({scope.label()})", step="author_network"
+            )
         mv.rebuild(conn, scope.view_key("author_network"))
         rebuilt.append(scope.view_key("author_network"))
     except Exception as e:
         logger.warning("Failed to rebuild author_network: %s", e)
         if job_id:
-            add_job_log(job_id, f"Failed rebuilding author_network: {e}", level="ERROR", step="author_network")
+            add_job_log(
+                job_id,
+                f"Failed rebuilding author_network: {e}",
+                level="ERROR",
+                step="author_network",
+            )
 
     summary = {
         "rebuilt": rebuilt,
@@ -1522,7 +1919,9 @@ def _rebuild_graphs_impl(
         "message": f"Rebuilt {len(rebuilt)} {scope.label()} graph view(s)",
     }
     if job_id:
-        add_job_log(job_id, f"Graph rebuild completed: {len(rebuilt)} rebuilt", step="done", data=summary)
+        add_job_log(
+            job_id, f"Graph rebuild completed: {len(rebuilt)} rebuilt", step="done", data=summary
+        )
     return summary
 
 
@@ -1610,9 +2009,7 @@ def _cluster_label_refresh_impl(
             continue
 
         if graph_type == "paper_map":
-            titles, abstracts = _collect_paper_cluster_context(
-                conn, member_ids, limit=6
-            )
+            titles, abstracts = _collect_paper_cluster_context(conn, member_ids, limit=6)
         else:
             titles, abstracts = _collect_author_cluster_context(
                 conn, member_ids, limit=6, scope=scope
@@ -1642,8 +2039,7 @@ def _cluster_label_refresh_impl(
         for entry in refresh_entries
     ]
     cluster_texts = {
-        entry["synthetic_key"]: entry["joined_text"] or "(empty)"
-        for entry in refresh_entries
+        entry["synthetic_key"]: entry["joined_text"] or "(empty)" for entry in refresh_entries
     }
     background_df, background_n = _load_cluster_term_background(conn)
     tfidf_labels = (
@@ -1719,9 +2115,7 @@ def _cluster_label_refresh_impl(
     return summary
 
 
-def _load_vectors_for(
-    conn: sqlite3.Connection, paper_ids: list[str]
-) -> dict[str, "np.ndarray"]:
+def _load_vectors_for(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str, "np.ndarray"]:
     """Decode active-model embedding vectors for specific paper ids (I-13 helper).
 
     The representative selector needs the members' vectors; this loads + decodes
@@ -1744,7 +2138,7 @@ def _load_vectors_for(
             JOIN papers p ON p.id = pe.paper_id
             WHERE pe.model = ?
               AND pe.paper_id IN ({placeholders})
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             """,
             [model, *paper_ids],
         ).fetchall()
@@ -1862,7 +2256,7 @@ def _collect_author_cluster_context(
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
             WHERE lower(pa.openalex_id) IN ({placeholders}){scope_filter}
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             GROUP BY p.id
             ORDER BY cby DESC, pdate DESC
             LIMIT ?
@@ -1914,7 +2308,9 @@ def refresh_cluster_labels(
         set_job_status,
     )
 
-    graph_type = payload.graph_type if payload.graph_type in {"paper_map", "author_network"} else "paper_map"
+    graph_type = (
+        payload.graph_type if payload.graph_type in {"paper_map", "author_network"} else "paper_map"
+    )
     scope = Scope.parse(payload.scope)
     operation_key = f"graphs.cluster_labels:{graph_type}:{scope}"
     existing = find_active_job(operation_key)
@@ -2142,7 +2538,7 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
                 WHERE pe.model = ?
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 """,
                 (active_model,),
             ).fetchone()
@@ -2193,7 +2589,7 @@ def _load_cluster_term_background(
             f"""
             SELECT COUNT(*) AS n, COALESCE(MAX(COALESCE(p.updated_at, p.created_at, '')), '') AS watermark
             FROM papers p
-            WHERE {standalone_paper_sql('p')}
+            WHERE {standalone_paper_sql("p")}
             """
         ).fetchone()
         corpus_n = int(row["n"] if isinstance(row, sqlite3.Row) else row[0] or 0)
@@ -2219,7 +2615,7 @@ def _load_cluster_term_background(
             f"""
             SELECT COALESCE(p.title, '') AS title, COALESCE(p.abstract, '') AS abstract
             FROM papers p
-            WHERE {standalone_paper_sql('p')}
+            WHERE {standalone_paper_sql("p")}
               AND (
                 COALESCE(TRIM(p.title), '') <> ''
                 OR COALESCE(TRIM(p.abstract), '') <> ''
@@ -2297,6 +2693,7 @@ def _build_text_paper_map(
 
     from alma.ai.clustering import Cluster, _silhouette_optimal_k, label_clusters_tfidf
     from alma.ai.projections import project_embeddings as _project_embeddings
+
     # Standalone gate (43.5): mirror `_load_embeddings` — exclude component rows
     # (figures / SI / datasets) and merged-away preprint twins (which KEEP
     # status='library' per preprint_dedup). This text-fallback path is the
@@ -2310,7 +2707,7 @@ def _build_text_paper_map(
                    publication_date, authors, status
             FROM papers p
             WHERE status = 'library'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(cited_by_count, 0) DESC,
                      COALESCE(publication_date, '') DESC
             """
@@ -2321,7 +2718,7 @@ def _build_text_paper_map(
             SELECT id, title, abstract, year, journal, cited_by_count, rating,
                    publication_date, authors, status
             FROM papers p
-            WHERE {standalone_paper_sql('p')}
+            WHERE {standalone_paper_sql("p")}
             ORDER BY COALESCE(cited_by_count, 0) DESC,
                      COALESCE(publication_date, '') DESC
             """
@@ -2338,7 +2735,9 @@ def _build_text_paper_map(
         journal = (row["journal"] if isinstance(row, sqlite3.Row) else row[4]) or ""
         cited_by = (row["cited_by_count"] if isinstance(row, sqlite3.Row) else row[5]) or 0
         rating = (row["rating"] if isinstance(row, sqlite3.Row) else row[6]) or 0
-        publication_date = (row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]) or None
+        publication_date = (
+            row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]
+        ) or None
         authors = (row["authors"] if isinstance(row, sqlite3.Row) else row[8]) or ""
         status = (row["status"] if isinstance(row, sqlite3.Row) else row[9]) or ""
 
@@ -2407,12 +2806,9 @@ def _build_text_paper_map(
             )
             cid_map = {old: new for new, old in enumerate(sorted_old_cids)}
             cluster_assignments = {
-                pid: cid_map[int(km_labels[idx])]
-                for idx, pid in enumerate(paper_ids)
+                pid: cid_map[int(km_labels[idx])] for idx, pid in enumerate(paper_ids)
             }
-            cluster_sizes = {
-                cid_map[old]: len(members_by_cid[old]) for old in sorted_old_cids
-            }
+            cluster_sizes = {cid_map[old]: len(members_by_cid[old]) for old in sorted_old_cids}
 
             synthetic_clusters = [
                 Cluster(
@@ -2435,9 +2831,7 @@ def _build_text_paper_map(
             # ``project_embeddings`` falls back gracefully when UMAP isn't
             # installed (TSNE) or when n is very small (centred at origin).
             try:
-                tfidf_embeddings = {
-                    paper_ids[i]: matrix[i].tolist() for i in range(n_papers)
-                }
+                tfidf_embeddings = {paper_ids[i]: matrix[i].tolist() for i in range(n_papers)}
                 coords = _project_embeddings(tfidf_embeddings, method="auto")
             except Exception:
                 coords = {}
@@ -2485,11 +2879,7 @@ def _build_text_paper_map(
                 x=x,
                 y=y,
                 cluster_id=cid,
-                color=(
-                    CLUSTER_COLORS[cid % len(CLUSTER_COLORS)]
-                    if cid is not None
-                    else None
-                ),
+                color=(CLUSTER_COLORS[cid % len(CLUSTER_COLORS)] if cid is not None else None),
                 size=max(1.0, math.log1p(meta["cited_by_count"])),
                 in_library=bool(meta.get("in_library", True)),
                 metadata={
@@ -2501,9 +2891,7 @@ def _build_text_paper_map(
                     "cited_by_count": meta["cited_by_count"],
                     "rating": meta["rating"],
                     "paper_id": pid,
-                    "cluster_label": cluster_labels_by_cid.get(cid)
-                    if cid is not None
-                    else None,
+                    "cluster_label": cluster_labels_by_cid.get(cid) if cid is not None else None,
                 },
             )
         )
@@ -2550,6 +2938,14 @@ def _build_text_paper_map(
         "method": method_tag,
         "clusters": clusters_payload,
         "scope": scope,
+        # The text fallback fits its OWN arrangement (TF-IDF / grid), which has
+        # nothing to do with the embedding substrate. Say so, or an overlay
+        # drawn at substrate coordinates would land on unrelated dots.
+        "layout": {
+            "frame": LAYOUT_FRAME_OWN,
+            "method": method_tag,
+            "node_count": len(nodes),
+        },
         **(ai_state or {}),
     }
     if method_tag == "no_clustering":
@@ -2686,6 +3082,78 @@ def _build_cluster_detail(
     }
 
 
+def _annotate_cluster_hues(
+    conn: sqlite3.Connection,
+    cluster_info: list[dict[str, Any]],
+    *,
+    cluster_members: dict[int, list[str]],
+    substrate_frame: bool,
+) -> None:
+    """Stamp each cluster with its hue rank IN THE SPACE (mutates in place).
+
+    A cluster's colour identifies WHICH region of the space it is, so it must be
+    the same colour in every view of that space. Hosts used to rank clusters by
+    their size among the RENDERED nodes, which meant the Library view — a subset
+    of the very same corpus layout — recoloured every cluster: measured
+    2026-07-26, the largest Library cluster was hue #0 in Library and hue #194 in
+    Corpus, so switching scope reshuffled the whole map's palette.
+
+    The ranking therefore comes from the space, never from the selection:
+
+    * substrate frame — cluster sizes over the whole ``publication_clusters``
+      corpus layout, so a Library payload and a Corpus payload agree exactly;
+    * own frame — this payload's own membership, which for a corpus-fitted
+      variant IS the whole space.
+
+    Outliers are excluded: the Unclustered group has a fixed neutral colour, not
+    a place on the hue ramp.
+    """
+    hue_index = (
+        substrate_cluster_hues(conn)
+        if substrate_frame
+        else _hue_order(
+            {int(cid): len(members) for cid, members in cluster_members.items() if int(cid) >= 0}
+        )
+    )
+    for detail in cluster_info:
+        cid = int(detail.get("id", OUTLIER_CLUSTER_ID))
+        if cid in hue_index:
+            detail["hue_index"] = hue_index[cid]
+
+
+def _hue_order(sizes: dict[int, int]) -> dict[int, int]:
+    """Cluster id → hue rank. Size DESC, then id ASC.
+
+    The id tiebreak is not cosmetic: without it two equal-sized clusters could
+    swap hues between two reads of the SAME space.
+    """
+    order = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {cid: index for index, (cid, _) in enumerate(order)}
+
+
+def substrate_cluster_hues(conn: sqlite3.Connection) -> dict[int, int]:
+    """Hue rank per cluster over the WHOLE corpus substrate.
+
+    The one owner of "which colour is this cluster", shared by every host that
+    paints substrate clusters — the paper map (both scopes) and the Discovery
+    frontier. Each of them draws a different subset of the same space, and each
+    used to rank the clusters it happened to be drawing, so one cluster wore
+    three different colours depending on where you met it.
+    """
+    try:
+        sizes = {
+            int(row[0]): int(row[1])
+            for row in conn.execute(
+                "SELECT cluster_id, COUNT(*) FROM publication_clusters "
+                "WHERE scope = ? AND cluster_id >= 0 GROUP BY cluster_id",
+                (SUBSTRATE_SCOPE,),
+            ).fetchall()
+        }
+    except sqlite3.OperationalError:
+        return {}
+    return _hue_order(sizes)
+
+
 def _build_cluster_info(
     cluster_members: dict[int, list[str]],
     *,
@@ -2735,9 +3203,7 @@ def _load_paper_map_cached_labels(
     from alma.ai.cluster_labels import compute_cluster_signature, fetch_cached_labels
 
     signatures = {
-        compute_cluster_signature(members)
-        for members in cluster_members.values()
-        if members
+        compute_cluster_signature(members) for members in cluster_members.values() if members
     }
     if not signatures:
         return {}
@@ -2819,7 +3285,7 @@ def _load_embeddings(
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
                 WHERE pe.model = ? AND p.status = 'library'
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 """,
                 (active_model,),
             ).fetchall()
@@ -2829,7 +3295,7 @@ def _load_embeddings(
                 SELECT pe.paper_id, pe.embedding
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
-                WHERE pe.model = ? AND {standalone_paper_sql('p')}
+                WHERE pe.model = ? AND {standalone_paper_sql("p")}
                 """,
                 (active_model,),
             ).fetchall()
@@ -3005,12 +3471,11 @@ def _build_embedding_paper_map(
         return float(np.dot(a, b) / (na * nb))
 
     # Deterministic placement jitter is owned by graph_substrate (shared with
-    # the standalone placement sweep) — see `cluster_jitter`.
+    # the standalone placement sweep) — see `graph_substrate.place_vectors`.
 
     paper_ids = list(embeddings.keys())
     vectors_by_id = {
-        paper_id: np.asarray(vec, dtype=np.float32)
-        for paper_id, vec in embeddings.items()
+        paper_id: np.asarray(vec, dtype=np.float32) for paper_id, vec in embeddings.items()
     }
 
     # Fetch per-paper text payloads (for labels and node metadata). The cluster
@@ -3038,9 +3503,10 @@ def _build_embedding_paper_map(
                 embedding_created_at[pid] = str(created_at or "")
     except sqlite3.OperationalError:
         embedding_created_at = {}
+    stored_placement: dict[str, str | None] = {}
     try:
         rows = conn.execute(
-            "SELECT paper_id, cluster_id, label, x, y, updated_at "
+            "SELECT paper_id, cluster_id, label, x, y, updated_at, placement "
             "FROM publication_clusters WHERE scope = ?",
             (layout_scope,),
         ).fetchall()
@@ -3048,12 +3514,19 @@ def _build_embedding_paper_map(
             pid = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
             if pid not in vectors_by_id:
                 continue
+            stored_placement[str(pid)] = (
+                row["placement"] if isinstance(row, sqlite3.Row) else row[6]
+            ) or None
             layout_rows[pid] = {
-                "cluster_id": int((row["cluster_id"] if isinstance(row, sqlite3.Row) else row[1]) or 0),
+                "cluster_id": int(
+                    (row["cluster_id"] if isinstance(row, sqlite3.Row) else row[1]) or 0
+                ),
                 "label": (row["label"] if isinstance(row, sqlite3.Row) else row[2]) or "",
                 "x": float((row["x"] if isinstance(row, sqlite3.Row) else row[3]) or 0.5),
                 "y": float((row["y"] if isinstance(row, sqlite3.Row) else row[4]) or 0.5),
-                "updated_at": str((row["updated_at"] if isinstance(row, sqlite3.Row) else row[5]) or ""),
+                "updated_at": str(
+                    (row["updated_at"] if isinstance(row, sqlite3.Row) else row[5]) or ""
+                ),
             }
     except sqlite3.OperationalError:
         layout_rows = {}
@@ -3077,6 +3550,9 @@ def _build_embedding_paper_map(
     labels_by_cluster: dict[int, str] = {}
     cluster_members: dict[int, list[str]] = defaultdict(list)
     layout_mode = "embeddings_full"
+    # Papers THIS build positions by interpolation rather than by the fit. Drives
+    # both the persisted `placement` stamp and the honesty count in the payload.
+    interpolated_ids: set[str] = set()
     # Clustering diagnostics (I-4/I-6) — populated by the full-rebuild path; the
     # cached/incremental paths derive their counts from the loaded layout below.
     clustering_meta: dict[str, Any] = {}
@@ -3087,8 +3563,7 @@ def _build_embedding_paper_map(
     # reusing it would silently ignore the requested detail level. Force a full
     # recompute (variant builds only — they pass persist=False).
     requested_resolution = float(
-        opts.get("cluster_resolution", SUBSTRATE_CLUSTER_RESOLUTION)
-        or SUBSTRATE_CLUSTER_RESOLUTION
+        opts.get("cluster_resolution", SUBSTRATE_CLUSTER_RESOLUTION) or SUBSTRATE_CLUSTER_RESOLUTION
     )
     if abs(requested_resolution - SUBSTRATE_CLUSTER_RESOLUTION) > 1e-6:
         stale_ids = list(paper_ids)
@@ -3114,9 +3589,10 @@ def _build_embedding_paper_map(
     # that a fresh fit is more honest); substrate-only builds (the default
     # Library assembly) place EVERY missing paper incrementally — a full fit
     # is never theirs to run.
-    elif stable_ids and stale_ids and (
-        not allow_full_rebuild
-        or len(stale_ids) <= max(3, int(round(len(paper_ids) * 0.25)))
+    elif (
+        stable_ids
+        and stale_ids
+        and (not allow_full_rebuild or len(stale_ids) <= max(3, int(round(len(paper_ids) * 0.25))))
     ):
         layout_mode = "embeddings_incremental"
         for paper_id in stable_ids:
@@ -3128,16 +3604,42 @@ def _build_embedding_paper_map(
             if cached.get("label"):
                 labels_by_cluster[cid] = str(cached["label"])
 
+        # Build the SAME placement context the standalone sweep uses, but from
+        # the layout this build is holding in memory rather than from a second
+        # read of publication_clusters (the rows here may not be persisted yet).
         centroid_vectors: dict[int, np.ndarray] = {}
         centroid_coords: dict[int, tuple[float, float]] = {}
+        admission: dict[int, float] = {}
+        field_ids: list[str] = []
         for cid, members in cluster_members.items():
             member_vectors = [vectors_by_id[pid] for pid in members if pid in vectors_by_id]
             if not member_vectors:
                 continue
-            centroid_vectors[cid] = np.mean(np.stack(member_vectors), axis=0)
+            centroid = np.mean(np.stack(member_vectors), axis=0)
+            centroid_vectors[cid] = centroid
             xs = [coords[pid][0] for pid in members]
             ys = [coords[pid][1] for pid in members]
             centroid_coords[cid] = (float(np.mean(xs)), float(np.mean(ys)))
+            if cid >= 0:
+                field_ids.extend(pid for pid in members if pid in vectors_by_id)
+                if len(member_vectors) >= MIN_ADMISSION_SAMPLE:
+                    member_cos = np.array(
+                        [_cosine(v, centroid) for v in member_vectors], dtype=np.float64
+                    )
+                    admission[cid] = min(
+                        MAX_ADMISSION_COSINE,
+                        float(np.percentile(member_cos, ADMISSION_PERCENTILE)),
+                    )
+
+        placement_field = None
+        if field_ids:
+            field_matrix = np.stack([vectors_by_id[pid] for pid in field_ids]).astype(np.float32)
+            field_matrix /= np.clip(np.linalg.norm(field_matrix, axis=1, keepdims=True), 1e-9, None)
+            placement_field = PlacementField(
+                ids=tuple(field_ids),
+                matrix=field_matrix,
+                coords=np.asarray([coords[pid] for pid in field_ids], dtype=np.float32),
+            )
 
         # If centroid bootstrap fails, fall back to a full recompute.
         if not centroid_vectors:
@@ -3149,30 +3651,25 @@ def _build_embedding_paper_map(
             labels_by_cluster = {}
             layout_mode = "embeddings_full"
         else:
-            for paper_id in stale_ids:
-                # Shared nearest-centroid rule (graph_substrate): attach only
-                # when genuinely close, else the honest Unclustered group
-                # (I-6/I-7) — identical to the standalone placement sweep so a
-                # paper can't cluster differently depending on which path
-                # placed it.
-                cid = assign_to_centroids(
-                    vectors_by_id[paper_id], centroid_vectors, min_cosine=INCREMENTAL_MIN_COSINE
-                )
-                assignments[paper_id] = cid
-                cluster_members[cid].append(paper_id)
-
-            # Place incremental nodes around cluster centroids with deterministic jitter.
-            stale_idx_by_cluster: dict[int, int] = defaultdict(int)
-            for paper_id in stale_ids:
-                cid = assignments[paper_id]
-                cx, cy = centroid_coords.get(cid, (0.5, 0.5))
-                idx = stale_idx_by_cluster[cid]
-                stale_idx_by_cluster[cid] += 1
-                jx, jy = cluster_jitter(paper_id, cid, idx)
-                coords[paper_id] = (
-                    min(0.98, max(0.02, cx + jx)),
-                    min(0.98, max(0.02, cy + jy)),
-                )
+            # THE shared placement rule (graph_substrate.place_vectors): the
+            # cluster's own admission radius decides membership, the paper's
+            # nearest already-placed neighbours decide position, and the two are
+            # decided separately. Identical to the standalone sweep, so a paper
+            # can't land somewhere else depending on which path reached it.
+            placements = place_vectors(
+                {pid: vectors_by_id[pid] for pid in stale_ids if pid in vectors_by_id},
+                PlacementContext(
+                    centroid_vectors=centroid_vectors,
+                    centroid_coords=centroid_coords,
+                    admission=admission,
+                    field=placement_field,
+                ),
+            )
+            for paper_id, placement in placements.items():
+                assignments[paper_id] = placement.cluster_id
+                cluster_members[placement.cluster_id].append(paper_id)
+                coords[paper_id] = (placement.x, placement.y)
+                interpolated_ids.add(paper_id)
 
     # 3) Full rebuild: clustering + 2D projection.
     if layout_mode == "embeddings_full" and not allow_full_rebuild:
@@ -3245,6 +3742,7 @@ def _build_embedding_paper_map(
 
     # Ensure every cluster has a label after incremental assignment as well.
     if cluster_members and (layout_mode != "embeddings_full" or not labels_by_cluster):
+
         class _Cluster:
             def __init__(self, cluster_id: int, member_keys: list[str]):
                 self.cluster_id = cluster_id
@@ -3262,7 +3760,9 @@ def _build_embedding_paper_map(
             background_doc_count=background_n,
         )
         for cluster, label in zip(synthetic_clusters, generated_labels):
-            labels_by_cluster[int(cluster.cluster_id)] = str(label or labels_by_cluster.get(int(cluster.cluster_id), ""))
+            labels_by_cluster[int(cluster.cluster_id)] = str(
+                label or labels_by_cluster.get(int(cluster.cluster_id), "")
+            )
         # The outlier group always carries the fixed Unclustered label.
         if OUTLIER_CLUSTER_ID in cluster_members:
             labels_by_cluster[OUTLIER_CLUSTER_ID] = OUTLIER_LABEL
@@ -3285,7 +3785,7 @@ def _build_embedding_paper_map(
         cluster_batch_size = 200
         try:
             for batch_start in range(0, len(persist_ids), cluster_batch_size):
-                batch = persist_ids[batch_start:batch_start + cluster_batch_size]
+                batch = persist_ids[batch_start : batch_start + cluster_batch_size]
                 with write_section(conn, label="graphs paper_map: persist clusters"):
                     for paper_id in batch:
                         # Default to the Unclustered group (not cluster 0) for any
@@ -3297,22 +3797,39 @@ def _build_embedding_paper_map(
                         )
                         conn.execute(
                             """
-                            INSERT INTO publication_clusters (paper_id, scope, cluster_id, label, x, y, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO publication_clusters
+                                (paper_id, scope, cluster_id, label, x, y, updated_at, placement)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(paper_id, scope) DO UPDATE SET
                                 cluster_id = excluded.cluster_id,
                                 label = excluded.label,
                                 x = excluded.x,
                                 y = excluded.y,
-                                updated_at = excluded.updated_at
+                                updated_at = excluded.updated_at,
+                                placement = excluded.placement
                             """,
-                            (paper_id, layout_scope, cid, label, float(x), float(y), now_iso),
+                            (
+                                paper_id,
+                                layout_scope,
+                                cid,
+                                label,
+                                float(x),
+                                float(y),
+                                now_iso,
+                                (
+                                    PLACEMENT_INTERPOLATED
+                                    if paper_id in interpolated_ids
+                                    else PLACEMENT_LAYOUT
+                                ),
+                            ),
                         )
         except sqlite3.OperationalError:
             # A transient lock means this pass didn't fully cache the layout; the MV
             # row still persists and the next rebuild/refresh retries. write_section
             # already rolled back the in-flight batch.
-            logger.warning("paper_map cluster persist hit a lock; layout not fully cached this pass")
+            logger.warning(
+                "paper_map cluster persist hit a lock; layout not fully cached this pass"
+            )
 
     # PROTOTYPE (task 19): fused multi-view layout. Clusters stay SEMANTIC
     # (computed/cached above — stable), but POSITIONS are re-blended from
@@ -3351,18 +3868,37 @@ def _build_embedding_paper_map(
             logger.warning("fused layout failed; keeping semantic layout: %s", exc)
 
     # Compute year range for color scaling
-    all_years = [int(paper_meta[pid].get("year") or 0) for pid in embeddings if paper_meta[pid].get("year")]
+    all_years = [
+        int(paper_meta[pid].get("year") or 0) for pid in embeddings if paper_meta[pid].get("year")
+    ]
     min_year = min(all_years) if all_years else 2000
     max_year = max(all_years) if all_years else 2026
     year_range = max(1, max_year - min_year)
 
     # Max citations for scaling
-    max_citations = max((paper_meta[pid].get("cited_by_count", 0) for pid in embeddings), default=1) or 1
+    max_citations = (
+        max((paper_meta[pid].get("cited_by_count", 0) for pid in embeddings), default=1) or 1
+    )
+
+    def _placement_of(paper_id: str) -> str | None:
+        """Coordinate provenance for a rendered paper.
+
+        What THIS build decided wins; otherwise whatever the substrate row
+        already carried. Rows written before the column existed stay ``None``
+        — genuinely unknown, never claimed as either.
+        """
+        if paper_id in interpolated_ids:
+            return PLACEMENT_INTERPOLATED
+        if layout_mode == "embeddings_full":
+            return PLACEMENT_LAYOUT
+        return stored_placement.get(paper_id)
 
     # Build nodes.
     nodes: list[GraphNode] = []
     for paper_id in embeddings:
-        meta = paper_meta.get(paper_id, {"title": "", "cited_by_count": 0, "year": None, "rating": 0})
+        meta = paper_meta.get(
+            paper_id, {"title": "", "cited_by_count": 0, "year": None, "rating": 0}
+        )
         cid = assignments.get(paper_id)
         x, y = coords.get(paper_id, (0.5, 0.5))
 
@@ -3376,7 +3912,14 @@ def _build_embedding_paper_map(
             b = int(246 * (1 - t) + 129 * t)
             node_color = f"#{r:02x}{g:02x}{b:02x}"
         elif color_by == "rating" and meta.get("rating"):
-            rating_colors = {0: "#94A3B8", 1: "#EF4444", 2: "#F97316", 3: "#F59E0B", 4: "#10B981", 5: "#3B82F6"}
+            rating_colors = {
+                0: "#94A3B8",
+                1: "#EF4444",
+                2: "#F97316",
+                3: "#F59E0B",
+                4: "#10B981",
+                5: "#3B82F6",
+            }
             node_color = rating_colors.get(int(meta["rating"]), "#94A3B8")
         elif color_by == "citations":
             cite_ratio = min(1.0, int(meta.get("cited_by_count", 0)) / max_citations)
@@ -3434,6 +3977,10 @@ def _build_embedding_paper_map(
                     "cluster_confidence": (
                         round(float(confidence), 3) if confidence is not None else None
                     ),
+                    # How this dot's (x, y) were obtained — 'layout' (the fit),
+                    # 'interpolated' (approximated between rebuilds), or None
+                    # (placed before provenance was tracked).
+                    "placement": _placement_of(paper_id),
                 },
             )
         )
@@ -3459,13 +4006,16 @@ def _build_embedding_paper_map(
                 CouplingSpec(
                     edge_type="bibliographic_coupling",
                     pairs=_paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3),
-                    weight_floor=0.4, weight_span=0.5,
+                    weight_floor=0.4,
+                    weight_span=0.5,
                     top_k_per_node=10,
                 ),
                 CouplingSpec(
                     edge_type="co_authorship",
                     pairs=_paper_coauthorship(conn, paper_ids, min_shared_authors=1),
-                    weight_floor=0.4, weight_span=0.2, weight_mode="linear_capped",
+                    weight_floor=0.4,
+                    weight_span=0.2,
+                    weight_mode="linear_capped",
                     top_k_per_node=10,
                 ),
                 # Co-citation: papers cited together by ≥2 other papers (shared
@@ -3474,7 +4024,8 @@ def _build_embedding_paper_map(
                 CouplingSpec(
                     edge_type="co_citation",
                     pairs=_paper_cocitation(conn, paper_ids, min_shared_citers=2),
-                    weight_floor=0.4, weight_span=0.5,
+                    weight_floor=0.4,
+                    weight_span=0.5,
                     top_k_per_node=10,
                 ),
             ],
@@ -3486,9 +4037,7 @@ def _build_embedding_paper_map(
 
     # Topic clusters only — the Unclustered group is reported as a count in the
     # clustering metadata, never as a pseudo-topic with a TF-IDF label (I-6).
-    topic_cluster_members = {
-        cid: members for cid, members in cluster_members.items() if cid >= 0
-    }
+    topic_cluster_members = {cid: members for cid, members in cluster_members.items() if cid >= 0}
     cached_labels = _load_paper_map_cached_labels(
         conn,
         topic_cluster_members,
@@ -3505,6 +4054,12 @@ def _build_embedding_paper_map(
         vectors_by_id=vectors_by_id,
         background_doc_freq=background_df,
         background_doc_count=background_n,
+    )
+    _annotate_cluster_hues(
+        conn,
+        cluster_info,
+        cluster_members=cluster_members,
+        substrate_frame=layout_mode in ("embeddings_cached", "embeddings_incremental"),
     )
 
     # Unified clustering diagnostics (I-4/I-6) for the method/uncertainty panel.
@@ -3535,8 +4090,22 @@ def _build_embedding_paper_map(
             "method": layout_mode,
             "stale_papers": len(stale_ids),
             "stable_papers": len(stable_ids),
+            # Honesty counters, same contract as the author map's
+            # `omitted_unplaced`: an approximation the reader can see. Dots whose
+            # position was interpolated since the last full fit, and dots placed
+            # before provenance was tracked.
+            "approximate_positions": sum(
+                1 for pid in embeddings if _placement_of(pid) == PLACEMENT_INTERPOLATED
+            ),
+            "unknown_placement": sum(1 for pid in embeddings if _placement_of(pid) is None),
             "clusters": cluster_info,
             "clustering": clustering_panel,
+            "layout": _layout_frame(
+                layout_mode=layout_mode,
+                requested_resolution=requested_resolution,
+                layout_weights=layout_weights,
+                node_count=len(nodes),
+            ),
             # Per-layer edge counts so the UI can build filter toggles (I-11).
             "edge_layers": edge_layers,
             **(ai_state or {}),
@@ -3545,10 +4114,7 @@ def _build_embedding_paper_map(
     return result
 
 
-
-def _get_cached_graph(
-    conn: sqlite3.Connection, graph_type: str
-) -> GraphData | None:
+def _get_cached_graph(conn: sqlite3.Connection, graph_type: str) -> GraphData | None:
     """Get cached graph data if not expired (1 hour TTL)."""
     try:
         row = conn.execute(
@@ -3583,9 +4149,7 @@ def _get_cached_graph(
         return None
 
 
-def _cache_graph(
-    conn: sqlite3.Connection, graph_type: str, data: GraphData
-) -> None:
+def _cache_graph(conn: sqlite3.Connection, graph_type: str, data: GraphData) -> None:
     """Cache graph data."""
     try:
         conn.execute(
@@ -3613,9 +4177,7 @@ def _retracted_paper_ids(conn: sqlite3.Connection, paper_ids: list[str]) -> set[
         ).fetchall()
     except sqlite3.OperationalError:
         return set()
-    return {
-        str(row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows
-    }
+    return {str(row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows}
 
 
 def _paper_coauthorship(
@@ -3804,9 +4366,7 @@ def _paper_cocitation(
     )
 
 
-def _citation_edge_coverage(
-    conn: sqlite3.Connection, scope: Any
-) -> dict[str, Any] | None:
+def _citation_edge_coverage(conn: sqlite3.Connection, scope: Any) -> dict[str, Any] | None:
     """How much of the scope has the reference rows that citation edges need.
 
     ``covered`` = standalone papers in scope with ≥1 ``publication_references``
@@ -3818,12 +4378,7 @@ def _citation_edge_coverage(
     try:
         sc = scope if isinstance(scope, Scope) else Scope.parse(scope or "library")
         where = sc.paper_filter("p", leading_and=False)
-        total = int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM papers p WHERE {where}"
-            ).fetchone()[0]
-            or 0
-        )
+        total = int(conn.execute(f"SELECT COUNT(*) FROM papers p WHERE {where}").fetchone()[0] or 0)
         covered = int(
             conn.execute(
                 f"""
@@ -3859,35 +4414,6 @@ def _citation_edge_coverage(
 # served immediately and a background rebuild job runs under
 # `materialize.graph.<view>` — `useOperationToasts` invalidates the
 # matching React Query roots when it completes.
-
-
-def _graph_data_from_envelope(envelope: dict) -> GraphData:
-    """Reconstruct a GraphData from a materialised-view envelope.
-
-    The cached payload is a JSON-decoded dict with `nodes`, `edges`,
-    `metadata`. We re-validate it through Pydantic so the response stays
-    typed (the route still declares ``response_model=GraphData``), and
-    the SWR flags ride along inside ``metadata`` so existing frontend
-    code that only reads ``nodes`` / ``edges`` keeps working.
-    """
-    payload = envelope.get("payload") or {}
-    metadata = dict(payload.get("metadata") or {})
-    metadata["stale"] = bool(envelope.get("stale", False))
-    metadata["rebuilding"] = bool(envelope.get("rebuilding", False))
-    if envelope.get("computed_at"):
-        metadata["computed_at"] = envelope["computed_at"]
-    metadata["delivery"] = {
-        "source": "materialized_view",
-        "computed_at": str(envelope.get("computed_at") or ""),
-        "compute_ms": int(envelope.get("compute_ms") or 0),
-        "stale": bool(envelope.get("stale", False)),
-        "rebuilding": bool(envelope.get("rebuilding", False)),
-    }
-    return GraphData(
-        nodes=payload.get("nodes") or [],
-        edges=payload.get("edges") or [],
-        metadata=metadata,
-    )
 
 
 def _build_paper_map_payload(
@@ -3939,9 +4465,7 @@ def _build_paper_map_payload(
                 conn, embeddings, ai_state=ai_state, graph_options=graph_options
             )
     else:
-        result = _build_text_paper_map(
-            conn, scope=scope, ai_state=ai_state
-        )
+        result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
     return result.model_dump()
 
 
@@ -3960,29 +4484,29 @@ def _build_paper_map_payload(
 # text now, so publication_topics is no longer a graph input.)
 _PAPER_MAP_LIBRARY_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
-      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_embeddings pe
          JOIN papers p ON p.id = pe.paper_id
-         WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+         WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')})
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")})
 """
 
 _PAPER_MAP_CORPUS_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
-      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql("p")}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql("p")}),
       (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql('p')})
+         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql("p")})
 """
 
 # Author network. The graph's structure is derived from the publication graph —
@@ -3994,30 +4518,30 @@ _PAPER_MAP_CORPUS_FP_SQL = f"""
 # count, and the embedding-recompute watermark.
 _AUTHOR_NETWORK_LIBRARY_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
-      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM followed_authors),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
       (SELECT COUNT(*) FROM publication_authors pa
-         JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')})
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")})
 """
 
 _AUTHOR_NETWORK_CORPUS_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
-      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql("p")}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM followed_authors),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
       (SELECT COUNT(*) FROM publication_authors pa
-         JOIN papers p ON p.id = pa.paper_id WHERE {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pa.paper_id WHERE {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql('p')}),
+         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql("p")}),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')})
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql("p")})
 """
 
 # I-4: stamp the clustering/projection/labelling versions into the paper-map +
@@ -4025,39 +4549,47 @@ _AUTHOR_NETWORK_CORPUS_FP_SQL = f"""
 # clustering fix) invalidates the cached layout — input data alone can't, so a
 # corrected algorithm would otherwise keep serving the old manufactured clusters.
 _GRAPH_ML_VERSIONS = (CLUSTERING_ALGO_VERSION, PROJECTION_ALGO_VERSION, LABELLING_VERSION)
-mv.register(mv.View(
-    key="graph:paper_map:library",
-    fingerprint_sql=with_version(_PAPER_MAP_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
-    build_fn=lambda conn: _build_paper_map_payload(conn, scope="library"),
-    operation_key="materialize.graph.paper_map.library",
-    isolate_build=True,
-))
-mv.register(mv.View(
-    key="graph:paper_map:corpus",
-    fingerprint_sql=with_version(_PAPER_MAP_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
-    build_fn=lambda conn: _build_paper_map_payload(conn, scope="corpus"),
-    operation_key="materialize.graph.paper_map.corpus",
-    isolate_build=True,
-))
-mv.register(mv.View(
-    key="graph:author_network:library",
-    fingerprint_sql=with_version(
-        _AUTHOR_NETWORK_LIBRARY_FP_SQL,
-        *_GRAPH_ML_VERSIONS,
-        _AUTHOR_NETWORK_LAYOUT_VERSION,
-    ),
-    build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
-    operation_key="materialize.graph.author_network.library",
-    isolate_build=True,
-))
-mv.register(mv.View(
-    key="graph:author_network:corpus",
-    fingerprint_sql=with_version(
-        _AUTHOR_NETWORK_CORPUS_FP_SQL,
-        *_GRAPH_ML_VERSIONS,
-        _AUTHOR_NETWORK_LAYOUT_VERSION,
-    ),
-    build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
-    operation_key="materialize.graph.author_network.corpus",
-    isolate_build=True,
-))
+mv.register(
+    mv.View(
+        key="graph:paper_map:library",
+        fingerprint_sql=with_version(_PAPER_MAP_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
+        build_fn=lambda conn: _build_paper_map_payload(conn, scope="library"),
+        operation_key="materialize.graph.paper_map.library",
+        isolate_build=True,
+    )
+)
+mv.register(
+    mv.View(
+        key="graph:paper_map:corpus",
+        fingerprint_sql=with_version(_PAPER_MAP_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
+        build_fn=lambda conn: _build_paper_map_payload(conn, scope="corpus"),
+        operation_key="materialize.graph.paper_map.corpus",
+        isolate_build=True,
+    )
+)
+mv.register(
+    mv.View(
+        key="graph:author_network:library",
+        fingerprint_sql=with_version(
+            _AUTHOR_NETWORK_LIBRARY_FP_SQL,
+            *_GRAPH_ML_VERSIONS,
+            _AUTHOR_NETWORK_LAYOUT_VERSION,
+        ),
+        build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
+        operation_key="materialize.graph.author_network.library",
+        isolate_build=True,
+    )
+)
+mv.register(
+    mv.View(
+        key="graph:author_network:corpus",
+        fingerprint_sql=with_version(
+            _AUTHOR_NETWORK_CORPUS_FP_SQL,
+            *_GRAPH_ML_VERSIONS,
+            _AUTHOR_NETWORK_LAYOUT_VERSION,
+        ),
+        build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
+        operation_key="materialize.graph.author_network.corpus",
+        isolate_build=True,
+    )
+)

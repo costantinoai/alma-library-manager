@@ -15,8 +15,8 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from alma.application import alerts as alerts_app
-from alma.application import connection_status
 from alma.application import feed as feed_app
+from alma.application import home_status
 from alma.application import imports as imports_app
 from alma.application import library as library_app
 from alma.application import materialized_views as mv
@@ -115,9 +115,7 @@ def _local_days(
     return windows
 
 
-def _trend(
-    db: sqlite3.Connection, windows: list[tuple[str, str, str]]
-) -> list[dict[str, Any]]:
+def _trend(db: sqlite3.Connection, windows: list[tuple[str, str, str]]) -> list[dict[str, Any]]:
     """Daily Feed + Discovery inflow across the sparkline window.
 
     Counts match the headline `today` numbers by construction: Feed keys on a
@@ -142,7 +140,7 @@ def _trend(
         FROM per_paper pp
         JOIN papers p ON p.id = pp.paper_id
         WHERE pp.first_seen >= ? AND pp.first_seen < ?
-          AND {standalone_paper_sql('p')}
+          AND {standalone_paper_sql("p")}
         """,
         (start, end),
     ).fetchall()
@@ -154,7 +152,7 @@ def _trend(
         JOIN discovery_lenses l ON l.id = r.lens_id AND l.is_active = 1
         JOIN papers p ON p.id = r.paper_id
         WHERE r.created_at >= ? AND r.created_at < ?
-          AND {standalone_paper_sql('p')}
+          AND {standalone_paper_sql("p")}
         GROUP BY r.paper_id
         """,
         (start, end),
@@ -267,8 +265,7 @@ def _attention(db: sqlite3.Connection) -> dict[str, int]:
     if _table_exists(db, "inbox_messages"):
         inbox_unresolved = int(
             db.execute(
-                "SELECT COUNT(*) AS c FROM inbox_messages "
-                "WHERE outcome IN ('unresolved', 'error')"
+                "SELECT COUNT(*) AS c FROM inbox_messages WHERE outcome IN ('unresolved', 'error')"
             ).fetchone()["c"]
             or 0
         )
@@ -313,8 +310,7 @@ def _select_highlights(
     discovery_today = [
         c
         for c in discovery_candidates
-        if str(c.get("created_at") or "") >= day_start
-        and str(c.get("id") or "") not in used_papers
+        if str(c.get("created_at") or "") >= day_start and str(c.get("id") or "") not in used_papers
     ]
     discovery_recent = [
         c for c in discovery_candidates if str(c.get("id") or "") not in used_papers
@@ -439,18 +435,13 @@ def build_daily_brief(
     # D13: papers you sent yourself from another device, awaiting triage. Home
     # is the Inbox's home surface; the section hides itself when empty.
     inbox = library_app.inbox_preview(db, limit=INBOX_PREVIEW_LIMIT)
-    user_row = db.execute(
-        "SELECT value FROM discovery_settings WHERE key = 'user.name'"
-    ).fetchone()
+    user_row = db.execute("SELECT value FROM discovery_settings WHERE key = 'user.name'").fetchone()
 
     return {
-        "generated_at": (now or datetime.now(timezone.utc)).astimezone(
-            timezone.utc
-        ).isoformat(),
+        "generated_at": (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
         "day_start": day_start_api,
         "timezone": timezone_name,
-        "user_name": str((user_row["value"] if user_row else "") or "").strip()
-        or None,
+        "user_name": str((user_row["value"] if user_row else "") or "").strip() or None,
         "activity": {
             "feed": {
                 "today": int(feed["today"]),
@@ -468,9 +459,10 @@ def build_daily_brief(
             # Oldest day first, today last — the reading order of the strip.
             "trend": _trend(db, _local_days(timezone_name, now=now)),
         },
-        # The three outside dependencies that fail silently. Derived from the
-        # operation ledger, never probed live on this read path.
-        "connections": connection_status.assess_connections(db),
+        # The status line under the figures: one pill per subsystem, saying how
+        # recently it did its job. Derived from local state, never probed live on
+        # this read path. See `application/home_status.py` for the tiers.
+        "status": home_status.assess(db, now=now),
         "highlights": _select_highlights(feed, discovery, day_start=day_start),
         "reading": {
             "total": int(reading["total"]),

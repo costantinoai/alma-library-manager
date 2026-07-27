@@ -125,6 +125,13 @@ interface PaperCardProps {
    *  a reading-status dropdown (Library surfaces) or a bulk-action menu
    *  without forking the card layout. */
   readingStatusSlot?: React.ReactNode
+  /** The surface's own why-signal, rendered INLINE at the HEAD of the signal
+   *  row — Feed's matched authors / monitors, Discovery's provenance chips.
+   *  It shares the line with the citations, the score meter and the Why
+   *  toggle (which close the row), so a normal-view card stays four rows:
+   *  title / authors · date · journal / signals / actions. Pass chips, never
+   *  a block — anything taller belongs in `children`. */
+  metaSlot?: React.ReactNode
   /** Optional slot inserted inline with the title, right-aligned. Use for
    *  row-context affordances that must sit next to the title (e.g. a
    *  reading-status pill in a compact Library row, a provenance chip in
@@ -358,6 +365,7 @@ export function PaperCard({
   quickActions,
   sources,
   readingStatusSlot,
+  metaSlot,
   trailingHeader,
   reaction = null,
   isSaved = false,
@@ -423,6 +431,10 @@ export function PaperCard({
     if (influential > 0) return `${cites.toLocaleString()} cited · ${influential} influential`
     return `${cites.toLocaleString()} cited`
   })()
+  // Does the signal row carry any of the numeric fields? Decides whether the
+  // row renders at all when the surface supplies only `metaSlot`.
+  const hasMetaLead =
+    !!citationsLabel || rankDisplay != null || !!starDisplay || score != null
   const padding = isCompact ? 'p-3' : 'p-4'
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
@@ -689,34 +701,42 @@ export function PaperCard({
               </div>
             )}
 
-            {/* Metadata strip — collapsed to one dense line with
-                bullet separators (T15, 2026-04-24). Holds venue,
-                citations (with S2 influential-count when > 0),
-                paper_signal ranking, user star rating, and the
-                Discovery ScoreMeter + Why affordance. Every field is
-                optional (sparse-field policy); the row hides entirely
-                when nothing to show. Year is in the authors row
-                above. */}
-            {(citationsLabel ||
-              rankDisplay != null ||
-              starDisplay ||
-              score != null) && (
+            {/* Signal row — one dense line with bullet separators (T15,
+                2026-04-24). Reading left to right: the surface's own why-chips
+                (`metaSlot` — Feed's matched authors/monitors, Discovery's
+                provenance), citations (with the S2 influential count when
+                > 0), the paper_signal rank, the user's star rating, and last
+                the score bar with its Why toggle. That order is deliberate
+                (2026-07-27): the qualitative reason a paper is in front of you
+                leads, the number that ranked it closes. Every field is
+                optional (sparse-field policy); the row hides entirely when
+                there is nothing to show. The year lives in the authors row
+                above, never here. */}
+            {(hasMetaLead || metaSlot) && (
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                {citationsLabel && (
-                  <span
-                    className="tabular-nums"
-                    title={
-                      (paper.influential_citation_count ?? 0) > 0
-                        ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
-                        : `${paper.cited_by_count} citations`
-                    }
-                  >
-                    {citationsLabel}
+                {metaSlot && (
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {metaSlot}
                   </span>
+                )}
+                {citationsLabel && (
+                  <>
+                    {metaSlot && <span className="text-slate-300">·</span>}
+                    <span
+                      className="tabular-nums"
+                      title={
+                        (paper.influential_citation_count ?? 0) > 0
+                          ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
+                          : `${paper.cited_by_count} citations`
+                      }
+                    >
+                      {citationsLabel}
+                    </span>
+                  </>
                 )}
                 {rankDisplay != null && (
                   <>
-                    {citationsLabel && <span className="text-slate-300">·</span>}
+                    {(metaSlot || citationsLabel) && <span className="text-slate-300">·</span>}
                     <span
                       className="tabular-nums text-slate-600"
                       title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
@@ -727,7 +747,7 @@ export function PaperCard({
                 )}
                 {starDisplay && (
                   <>
-                    {(citationsLabel || rankDisplay != null) && <span className="text-slate-300">·</span>}
+                    {(metaSlot || citationsLabel || rankDisplay != null) && <span className="text-slate-300">·</span>}
                     <span
                       className="tabular-nums text-gold-500"
                       title={`Your rating: ${paper.rating}/5`}
@@ -738,7 +758,9 @@ export function PaperCard({
                 )}
                 {score != null && (
                   <>
-                    {(citationsLabel || rankDisplay != null || starDisplay) && <span className="text-slate-300">·</span>}
+                    {(metaSlot || citationsLabel || rankDisplay != null || starDisplay) && (
+                      <span className="text-slate-300">·</span>
+                    )}
                     <span className="inline-flex items-center gap-2">
                       <ScoreMeter score={score} />
                       {(hasBreakdown || hasExplanation) && (

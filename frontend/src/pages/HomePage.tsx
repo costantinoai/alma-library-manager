@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 /**
  * Home — a read-only daily research desk.
  *
@@ -19,7 +20,6 @@ import {
   Send,
   Sparkles,
   Sunrise,
-  UserPlus,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -33,26 +33,31 @@ import {
   type OnboardingPaperAction,
 } from '@/api/client'
 import { AttentionChips } from '@/components/home/AttentionChips'
-import { ConnectionRail } from '@/components/home/ConnectionRail'
+import { HomeStatusRail } from '@/components/home/HomeStatusRail'
 import { InflowStrip } from '@/components/home/InflowStrip'
 import { PaperActionBar } from '@/components/discovery/PaperActionBar'
+import { PageTour, HOME_TOUR } from '@/components/onboarding'
 import { IdentityChip, MetricTile, PaperTile, PaperTileGrid } from '@/components/shared'
 import { Button } from '@/components/ui/button'
-import { BrandRule } from '@/components/ui/brand-rule'
 import { Card } from '@/components/ui/card'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { OnlineSearchTab } from '@/components/OnlineSearchTab'
+import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { Meter } from '@/components/ui/meter'
 import { PageSection } from '@/components/ui/page-section'
-import { CalibrationCard } from '@/components/home/CalibrationCard'
+import { SignalLabSheet } from '@/components/home/SignalLabSheet'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { errorToast, toast } from '@/hooks/useToast'
-import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
+import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   CAPTURE_CHANNEL_CHIP,
   CAPTURE_CHANNEL_CHIP_FALLBACK,
   CAPTURE_CHANNEL_LABEL,
+  HOME_SECTION_THEMES,
   MONITOR_MIX_FILL,
+  type HomeSectionThemeKey,
 } from '@/lib/palette'
 import { cn, formatRelativeShort } from '@/lib/utils'
 
@@ -148,10 +153,12 @@ function PaperSection({
   papers,
   hrefFor,
   reasonFor = addedReason,
+  noteTheme,
 }: {
   papers: HomePaper[]
   hrefFor: (paper: HomePaper) => string
   reasonFor?: (paper: HomePaper) => string | undefined
+  noteTheme: HomeSectionThemeKey
 }) {
   return (
     <PaperTileGrid
@@ -165,6 +172,7 @@ function PaperSection({
           byline={paperByline(paper)}
           excerpt={excerpt(paper)}
           reason={reasonFor?.(paper)}
+          noteTheme={noteTheme}
         />
       )}
     />
@@ -254,11 +262,31 @@ function CaptureEyebrow({ paper }: { paper: HomePaper }) {
 
 export function HomePage() {
   const queryClient = useQueryClient()
+  const route = useHashRoute()
+  const routeQuery = route.params.get('query')?.trim() ?? ''
+  const routeAction = route.params.get('action')?.trim() ?? ''
   const briefQuery = useQuery({
     queryKey: ['home-brief'],
     queryFn: () => getHomeBrief(),
     staleTime: 30_000,
   })
+
+  // Find & add lives on the desk (user call 2026-07-27), not on Discovery:
+  // adding a paper you already know about is a starting move, and Discovery
+  // should be about the lens and its suggestions and nothing else. Folded by
+  // default; the masthead's "Find papers" button and `?action=find` open it.
+  const [findAddOpen, setFindAddOpen] = useState(false)
+  const findAddRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (routeAction !== 'find' && !routeQuery) return
+    setFindAddOpen(true)
+    window.setTimeout(() => {
+      findAddRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+    const next = new URLSearchParams(route.params)
+    next.delete('action')
+    window.history.replaceState(null, '', buildHashRoute('home', Object.fromEntries(next)))
+  }, [route.params, routeAction, routeQuery])
 
   // Inbox triage (D13). Every verb goes through the ONE canonical route,
   // `POST /papers/{id}/action`, with `surface: 'inbox'` so feedback provenance
@@ -324,30 +352,25 @@ export function HomePage() {
           Grouping is semantic, not decorative: status lives on the blotter,
           papers live on the desk. */}
       <Card className="space-y-5 p-5 sm:p-6">
-        <header className="space-y-3">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h1 className="font-brand text-2xl font-semibold text-alma-800 sm:text-[1.75rem]">
-                {greeting(brief.user_name)}
-              </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                {localDate()} · updated {formatRelativeShort(brief.generated_at)}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2" aria-label="Start a workflow">
-              <Button size="sm" onClick={() => navigateTo('discovery', { action: 'find' })}>
-                <FileSearch className="h-4 w-4" />
-                Find papers
-              </Button>
-              <Button size="sm" onClick={() => navigateTo('authors', { action: 'follow' })}>
-                <UserPlus className="h-4 w-4" />
-                Follow author
-              </Button>
-            </div>
-          </div>
-          {/* The wordmark's own gold rule closes the masthead. */}
-          <BrandRule center="diamond" />
-        </header>
+        {/* The one page whose intro IS its content: the greeting is the lede,
+            and the gold rule closes the masthead (masthead trim only — never a
+            section divider). Rendered `bare` because the blotter Card already
+            supplies the paper. */}
+        <PageIntro
+          bare
+          masthead
+          rule
+          lede={greeting(brief.user_name)}
+          meta={
+            <MetaLine
+              items={[
+                localDate(),
+                <span>updated {formatRelativeShort(brief.generated_at)}</span>,
+              ]}
+            />
+          }
+          tour={<PageTour pageKey="home" steps={HOME_TOUR} />}
+        />
 
         <PageSection
           id="home-activity"
@@ -364,7 +387,10 @@ export function HomePage() {
               border per number; the sparkline floating in its own plate beside
               the heading read as a separate widget rather than part of the
               same reading. */}
-          <div className="flex flex-wrap items-start gap-y-5 divide-edge-1 sm:divide-x">
+          <div
+            data-tour="home-brief"
+            className="flex flex-wrap items-start gap-y-5 divide-edge-1 sm:divide-x"
+          >
             <MetricTile
               variant="bare"
               className="basis-1/2 px-0 sm:basis-auto sm:flex-1 sm:pr-5"
@@ -436,12 +462,15 @@ export function HomePage() {
               produced them and how recently — and then what wants a decision.
               Above the numbers it was preamble; here it is the footnote the
               numbers need. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-edge-1 pt-3">
-            <ConnectionRail connections={brief.connections} />
+          <div
+            data-tour="home-status"
+            className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-edge-1 pt-3"
+          >
+            <HomeStatusRail status={brief.status} />
             {/* One hairline between the two halves: everything left of it is
                 machinery ALMa runs, everything right of it wants a decision
                 from you. Only drawn when both sides exist. */}
-            {attentionTotal > 0 && brief.connections.length > 0 && (
+            {attentionTotal > 0 && brief.status.length > 0 && (
               <span className="h-3 w-px bg-control-edge" aria-hidden />
             )}
             <AttentionChips attention={brief.attention} />
@@ -452,11 +481,23 @@ export function HomePage() {
               <span>
                 Still waiting from earlier:
                 {' '}
-                <a href={buildHashRoute('feed')} className="font-medium text-alma-folio hover:underline">
+                <a
+                  href={buildHashRoute('feed')}
+                  className={cn(
+                    'font-medium hover:underline',
+                    HOME_SECTION_THEMES.feed.title,
+                  )}
+                >
                   {feed.carryover} in Feed
                 </a>
                 {' · '}
-                <a href={buildHashRoute('discovery')} className="font-medium text-alma-folio hover:underline">
+                <a
+                  href={buildHashRoute('discovery')}
+                  className={cn(
+                    'font-medium hover:underline',
+                    HOME_SECTION_THEMES.discovery.title,
+                  )}
+                >
                   {discovery.carryover} in Discovery
                 </a>
               </span>
@@ -466,134 +507,166 @@ export function HomePage() {
 
       </Card>
 
-      {/* Signal Lab calibration — one round per visit (task 54, D20).
-          Sits above the Inbox: a 10-second question, answered before the desk
-          work starts. Renders nothing until the corpus substrate exists. */}
-      <CalibrationCard />
+      {/* Find & add — the manual way into the corpus: you already know the
+          paper, so no lens is involved. Directly under the blotter, first of
+          the loose sheets, because it is an ACTION and everything below it
+          only reports. It replaced a masthead button that did nothing but
+          navigate to Discovery to run the same search (2026-07-27). */}
+      <DisclosurePanel
+        ref={findAddRef}
+        icon={FileSearch}
+        title="Find & add a paper"
+        description="Search any source and add a paper by hand — when you already know what you're looking for."
+        open={findAddOpen}
+        onOpenChange={setFindAddOpen}
+      >
+        <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
+      </DisclosurePanel>
+
+      {/* Signal Lab (task 58, D20) — the day's response sheet. Sits above
+          Inbox as a distinct printed artifact, not another card; renders
+          nothing until the substrate and at least 10 rounds exist. */}
+      <SignalLabSheet />
 
       {/* D13 Inbox — papers you sent yourself from another device, awaiting
           triage. Home IS the Inbox's surface, so there is no "open elsewhere"
           action. It leads the research sections, ahead of even "Picked for
           you": what you chose to send yourself outranks anything ALMa chose
-          for you. Renders only when non-empty — a capture queue notifies, it
-          never nags (I-22). */}
-      {brief.inbox.total > 0 && (
-        <PageSection
-          id="home-inbox"
-          collapsible
-          title="Inbox"
-          icon={Inbox}
-          count={brief.inbox.total}
-          description="Papers you sent yourself, waiting for a decision."
-        >
-          {/* The same measured tile grid every other section on this page
-              uses, so the Inbox scans as one more shelf on the desk rather
-              than a different kind of list. The tiles carry triage controls
-              because Home OWNS this decision — there is no other page to open
-              an Inbox paper on. */}
-          <PaperTileGrid
-            items={brief.inbox.items}
-            getKey={(paper) => paper.id}
-            collapsedRows={COLLAPSED_ROWS}
-            renderTile={(paper) => (
-              <PaperTile
-                href={buildHashRoute('library', { paper: paper.id })}
-                title={paper.title}
-                byline={paperByline(paper)}
-                excerpt={excerpt(paper)}
-                eyebrow={<CaptureEyebrow paper={paper} />}
-                actions={
-                  <PaperActionBar
-                    compact
-                    showLabels={false}
-                    disabled={triage.isPending}
-                    onAdd={act(paper.id, 'add')}
-                    onLike={act(paper.id, 'like')}
-                    onLove={act(paper.id, 'love')}
-                    onDislike={act(paper.id, 'dislike')}
-                    // The X. `defer` returns the paper to `tracked` writing no
-                    // rating and no feedback event — "I saw it, no action for
-                    // it", NOT a judgement. Relabelled so the button never
-                    // reads as the global hide `dismiss` performs elsewhere.
-                    onDismiss={act(paper.id, 'defer')}
-                    dismissLabel="Not now"
-                    dismissTitle="Clear from Inbox — stays in your corpus, records no opinion"
-                  />
-                }
-              />
-            )}
-          />
-        </PageSection>
-      )}
+          for you. An empty Inbox keeps its header bar and a `0` pill, folded
+          shut (2026-07-27) — the desk's shelves are always where you left
+          them; only their contents change. */}
+      <div data-tour="home-inbox">
+      <PageSection
+        id="home-inbox"
+        collapsible
+        title="Inbox"
+        icon={Inbox}
+        categoryTheme={HOME_SECTION_THEMES.inbox}
+        count={brief.inbox.total}
+        description="Papers you sent yourself, waiting for a decision."
+        emptyState={
+          <p className="text-sm text-slate-500">
+            Nothing waiting. Papers you send yourself from another device land here for triage.
+          </p>
+        }
+      >
+        {/* The same measured tile grid every other section on this page
+            uses, so the Inbox scans as one more shelf on the desk rather
+            than a different kind of list. The tiles carry triage controls
+            because Home OWNS this decision — there is no other page to open
+            an Inbox paper on. */}
+        <PaperTileGrid
+          items={brief.inbox.items}
+          getKey={(paper) => paper.id}
+          collapsedRows={COLLAPSED_ROWS}
+          renderTile={(paper) => (
+            <PaperTile
+              href={buildHashRoute('library', { paper: paper.id })}
+              title={paper.title}
+              byline={paperByline(paper)}
+              excerpt={excerpt(paper)}
+              noteTheme="inbox"
+              eyebrow={<CaptureEyebrow paper={paper} />}
+              actions={
+                <PaperActionBar
+                  compact
+                  showLabels={false}
+                  disabled={triage.isPending}
+                  onAdd={act(paper.id, 'add')}
+                  onLike={act(paper.id, 'like')}
+                  onLove={act(paper.id, 'love')}
+                  onDislike={act(paper.id, 'dislike')}
+                  // The X. `defer` returns the paper to `tracked` writing no
+                  // rating and no feedback event — "I saw it, no action for
+                  // it", NOT a judgement. Relabelled so the button never
+                  // reads as the global hide `dismiss` performs elsewhere.
+                  onDismiss={act(paper.id, 'defer')}
+                  dismissLabel="Not now"
+                  dismissTitle="Clear from Inbox — stays in your corpus, records no opinion"
+                />
+              }
+            />
+          )}
+        />
+      </PageSection>
+      </div>
 
+      <div data-tour="home-picked">
       <PageSection
         id="home-highlights"
-          collapsible
+        collapsible
         title="Picked for you"
         icon={Sparkles}
+        categoryTheme={HOME_SECTION_THEMES.picked}
         count={brief.highlights.length}
         description="New research from your monitored sources and Discovery, with the reason it surfaced."
+        emptyState={
+          <p className="text-sm text-slate-500">
+            No new research arrived in the last seven days. Your reading list and source pages remain available below.
+          </p>
+        }
       >
-        {brief.highlights.length > 0 ? (
-          <PaperTileGrid
-            items={brief.highlights}
-            getKey={(highlight) =>
-              `${highlight.kind}-${highlight.paper.id}-${highlight.source?.id ?? highlight.lens_id ?? ''}`
-            }
-            // Exactly one row of the same measured grid the sections below
-            // use — a shortlist, not a truncated list, so no "Show more".
-            collapsedRows={1}
-            expandable={false}
-            renderTile={(highlight) => (
-              <PaperTile
-                href={highlightHref(highlight)}
-                title={highlight.paper.title}
-                byline={paperByline(highlight.paper)}
-                excerpt={excerpt(highlight.paper)}
-                eyebrow={
-                  <StatusBadge
-                    tone={highlight.period === 'today' ? 'accent' : 'neutral'}
-                    size="sm"
-                  >
-                    {highlight.period === 'today' ? 'Today' : 'Last 7 days'}
-                  </StatusBadge>
-                }
-                score={highlight.score ?? null}
-                reason={highlight.reason.label}
-                explanation={highlightExplanation(highlight)}
-              />
-            )}
-          />
-        ) : (
-          <Card className="p-5">
-            <p className="text-sm text-slate-500">
-              No new research arrived in the last seven days. Your reading list and source pages remain available below.
-            </p>
-          </Card>
-        )}
-      </PageSection>
-
-      {brief.reading.total > 0 && (
-        <PageSection
-          id="home-reading"
-          collapsible
-          title="Reading list"
-          icon={BookMarked}
-          count={brief.reading.total}
-          description="Latest added, newest first."
-          action={
-            <Button size="sm" variant="ghost" onClick={() => navigateTo('library', { tab: 'reading' })}>
-              Open reading list
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+        <PaperTileGrid
+          items={brief.highlights}
+          getKey={(highlight) =>
+            `${highlight.kind}-${highlight.paper.id}-${highlight.source?.id ?? highlight.lens_id ?? ''}`
           }
-        >
-          <PaperSection
-            papers={brief.reading.items}
-            hrefFor={(paper) => buildHashRoute('library', { tab: 'reading', paper: paper.id })}
-          />
-        </PageSection>
-      )}
+          // Exactly one row of the same measured grid the sections below
+          // use — a shortlist, not a truncated list, so no "Show more".
+          collapsedRows={1}
+          expandable={false}
+          renderTile={(highlight) => (
+            <PaperTile
+              href={highlightHref(highlight)}
+              title={highlight.paper.title}
+              byline={paperByline(highlight.paper)}
+              excerpt={excerpt(highlight.paper)}
+              noteTheme={
+                highlight.kind === 'discovery_paper' ? 'discovery' : 'feed'
+              }
+              eyebrow={
+                <StatusBadge
+                  tone={highlight.period === 'today' ? 'accent' : 'neutral'}
+                  size="sm"
+                >
+                  {highlight.period === 'today' ? 'Today' : 'Last 7 days'}
+                </StatusBadge>
+              }
+              score={highlight.score ?? null}
+              reason={highlight.reason.label}
+              explanation={highlightExplanation(highlight)}
+            />
+          )}
+        />
+      </PageSection>
+      </div>
+
+      <PageSection
+        id="home-reading"
+        collapsible
+        title="Reading list"
+        icon={BookMarked}
+        categoryTheme={HOME_SECTION_THEMES.reading}
+        count={brief.reading.total}
+        description="Latest added, newest first."
+        action={
+          <Button size="sm" variant="ghost" onClick={() => navigateTo('library', { tab: 'reading' })}>
+            Open reading list
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        }
+        emptyState={
+          <p className="text-sm text-slate-500">
+            Nothing queued. Papers you add to the reading list show up here, newest first.
+          </p>
+        }
+      >
+        <PaperSection
+          papers={brief.reading.items}
+          hrefFor={(paper) => buildHashRoute('library', { tab: 'reading', paper: paper.id })}
+          noteTheme="reading"
+        />
+      </PageSection>
 
       {attentionTotal === 0 && brief.reading.total === 0 && brief.inbox.total === 0 && brief.highlights.length === 0 && (
         <p className="flex items-center gap-2 text-sm text-slate-500">

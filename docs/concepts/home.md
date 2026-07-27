@@ -19,21 +19,30 @@ The page has two halves, and the split is meaning, not decoration:
 - **The blotter** — one raised panel at the top carrying your whole *situation*:
   the greeting and date, the two workflow shortcuts, one slim status line, and
   today's figures. It is the pad you work on, and it is always the same shape.
-- **The desk** — the research itself, as loose sheets below: Inbox, Picked for
-  you, Reading list. Each is its own **collapsible block** — fold away what
+- **The desk** — the research itself, as loose sheets below: one optional
+  Signal Lab calibration, Inbox, Picked for you, Reading list. Each paper
+  section is its own **collapsible block** — fold away what
   isn't today's business and the rest comes up to meet you.
 
-Reading order follows urgency: what is my situation (blotter) → what did I send
-myself (Inbox) → what did ALMa find (Picked for you) → what am I already
-reading.
+Reading order follows urgency: what is my situation (blotter) → one cheap taste
+calibration when available → what did I send myself (Inbox) → what did ALMa
+find (Picked for you) → what am I already reading.
+
+Signal Lab serves a deck of at least ten signed rounds immediately above Inbox
+when the feature is active and the super-region graph exists. Its distinct game
+board explains the task, shows deck progress, and adds quiet evidence rows for
+directions, boundaries, daily/total rounds, unique and fitted observations,
+fit freshness, and super-region/edge coverage. It never presents the
+combinatorial triplet universe as progress. Disabling the feature hides this
+section and ignores retained signals without deleting them.
 
 ## The status line
 
 One slim line under the greeting, with no heading of its own, carrying two
 groups split by a hairline:
 
-- **left — the machinery**: one dot per outside dependency (see
-  [Connections](#connections) below);
+- **left — the machinery**: one dot per core subsystem/capability (see
+  [System status](#system-status) below);
 - **right — what wants you**: one chip per pending decision (see
   [Needs you](#needs-you)).
 
@@ -105,6 +114,12 @@ Home is navigation-only. Opening a highlight takes you to its Feed monitor,
 Discovery lens, or paper detail on the owner page; all save, rate, read, and
 dismiss actions remain there.
 
+Home paper tiles deliberately read as calm sticky notes on the desk. One
+central category palette owns every use—tile paper, count pills, small chart
+marks, and title symbols: Inbox green, Reading violet, Picked gold, Discovery
+blue-cyan, and Feed magenta. The page title words remain navy; only the symbol
+before each section title carries category colour.
+
 ## Inbox
 
 Papers you sent yourself from another device — Slack today, any channel that
@@ -126,8 +141,9 @@ when the paper first entered your corpus: a paper your Feed collected two years
 ago, which you re-sent yourself this morning, belongs at the top of the queue it
 just joined.
 
-The section renders only when something is waiting, so an empty Inbox
-disappears rather than nagging. Papers are not meant to accumulate here.
+The Inbox shelf remains in the page order with a zero count when empty, folded
+shut and without empty-state copy. Its position therefore stays predictable
+without nagging. Papers are not meant to accumulate here.
 
 While a capture waits it is a full corpus member — enriched, embedded, mapped,
 deduplicated — but it is excluded from every preference query, so an untriaged
@@ -143,43 +159,29 @@ The section shows two full rows of the measured tile grid while collapsed — up
 to eight tiles on a wide desk and two on a phone — so it never ends on a ragged
 half-row.
 
-## Connections
+## System status
 
-The left half of the status line carries one dot per outside dependency ALMa
-needs while you are not looking. **Everything is named by its real name** — the
-capture entries come from the channel registry, so you read **Slack**, not an
-abstract "Capture":
+The left half of the status line carries compact pills such as Automation,
+Feed, Discovery, the active embedding stack, Inbox, and Alerts. Only the
+severity dot and owner name are visible; metric, explanation, and check time
+live on hover.
 
-| Dot | What it means when it goes red |
-|---|---|
-| **Slack** (one per capture channel) | Papers you send yourself stop arriving in your Inbox. |
-| **OpenAlex** | Feed monitors, author refreshes and paper metadata stall. |
-| **Semantic Scholar** | New papers never get vectors, so Discovery stops seeing them. |
-| **SPECTER2** / **OpenAI embeddings** | This machine can't compute vectors at all. |
+Inbox and Alerts are core capabilities, so Home never labels either pill
+“Slack”, “SMTP”, or another provider. Their provider-independent state is:
 
-The last dot is named for the stack that would actually run here, and it is the
-one entry with a real *not set up* state: an environment without the local
-torch/adapters stack (or a hosted key) cannot compute embeddings, and the pill
-says so — papers still get vectors from Semantic Scholar, just not from you.
-Support is checked by looking for the modules, never by importing them: a page
-load must not pay for loading torch.
+- green — at least one supporting integration is configured, active, and
+  working;
+- red — configured but the direction is failing;
+- grey — no integration is configured.
 
-These failures are the ones that never announce themselves — a revoked token, a
-rejected key, a provider outage, a missing dependency — and their only symptom
-is a page that quietly stops filling up.
+Provider controls remain under **Settings → Plugins**. Every status pill links
+to the page or Settings section that owns its remedy; where no owner route
+exists, Home uses the shared popup primitive for the repair action.
 
-The dots are always present, so their silence is meaningful: you learn where they
-live while everything is green, which is the only way you will notice the day one
-turns red. A failing connection also states itself in words below the line, says
-what you are losing, and links to the fix.
-
-States are read from the **operation ledger** — the recorded outcome of every
-job that actually talked to that provider — not from a live probe, because Home
-is a pure read and should not make a network call per dot to render. So a dot
-claims *"last time we used this, it worked"*, never *"it works right now"*, and
-every tooltip says when. A cancelled job sets no state at all: it proves the
-run stopped, not that the provider answered. Live re-probing lives in
-**Settings → Connections**.
+States come from local configuration, domain state, and the **operation
+ledger**, not from live probes. Home therefore says what happened the last time
+ALMa used a capability. A cancelled operation sets no health verdict. This
+keeps `GET /home/brief` a pure read.
 
 ## Needs you
 

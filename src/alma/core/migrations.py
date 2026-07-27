@@ -1161,6 +1161,25 @@ def _m_0034_inbox_messages(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0035_cluster_placement_provenance(conn: sqlite3.Connection) -> None:
+    """Coordinate provenance on the substrate (2026-07-27).
+
+    ``publication_clusters.placement`` records HOW a row's (x, y) was obtained:
+    ``'layout'`` (the UMAP fit) or ``'interpolated'`` (approximated between
+    rebuilds from nearest placed neighbours). Until now the two were
+    indistinguishable, so an approximation rendered as a computed fact.
+
+    Deliberately NOT back-filled. Existing rows are a mix and nothing in the
+    schema can tell them apart after the fact, so they stay NULL = "placed
+    before provenance was tracked" — the same rule as
+    ``tasks/lessons.md`` → "Don't fabricate missing timestamps". The next full
+    layout rebuild stamps every row it writes for real.
+    """
+    if not _table_exists(conn, "publication_clusters"):
+        return
+    _add_columns(conn, "publication_clusters", {"placement": "TEXT"})
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1196,6 +1215,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (32, "single_corpus_substrate", _m_0032_single_corpus_substrate),
     (33, "author_seed_status", _m_0033_author_seed_status),
     (34, "inbox_messages", _m_0034_inbox_messages),
+    (35, "cluster_placement_provenance", _m_0035_cluster_placement_provenance),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -154,8 +154,8 @@ Every Slack-touching call runs through the canonical
 | Endpoint | Operation key |
 |---|---|
 | `POST /alerts/{id}/evaluate` | `alerts.evaluate:<alert_id>` |
-| `POST /plugins/slack/test` | `alerts.slack.test` |
-| `POST /plugins/email/test` | `alerts.email.test` |
+| `POST /plugins/slack/test` | `integrations.slack.test` |
+| `POST /plugins/email/test` | `integrations.email.test` |
 | Periodic sweep | `alerts.evaluate_scheduled` |
 
 The HTTP request returns in ~100 ms with a `JobEnvelope`
@@ -169,18 +169,17 @@ Concurrent re-fires of the same alert dedupe via `find_active_job`:
 clicking "Evaluate" twice returns the same `job_id` on the second
 call, with `status: "already_running"`.
 
-## Delivery channels
+## Delivery integrations
 
-Two working channels: **Slack** and **Email**. An alert delivers to
-whichever channels are checked on its `channels` list (`slack`,
-`email`, or both); each channel sends the same matched-paper set
-independently. Both are registered in `alma.channels` with a `send`
-capability; the `MessagingPlugin` interface in `alma.plugins.base` leaves
-room for Discord / webhook follow-ons. See
-[Delivery channels](channels.md) for the full registry and the
-send/receive split. Each has a "Send test" button in
-Settings that runs through the same notifier as real delivery — a
-green test proves the production path works.
+Two working integrations: **Slack** and **Email**. An Alert delivers to
+whichever active send-capable manifests are checked on its `channels` list;
+each integration receives the same matched-paper set independently. The
+frontend discovers those choices from `alma.plugins.registry`, and the API
+rejects unknown or receive-only ids before they reach durable Alert state.
+
+Alerts remain core: rules, schedules, matching, deduplication, history, and
+Activity live here. Integration plugins only render and deliver through the
+manifest's `AlertSender` seam. See [External integrations](channels.md).
 
 ### Slack
 
@@ -188,7 +187,7 @@ Delivery via a Slack Bot User OAuth Token through `SlackNotifier`.
 The bot token is stored in the unified secret store
 (`data/secrets.json`, key `slack.bot_token`). The DM target lives
 in `data/settings.json` under `slack_channel`. Both are editable
-from **Settings → Delivery channels**; no environment variable hand-edits
+from **Settings → Plugins**; no environment variable hand-edits
 needed.
 
 ### Email
@@ -207,7 +206,7 @@ toggle are stored in `data/settings.json` (keys `smtp_host`,
 `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`,
 `smtp_use_tls`). The SMTP **password** is held in the unified secret
 store (`data/secrets.json`, key `smtp.password`) — never in
-`settings.json`. All are editable from **Settings → Email digests**;
+`settings.json`. All are editable from **Settings → Plugins → Email**;
 each also has an env-var override (`SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USERNAME`, `SMTP_FROM`, `SMTP_TO`, `SMTP_PASSWORD`). See the
 [Configuration reference](../reference/configuration.md#email-smtp).

@@ -27,8 +27,8 @@ alma/
 │   ├── library/                  # Importers, deduplication, enrichment
 │   ├── ai/                       # Embedding providers and dependency probes
 │   ├── openalex/                 # OpenAlex HTTP client + helpers
-│   ├── services/                 # Thin domain services (S2 vectors, signal lab)
-│   ├── plugins/                  # Plugin registry (wraps the transports below)
+│   ├── services/                 # Thin domain services (S2 vectors, Inbox adapters)
+│   ├── plugins/                  # External integration manifests + schemas
 │   ├── slack/                    # Slack notifier client
 │   ├── mailer/                   # SMTP / email digest client
 │   ├── cli/                      # `alma` CLI entry point
@@ -80,6 +80,10 @@ flowchart TD
   (signal lab, S2 vectors).
 * **Domain modules** — `discovery/`, `library/`, `ai/`, `openalex/`
   encapsulate their own state, helpers, and external-API contracts.
+* **Integration plugins** — optional external adapters only. Core Alerts and
+  Inbox own their workflows; each package under `plugins/` owns a strict config
+  schema and implements `send`, `receive`, or both. See
+  [Building an integration](integrations.md).
 
 ### Two discovery locations
 
@@ -233,8 +237,9 @@ Every user action maps to exactly one canonical use-case. Examples:
 | Add a Discovery recommendation to Reading list | `alma.application.discovery.mark_recommendation_action(..., "read")` |
 | Follow / unfollow an author | `alma.application.authors.apply_follow_state` |
 | Save an online search result | `alma.application.openalex_manual.save_online_search_result` |
-| Write a feedback event | `alma.services.signal_lab.record_feedback` |
+| Write a paper feedback event | `alma.application.paper_actions.apply_paper_action` |
 | Promote an existing tracked paper into Library | `alma.application.library.add_to_library` (same) |
+| Create a collection-backed lens from a map lasso | `alma.application.map_selection.create_collection_lens` |
 
 Two routes that mean the same thing always call the same helper.
 This is the [one intent per action](../vision.md#one-intent-per-action)
@@ -326,14 +331,23 @@ background jobs share that one writer, so a burst of work can collide as
   writes on a clean transaction, and nothing else may be staged on that
   connection before the retried block (e.g. `create_author` commits its
   column-ensure first; the merge runs as one atomic transaction).
-* **Why Feed/Discovery paper actions are *not* wrapped** — they funnel
-  through `library.add_to_library` **and** `signal_lab.record_feedback`,
-  which each `commit()` internally and **append** non-idempotent rows. One
-  action is therefore a *sequence* of separate commits, not a single atomic
-  unit, so a blind re-run would double-record a signal. They rely on the
-  busy_timeout + the worker cap instead. Giving them the same retry would
-  require making each action one transaction first (defer the inner
-  commits) — a refactor, not a drop-in.
+* **Feed/Discovery paper actions are one transaction** —
+  `application.paper_actions.apply_paper_action` owns the membership,
+  surface-row settlement, and ordinary feedback writes inside one
+  `run_write_unit`. Signal Lab game rounds use their own one-row writer and
+  never enter this path.
+* **Map selection is one compound transaction** —
+  `application.map_selection.create_collection_lens` re-validates the current
+  Library/Corpus scope, then creates collection, Library promotions,
+  memberships, and collection-backed lens under one `run_write_unit`.
+* **Signal Lab sheets are active-design reads** —
+  `application.signal_lab.policy.build_queue` reads the complete judgeable
+  super-region pool, generates a bounded representative candidate set, and
+  designs one diverse sheet with full-outcome expected information gain,
+  cooldown, staleness, answerability, and protected exploration. The GET writes
+  nothing. Its signed nonce makes answer POST retries idempotent; the first
+  valid answer is one row, and the derived utility/metric heads refit wholesale
+  in the background.
 * **Fetch/write decoupling for network sweeps** — per-item network jobs
   (identity resolution, abstract recovery) run through
   `core.fetch_pipeline`: bounded concurrent fetch pools do the network (no DB

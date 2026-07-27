@@ -125,7 +125,7 @@ This is the step that actually adds ALMa to Slack.
         Anyone holding it can act as your bot. If it leaks, hit **Regenerate**
         on that page and paste the new one into ALMa.
 
-2. In ALMa: **Settings → Channels → Slack Bot Token** → paste → **Save**.
+2. In ALMa: **Settings → Plugins → Slack → Bot token** → paste → **Save plugin settings**.
 
 ALMa keeps it in its secret store (`data/secrets.json`, gitignored, mode
 `0600`) — never in `settings.json`, never in `.env` — and shows only a masked
@@ -135,7 +135,7 @@ version afterwards.
 
 ## Step 5 — Check it works
 
-**Settings → Channels → Test Slack Connection.** A success toast means the token
+**Settings → Plugins → Slack → Test connection.** A success toast means the token
 and scopes are good.
 
 ## Next

@@ -50,6 +50,13 @@ interface LensManagerProps {
   onDelete: (lensId: string) => void
   /** Persist a new lens order (drag-to-reorder). Omit to disable reordering. */
   onReorder?: (orderedIds: string[]) => void
+  /**
+   * Render without the component's own sheet + "Lenses" eyebrow, for a host
+   * that already frames and names it (the Discovery "Lenses" band). Without
+   * this the picker is a bordered card inside a bordered card, under a second
+   * copy of the word it is already titled with.
+   */
+  bare?: boolean
 }
 
 /** One lens chip: a grip handle (drag), the name (select), and delete. The
@@ -162,6 +169,7 @@ export function LensManager({
   onCreate,
   onDelete,
   onReorder,
+  bare = false,
 }: LensManagerProps) {
   // Pointer needs a small drag threshold so a plain click still selects/deletes;
   // keyboard sensor makes reordering accessible.
@@ -256,56 +264,75 @@ export function LensManager({
     }
   }
 
-  return (
-    <section className="space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sheet">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-col gap-0.5">
-          <EyebrowLabel tone="muted">Lenses</EyebrowLabel>
-          <p className="text-xs text-slate-500">
-            Pick a lens to drive the recommendations and branch settings below — switching lenses respawns everything.
-          </p>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant={showCreateForm ? 'ghost' : 'outline'}
-          onClick={() => (showCreateForm ? cancelCreate() : setShowCreateForm(true))}
-        >
-          {showCreateForm ? (
-            <>
-              <X className="mr-1 h-4 w-4" /> Cancel
-            </>
-          ) : (
-            <>
-              <Plus className="mr-1 h-4 w-4" /> New lens
-            </>
-          )}
-        </Button>
-      </div>
-
-      {lenses.length === 0 ? (
-        <EmptyState
-          title="No lenses yet"
-          description="Create one to start context-aware discovery."
-        />
+  const createButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant={showCreateForm ? 'ghost' : 'outline'}
+      onClick={() => (showCreateForm ? cancelCreate() : setShowCreateForm(true))}
+    >
+      {showCreateForm ? (
+        <>
+          <X className="mr-1 h-4 w-4" /> Cancel
+        </>
       ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={lenses.map((lens) => lens.id)} strategy={rectSortingStrategy}>
-            <div className="flex flex-wrap gap-2">
-              {lenses.map((lens) => (
-                <SortableLensChip
-                  key={lens.id}
-                  lens={lens}
-                  isActive={selectedLensId === lens.id}
-                  draggable={canReorder}
-                  onSelect={() => onSelectLens(lens.id)}
-                  onDelete={() => handleDeleteClick(lens)}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+        <>
+          <Plus className="mr-1 h-4 w-4" /> New lens
+        </>
       )}
+    </Button>
+  )
+
+  return (
+    <section
+      className={cn(
+        'space-y-3',
+        !bare && 'rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sheet',
+      )}
+    >
+      {/* A host that frames this (the Discovery "Lenses" band) has already
+          said what a lens is; repeating it here stacked two descriptions on
+          top of each other, and left "New lens" alone on an otherwise empty
+          row. Bare mode drops the header and puts the button where the action
+          is — at the end of the chip row it adds to. */}
+      {!bare && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-0.5">
+            <EyebrowLabel tone="muted">Lenses</EyebrowLabel>
+            <p className="text-xs text-slate-500">
+              Pick a lens to drive the recommendations and branch settings below — switching lenses respawns everything.
+            </p>
+          </div>
+          {createButton}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {lenses.length === 0 ? (
+          <EmptyState
+            title="No lenses yet"
+            description="Create one to start context-aware discovery."
+          />
+        ) : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={lenses.map((lens) => lens.id)} strategy={rectSortingStrategy}>
+              <div className="flex flex-wrap items-center gap-2">
+                {lenses.map((lens) => (
+                  <SortableLensChip
+                    key={lens.id}
+                    lens={lens}
+                    isActive={selectedLensId === lens.id}
+                    draggable={canReorder}
+                    onSelect={() => onSelectLens(lens.id)}
+                    onDelete={() => handleDeleteClick(lens)}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        )}
+        {bare && createButton}
+      </div>
 
       {showCreateForm && (
         <div className="grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_auto_1fr_auto]">

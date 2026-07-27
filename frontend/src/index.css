@@ -526,3 +526,49 @@ body {
   box-shadow: 0 0 8px 0 rgb(30 91 134 / 0.45);
   pointer-events: none;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Signal Lab — the pencil mark (Home).
+ *
+ * Signal Lab asks a triad question (best–worst, or odd-one-out) that ran on
+ * printed response sheets in psychophysics for decades. The band itself is an
+ * ordinary Home section in the ordinary materials; the one place that history
+ * shows through is the answer bubble, which fills like graphite.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* A filled answer bubble. The fill colour is the app's accent (every
+ * selected/checked state is accent, no exceptions) — what makes it read as
+ * graphite rather than a vector dot is the paper grain multiplied over it, so
+ * the pigment looks absorbed into fibre and slightly uneven, and the press-in
+ * animation on arrival. */
+.alma-pencil-mark {
+  position: relative;
+  overflow: hidden;
+  animation: alma-pencil-press 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.alma-pencil-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("/brand/paper-texture.svg");
+  background-repeat: repeat;
+  background-size: 72px 72px;
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+}
+@keyframes alma-pencil-press {
+  from {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .alma-pencil-mark {
+    animation: none;
+  }
+}

@@ -7,10 +7,9 @@ evidence. The invalidate half is not optional — scoring reads the model via
 split), so a purge that only deleted rounds would keep serving the stale
 model until an unrelated rebuild landed (defect D-2, task 54 §1.2).
 
-There is deliberately no partial clean and no deactivate tier: nothing is
-promoted until the stage gates say so (weights default "0.0"), so "the lab
-is misbehaving" is handled by never having turned it on — not by a second
-lifecycle to maintain.
+Purge and activation are deliberately separate. Disabling Signal Lab is a
+reversible consumption gate: Home, ranking, and maps ignore retained evidence.
+Purge is the explicit irreversible action that deletes it.
 """
 
 from __future__ import annotations
@@ -35,9 +34,7 @@ def purge(db: sqlite3.Connection) -> dict[str, int]:
     """
 
     def _unit() -> dict[str, int]:
-        n = int(
-            db.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0] or 0
-        )
+        n = int(db.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0] or 0)
         db.execute("DELETE FROM signal_lab_rounds")
         mv.invalidate(db, MODEL_VIEW_KEY)
         return {"rounds_deleted": n}

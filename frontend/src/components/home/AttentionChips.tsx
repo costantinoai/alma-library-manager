@@ -65,7 +65,7 @@ const ATTENTION: Record<AttentionKey, AttentionSpec> = {
     metric: (n) => `${n} not identified`,
     title: (n) =>
       `${n} captured ${n === 1 ? 'message' : 'messages'} reached ALMa but resolved to no paper — a link with no DOI, or an upstream failure. Recorded rather than dropped.`,
-    href: buildHashRoute('settings', { anchor: 'channels' }),
+    href: buildHashRoute('settings', { anchor: 'plugins' }),
   },
   author_decisions: {
     icon: Users,
@@ -125,9 +125,9 @@ export function AttentionChips({ attention }: AttentionChipsProps) {
           variant="slim"
           severity={spec.severity}
           name={spec.label(count)}
-          metric={spec.metric(count)}
           href={spec.href}
-          title={spec.title(count)}
+          title={`${spec.metric(count)}. ${spec.title(count)}`}
+          ariaLabel={`${spec.label(count)}: ${spec.metric(count)}`}
         />
       ))}
     </>

@@ -61,23 +61,20 @@ def build_signal_lab_eval(conn: sqlite3.Connection) -> dict[str, Any]:
     lab_ctx = {
         "w_offset": HYPOTHETICAL_POINTS,
         "w_utility": HYPOTHETICAL_POINTS,
-        "offsets": {
-            int(k): float(v) for k, v in (payload.get("region_offsets") or {}).items()
-        },
+        "offsets": {int(k): float(v) for k, v in (payload.get("region_offsets") or {}).items()},
         "utility": None,
+        "utility_confidence": 1.0,
         "centroids": {},
     }
     from alma.application import super_regions as sr
     from alma.application.signal_lab.fit import decode_head_vector
 
-    if payload.get("utility_b64"):
-        lab_ctx["utility"] = decode_head_vector(payload["utility_b64"])
+    if payload.get("utility_delta_b64"):
+        lab_ctx["utility"] = decode_head_vector(payload["utility_delta_b64"])
     regions_stored = mv.get_stored(conn, sr.VIEW_KEY)
     if regions_stored is not None and lab_ctx["offsets"]:
         for region in regions_stored["payload"].get("regions", []):
-            lab_ctx["centroids"][int(region["id"])] = sr.decode_centroid(
-                region["centroid_b64"]
-            )
+            lab_ctx["centroids"][int(region["id"])] = sr.decode_centroid(region["centroid_b64"])
 
     rows = conn.execute(
         """

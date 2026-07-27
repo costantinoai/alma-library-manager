@@ -1,4 +1,4 @@
-"""Signal Lab — the reversible minigame layer (task 54, D20).
+"""Signal Lab — first-class reversible calibration (task 54, D20).
 
 The layer's contract in one paragraph: games are pure data
 (:mod:`.spec.MiniGame`); the layer writes exactly one row per answered round
@@ -10,7 +10,7 @@ purging the lab (:mod:`.purge`) is DELETE + invalidate, total and immediate.
 
 ``available_games()`` is the EXPLICIT registry — this list is what can reach
 your signal, the same discipline as
-``services.inbox_channels.available_channels()``.
+the external-integration registry.
 """
 
 from __future__ import annotations
@@ -44,26 +44,15 @@ def get_game(game_id: str) -> MiniGame:
 
 
 def lab_tuning(conn) -> dict:
-    """The lab's tunable numbers, resolved settings-over-defaults. ONE parser.
+    """Sampler/fitter tuning from the feature's one validated parser."""
+    from alma.application.signal_lab.settings import read
 
-    Every knob lives in ``DISCOVERY_SETTINGS_DEFAULTS`` under ``signal_lab.*``
-    (task 54): right defaults, tunable from Settings without a code change.
-    """
-    from alma.application.discovery.lens_crud import read_settings
-
-    s = read_settings(conn)
-
-    def _f(key: str, fallback: float) -> float:
-        try:
-            return float(s.get(key, fallback))
-        except (TypeError, ValueError):
-            return fallback
-
+    settings = read(conn)
     return {
-        "gamma_start": _f("signal_lab.gamma_start", 0.35),
-        "epsilon": _f("signal_lab.epsilon", 0.20),
-        "coverage_target": max(1, int(_f("signal_lab.coverage_target", 20))),
-        "refit_every_rounds": max(1, int(_f("signal_lab.refit_every_rounds", 5))),
-        "holdout_percent": min(50, max(0, int(_f("signal_lab.holdout_percent", 15)))),
-        "override_min_votes": max(1, int(_f("signal_lab.override_min_votes", 3))),
+        "gamma_start": settings.ring_decay,
+        "epsilon": settings.exploration_rate,
+        "coverage_target": settings.coverage_target,
+        "refit_every_rounds": settings.refit_every_rounds,
+        "holdout_percent": settings.holdout_percent,
+        "override_min_votes": settings.override_min_votes,
     }

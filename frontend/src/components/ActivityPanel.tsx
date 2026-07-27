@@ -21,6 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SubPanel } from '@/components/ui/sub-panel'
+import { SIDEBAR_DOCK_INSET, sidebarInset } from '@/components/layout/sidebarMetrics'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource } from '@/lib/activity'
@@ -1201,7 +1202,14 @@ function QueryErrorView({ title, message }: { title: string; message: string }) 
 
 // ── Main component ──
 
-export function ActivityPanel() {
+interface ActivityPanelProps {
+  /** Whether the desk's left rail is collapsed. The dock is `fixed`, so it
+   *  cannot inherit the main column's padding — it has to be told how much
+   *  room the rail is taking and inset its own left edge to match. */
+  sidebarCollapsed?: boolean
+}
+
+export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps = {}) {
   const [isOpen, setIsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'operations' | 'logs'>('operations')
   const [logLevel, setLogLevel] = useState<string>('ALL')
@@ -1366,7 +1374,16 @@ export function ActivityPanel() {
         />
       )}
 
-      <div className="fixed bottom-0 left-0 right-0 z-40 lg:left-[260px]">
+      {/* Docked across the bottom of the window. Its left edge tracks the
+          rail's current width (`sidebarMetrics`), on the same 200ms curve as
+          the rail and the main column, so collapsing the nav widens the dock
+          with everything else instead of leaving a dead gutter. */}
+      <div
+        className={cn(
+          'fixed bottom-0 left-0 right-0 z-40 transition-[left] duration-200',
+          sidebarInset(SIDEBAR_DOCK_INSET, sidebarCollapsed),
+        )}
+      >
         {/* Toggle bar -- always visible.
             Activity intentionally lives in a cool slate/white palette,
             visually detaching it from the warm cream/parchment reading

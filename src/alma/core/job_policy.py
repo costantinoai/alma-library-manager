@@ -80,8 +80,13 @@ class JobPolicy:
             JobClass.DATA_MANAGEMENT,
             JobClass.MAINTENANCE,
         }:
-            raise ValueError(f"{self.namespace}: destructive jobs must be data_management/maintenance")
-        if self.job_class == JobClass.HOUSEKEEPING and ResourceKind.DB_EXCLUSIVE not in self.resources:
+            raise ValueError(
+                f"{self.namespace}: destructive jobs must be data_management/maintenance"
+            )
+        if (
+            self.job_class == JobClass.HOUSEKEEPING
+            and ResourceKind.DB_EXCLUSIVE not in self.resources
+        ):
             raise ValueError(f"{self.namespace}: housekeeping must declare DB_EXCLUSIVE")
         if self.fanout_budget < 1:
             raise ValueError(f"{self.namespace}: fanout_budget must be >= 1")
@@ -90,8 +95,16 @@ class JobPolicy:
 _R = ResourceKind
 
 
-def _p(namespace: str, job_class: JobClass, priority: int, resources: set[ResourceKind], **kw) -> JobPolicy:
-    return JobPolicy(namespace=namespace, job_class=job_class, priority=priority, resources=frozenset(resources), **kw)
+def _p(
+    namespace: str, job_class: JobClass, priority: int, resources: set[ResourceKind], **kw
+) -> JobPolicy:
+    return JobPolicy(
+        namespace=namespace,
+        job_class=job_class,
+        priority=priority,
+        resources=frozenset(resources),
+        **kw,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -102,63 +115,221 @@ def _p(namespace: str, job_class: JobClass, priority: int, resources: set[Resour
 # and may_overlap_maintenance False.
 # --------------------------------------------------------------------------
 
-JOB_POLICIES: dict[str, JobPolicy] = {p.namespace: p for p in (
-    # ---- Maintenance lane (serialized; the Health DAG) ----------------------
-    _p("ai", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
-       sources=("semantic_scholar", "openalex"), durable=True, max_concurrency=1, may_overlap_maintenance=False),
-    _p("embeddings", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
-       sources=("semantic_scholar",), durable=True, max_concurrency=1, may_overlap_maintenance=False),
-    _p("papers", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex", "semantic_scholar", "crossref"), durable=True, max_concurrency=1, may_overlap_maintenance=False),
-    _p("corpus", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex", "crossref"), durable=True, max_concurrency=1, may_overlap_maintenance=False),
-    _p("authors", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
-       sources=("openalex", "orcid", "semantic_scholar", "crossref"), durable=True, max_concurrency=1, may_overlap_maintenance=False),
-    _p("graphs", JobClass.MAINTENANCE, 30, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex",), max_concurrency=1, may_overlap_maintenance=False),
-    _p("materialize", JobClass.MAINTENANCE, 30, {_R.DB_WRITER},
-       max_concurrency=1, may_overlap_maintenance=False),
-    _p("topics", JobClass.MAINTENANCE, 30, {_R.DB_WRITER},
-       max_concurrency=1, may_overlap_maintenance=False),
-    _p("maintenance", JobClass.MAINTENANCE, 30, {_R.DB_WRITER},
-       max_concurrency=1, may_overlap_maintenance=False),
-    # ---- User / product work (must keep capacity; may overlap maintenance) ---
-    # Discovery/feed/lenses fan out across many retrieval lanes that already
-    # carry per-lane deadlines + 429 abandonment; a generous fanout_budget keeps
-    # a user-initiated (backgrounded) refresh fast while still being a declared,
-    # greppable ceiling rather than an unbounded pool.
-    _p("discovery", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
-       sources=("openalex", "semantic_scholar"), max_concurrency=2, fanout_budget=12),
-    _p("feed", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",),
-       max_concurrency=2, fanout_budget=8),
-    _p("lenses", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER, _R.LOCAL_MODEL}, max_concurrency=2, fanout_budget=8),
-    _p("publications", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex", "semantic_scholar", "crossref"), max_concurrency=2),
-    _p("imports", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=2),
-    _p("tags", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER}, max_concurrency=2),
-    _p("operations", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex", "semantic_scholar"), max_concurrency=2),
-    _p("fetch", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=2),
-    _p("onboarding", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=1),
-    # ---- Notification / integration ----------------------------------------
-    # Inbox capture (D13): polls delivery channels (Slack today) and lands what
-    # you sent yourself. NOTIFICATION rather than USER_PRODUCT — it is an
-    # integration poll, not something the user is waiting on a page for. Runs on
-    # a minutes cadence, so `max_concurrency=1` and no fan-out: overlapping
-    # sweeps would re-fetch the same window, and the per-message capture is a
-    # short serial gather-then-write. Network (Slack + OpenAlex) and DB writer.
-    _p("inbox", JobClass.NOTIFICATION, 40, {_R.NETWORK, _R.DB_WRITER},
-       sources=("openalex",), max_concurrency=1, fanout_budget=1),
-    _p("alerts", JobClass.NOTIFICATION, 40, {_R.DB_WRITER, _R.NETWORK}, max_concurrency=1),
-    _p("plugins", JobClass.NOTIFICATION, 40, {_R.NETWORK}, durable=False, max_concurrency=2),
-    # ---- Data-management / destructive utilities ---------------------------
-    _p("library", JobClass.DATA_MANAGEMENT, 50, {_R.DB_WRITER, _R.DB_EXCLUSIVE},
-       coalescing=True, max_concurrency=1, may_overlap_maintenance=False, destructive=True),
-    _p("signal", JobClass.DATA_MANAGEMENT, 50, {_R.DB_WRITER}, max_concurrency=1, destructive=True),
-    # ---- Housekeeping (DB-exclusive, quiet slot) ---------------------------
-    _p("db", JobClass.HOUSEKEEPING, 60, {_R.DB_WRITER, _R.DB_EXCLUSIVE},
-       coalescing=True, max_concurrency=1, may_overlap_maintenance=False),
-)}
+JOB_POLICIES: dict[str, JobPolicy] = {
+    p.namespace: p
+    for p in (
+        # ---- Maintenance lane (serialized; the Health DAG) ----------------------
+        _p(
+            "ai",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
+            sources=("semantic_scholar", "openalex"),
+            durable=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "embeddings",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
+            sources=("semantic_scholar",),
+            durable=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "papers",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex", "semantic_scholar", "crossref"),
+            durable=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "corpus",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex", "crossref"),
+            durable=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "authors",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
+            sources=("openalex", "orcid", "semantic_scholar", "crossref"),
+            durable=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "graphs",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "materialize",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.DB_WRITER},
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "topics",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.DB_WRITER},
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        _p(
+            "maintenance",
+            JobClass.MAINTENANCE,
+            30,
+            {_R.DB_WRITER},
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+        # ---- User / product work (must keep capacity; may overlap maintenance) ---
+        # Discovery/feed/lenses fan out across many retrieval lanes that already
+        # carry per-lane deadlines + 429 abandonment; a generous fanout_budget keeps
+        # a user-initiated (backgrounded) refresh fast while still being a declared,
+        # greppable ceiling rather than an unbounded pool.
+        _p(
+            "discovery",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
+            sources=("openalex", "semantic_scholar"),
+            max_concurrency=2,
+            fanout_budget=12,
+        ),
+        _p(
+            "feed",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=2,
+            fanout_budget=8,
+        ),
+        _p(
+            "lenses",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.DB_WRITER, _R.LOCAL_MODEL},
+            max_concurrency=2,
+            fanout_budget=8,
+        ),
+        _p(
+            "publications",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex", "semantic_scholar", "crossref"),
+            max_concurrency=2,
+        ),
+        _p(
+            "imports",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=2,
+        ),
+        _p("tags", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER}, max_concurrency=2),
+        _p(
+            "operations",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex", "semantic_scholar"),
+            max_concurrency=2,
+        ),
+        _p(
+            "fetch",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=2,
+        ),
+        _p(
+            "onboarding",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=1,
+        ),
+        # ---- Notification / integration ----------------------------------------
+        # Inbox capture (D13): polls delivery channels (Slack today) and lands what
+        # you sent yourself. NOTIFICATION rather than USER_PRODUCT — it is an
+        # integration poll, not something the user is waiting on a page for. Runs on
+        # a minutes cadence, so `max_concurrency=1` and no fan-out: overlapping
+        # sweeps would re-fetch the same window, and the per-message capture is a
+        # short serial gather-then-write. Network (Slack + OpenAlex) and DB writer.
+        _p(
+            "inbox",
+            JobClass.NOTIFICATION,
+            40,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("openalex",),
+            max_concurrency=1,
+            fanout_budget=1,
+        ),
+        _p("alerts", JobClass.NOTIFICATION, 40, {_R.DB_WRITER, _R.NETWORK}, max_concurrency=1),
+        _p(
+            "integrations",
+            JobClass.NOTIFICATION,
+            40,
+            {_R.NETWORK},
+            durable=False,
+            max_concurrency=2,
+        ),
+        # ---- Data-management / destructive utilities ---------------------------
+        _p(
+            "library",
+            JobClass.DATA_MANAGEMENT,
+            50,
+            {_R.DB_WRITER, _R.DB_EXCLUSIVE},
+            coalescing=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+            destructive=True,
+        ),
+        _p(
+            "signal_lab",
+            JobClass.DATA_MANAGEMENT,
+            50,
+            {_R.DB_WRITER},
+            max_concurrency=1,
+            destructive=True,
+        ),
+        # ---- Housekeeping (DB-exclusive, quiet slot) ---------------------------
+        _p(
+            "db",
+            JobClass.HOUSEKEEPING,
+            60,
+            {_R.DB_WRITER, _R.DB_EXCLUSIVE},
+            coalescing=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+        ),
+    )
+}
 
 
 # Allowlist of modules that legitimately contain a raw scheduling call
@@ -171,36 +342,38 @@ JOB_POLICIES: dict[str, JobPolicy] = {p.namespace: p for p in (
 # discovery schedule via the `schedule_pending_*` wrapper helpers rather than a
 # raw call, so they may not contain the literal token — they are kept here as
 # known producers for documentation.
-SCHEDULING_MODULES: frozenset[str] = frozenset({
-    "api/scheduler.py",
-    "core/job_envelope.py",
-    "api/routes/ai.py",
-    "api/routes/alerts.py",
-    "api/routes/authors.py",
-    "api/routes/discovery.py",
-    "api/routes/feed.py",
-    "api/routes/graphs.py",
-    "api/routes/imports.py",
-    "api/routes/lenses.py",
-    "api/routes/library_mgmt.py",
-    "api/routes/operations.py",
-    "api/routes/plugins.py",
-    "api/routes/publications.py",
-    "api/routes/tags.py",
-    "api/routes/onboarding.py",
-    "application/followed_authors.py",
-    "application/library.py",
-    "application/materialized_views.py",
-    "application/feed.py",
-    "application/discovery/__init__.py",
-    "library/importer.py",
-    "services/s2_vectors.py",
-    "services/title_resolution.py",
-    "services/corpus_rehydrate.py",
-    "services/author_hydrate.py",
-    "services/embedding_chain.py",
-    "services/maintenance.py",
-})
+SCHEDULING_MODULES: frozenset[str] = frozenset(
+    {
+        "api/scheduler.py",
+        "core/job_envelope.py",
+        "api/routes/ai.py",
+        "api/routes/alerts.py",
+        "api/routes/authors.py",
+        "api/routes/discovery.py",
+        "api/routes/feed.py",
+        "api/routes/graphs.py",
+        "api/routes/imports.py",
+        "api/routes/lenses.py",
+        "api/routes/library_mgmt.py",
+        "api/routes/operations.py",
+        "api/routes/plugins.py",
+        "api/routes/publications.py",
+        "api/routes/tags.py",
+        "api/routes/onboarding.py",
+        "application/followed_authors.py",
+        "application/library.py",
+        "application/materialized_views.py",
+        "application/feed.py",
+        "application/discovery/__init__.py",
+        "library/importer.py",
+        "services/s2_vectors.py",
+        "services/title_resolution.py",
+        "services/corpus_rehydrate.py",
+        "services/author_hydrate.py",
+        "services/embedding_chain.py",
+        "services/maintenance.py",
+    }
+)
 
 
 def policy_for(operation_key: str) -> JobPolicy | None:
@@ -234,9 +407,7 @@ def admit_maintenance(active_total: int, *, app_idle: bool) -> tuple[bool, str]:
     return (True, "admitted")
 
 
-def admit_maintenance_continue(
-    user_facing_active: int, *, app_idle: bool
-) -> tuple[bool, str]:
+def admit_maintenance_continue(user_facing_active: int, *, app_idle: bool) -> tuple[bool, str]:
     """Whether an ALREADY-RUNNING background sweep may KEEP GOING (2026-07-25).
 
     Starting and continuing are different questions, and conflating them was a

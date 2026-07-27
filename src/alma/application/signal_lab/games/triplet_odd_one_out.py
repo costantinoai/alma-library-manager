@@ -46,7 +46,7 @@ def interpret_odd_one_out(rnd: RoundRow) -> list[Constraint]:
 
 TRIPLET_ODD_ONE_OUT = MiniGame(
     id="triplet_odd_one_out",
-    title="Calibrate: odd one out",
+    title="Signal Lab: odd one out",
     question="Which paper doesn't belong with the other two?",
     options=("odd", "cant_tell"),
     draw=DrawSpec(region_mode="boundary", k=3),

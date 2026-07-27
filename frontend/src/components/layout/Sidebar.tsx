@@ -19,6 +19,7 @@ import { getBootstrap } from '@/api/client'
 import { BrandRule } from '@/components/ui/brand-rule'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { getNavBadgeCount } from './navBadgeCounts'
+import { SIDEBAR_RAIL_WIDTH, sidebarInset } from './sidebarMetrics'
 
 export type Page =
   | 'home'
@@ -194,7 +195,9 @@ export function Sidebar({
           'fixed inset-y-0 left-0 z-50 flex flex-col transition-[transform,width] duration-200 lg:translate-x-0',
           // Width is responsive to `collapsed` — but only on desktop.
           // On mobile the off-canvas drawer always uses the full width.
-          collapsed ? 'w-[260px] lg:w-[72px]' : 'w-[260px]',
+          // The literal widths live in `sidebarMetrics` so the main column
+          // and the Activity dock inset by exactly this much.
+          sidebarInset(SIDEBAR_RAIL_WIDTH, collapsed),
           isOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >

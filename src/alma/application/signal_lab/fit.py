@@ -16,10 +16,10 @@ Heads, in order of statistical safety (task 53):
 
 * ``region_offsets`` — James–Stein-shrunk per-region preference win-rates.
 * ``utility`` — Bradley–Terry logistic on ``w·x``, ridge-shrunk to the
-  Library-centroid prior, plus a K-vector bootstrap ensemble (the BALD
-  disagreement scorer the round policy reads).
+  Library-centroid prior, plus a K-vector bootstrap ensemble.
+* ``metric`` — non-negative diagonal distance weights fitted from relative
+  similarity constraints, plus a bootstrap ensemble for odd-one-out EIG.
 * ``region_overrides`` — odd-one-out boundary votes past a threshold.
-* metric head — M2, gated on the stage-0 reachability check. Not fitted here.
 
 M0 note: the prior is the Library vector centroid. M1 wires the true Rocchio
 prior (``feedback_positive_centroid − feedback_negative_centroid``) once the
@@ -46,7 +46,8 @@ from alma.ai.graph_versions import (
     with_version,
 )
 from alma.application import materialized_views as mv
-from alma.application.signal_lab.spec import MiniGame, Pref, RegionVote, RoundRow
+from alma.application.signal_lab.query import canonical_query_key
+from alma.application.signal_lab.spec import MiniGame, Pref, RegionVote, RoundRow, Sim
 from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ MODEL_VIEW_KEY = "signal_lab:model"
 # global mean with the weight of this many pseudo-observations.
 OFFSET_SHRINKAGE = 8.0
 
-# Bootstrap ensemble size for the BALD disagreement scorer (Houlsby 2011).
+# Bootstrap ensemble size for full-outcome expected-information acquisition.
 ENSEMBLE_K = 8
 
 # Ridge pull of the utility vector toward the prior, and full-batch
@@ -67,6 +68,13 @@ ENSEMBLE_K = 8
 UTILITY_RIDGE = 0.10
 UTILITY_EPOCHS = 200
 UTILITY_LR = 0.5
+
+# Non-negative diagonal metric fit. Identity is the strong prior: Signal Lab
+# may sharpen semantic distances, never invent an unconstrained rotation from
+# a handful of clicks.
+METRIC_RIDGE = 0.25
+METRIC_EPOCHS = 160
+METRIC_LR = 0.35
 
 # A paper needs this many consistent boundary votes before the lab overlays
 # its region assignment.
@@ -121,12 +129,21 @@ def fit_model(
     """
     train_prefs: list[Pref] = []
     holdout_prefs: list[Pref] = []
+    train_sims: list[Sim] = []
+    holdout_sims: list[Sim] = []
     votes: dict[str, defaultdict[int, int]] = {}
     unknown_game_rounds = 0
+    duplicate_rounds = 0
     answered = 0
     skipped = 0
+    seen_queries: set[str] = set()
 
     for rnd in rounds:
+        query_key = canonical_query_key(rnd.game_id, rnd.shown)
+        if query_key in seen_queries:
+            duplicate_rounds += 1
+            continue
+        seen_queries.add(query_key)
         if rnd.skipped or rnd.answer is None:
             skipped += 1
             continue
@@ -143,18 +160,26 @@ def fit_model(
         for c in constraints:
             if isinstance(c, Pref):
                 (holdout_prefs if rnd.holdout else train_prefs).append(c)
+            elif isinstance(c, Sim):
+                (holdout_sims if rnd.holdout else train_sims).append(c)
             elif isinstance(c, RegionVote):
                 votes.setdefault(c.paper_id, defaultdict(int))[c.region_id] += 1
-            # Sim constraints feed the metric head — M2, gated.
+            # Sim constraints feed the conservative diagonal metric head.
 
     gamma = _anneal_gamma(rounds, gamma_start, coverage_target)
     prior_unit = _unit_or_none(prior)
     offsets = _fit_region_offsets(train_prefs, paper_regions)
     utility, ensemble = _fit_utility(train_prefs, vectors, prior_unit)
-    overrides = _fit_overrides(votes, min_votes=override_min_votes)
-    holdout = _holdout_metrics(
-        holdout_prefs, vectors, paper_regions, prior_unit, offsets, utility
+    metric, metric_ensemble = _fit_metric(train_sims, vectors)
+    utility_delta = (
+        utility - prior_unit
+        if utility is not None and prior_unit is not None and utility.shape == prior_unit.shape
+        else utility
     )
+    overrides = _fit_overrides(votes, min_votes=override_min_votes)
+    holdout = _holdout_metrics(holdout_prefs, vectors, paper_regions, prior_unit, offsets, utility)
+    holdout["metric_triplets"] = len(holdout_sims)
+    holdout["metric_accuracy"] = _metric_accuracy(holdout_sims, vectors, metric)
 
     return {
         "fit_version": SIGNAL_LAB_FIT_VERSION,
@@ -165,20 +190,24 @@ def fit_model(
             "answered": answered,
             "skipped": skipped,
             "unknown_game_rounds": unknown_game_rounds,
+            "duplicate_rounds": duplicate_rounds,
             "train_prefs": len(train_prefs),
             "holdout_prefs": len(holdout_prefs),
+            "train_sims": len(train_sims),
+            "holdout_sims": len(holdout_sims),
         },
         "region_offsets": {str(k): round(v, 4) for k, v in offsets.items()},
         "utility_b64": _b64(utility) if utility is not None else None,
+        "utility_delta_b64": _b64(utility_delta) if utility_delta is not None else None,
         "ensemble_b64": [_b64(w) for w in ensemble],
+        "metric_b64": _b64(metric) if metric is not None else None,
+        "metric_ensemble_b64": [_b64(m) for m in metric_ensemble],
         "region_overrides": overrides,
         "holdout": holdout,
     }
 
 
-def _anneal_gamma(
-    rounds: list[RoundRow], gamma_start: float, coverage_target: int
-) -> float:
+def _anneal_gamma(rounds: list[RoundRow], gamma_start: float, coverage_target: int) -> float:
     """Competence-gated ring expansion (task 54 §3), derived purely from rounds.
 
     γ anneals ×1.25 per fully-covered ring level: ring ≤ k is covered when
@@ -203,12 +232,10 @@ def _anneal_gamma(
             break
         levels += 1
         ring += 1
-    return float(min(1.0, gamma_start * (1.25 ** levels)))
+    return float(min(1.0, gamma_start * (1.25**levels)))
 
 
-def _fit_region_offsets(
-    prefs: list[Pref], paper_regions: dict[str, int]
-) -> dict[int, float]:
+def _fit_region_offsets(prefs: list[Pref], paper_regions: dict[str, int]) -> dict[int, float]:
     """Per-region win-rate offsets, James–Stein-shrunk toward the global mean.
 
     A preferred paper scores +1 for its region, the rejected one −1; the
@@ -247,11 +274,7 @@ def _sgd_utility(
     deterministic given the bootstrap sample, and fast enough that the
     stage-0 simulator can refit hundreds of times.
     """
-    usable = [
-        (vectors[p.a], vectors[p.b])
-        for p in prefs
-        if p.a in vectors and p.b in vectors
-    ]
+    usable = [(vectors[p.a], vectors[p.b]) for p in prefs if p.a in vectors and p.b in vectors]
     if not usable:
         return None
     diffs = np.stack([(xa - xb) for xa, xb in usable]).astype(np.float32)  # n × d
@@ -279,7 +302,7 @@ def _fit_utility(
     vectors: dict[str, np.ndarray],
     prior_unit: np.ndarray | None,
 ) -> tuple[np.ndarray | None, list[np.ndarray]]:
-    """Point utility + K-member bootstrap ensemble (the BALD scorer)."""
+    """Point utility + K-member bootstrap posterior approximation."""
     point = _sgd_utility(prefs, vectors, prior_unit, seed=0, sample_with_replacement=False)
     if point is None:
         return None, []
@@ -289,6 +312,81 @@ def _fit_utility(
         if w is not None:
             ensemble.append(w)
     return point, ensemble
+
+
+def _sgd_metric(
+    sims: list[Sim],
+    vectors: dict[str, np.ndarray],
+    *,
+    seed: int,
+    sample_with_replacement: bool,
+) -> np.ndarray | None:
+    """Fit non-negative diagonal metric from relative-distance constraints.
+
+    For ``near`` to beat ``far`` we want
+    ``m·((anchor-far)^2 - (anchor-near)^2) > 0``. Ridge to identity and
+    positivity clipping keep sparse evidence conservative.
+    """
+    usable = [
+        (vectors[s.anchor], vectors[s.near], vectors[s.far])
+        for s in sims
+        if s.anchor in vectors and s.near in vectors and s.far in vectors
+    ]
+    if not usable:
+        return None
+    features = np.stack(
+        [(anchor - far) ** 2 - (anchor - near) ** 2 for anchor, near, far in usable]
+    ).astype(np.float32)
+    if sample_with_replacement:
+        rng = np.random.default_rng(seed)
+        features = features[rng.choice(len(features), size=len(features), replace=True)]
+    n, dim = features.shape
+    anchor_metric = np.ones(dim, dtype=np.float32)
+    metric = anchor_metric.copy()
+    for _ in range(METRIC_EPOCHS):
+        z = features @ metric
+        residual = 1.0 / (1.0 + np.exp(-np.clip(z, -30.0, 30.0))) - 1.0
+        grad = (features.T @ residual) / n + METRIC_RIDGE * (metric - anchor_metric)
+        metric -= METRIC_LR * grad
+        metric = np.clip(metric, 0.05, 20.0)
+        metric /= float(np.mean(metric)) or 1.0
+    return metric.astype(np.float32)
+
+
+def _fit_metric(
+    sims: list[Sim],
+    vectors: dict[str, np.ndarray],
+) -> tuple[np.ndarray | None, list[np.ndarray]]:
+    point = _sgd_metric(sims, vectors, seed=0, sample_with_replacement=False)
+    if point is None:
+        return None, []
+    ensemble = []
+    for k in range(ENSEMBLE_K):
+        member = _sgd_metric(sims, vectors, seed=1000 + k, sample_with_replacement=True)
+        if member is not None:
+            ensemble.append(member)
+    return point, ensemble
+
+
+def _metric_accuracy(
+    sims: list[Sim],
+    vectors: dict[str, np.ndarray],
+    metric: np.ndarray | None,
+) -> float | None:
+    if not sims or metric is None:
+        return None
+    hits = judged = 0
+    for sim in sims:
+        if sim.anchor not in vectors or sim.near not in vectors or sim.far not in vectors:
+            continue
+        anchor = vectors[sim.anchor]
+        near = float(metric @ ((anchor - vectors[sim.near]) ** 2))
+        far = float(metric @ ((anchor - vectors[sim.far]) ** 2))
+        if near == far:
+            continue
+        judged += 1
+        hits += 1 if near < far else 0
+    return round(hits / judged, 4) if judged else None
 
 
 def _fit_overrides(
@@ -354,9 +452,7 @@ def _holdout_metrics(
     return {
         "pairs": len(holdout_prefs),
         "prior_accuracy": _pairwise_accuracy(holdout_prefs, _scores(prior_unit, False)),
-        "offsets_accuracy": _pairwise_accuracy(
-            holdout_prefs, _scores(prior_unit, True)
-        ),
+        "offsets_accuracy": _pairwise_accuracy(holdout_prefs, _scores(prior_unit, True)),
         "utility_accuracy": _pairwise_accuracy(holdout_prefs, _scores(utility, True)),
     }
 
@@ -388,8 +484,7 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
     stored = mv.get_stored(conn, sr.VIEW_KEY)
     if stored is not None and shown_ids:
         cluster_to_region = {
-            int(k): int(v)
-            for k, v in (stored["payload"].get("cluster_to_region") or {}).items()
+            int(k): int(v) for k, v in (stored["payload"].get("cluster_to_region") or {}).items()
         }
         placeholders = ",".join("?" for _ in shown_ids)
         try:

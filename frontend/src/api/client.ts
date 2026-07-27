@@ -904,20 +904,6 @@ export interface Settings {
   from_year?: number
   api_call_delay?: string
   database?: string
-  slack_token?: string
-  slack_channel?: string
-  /** Channel ALMa POLLS for papers you send yourself. Separate from
-   *  `slack_channel` (where alerts are posted) so capture never re-ingests
-   *  ALMa's own notifications. Empty disables Inbox capture. */
-  slack_inbox_channel?: string
-  smtp_host?: string
-  smtp_port?: number
-  smtp_username?: string
-  smtp_password?: string
-  smtp_from?: string
-  smtp_to?: string
-  smtp_use_tls?: boolean
-  check_interval_hours?: number
   id_resolution_semantic_scholar_enabled?: boolean
   id_resolution_orcid_enabled?: boolean
   id_resolution_scholar_scrape_auto_enabled?: boolean
@@ -2509,7 +2495,7 @@ export interface InsightsDiagnostics {
       warning_count: number
       healthy_checks: number
       embeddings_ready: boolean
-      slack_configured: boolean
+      alert_delivery_ready: boolean
       degraded_monitors: number
       disabled_sources: number
       misconfigured_channels: number
@@ -2846,35 +2832,95 @@ export async function evaluateAlert(alertId: string): Promise<AlertEvaluationRes
   return resp as AlertEvaluationResult
 }
 
-export interface SlackTestResult {
+export interface IntegrationTestResult {
   ok: boolean
   message: string
   target?: string
   error?: string
 }
 
+export interface PluginSchemaProperty {
+  title?: string
+  description?: string
+  type?: 'string' | 'number' | 'integer' | 'boolean'
+  default?: unknown
+  minimum?: number
+  maximum?: number
+  exclusiveMinimum?: number
+  pattern?: string
+  'x-alma-secret'?: boolean
+  'x-alma-order'?: number
+  'x-alma-step'?: number
+  'x-alma-advanced'?: boolean
+}
+
+export interface PluginInfo {
+  id: string
+  display_name: string
+  version: string
+  description: string
+  kind: 'integration'
+  capabilities: string[]
+  enabled: boolean
+  configured: boolean
+  can_send: boolean
+  can_receive: boolean
+  config_schema: {
+    title?: string
+    properties?: Record<string, PluginSchemaProperty>
+    required?: string[]
+    additionalProperties?: boolean
+  }
+  status: Record<string, unknown>
+  actions: string[]
+  docs_path: string
+}
+
+export interface PluginConfigResponse {
+  plugin_id: string
+  config: Record<string, unknown>
+}
+
+export function listPlugins(): Promise<PluginInfo[]> {
+  return api.get<PluginInfo[]>('/plugins')
+}
+
+export function getPluginConfig(pluginId: string): Promise<PluginConfigResponse> {
+  return api.get<PluginConfigResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`)
+}
+
+export function updatePluginConfig(
+  pluginId: string,
+  config: Record<string, unknown>,
+): Promise<PluginConfigResponse> {
+  return api.put<PluginConfigResponse>(
+    `/plugins/${encodeURIComponent(pluginId)}/config`,
+    config,
+  )
+}
+
+export function setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginInfo> {
+  return api.put<PluginInfo>(`/plugins/${encodeURIComponent(pluginId)}/enabled`, { enabled })
+}
+
 /**
- * Test a messaging plugin connection.
+ * Test an external integration connection.
  *
- * For Slack the backend returns an Activity envelope and runs the actual
- * `chat.postMessage` on the scheduler thread pool — so the test exercises
- * the exact code path that delivers real alerts. We unwrap the envelope
- * via `waitForJob`. For other plugins the legacy synchronous shape is
- * preserved.
+ * Delivery plugins return an Activity envelope and run the real transport on
+ * the scheduler pool, so this exercises the same path as alert delivery.
  */
 export async function testPluginConnection(
   pluginName: string,
-): Promise<SlackTestResult> {
+): Promise<IntegrationTestResult> {
   const resp = await api.post<JobEnvelope | { success: boolean; message: string; timestamp: string }>(
     `/plugins/${encodeURIComponent(pluginName)}/test`,
   )
   if (isJobEnvelope(resp)) {
-    if (resp.status === 'already_running') {
-      return { ok: false, message: 'A Slack test is already in progress; try again in a moment.' }
+    if (resp.already_running === true) {
+      return { ok: false, message: 'This integration test is already in progress; try again in a moment.' }
     }
-    return waitForJob<SlackTestResult>(resp.job_id, { timeoutMs: 30_000 })
+    return waitForJob<IntegrationTestResult>(resp.job_id, { timeoutMs: 30_000 })
   }
-  // Legacy shape (non-slack plugins).
   return {
     ok: Boolean((resp as { success?: boolean }).success),
     message: String((resp as { message?: string }).message ?? ''),
@@ -3475,6 +3521,24 @@ export interface RegionDescription {
  * POST because the body carries up to ~300 ids; it is a pure read. */
 export function describeRegion(paperIds: string[]): Promise<RegionDescription> {
   return api.post<RegionDescription>('/graphs/region/describe', { paper_ids: paperIds })
+}
+
+export interface MapSelectionLensResult {
+  collection_id: string
+  lens_id: string
+  name: string
+  paper_count: number
+}
+
+/** One atomic action: save a visible map selection into a collection, then
+ * create a collection-backed Discovery lens. Backend re-validates scope. */
+export function createLensFromMapSelection(body: {
+  name: string
+  selection_kind: 'papers' | 'authors'
+  ids: string[]
+  scope: 'library' | 'corpus'
+}): Promise<MapSelectionLensResult> {
+  return api.post<MapSelectionLensResult>('/graphs/selection/lens', body)
 }
 
 // ── Import types ──
@@ -4653,13 +4717,6 @@ export type OnboardingPaperAction =
   | 'defer'
   | 'undo'
 
-export interface OnboardingPaperFeedbackResult {
-  paper_id: string
-  action: OnboardingPaperAction
-  status: string | null
-  rating: number | null
-}
-
 export function getOnboardingStatus(): Promise<OnboardingStatus> {
   return api.get<OnboardingStatus>('/onboarding/status')
 }
@@ -4853,19 +4910,30 @@ export interface HomeTrendPoint {
 }
 
 /**
- * An outside dependency Home watches, and whether it last worked.
+ * One subsystem on Home's status line: is it working, and how recently did it
+ * do its job.
  *
- * Derived from the operation ledger, not a live probe — so `checked_at` is
- * load-bearing: "OpenAlex is fine" always means "was fine when last used".
+ * Derived from local state, not a live probe — so `checked_at` is load-bearing:
+ * a pill claims "last time we used this, it worked", never "it works now".
+ *
+ * `tier` is decided by the BACKEND and the frontend renders whatever arrives:
+ *   `always`  — present even when green (the subsystems behind Home's figures)
+ *   `plugin`  — an activated channel; absent entirely when deactivated
+ *   `problem` — only sent when actually degraded
+ * Healthy `problem` pills never reach the client at all, so the line is exactly
+ * as long as it needs to be.
  */
-export interface HomeConnection {
+export interface HomeStatusPill {
   key: string
   label: string
-  state: 'ok' | 'failed' | 'running' | 'unknown' | 'not_configured'
-  /** What the last run reported. */
+  state: 'ok' | 'warning' | 'failed' | 'running' | 'unknown' | 'off'
+  /** The shared severity vocabulary — drives the dot colour. */
+  severity: string
+  /** The glanceable half: "96 monitors · 2d ago", "84% covered". */
+  metric: string
+  /** The sentence behind it, on hover. */
   detail: string
-  /** What the user loses while this is broken. */
-  stake: string
+  tier: 'always' | 'problem'
   checked_at?: string | null
   href: string
 }
@@ -4920,8 +4988,8 @@ export interface HomeBrief {
     /** Daily inflow across the last 7 local days, oldest first. */
     trend: HomeTrendPoint[]
   }
-  /** The outside dependencies whose failure is otherwise silent. */
-  connections: HomeConnection[]
+  /** The status line under the figures — one pill per subsystem. */
+  status: HomeStatusPill[]
   highlights: HomeHighlight[]
   reading: {
     total: number
@@ -4957,6 +5025,29 @@ export function markFeedSeen(): Promise<{ last_seen_at: string }> {
 }
 
 // ── Signal Lab (task 54, D20) ────────────────────────────────────────────────
+
+export interface SignalLabSettings {
+  enabled: boolean
+  region_offset_points: number
+  utility_points: number
+  map_tint_strength: number
+  ring_decay: number
+  exploration_rate: number
+  coverage_target: number
+  refit_every_rounds: number
+  holdout_percent: number
+  override_min_votes: number
+}
+
+export function getSignalLabSettings(): Promise<SignalLabSettings> {
+  return api.get<SignalLabSettings>('/signal-lab/settings')
+}
+
+export function updateSignalLabSettings(
+  settings: SignalLabSettings,
+): Promise<SignalLabSettings> {
+  return api.put<SignalLabSettings>('/signal-lab/settings', settings)
+}
 
 export interface SignalLabModelSummary {
   ready: boolean
@@ -4999,17 +5090,25 @@ export interface SignalLabRoundPaper {
   summary: string
 }
 
-export interface SignalLabRound {
-  available: boolean
-  reason?: string
-  question?: string
-  options?: string[]
-  papers?: SignalLabRoundPaper[]
-  token?: string
+export interface SignalLabQueuedRound {
+  papers: SignalLabRoundPaper[]
+  token: string
 }
 
-export function getSignalLabRound(gameId = 'triplet_best_worst'): Promise<SignalLabRound> {
-  return api.get<SignalLabRound>(`/signal-lab/${gameId}/round`)
+export interface SignalLabQueue {
+  available: boolean
+  reason?: string
+  game_id?: string
+  question?: string
+  options?: string[]
+  rounds?: SignalLabQueuedRound[]
+}
+
+export function getSignalLabQueue(
+  gameId = 'triplet_best_worst',
+  count = 12,
+): Promise<SignalLabQueue> {
+  return api.get<SignalLabQueue>(`/signal-lab/${gameId}/queue?count=${count}`)
 }
 
 export function answerSignalLabRound(
@@ -5039,4 +5138,48 @@ export interface SignalLabEval {
 
 export function getSignalLabEval(): Promise<SignalLabEval> {
   return api.get<SignalLabEval>('/signal-lab/eval')
+}
+
+export interface SignalLabDirection {
+  region_id: number
+  label: string
+  value: number
+}
+
+export interface SignalLabSummary {
+  active: boolean
+  rounds: {
+    today: number
+    total: number
+    answered: number
+    skipped: number
+    unique_queries: number
+    duplicate_queries: number
+  }
+  fit: {
+    ready: boolean
+    fresh: boolean
+    source_rounds: number
+    fitted_queries: number
+    fitted_observations: number
+    pending_rounds: number
+    utility_preferences: number
+    metric_constraints: number
+  }
+  coverage: {
+    regions_observed: number
+    regions_total: number
+    edges_observed: number
+    edges_total: number
+  }
+  effects: {
+    upward: SignalLabDirection[]
+    downward: SignalLabDirection[]
+    regions_moving: number
+    boundary_overrides: number
+  }
+}
+
+export function getSignalLabSummary(): Promise<SignalLabSummary> {
+  return api.get<SignalLabSummary>('/signal-lab/summary')
 }

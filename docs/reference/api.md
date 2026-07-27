@@ -257,6 +257,7 @@ rest.
 | `GET` | `/graphs/author-network` | The Author Map: each eligible author is placed at the centroid of at least two of their papers on the corpus substrate, then the 2D centroids are density-clustered into research communities. Cached and process-built; ships **no edges**. Authors without two placed papers are omitted and counted in `metadata.omitted_unplaced`. Accepts `prefetch=true` with the same read-only meaning as `/graphs/paper-map`. |
 | `GET` | `/graphs/signal-field` | Space-owned preference field over the corpus substrate: one valence per paper at its layout coordinates, plus its live 0–100 score. Feeds every paper map's Terrain overlay and Score colouring. Pure read. |
 | `GET` | `/graphs/author-field` | The Author Map's live field, keyed by author id: mean `paper_valence` over the papers of theirs you have a signal on (`v: null` when none), plus their mean live score. Same `signal_valence` weights as `/graphs/signal-field`. Pure read. |
+| `POST` | `/graphs/selection/lens` | Atomically create a collection, save a visible paper/author selection into it under the declared Library/Corpus scope, and create a collection-backed Discovery lens. |
 | `POST` | `/graphs/cluster-labels/refresh` | Re-label paper-map clusters. |
 | `POST` | `/graphs/rebuild` | Queue a process-isolated local rebuild for one scope. Keeps the last-good layout readable until replacement; does not perform remote reference enrichment. |
 | `POST` | `/graphs/reference-backfill` | Queue OpenAlex reference enrichment independently of layout recomputation. |
@@ -346,6 +347,19 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings/semantic-scholar/status` | Semantic Scholar connection status |
 | `GET` | `/settings/export` | Export the settings document |
 
+### Signal Lab
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/signal-lab/games` | Available calibration game specs |
+| `GET` | `/signal-lab/{game}/queue?count=12` | At least ten signed, zero-write rounds for Home's game deck |
+| `POST` | `/signal-lab/{game}/round/answer` | Validate signature and persist exactly one answered round |
+| `GET` | `/signal-lab/summary` | Unique/duplicate ledger evidence, current-fit observations and constraints, freshness, structural region/edge coverage, and active effects |
+| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded promotion weights |
+| `GET` | `/signal-lab/model` | Current wholesale fit |
+| `GET` | `/signal-lab/eval` | Held-out metrics and promotion evidence |
+| `POST` | `/signal-lab/purge` | Delete round history and invalidate the model; does not change activation/config |
+
 ### Other
 
 | Method | Path | Purpose |
@@ -360,8 +374,11 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |
-| `GET` | `/plugins` | Delivery-channel inventory: each channel's directions (`send` / `receive`) and whether each is configured |
-| `POST` | `/plugins/{name}/test` | Send a real test message through the production notifier (Activity envelope) |
+| `GET` | `/plugins` | Integration manifests: capabilities, activation, generated config schema, and direction status |
+| `GET` | `/plugins/{id}/config` | Read validated configuration with masked secrets |
+| `PUT` | `/plugins/{id}/config` | Strictly validate and replace integration configuration |
+| `PUT` | `/plugins/{id}/enabled` | Activate/deactivate while retaining config |
+| `POST` | `/plugins/{id}/test` | Run the manifest's production-transport test through Activity |
 | `GET` `POST` | `/fetch[/…]` | Fetch / bulk operation endpoints |
 
 ### Browser connector (extension)

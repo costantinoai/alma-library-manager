@@ -29,7 +29,6 @@ from pathlib import Path
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from alma.channels import ChannelRegistry, get_channel_registry
 from alma.config import (
     get_data_dir,
     get_db_path,
@@ -37,6 +36,8 @@ from alma.config import (
 from alma.core.migrations import apply_pending_migrations, stamp_schema_version
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+from alma.plugins.registry import PluginRegistry
+from alma.plugins.registry import get_plugin_registry as runtime_plugins
 
 logger = logging.getLogger(__name__)
 _schema_init_lock = threading.Lock()
@@ -46,6 +47,7 @@ _schema_initialized_path: str | None = None
 
 # Security
 security = HTTPBearer(auto_error=False)
+
 
 # Configuration helpers (now delegated to config module)
 def _data_dir() -> str:
@@ -84,6 +86,7 @@ API_KEY = _api_key_raw.strip() if _api_key_raw else None
 # ============================================================================
 # Database Schema Initialisation (run once at startup)
 # ============================================================================
+
 
 def _detect_default_python_env() -> tuple[str, str]:
     """Pick a sensible default Python environment for AI dependencies.
@@ -903,7 +906,7 @@ def init_db_schema() -> None:
             )
             _safe_execute(
                 conn,
-                "CREATE INDEX IF NOT EXISTS idx_pub_topics_topic_id ON publication_topics(topic_id)"
+                "CREATE INDEX IF NOT EXISTS idx_pub_topics_topic_id ON publication_topics(topic_id)",
             )
 
             # ==============================================================
@@ -1093,6 +1096,11 @@ def init_db_schema() -> None:
                     x REAL DEFAULT 0.5,
                     y REAL DEFAULT 0.5,
                     updated_at TEXT DEFAULT (datetime('now')),
+                    -- How (x, y) were obtained: 'layout' (the UMAP fit) or
+                    -- 'interpolated' (approximated between rebuilds). NULL only
+                    -- on rows written before the column existed. See
+                    -- alma.application.graph_substrate.PLACEMENT_*.
+                    placement TEXT,
                     PRIMARY KEY (paper_id, scope)
                 )"""
             )
@@ -1212,6 +1220,7 @@ def init_db_schema() -> None:
                     region_version INTEGER,
                     ring INTEGER,
                     policy_version INTEGER NOT NULL,
+                    nonce TEXT,
                     shown_json TEXT NOT NULL,
                     answer_json TEXT,
                     skipped INTEGER DEFAULT 0,
@@ -1220,9 +1229,19 @@ def init_db_schema() -> None:
                     created_at TEXT DEFAULT (datetime('now'))
                 )"""
             )
+            signal_lab_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(signal_lab_rounds)").fetchall()
+            }
+            if "nonce" not in signal_lab_columns:
+                conn.execute("ALTER TABLE signal_lab_rounds ADD COLUMN nonce TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_signal_lab_rounds_game "
                 "ON signal_lab_rounds(game_id, created_at DESC)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_lab_rounds_nonce "
+                "ON signal_lab_rounds(nonce) WHERE nonce IS NOT NULL"
             )
 
             # ==============================================================
@@ -1245,10 +1264,7 @@ def init_db_schema() -> None:
             # later run from the clone. If `/opt/venv` is not present,
             # repoint that stale default to the source-install default
             # (`<repo>/.venv`) without disturbing explicit user choices.
-            if (
-                _default_env_path != "/opt/venv"
-                and not os.path.isfile("/opt/venv/bin/python")
-            ):
+            if _default_env_path != "/opt/venv" and not os.path.isfile("/opt/venv/bin/python"):
                 conn.execute(
                     """
                     UPDATE discovery_settings
@@ -1497,6 +1513,7 @@ def init_db_schema() -> None:
 # Database Dependencies (lightweight per-request provider)
 # ============================================================================
 
+
 def open_db_connection() -> sqlite3.Connection:
     """Open one configured SQLite connection for app code.
 
@@ -1569,23 +1586,20 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
 # Channel Registry Dependency
 # ============================================================================
 
-def get_plugin_registry() -> ChannelRegistry:
-    """The delivery-channel registry (senders AND receivers).
 
-    Name kept for the routes and tests that already inject it; the object is
-    `alma.channels.ChannelRegistry`, which is the single registry for both
-    directions since task 55.
-    """
-    return get_channel_registry()
+def get_plugin_registry() -> PluginRegistry:
+    """The runtime-plugin catalogue dependency."""
+    return runtime_plugins()
 
 
 # ============================================================================
 # Authentication Dependencies
 # ============================================================================
 
+
 def verify_api_key(
     x_api_key: str | None = Header(None),
-    credentials: HTTPAuthorizationCredentials | None = Depends(security)
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> bool:
     """Verify API key from header or bearer token."""
     if API_KEY is None:
@@ -1606,15 +1620,13 @@ def verify_api_key(
 
 def get_current_user(authenticated: bool = Depends(verify_api_key)) -> dict:
     """Get the current authenticated user."""
-    return {
-        "username": "api_user",
-        "authenticated": authenticated
-    }
+    return {"username": "api_user", "authenticated": authenticated}
 
 
 # ============================================================================
 # Optional Dependencies for Testing
 # ============================================================================
+
 
 def get_test_mode() -> bool:
     """Check if running in test mode."""

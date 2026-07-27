@@ -37,7 +37,6 @@ from alma.api.routes.health import router as health_router
 from alma.api.routes.home import router as home_router
 from alma.api.routes.imports import router as imports_router
 from alma.api.routes.inbox import router as inbox_router
-from alma.api.routes.signal_lab import router as signal_lab_router
 from alma.api.routes.insights import router as insights_router
 from alma.api.routes.lenses import router as lenses_router
 from alma.api.routes.library import router as library_router
@@ -50,10 +49,10 @@ from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
 from alma.api.routes.settings import router as settings_router
+from alma.api.routes.signal_lab import router as signal_lab_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
-from alma.channels import get_channel_registry
 from alma.core.logging import setup_logging
 from alma.version import get_app_version
 
@@ -70,6 +69,7 @@ START_TIME = time.time()
 # ============================================================================
 # Lifespan Management
 # ============================================================================
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -96,21 +96,30 @@ async def lifespan(app: FastAPI):
     # install; only acts when legacy data is found at the old location.
     try:
         from alma.core.storage_migration import validate_and_migrate_storage
+
         validate_and_migrate_storage()
     except Exception as e:
         # A halt (StorageMigrationHalt) is deliberately fatal — surface it.
         logger.error("Storage validation failed: %s", e)
         raise
 
+    # Upgrade and validate the forward-only settings schema before any optional
+    # subsystem can read activation/configuration.
+    from alma.config import migrate_settings_schema, validate_settings_schema
+
+    migrate_settings_schema()
+    validate_settings_schema()
+
     # Initialise database schema ONCE (all DDL, seeds).
     # This keeps per-request get_db() lightweight and avoids lock contention.
     from alma.api.deps import init_db_schema
+
     init_db_schema()
 
-    # Delivery channels need no startup registration: `alma.channels.CHANNELS`
-    # is an explicit, static list. Five call sites used to re-register the Slack
-    # plugin defensively because registration was imperative and could be missed.
-    logger.info("Delivery channels: %s", ", ".join(get_channel_registry().names()))
+    logger.info(
+        "Integration plugins: %s",
+        ", ".join(get_plugin_registry().ids()),
+    )
 
     # Start scheduler with periodic alert evaluation and author refresh jobs
     try:
@@ -274,6 +283,7 @@ async def log_requests(request: Request, call_next):
 # Exception Handlers
 # ============================================================================
 
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors."""
@@ -283,8 +293,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={
             "error": "ValidationError",
             "message": "Request validation failed",
-            "detail": exc.errors()
-        }
+            "detail": exc.errors(),
+        },
     )
 
 
@@ -328,13 +338,14 @@ async def general_exception_handler(request: Request, exc: Exception):
             "error": "InternalServerError",
             "message": "An unexpected error occurred",
             "detail": None,
-        }
+        },
     )
 
 
 # ============================================================================
 # Root Routes
 # ============================================================================
+
 
 @app.get("/api")
 async def api_root():
@@ -351,7 +362,7 @@ async def api_root():
             "papers": "/api/v1/papers",
             "plugins": "/api/v1/plugins",
             "stats": "/api/v1/stats",
-        }
+        },
     }
 
 
@@ -359,12 +370,13 @@ async def api_root():
 # System Routes
 # ============================================================================
 
+
 @app.get(
     "/api/v1/health",
     response_model=HealthResponse,
     summary="Health check",
     description="Check the health status of the API and its dependencies.",
-    tags=["system"]
+    tags=["system"],
 )
 def health_check():
     """Health check endpoint.
@@ -400,7 +412,7 @@ def health_check():
         # The contract version stays available at /api/v1/version.
         version=APP_VERSION,
         uptime_seconds=uptime,
-        database_ok=database_ok
+        database_ok=database_ok,
     )
 
 
@@ -409,7 +421,7 @@ def health_check():
     response_model=VersionResponse,
     summary="Version information",
     description="Get version information for the API and application.",
-    tags=["system"]
+    tags=["system"],
 )
 async def version_info():
     """Get version information.
@@ -425,7 +437,7 @@ async def version_info():
     return VersionResponse(
         api_version=API_VERSION,
         app_version=APP_VERSION,
-        python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
     )
 
 
@@ -434,7 +446,7 @@ async def version_info():
     response_model=StatisticsResponse,
     summary="Overall statistics",
     description="Get aggregate statistics about the system.",
-    tags=["system"]
+    tags=["system"],
 )
 def get_statistics():
     """Get overall system statistics.
@@ -462,7 +474,7 @@ def get_statistics():
         # process, so it read 0 until something sent a message.
         registry = get_plugin_registry()
         configured_plugins = len(
-            [entry for entry in registry.describe_all() if entry["is_configured"]]
+            [entry for entry in registry.describe_all() if entry["configured"]]
         )
 
         return StatisticsResponse(
@@ -470,7 +482,7 @@ def get_statistics():
             total_publications=total_publications,
             total_citations=int(total_citations),
             active_jobs=0,  # TODO: Implement jobs
-            configured_plugins=configured_plugins
+            configured_plugins=configured_plugins,
         )
 
     except Exception as e:
@@ -480,7 +492,7 @@ def get_statistics():
             total_publications=0,
             total_citations=0,
             active_jobs=0,
-            configured_plugins=0
+            configured_plugins=0,
         )
 
 
@@ -570,10 +582,7 @@ if os.path.exists(_frontend_dist):
 
         candidate = os.path.realpath(os.path.join(_frontend_dist, full_path))
         dist_root = os.path.realpath(_frontend_dist)
-        if (
-            candidate.startswith(dist_root + os.sep)
-            and os.path.isfile(candidate)
-        ):
+        if candidate.startswith(dist_root + os.sep) and os.path.isfile(candidate):
             return FileResponse(candidate)
 
         raise HTTPException(status_code=404, detail="Not found")
@@ -590,8 +599,7 @@ if __name__ == "__main__":
 
     # Configure logging
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     # Run server
@@ -600,5 +608,5 @@ if __name__ == "__main__":
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", 8000)),
         reload=os.getenv("DEBUG", "false").lower() == "true",
-        log_level="info"
+        log_level="info",
     )

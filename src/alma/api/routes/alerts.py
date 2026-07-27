@@ -36,6 +36,7 @@ router = APIRouter(
 # Alert Rules (existing CRUD - preserved)
 # ===================================================================
 
+
 @router.get(
     "/rules",
     response_model=list[AlertRuleResponse],
@@ -123,8 +124,12 @@ def update_rule(
             enabled=req.enabled,
         )
         if updated is None:
-            return OperationOutcome(status="noop", message="Rule not found", result={"rule_id": rule_id})
-        return OperationOutcome(status="completed", message="Rule updated", result={"rule_id": rule_id})
+            return OperationOutcome(
+                status="noop", message="Rule not found", result={"rule_id": rule_id}
+            )
+        return OperationOutcome(
+            status="completed", message="Rule updated", result={"rule_id": rule_id}
+        )
 
     try:
         op = runner.run(
@@ -162,8 +167,12 @@ def delete_rule(
     def _handler(_ctx):
         deleted = alerts_app.delete_rule(db, rule_id)
         if not deleted:
-            return OperationOutcome(status="noop", message="Rule not found", result={"rule_id": rule_id})
-        return OperationOutcome(status="completed", message="Rule deleted", result={"rule_id": rule_id})
+            return OperationOutcome(
+                status="noop", message="Rule not found", result={"rule_id": rule_id}
+            )
+        return OperationOutcome(
+            status="completed", message="Rule deleted", result={"rule_id": rule_id}
+        )
 
     op = runner.run(
         operation_key=f"alerts.rule.delete:{rule_id}",
@@ -191,7 +200,9 @@ def toggle_rule(
     def _handler(_ctx):
         updated = alerts_app.toggle_rule(db, rule_id)
         if updated is None:
-            return OperationOutcome(status="noop", message="Rule not found", result={"rule_id": rule_id})
+            return OperationOutcome(
+                status="noop", message="Rule not found", result={"rule_id": rule_id}
+            )
         return OperationOutcome(
             status="completed",
             message="Rule toggled",
@@ -215,6 +226,7 @@ def toggle_rule(
 # ===================================================================
 # Alert History (enhanced) - MUST come before /{alert_id} routes
 # ===================================================================
+
 
 @router.get(
     "/history",
@@ -245,6 +257,7 @@ def list_history(
 # ===================================================================
 # Test Fire (preserved) - MUST come before /{alert_id} routes
 # ===================================================================
+
 
 @router.post(
     "/test/{rule_id}",
@@ -369,13 +382,17 @@ def create_alert(
     user: dict = Depends(get_current_user),
 ):
     """Create a new alert (delivery config)."""
+    try:
+        channels = alerts_app.validate_delivery_channels(req.channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     runner = OperationRunner(db)
 
     def _handler(_ctx):
         created = alerts_app.create_alert(
             db,
             name=req.name,
-            channels=req.channels,
+            channels=channels,
             schedule=req.schedule,
             schedule_config=req.schedule_config,
             format_value=req.format,
@@ -428,6 +445,14 @@ def update_alert(
     user: dict = Depends(get_current_user),
 ):
     """Update an existing alert's fields (partial update)."""
+    try:
+        channels = (
+            alerts_app.validate_delivery_channels(req.channels)
+            if req.channels is not None
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     runner = OperationRunner(db)
 
     def _handler(_ctx):
@@ -435,15 +460,19 @@ def update_alert(
             db,
             alert_id,
             name=req.name,
-            channels=req.channels,
+            channels=channels,
             schedule=req.schedule,
             schedule_config=req.schedule_config,
             format_value=req.format,
             enabled=req.enabled,
         )
         if updated is None:
-            return OperationOutcome(status="noop", message="Alert not found", result={"alert_id": alert_id})
-        return OperationOutcome(status="completed", message="Alert updated", result={"alert_id": alert_id})
+            return OperationOutcome(
+                status="noop", message="Alert not found", result={"alert_id": alert_id}
+            )
+        return OperationOutcome(
+            status="completed", message="Alert updated", result={"alert_id": alert_id}
+        )
 
     op = runner.run(
         operation_key=f"alerts.update:{alert_id}",
@@ -475,8 +504,12 @@ def delete_alert(
     def _handler(_ctx):
         deleted = alerts_app.delete_alert(db, alert_id)
         if not deleted:
-            return OperationOutcome(status="noop", message="Alert not found", result={"alert_id": alert_id})
-        return OperationOutcome(status="completed", message="Alert deleted", result={"alert_id": alert_id})
+            return OperationOutcome(
+                status="noop", message="Alert not found", result={"alert_id": alert_id}
+            )
+        return OperationOutcome(
+            status="completed", message="Alert deleted", result={"alert_id": alert_id}
+        )
 
     op = runner.run(
         operation_key=f"alerts.delete:{alert_id}",
@@ -491,6 +524,7 @@ def delete_alert(
 # ===================================================================
 # Rule Assignments
 # ===================================================================
+
 
 @router.post(
     "/{alert_id}/rules",
@@ -508,7 +542,9 @@ def assign_rules(
     def _handler(_ctx):
         result = alerts_app.assign_rules(db, alert_id, req.rule_ids)
         if result is None:
-            return OperationOutcome(status="noop", message="Alert not found", result={"alert_id": alert_id})
+            return OperationOutcome(
+                status="noop", message="Alert not found", result={"alert_id": alert_id}
+            )
         return OperationOutcome(
             status="completed",
             message=f"Assigned {len(result['assigned_rule_ids'])} rules",
@@ -523,7 +559,7 @@ def assign_rules(
     )
     if op["status"] == "noop":
         raise HTTPException(status_code=404, detail="Alert not found")
-    return (op.get("result") or {"alert_id": alert_id, "assigned_rule_ids": []})
+    return op.get("result") or {"alert_id": alert_id, "assigned_rule_ids": []}
 
 
 @router.delete(
@@ -543,7 +579,11 @@ def unassign_rule(
     def _handler(_ctx):
         deleted = alerts_app.unassign_rule(db, alert_id, rule_id)
         if not deleted:
-            return OperationOutcome(status="noop", message="Assignment not found", result={"alert_id": alert_id, "rule_id": rule_id})
+            return OperationOutcome(
+                status="noop",
+                message="Assignment not found",
+                result={"alert_id": alert_id, "rule_id": rule_id},
+            )
         return OperationOutcome(
             status="completed",
             message="Rule unassigned from alert",
@@ -647,16 +687,19 @@ def evaluate_alert(
             sent = int(evaluated.get("papers_sent") or 0)
             new = int(evaluated.get("papers_new") or 0)
             channel_results = evaluated.get("channel_results") or {}
-            slack_status = (channel_results.get("slack") or {}).get("status") if isinstance(channel_results, dict) else None
+            results = list(channel_results.values()) if isinstance(channel_results, dict) else []
+            statuses = [str(result.get("status") or "") for result in results]
 
-            if slack_status == "sent":
+            if sent:
                 msg = f"Sent {sent} new paper(s) for '{alert_name}'"
-            elif slack_status == "empty":
+            elif statuses and all(value == "empty" for value in statuses):
                 msg = f"No new papers for '{alert_name}'"
-            elif slack_status == "skipped":
-                msg = f"Slack skipped: {(channel_results.get('slack') or {}).get('error')}"
-            elif slack_status == "failed":
-                msg = f"Slack delivery failed for '{alert_name}': {(channel_results.get('slack') or {}).get('error')}"
+            elif "failed" in statuses:
+                failed = next(result for result in results if result.get("status") == "failed")
+                msg = f"Digest delivery failed for '{alert_name}': {failed.get('error')}"
+            elif "skipped" in statuses:
+                skipped = next(result for result in results if result.get("status") == "skipped")
+                msg = f"Digest delivery skipped for '{alert_name}': {skipped.get('error')}"
             else:
                 msg = f"Evaluated alert '{alert_name}': {new} new, {sent} sent"
 
@@ -666,7 +709,8 @@ def evaluate_alert(
             # explicit commit those writes vanish when the connection
             # closes, breaking per-alert dedup.
             worker_db.commit()
-            return {**evaluated, "ok": slack_status in ("sent", "empty"), "message": msg}
+            ok = bool(statuses) and all(value in ("sent", "empty") for value in statuses)
+            return {**evaluated, "ok": ok, "message": msg}
         except Exception:
             try:
                 worker_db.rollback()

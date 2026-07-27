@@ -1,90 +1,84 @@
-# Delivery channels
+---
+title: External integrations
+description: How optional Slack, SMTP, and future adapters connect ALMa's core Inbox and Alerts to other services.
+---
 
-A **channel** is a service ALMa exchanges messages with. Each one declares what
-it can do:
+# External integrations
 
-| Capability | Meaning | Who uses it |
+**Inbox and Alerts are core ALMa features.** They do not become optional merely
+because no external service is connected. Integration plugins are the adapters
+that let those core features exchange information with Slack, SMTP, or a future
+channel.
+
+| Capability | Core owner | Integration responsibility |
 |---|---|---|
-| `send` | ALMa posts to it | [Alerts](alerts.md) — digests of matched papers |
-| `receive` | it feeds your [Inbox](inbox.md) | capture — papers you send yourself from your phone |
+| `send` | [Alerts](alerts.md) selects papers, schedules, deduplicates, and records outcomes | Render and deliver the finished digest |
+| `receive` | [Inbox](inbox.md) resolves papers, lands corpus rows, deduplicates, and owns triage | Fetch external messages and acknowledge outcomes |
 
-Today: **Slack** does both, **email** sends.
+Slack implements both directions. SMTP currently implements `send` only. One
+Slack activation controls both adapters because they share one external
+integration and credential; status still reports each direction separately.
 
-One service, two directions, and they are configured separately on purpose. A
-Slack token with a posting channel and no capture channel can send and not
-receive — so the UI says exactly that, per direction, rather than one
-all-or-nothing "connected" light.
+## One explicit manifest registry
 
-## One registry
+`alma.plugins.registry.PLUGINS` is the only integration catalogue. Every entry is
+a `PluginManifest` with:
 
-`alma.channels.CHANNELS` is the single list of every channel and its
-capabilities. Registration is **explicit**: a channel that is not on that list
-cannot post to you and cannot put a paper in your Inbox, and reading the list is
-how you know.
+- stable identity and version;
+- `send` / `receive` capabilities;
+- one explicit activation flag;
+- one strict Pydantic configuration model;
+- generated JSON Schema, storage mapping, masked secret reads, and status;
+- optional Alert sender, Inbox adapter, and connectivity-test action.
 
-There used to be two lists — one for senders, one for receivers — and Slack was
-in both without either knowing. That is how you get a channel that is polled but
-invisible in Settings, or listed in Settings and never actually polled.
+Registration is explicit. An unregistered id cannot enter an Alert row, deliver
+a digest, or put a message into Inbox. Signal Lab is not in this registry: it is
+a native intelligence feature.
 
-The capability flag lives on the **registry entry**, not on a merged base class,
-so the two halves stay separate protocols:
+The capability protocols remain separate. Outbound integrations implement the
+manifest's `AlertSender` callback; inbound integrations implement
+`alma.application.inbox_schema.InboundChannel`. A send-only integration does not
+grow fake receive methods.
 
-* outbound → `alma.plugins.base.MessagingPlugin` — send an already-rendered message
-* inbound → `alma.application.inbox_schema.InboundChannel` — fetch messages, acknowledge outcomes
+## Activation is not deletion
 
-Neither grows a speculative half it has no implementation for. When email capture
-arrives, it implements `InboundChannel` and flips one flag.
+Turning an integration off in **Settings → Plugins** retains its
+configuration and secrets. ALMa then:
 
-## One transport per service
+- excludes it from new delivery choices and automated Alert sends;
+- excludes its inbound adapter from Inbox capture sweeps;
+- hides its direction-status pills on Home.
 
-Everything Slack goes through `alma.slack.client.SlackNotifier` — the token, the
-`slack_sdk` client, the name→ID cache, posting, reading history, reacting. The
-alerts engine, the Slack messaging plugin, and the Inbox capture adapter are all
-callers of that one object.
+A manual connectivity test remains available after reactivation. Activation
+never purges Inbox papers or Alert history.
 
-This is enforced, not just intended: `tests/test_channel_registry.py` fails if a
-second `WebClient` appears anywhere, or if the Slack plugin imports an HTTP
-library of its own. It did both, for a year — a `requests` implementation of the
-same four Slack endpoints, with its own cache, running in the same process.
+## One transport and one credential
 
-## One credential
+Everything Slack goes through `alma.slack.client.SlackNotifier`: token,
+`slack_sdk` client, channel resolution, posting, history reads, and reactions.
+The Slack manifest and Inbox adapter call that transport; neither owns another
+HTTP client.
 
-The Slack bot token lives in the secret store (`data/secrets.json`, key
-`slack.bot_token`), settable from **Settings → Channels** or `SLACK_TOKEN`.
-There is no second copy. A `config/slack.json` from an older install is imported
-once at startup by the migrator and never read again.
-
-## Where rendering lives
-
-> **How a paper LOOKS in a channel is transport-scoped. What a paper IS is
-> application-scoped.**
-
-Rendering belongs with the transport that knows the medium's markup — Block Kit
-in `SlackNotifier`, MIME in `EmailNotifier`. Identity belongs to the application:
-`application/inbound_capture.py` extracts identifiers, and it has never heard of
-Slack.
-
-That line is why capture is channel-agnostic. Any transport that honours
-`inbox_schema` feeds the same pipeline; consolidation happens on the transport
-side of the boundary, never across it.
+Secrets live only in `alma.core.secrets`. Settings shows masked values and the
+server-generated schema marks secret fields with `x-alma-secret`. A legacy
+`config/slack.*` file is imported once by storage migration and never read by
+runtime code.
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/plugins` | Every channel, its capabilities, and whether each direction is configured |
-| `GET` | `/api/v1/plugins/{name}` | One channel |
-| `POST` | `/api/v1/plugins/{name}/test` | Send a real test message through the production notifier (Activity envelope) |
-| `GET` | `/api/v1/inbox/status` | Capture-side view: configured channels, what is waiting, what needs a human |
-| `POST` | `/api/v1/inbox/sweep` | Poll the receive-capable channels now |
+| `GET` | `/api/v1/plugins` | All manifests, capabilities, schema, activation, and status |
+| `GET` | `/api/v1/plugins/{id}` | One manifest |
+| `PUT` | `/api/v1/plugins/{id}/enabled` | Activate/deactivate without deleting config |
+| `GET` | `/api/v1/plugins/{id}/config` | Read validated config with masked secrets |
+| `PUT` | `/api/v1/plugins/{id}/config` | Strictly validate and replace config |
+| `POST` | `/api/v1/plugins/{id}/test` | Run the manifest test through Activity |
+| `GET` | `/api/v1/inbox/status` | Core Inbox capture status |
+| `POST` | `/api/v1/inbox/sweep` | Core Inbox action: poll active receive adapters |
 
-Configuration is **not** written through these routes. Settings owns it, because
-Settings owns the secret store; a second config writer on the plugins router is
-how the bot token ended up mirrored to disk in plaintext.
+The same Pydantic model validates writes and produces `config_schema`; the
+frontend does not maintain a duplicate field list.
 
-## Health
-
-The Health page reports a channel as **half set up** when it has credentials but
-a direction it supports cannot run — a Slack token with no channel to post into,
-or with no capture channel nominated. An entirely unconfigured channel is not a
-fault: every channel is opt-in.
+For the package contract and extension checklist, see
+[Building an integration](../development/integrations.md).

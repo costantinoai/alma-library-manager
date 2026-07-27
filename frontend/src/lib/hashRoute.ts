@@ -22,6 +22,7 @@ const VALID_PAGES = Object.keys(PAGE_ROUTES) as Page[]
 
 export interface HashRoute {
   page: Page
+  found: boolean
   params: URLSearchParams
   raw: string
 }
@@ -33,9 +34,11 @@ export function parseHashRoute(rawHash?: string): HashRoute {
   const [pagePart, queryPart = ''] = normalized.split('?', 2)
   // An empty hash lands on Home (task 47 Phase 6); Feed stays one click away.
   const pageCandidate = pagePart || 'home'
-  const page = VALID_PAGES.includes(pageCandidate as Page) ? (pageCandidate as Page) : 'home'
+  const found = VALID_PAGES.includes(pageCandidate as Page)
+  const page = found ? (pageCandidate as Page) : 'home'
   return {
     page,
+    found,
     params: new URLSearchParams(queryPart),
     raw,
   }

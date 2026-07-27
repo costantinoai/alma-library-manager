@@ -14,6 +14,19 @@ const EASE = [0.22, 0.61, 0.36, 1] as const
 const PAD = 6 // spotlight padding around the target
 const GAP = 12 // gap between target and the card
 const CARD_W = 320
+/**
+ * Largest slice of the viewport a spotlight may cut, as a fraction of its
+ * height.
+ *
+ * A cut-out taller than the screen is not a spotlight — the dim ends up
+ * entirely off-screen and the coachmark reads as a card floating over an
+ * un-dimmed page. Real targets do grow past this: `authors-followed` measured
+ * 6005px and `discovery-card` 3778px on 2026-07-27, because both wrap a whole
+ * result list. Rather than trust every future `data-tour` to stay small, the
+ * primitive trims an oversized target to its LEADING slice — the section header
+ * and first rows, which is the part the copy is about.
+ */
+const MAX_SPOTLIGHT_RATIO = 0.55
 
 export interface TourStep {
   /** CSS selector for the element to spotlight. Omit (or no match) → centred card. */
@@ -32,7 +45,22 @@ function readRect(selector?: string): Rect | null {
   if (!el) return null
   const r = el.getBoundingClientRect()
   if (r.width === 0 && r.height === 0) return null
-  return { top: r.top, left: r.left, width: r.width, height: r.height }
+  // Trim an oversized target to the slice that is actually on screen, capped
+  // at MAX_SPOTLIGHT_RATIO, so the dim always remains visible around it.
+  const maxHeight = window.innerHeight * MAX_SPOTLIGHT_RATIO
+  const top = Math.max(r.top, PAD + 8)
+  const visible = r.height - (top - r.top)
+  return {
+    top,
+    left: r.left,
+    width: r.width,
+    height: Math.max(Math.min(visible, maxHeight), 32),
+  }
+}
+
+/** Does this target need the leading-slice treatment (see MAX_SPOTLIGHT_RATIO)? */
+function isOversized(el: Element): boolean {
+  return el.getBoundingClientRect().height > window.innerHeight * MAX_SPOTLIGHT_RATIO
 }
 
 /**
@@ -70,7 +98,12 @@ export function OnboardingTour({
     if (!open || !step) return
     let raf = 0
     const el = step.target ? document.querySelector(step.target) : null
-    el?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+    // Centre a normal target; bring an oversized one's TOP into view instead,
+    // so the trimmed spotlight lands on its header rather than its middle.
+    el?.scrollIntoView({
+      block: el && isOversized(el) ? 'start' : 'center',
+      behavior: reduced ? 'auto' : 'smooth',
+    })
     const update = () => setRect(readRect(step.target))
     // Let the smooth-scroll settle before first measure.
     const t = window.setTimeout(update, reduced ? 0 : 220)

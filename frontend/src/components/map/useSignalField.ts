@@ -46,6 +46,10 @@ export function useSignalField(enabled: boolean): {
   stats: SignalFieldStats | null
   /** Live internal score per paper id — the Score colour mode's source. */
   scoresById: ReadonlyMap<string, number>
+  /** Live valence per paper id. The frame-independent half of the field: a
+   *  tuned layout has its own coordinates, so its terrain joins THESE values
+   *  onto its own nodes (see `terrainField.ts`). */
+  valenceById: ReadonlyMap<string, number>
   isFetching: boolean
 } {
   const query = useQuery({
@@ -70,10 +74,19 @@ export function useSignalField(enabled: boolean): {
     return m
   }, [query.data])
 
+  const valenceById = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of query.data?.points ?? []) {
+      if (typeof p.v === 'number') m.set(p.id, p.v)
+    }
+    return m
+  }, [query.data])
+
   return {
     points,
     stats: query.data?.stats ?? null,
     scoresById,
+    valenceById,
     isFetching: query.isFetching,
   }
 }

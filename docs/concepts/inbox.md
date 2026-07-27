@@ -165,7 +165,7 @@ invited costs one habit change and keeps the token narrow.
      - `groups:history` + `groups:read` (private channel), or
        `channels:history` + `channels:read` (public)
      - `reactions:write` — the receipt on your message
-3. Set the channel in Settings → Channels.
+3. Set the channel in Settings → Plugins → Slack.
 
 Capture stays **off** until a channel is nominated, and it is deliberately a
 separate setting from the alert channel: polling the channel ALMa *posts* to
@@ -192,19 +192,19 @@ DOIs in any form (bare, `doi:`, `https://doi.org/…`), arXiv links and ids
 bioRxiv DOIs, OpenAlex work ids, and a bare publisher URL as a last resort.
 Prose around the link is ignored.
 
-## Adding a channel
+## Adding an integration
 
-1. Implement `InboundChannel` in `src/alma/services/inbox_channels/`.
-2. Add a `ChannelDescriptor` to `alma.channels.CHANNELS` with the `receive`
-   capability — registration is explicit, so that one list tells you exactly
-   what can put a paper in your Inbox (and what ALMa can post to).
+Implement `InboundChannel` inside a package under `alma.plugins`, expose it as
+the manifest's `inbound_factory`, declare `receive`, then register that manifest
+once in `alma.plugins.registry.PLUGINS`. Resolution, corpus landing, Inbox
+membership, idempotency, and cursor handling are already core.
 
-That's all. Resolution, corpus landing, Inbox membership, idempotency and the
-cursor are already handled.
+See [Building an integration](../development/integrations.md) for the complete
+schema, activation, secret-storage, and test contract.
 
 ## Related
 
 * [Paper lifecycle](paper-lifecycle.md) — the two state axes
 * [Home](home.md) — where Inbox items surface
 * [Library](library.md) — where triaged papers land
-* [Delivery channels](channels.md) — the registry both directions share
+* [External integrations](channels.md) — adapters for both directions

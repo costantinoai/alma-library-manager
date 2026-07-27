@@ -8,9 +8,14 @@ home elsewhere:
 - onboarding *state* (`onboarding.completed`, `user.name`) in the
   `discovery_settings` key/value table;
 - the "you at the centre" owner-ingest (resolve identity → follow → mark owner
-  → schedule the historical backfill → promote the owner's papers to Library);
-- paper-level triage from a non-feed / non-discovery surface (the "react to the
-  papers we just fetched" step), applying the D6 rating contract.
+  → schedule the historical backfill → promote the owner's papers to Library).
+
+Paper triage during onboarding is NOT here: the "react to the papers we just
+fetched" and "triage your first batch" steps post to the one canonical route,
+``POST /papers/{paper_id}/action`` with ``surface='onboarding'`` (or
+``'discovery'`` for lens recommendations, which must settle their own row). The
+old ``/onboarding/paper-feedback`` duplicate was deleted with the rest of the
+per-surface action routes — see ``alma.application.paper_actions``.
 
 Everything else (keys, follows, monitors, lenses, recommendations) is driven by
 the frontend against the existing endpoints — see ``tasks/02_ONBOARDING.md``.
@@ -129,18 +134,6 @@ class IngestOwnerResponse(BaseModel):
 
 class PromoteOwnerResponse(BaseModel):
     promoted: int
-
-
-class PaperFeedbackRequest(BaseModel):
-    paper_id: str = Field(min_length=1)
-    action: str
-
-
-class PaperFeedbackResponse(BaseModel):
-    paper_id: str
-    action: str
-    status: str | None = None
-    rating: int | None = None
 
 
 # --------------------------------------------------------------------------- #

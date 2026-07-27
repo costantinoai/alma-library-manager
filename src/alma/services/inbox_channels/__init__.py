@@ -6,10 +6,9 @@ corpus landing and Inbox membership all live in
 `application.inbound_capture`, so a new channel is an adapter, never a
 pipeline.
 
-Registration is not here. Every channel ALMa knows about — in EITHER direction —
-is declared once in :mod:`alma.channels`, with a capability flag saying which
-directions it supports. This module holds the inbound *adapters*; that module
-holds the list.
+Registration is not here. Every optional subsystem is declared once in the
+runtime plugin catalogue with capability flags. This module holds inbound
+adapters; ``alma.plugins.registry`` owns the list.
 """
 
 from __future__ import annotations
@@ -29,6 +28,6 @@ def available_channels() -> list[InboundChannel]:
     simply off. A channel that RAISES while reporting its own configuration is
     logged at WARNING by the registry rather than being read as "off".
     """
-    from alma.channels import get_channel_registry
+    from alma.plugins.registry import get_plugin_registry
 
-    return get_channel_registry().inbound_channels()
+    return get_plugin_registry().inbound_channels()

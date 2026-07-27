@@ -212,7 +212,7 @@ export function SliderRow({
  */
 export function MapTuningPopover({
   children,
-  title = 'Fine tuning — dot size, dot opacity, word size, words per cluster',
+  title = 'Fine tuning — terrain opacity, dot size, dot opacity, word size, words per cluster',
 }: {
   children: React.ReactNode
   title?: string
@@ -236,13 +236,15 @@ export function MapTuningPopover({
   )
 }
 
-/** The display knobs every map shares: dot size/opacity, word size, words per
- *  cluster. One component so the ranges/labels can never drift per host. */
+/** Display knobs every map shares: terrain/dot opacity, dot/word size, words.
+ * One component so ranges and labels cannot drift per host. */
 export function MapDisplayTuningRows({
   sizeScale,
   onSizeScale,
   dotOpacity,
   onDotOpacity,
+  terrainOpacity,
+  onTerrainOpacity,
   wordScale,
   onWordScale,
   wordCount,
@@ -252,6 +254,8 @@ export function MapDisplayTuningRows({
   onSizeScale: (v: number) => void
   dotOpacity: number
   onDotOpacity: (v: number) => void
+  terrainOpacity: number
+  onTerrainOpacity: (v: number) => void
   wordScale: number
   onWordScale: (v: number) => void
   wordCount: number
@@ -276,6 +280,15 @@ export function MapDisplayTuningRows({
         step={0.05}
         format={(v) => `${Math.round(v * 100)}%`}
         onCommit={onDotOpacity}
+      />
+      <SliderRow
+        label="Terrain opacity"
+        value={terrainOpacity}
+        min={0.1}
+        max={1}
+        step={0.05}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onCommit={onTerrainOpacity}
       />
       <SliderRow
         label="Word size"

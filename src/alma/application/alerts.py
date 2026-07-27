@@ -10,8 +10,6 @@ from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
-from alma.mailer.client import get_email_notifier
-from alma.slack.client import get_slack_notifier
 
 VALID_RULE_TYPES = {
     "author",
@@ -88,7 +86,10 @@ def _validate_rule_config(rule_type: str, rule_config: dict) -> None:
             raise ValueError(message)
 
     if rule_type == "author":
-        _require(_has("author_id", "openalex_id"), "author rules require rule_config.author_id (or openalex_id)")
+        _require(
+            _has("author_id", "openalex_id"),
+            "author rules require rule_config.author_id (or openalex_id)",
+        )
     elif rule_type == "collection":
         _require(
             _has("collection_id", "collection_name"),
@@ -123,7 +124,10 @@ def _validate_rule_config(rule_type: str, rule_config: dict) -> None:
             "feed_monitor rules require rule_config.monitor_id (or monitor_key / label)",
         )
     elif rule_type == "branch":
-        _require(_has("branch_id", "branch_label"), "branch rules require rule_config.branch_id (or branch_label)")
+        _require(
+            _has("branch_id", "branch_label"),
+            "branch rules require rule_config.branch_id (or branch_label)",
+        )
     elif rule_type == "library_workflow":
         workflow = str(cfg.get("workflow") or cfg.get("state") or "").strip().lower()
         _require(
@@ -214,7 +218,9 @@ def toggle_rule(db: sqlite3.Connection, rule_id: str) -> dict | None:
     if existing is None:
         return None
     new_enabled = not bool(existing["enabled"])
-    db.execute("UPDATE alert_rules SET enabled = ? WHERE id = ?", (1 if new_enabled else 0, rule_id))
+    db.execute(
+        "UPDATE alert_rules SET enabled = ? WHERE id = ?", (1 if new_enabled else 0, rule_id)
+    )
     existing["enabled"] = new_enabled
     return existing
 
@@ -289,8 +295,7 @@ def list_alerts(db: sqlite3.Connection) -> list[dict]:
     # history query per alert inside build_alert_response).
     outcomes = _latest_history_outcomes(db, [str(r["id"]) for r in rows])
     return [
-        build_alert_response(db, dict(r), last_outcome=outcomes.get(str(r["id"])))
-        for r in rows
+        build_alert_response(db, dict(r), last_outcome=outcomes.get(str(r["id"]))) for r in rows
     ]
 
 
@@ -322,16 +327,29 @@ def _latest_history_outcomes(db: sqlite3.Connection, alert_ids: list[str]) -> di
     }
 
 
-def _configured_channels() -> list[str]:
-    """Delivery channels with a working notifier right now."""
-    channels: list[str] = []
-    for name, sender in _CHANNEL_SENDERS.items():
-        try:
-            if sender["notifier"]().is_configured:
-                channels.append(name)
-        except Exception:
-            continue
-    return channels
+def configured_delivery_integrations() -> list[str]:
+    """Return activated integration ids whose Alert sender is ready now."""
+    from alma.plugins.registry import get_plugin_registry
+
+    return [manifest.id for manifest in get_plugin_registry().enabled_delivery_plugins()]
+
+
+def validate_delivery_channels(channels: list[str]) -> list[str]:
+    """Validate + de-duplicate core Alert delivery integration ids.
+
+    The integration registry owns this vocabulary. Alert rows retain ids while
+    an integration is inactive, but an unknown/non-send adapter is never
+    accepted into durable state.
+    """
+    from alma.plugins.manifest import SEND
+    from alma.plugins.registry import get_plugin_registry
+
+    supported = {manifest.id for manifest in get_plugin_registry().with_capability(SEND)}
+    normalized = list(dict.fromkeys(str(channel).strip() for channel in channels))
+    unknown = sorted(channel for channel in normalized if channel not in supported)
+    if unknown:
+        raise ValueError("Unsupported Alert delivery integration(s): " + ", ".join(unknown))
+    return normalized
 
 
 def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
@@ -344,7 +362,7 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
     Rule payloads carry ``channels: []`` — delivery channels belong to the
     digest; the rule-level column is vestigial.
     """
-    delivery_channels = _configured_channels()
+    delivery_channels = configured_delivery_integrations()
     if not delivery_channels:
         return []
     templates: list[dict[str, Any]] = []
@@ -354,7 +372,9 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
 
         author_monitor_templates: list[dict[str, Any]] = []
         for monitor in monitor_app.list_feed_monitors(db):
-            last_result = monitor.get("last_result") if isinstance(monitor.get("last_result"), dict) else {}
+            last_result = (
+                monitor.get("last_result") if isinstance(monitor.get("last_result"), dict) else {}
+            )
             items_created = int(last_result.get("items_created") or 0)
             papers_found = int(last_result.get("papers_found") or 0)
             if monitor.get("health") != "ready" or items_created <= 0:
@@ -441,7 +461,7 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
             FROM collections c
             LEFT JOIN collection_items ci ON ci.collection_id = c.id
             LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             GROUP BY c.id, c.name
             HAVING COUNT(p.id) > 0
             ORDER BY item_count DESC, avg_rating DESC, lower(c.name)
@@ -495,7 +515,7 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE (COALESCE(r.branch_id, '') <> '' OR COALESCE(r.branch_label, '') <> '')
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             GROUP BY COALESCE(NULLIF(r.branch_id, ''), NULL), COALESCE(NULLIF(r.branch_label, ''), NULL)
             ORDER BY liked DESC, count DESC
             LIMIT 4
@@ -593,7 +613,9 @@ def _existing_rule_identities(db: sqlite3.Connection) -> set[tuple[str, str]]:
     identities: set[tuple[str, str]] = set()
     for row in db.execute("SELECT rule_type, rule_config FROM alert_rules").fetchall():
         config = _loads(row["rule_config"])
-        identity = _rule_identity(str(row["rule_type"] or ""), config if isinstance(config, dict) else {})
+        identity = _rule_identity(
+            str(row["rule_type"] or ""), config if isinstance(config, dict) else {}
+        )
         if identity:
             identities.add(identity)
     return identities
@@ -632,7 +654,12 @@ def apply_alert_template(db: sqlite3.Connection, template_key: str) -> dict | No
         enabled=alert_payload["enabled"],
         rule_ids=[rule["id"]],
     )
-    return {"template_key": template_key, "template_title": template["title"], "rule": rule, "alert": alert}
+    return {
+        "template_key": template_key,
+        "template_title": template["title"],
+        "rule": rule,
+        "alert": alert,
+    }
 
 
 def _is_unscheduled(schedule: str | None) -> bool:
@@ -663,9 +690,7 @@ def _parse_schedule_time(raw: str) -> tuple[int, int]:
         return 9, 0
 
 
-def reference_slot(
-    schedule: str, schedule_config: dict | None, now: datetime
-) -> datetime | None:
+def reference_slot(schedule: str, schedule_config: dict | None, now: datetime) -> datetime | None:
     """The slot boundary that decides due-ness at ``now``, or None.
 
     Daily: today's slot once it has passed; None before it (a daily digest
@@ -742,6 +767,7 @@ def create_alert(
     rule_ids: list[str],
 ) -> dict:
     """Create an alert plus optional rule assignments."""
+    channels = validate_delivery_channels(channels)
     if _is_unscheduled(schedule):
         schedule_config = None
     aid = uuid.uuid4().hex
@@ -794,6 +820,8 @@ def update_alert(
     enabled: bool | None = None,
 ) -> dict | None:
     """Partially update one alert."""
+    if channels is not None:
+        channels = validate_delivery_channels(channels)
     row = db.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
     if not row:
         return None
@@ -863,28 +891,6 @@ def unassign_rule(db: sqlite3.Connection, alert_id: str, rule_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-# Channel dispatch table: notifier factory, send call, not-configured message.
-# The Slack and email flows are identical except for these three things, so
-# they live here once instead of as two copy-pasted branches.
-_CHANNEL_SENDERS: dict[str, dict] = {
-    # `notifier` thunks resolve the module-level factory BY NAME at call time
-    # (not a captured reference) so tests can monkeypatch
-    # `alerts.get_slack_notifier` / `alerts.get_email_notifier`.
-    "slack": {
-        "notifier": lambda: get_slack_notifier(),
-        "send": lambda n, papers, name: n.send_paper_alert(channel=None, papers=papers, alert_name=name),
-        "unconfigured": "Slack token not configured",
-        "failure": "Slack API returned failure",
-    },
-    "email": {
-        "notifier": lambda: get_email_notifier(),
-        "send": lambda n, papers, name: n.send_paper_alert(recipients=None, papers=papers, alert_name=name),
-        "unconfigured": "Email/SMTP not configured",
-        "failure": "Email send returned failure",
-    },
-}
-
-
 def _gather_digest_matches(
     db: sqlite3.Connection, alert: dict
 ) -> tuple[list[dict], list[tuple[str, dict]], dict[str, list[tuple[str, dict]]]]:
@@ -911,7 +917,9 @@ def _gather_digest_matches(
     unique_papers = _deduplicate_papers(all_papers)
     alerted = _already_alerted_by_channel(alert["id"], db)
     new_by_channel = {
-        channel: [(key, paper) for key, paper in unique_papers if key not in alerted.get(channel, set())]
+        channel: [
+            (key, paper) for key, paper in unique_papers if key not in alerted.get(channel, set())
+        ]
         for channel in channels
     }
     return rule_rows, unique_papers, new_by_channel
@@ -938,11 +946,16 @@ async def evaluate_digest(
     rule_rows, unique_papers, new_by_channel = _gather_digest_matches(db, alert)
 
     # ── Phase 1: deliver (network only, no writes) ─────────────────────────
+    from alma.plugins.manifest import SEND
+    from alma.plugins.registry import get_plugin_registry
+
+    registry = get_plugin_registry()
     channel_results: dict[str, dict] = {}
     for channel_name in channels:
         new_papers = new_by_channel.get(channel_name, [])
-        sender = _CHANNEL_SENDERS.get(channel_name)
-        if sender is None:
+        try:
+            plugin = registry.get(channel_name)
+        except KeyError:
             channel_results[channel_name] = {
                 "status": "skipped",
                 "error": f"Unsupported channel type: {channel_name}",
@@ -950,21 +963,41 @@ async def evaluate_digest(
                 "papers_sent": 0,
             }
             continue
-        notifier = sender["notifier"]()
-        if not notifier.is_configured:
+        if not plugin.can(SEND) or plugin.alert_sender is None:
             channel_results[channel_name] = {
                 "status": "skipped",
-                "error": sender["unconfigured"],
+                "error": f"Plugin cannot deliver alerts: {channel_name}",
+                "papers_new": len(new_papers),
+                "papers_sent": 0,
+            }
+            continue
+        if not plugin.is_enabled():
+            channel_results[channel_name] = {
+                "status": "skipped",
+                "error": f"{plugin.display_name} plugin is disabled",
+                "papers_new": len(new_papers),
+                "papers_sent": 0,
+            }
+            continue
+        if not plugin.status().get("can_send"):
+            channel_results[channel_name] = {
+                "status": "skipped",
+                "error": f"{plugin.display_name} is not configured to send",
                 "papers_new": len(new_papers),
                 "papers_sent": 0,
             }
             continue
         if not new_papers:
-            channel_results[channel_name] = {"status": "empty", "error": None, "papers_new": 0, "papers_sent": 0}
+            channel_results[channel_name] = {
+                "status": "empty",
+                "error": None,
+                "papers_new": 0,
+                "papers_sent": 0,
+            }
             continue
         payload = [paper for _, paper in new_papers]
         try:
-            ok = await sender["send"](notifier, payload, alert["name"])
+            ok = await plugin.alert_sender(payload, alert["name"])
             if ok:
                 channel_results[channel_name] = {
                     "status": "sent",
@@ -975,7 +1008,7 @@ async def evaluate_digest(
             else:
                 channel_results[channel_name] = {
                     "status": "failed",
-                    "error": sender["failure"],
+                    "error": f"{plugin.display_name} delivery returned failure",
                     "papers_new": len(new_papers),
                     "papers_sent": 0,
                 }
@@ -1104,6 +1137,8 @@ def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> dict | None:
         "dry_run": True,
         "papers": paper_details,
     }
+
+
 _OUTCOME_NOT_PRECOMPUTED = object()
 
 
@@ -1129,7 +1164,9 @@ def build_alert_response(
         (alert_row["id"],),
     ).fetchall()
     if last_outcome is _OUTCOME_NOT_PRECOMPUTED:
-        last_outcome = _latest_history_outcomes(db, [str(alert_row["id"])]).get(str(alert_row["id"]))
+        last_outcome = _latest_history_outcomes(db, [str(alert_row["id"])]).get(
+            str(alert_row["id"])
+        )
     schedule = alert_row["schedule"]
     schedule_config = _loads(alert_row.get("schedule_config"))
     upcoming = next_slot(
@@ -1293,7 +1330,11 @@ def _evaluate_rule(
             watermark match set.
     """
     rule_type = str(rule_row.get("rule_type") or "").strip()
-    config = _loads(rule_row.get("rule_config")) if isinstance(rule_row.get("rule_config"), str) else rule_row.get("rule_config")
+    config = (
+        _loads(rule_row.get("rule_config"))
+        if isinstance(rule_row.get("rule_config"), str)
+        else rule_row.get("rule_config")
+    )
     if not isinstance(config, dict):
         config = {}
 
@@ -1329,7 +1370,7 @@ def _evaluate_rule(
                 FROM papers p
                 JOIN publication_authors pa ON pa.paper_id = p.id
                 WHERE ({" OR ".join(where_clauses)})
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
                 LIMIT 500
                 """,
@@ -1351,7 +1392,7 @@ def _evaluate_rule(
             SELECT DISTINCT p.*
             FROM papers p
             WHERE ({" OR ".join(where_clauses)})
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -1360,7 +1401,9 @@ def _evaluate_rule(
         return [dict(r) for r in rows]
 
     if rule_type == "collection":
-        collection_ref = str(config.get("collection_id") or config.get("collection_name") or "").strip()
+        collection_ref = str(
+            config.get("collection_id") or config.get("collection_name") or ""
+        ).strip()
         if not collection_ref:
             return []
         row = db.execute(
@@ -1382,7 +1425,7 @@ def _evaluate_rule(
             JOIN papers p ON p.id = ci.paper_id
             WHERE ci.collection_id = ?
               AND p.status = 'library'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.added_at, '') DESC
             LIMIT 500
             """,
@@ -1408,7 +1451,7 @@ def _evaluate_rule(
             SELECT DISTINCT p.*
             FROM papers p
             WHERE ({where})
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -1433,7 +1476,7 @@ def _evaluate_rule(
                 OR LOWER(COALESCE(t.canonical_name, '')) LIKE ?
                 OR LOWER(COALESCE(p.title, '')) LIKE ?
                 OR LOWER(COALESCE(p.abstract, '')) LIKE ?
-            ) AND {standalone_paper_sql('p')}
+            ) AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -1458,7 +1501,7 @@ def _evaluate_rule(
             JOIN papers p ON p.id = r.paper_id
             WHERE r.score >= ?
               AND COALESCE(r.user_action, '') != 'dismiss'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
               {lens_clause}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
@@ -1482,7 +1525,7 @@ def _evaluate_rule(
             WHERE r.lens_id = ?
               AND r.score >= ?
               AND COALESCE(r.user_action, '') != 'dismiss'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
             """,
@@ -1555,7 +1598,7 @@ def _evaluate_rule(
               AND TRIM(p.publication_date) != ''
               AND p.publication_date >= date('now', '-' || ? || ' days')
               AND lower(COALESCE(fi.status, 'new')) IN ({status_placeholders})
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
               {watermark_clause}
             ORDER BY p.publication_date DESC, fi.fetched_at DESC
             LIMIT 500
@@ -1589,7 +1632,9 @@ def _evaluate_rule(
             # falls back to the label when the diagnostics row has no
             # branch_id. Match the label column too (only for rows without
             # an id, so a real id can't collide with someone's label).
-            clauses.append("(r.branch_id = ? OR (COALESCE(r.branch_id, '') = '' AND r.branch_label = ?))")
+            clauses.append(
+                "(r.branch_id = ? OR (COALESCE(r.branch_id, '') = '' AND r.branch_label = ?))"
+            )
             params.extend([branch_id, branch_id])
         elif branch_label:
             clauses.append("r.branch_label = ?")
@@ -1602,7 +1647,7 @@ def _evaluate_rule(
             SELECT p.*
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
             """,
@@ -1626,7 +1671,7 @@ def _evaluate_rule(
             SELECT p.*
             FROM papers p
             WHERE {where}
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.added_at, '') DESC, COALESCE(p.rating, 0) DESC
             LIMIT ?
             """,

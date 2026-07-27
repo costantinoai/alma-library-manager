@@ -42,7 +42,7 @@ def interpret_best_worst(rnd: RoundRow) -> list[Constraint]:
 
 TRIPLET_BEST_WORST = MiniGame(
     id="triplet_best_worst",
-    title="Calibrate: pick your read",
+    title="Signal Lab: pick your read",
     question="Which would you read first — and which would you skip?",
     options=("best", "worst", "cant_tell"),
     draw=DrawSpec(region_mode="within", k=3),

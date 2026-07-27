@@ -317,13 +317,14 @@ export function RecommendationProvenance({
   // cards. We keep only the chip row (the cheap, scannable signal) and drop
   // the section chrome and the query/topic detail block. Users who want the
   // full breakdown click into the paper detail panel which still uses the
-  // panel variant.
+  // panel variant. It carries no margin of its own: it lands in the card's
+  // signal row (`PaperCard` → `metaSlot`), which owns the spacing.
   if (variant === 'inline') {
     if (chips.length === 0) return null
     return (
       <div
         aria-label="Recommendation provenance"
-        className={cn('mt-2 flex flex-wrap items-center gap-1.5', className)}
+        className={cn('flex flex-wrap items-center gap-1.5', className)}
       >
         {chips.map((chip) => (
           <SignalChip key={chip.key} kind={chip.kind} size="sm" title={chip.title}>

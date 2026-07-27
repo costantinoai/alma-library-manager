@@ -199,7 +199,7 @@ function buildIssueRows(comp: SystemComponent): {
 } {
   const consumed = new Set<string>()
   const rows: IssueRow[] = []
-  const broadcast: OperationalState[] = [] // states with no per-entity target (e.g. slack_unconfigured)
+  const broadcast: OperationalState[] = [] // states with no per-entity target (e.g. alert_delivery_unavailable)
   for (const s of comp.states) {
     const targets = s.targets ?? []
     if (!targets.length) {
@@ -348,7 +348,7 @@ const humanizeSourceError = (s: SourceRow): string => {
 }
 
 // Which component a degraded state belongs to — by remediation kind, falling
-// back to its id when a state has no actionable target (e.g. slack_unconfigured).
+// back to its id when a state has no actionable target (e.g. alert_delivery_unavailable).
 function componentOfState(s: OperationalState): string {
   const kinds = new Set((s.targets ?? []).map((t) => t.kind))
   if (kinds.has('monitor')) return 'monitors'
@@ -813,7 +813,7 @@ export function SystemStatusCards() {
             id: 'alerts',
             name: 'Alerts',
             icon: Bell,
-            description: 'Scheduled digests and their delivery channel (Slack).',
+            description: 'Scheduled digests and their active delivery integrations.',
             states: at('alerts'),
             reviewItems: [],
             ownerPage: 'alerts',
@@ -842,7 +842,7 @@ export function SystemStatusCards() {
                 secondary: p.is_healthy === true ? 'Configured · healthy' : 'Configured · not yet tested',
               })),
             ownerPage: 'settings',
-            ownerParams: { anchor: 'channels' },
+            ownerParams: { anchor: 'plugins' },
           },
           { count: halfConfiguredChannels, countLabel: 'half set up', healthyLabel: `${configuredPlugins} configured` },
         ),

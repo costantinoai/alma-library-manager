@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
-  CalendarClock,
   ChevronRight,
   ExternalLink,
   FileText,
   GitBranch,
+  Inbox,
   LayoutGrid,
   LayoutList,
   Loader2,
@@ -53,7 +53,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SkeletonList } from '@/components/shared'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { ConceptCallout } from '@/components/ui/concept-callout'
+import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
@@ -64,7 +64,7 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { cn, formatDate, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { cn, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -664,76 +664,54 @@ export function FeedPage() {
   const pulseTone = degradedMonitors > 0 ? 'amber' : 'emerald'
 
   return (
-    <div className="space-y-4">
-      {/* ── Hero strip ─────────────────────────────────────────────────────
-          Quiet context header. The TopBar already shows the "Feed" page
-          title in font-brand, so this surface doesn't repeat it. Instead it
-          carries the description, a live monitor pulse, a one-tap link to
-          Settings, and the primary Refresh action.
-      ──────────────────────────────────────────────────────────────────── */}
-      <section
+    <div className="space-y-6">
+      <PageIntro
         data-tour="feed-hero"
-        className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
-      >
-        {/* Flat chrome paper. The gradient was a v2 holdover that read as
-            SaaS-y on the bookish bg — paper is honest, no decoration. */}
-        <div className="relative flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:gap-8">
-          <div className="min-w-0 flex-1 space-y-2">
-            <p className="max-w-xl text-sm leading-relaxed text-slate-600">
-              Deterministic monitoring inbox for followed authors and saved topics or queries.
-            </p>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+        icon={Inbox}
+        lede="Everything new from what you monitor."
+        detail="Authors, journals, and queries you follow — newest first. Triage it here; what you keep and what you pass on both feed Discovery."
+        tour={<PageTour pageKey="feed" steps={FEED_TOUR} />}
+        meta={
+          <MetaLine
+            items={[
               <span className="inline-flex items-center gap-2">
-                <span className="relative flex h-2 w-2" aria-hidden>
-                  <span
-                    className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${
-                      pulseTone === 'amber' ? 'bg-warning-500' : 'bg-success-500'
-                    }`}
-                  />
-                  <span
-                    className={`relative inline-flex h-2 w-2 rounded-full ${
-                      pulseTone === 'amber' ? 'bg-warning-500' : 'bg-success-500'
-                    }`}
-                  />
-                </span>
+                <PulseDot tone={pulseTone === 'amber' ? 'warning' : 'success'} />
                 <span>
-                  <span className="font-semibold tabular-nums text-slate-800">{monitors.length}</span>
+                  <span className="font-semibold tabular-nums text-slate-800">
+                    {monitors.length}
+                  </span>
                   <span className="ml-1 text-slate-500">monitors</span>
                 </span>
-              </span>
-              <span className="text-slate-300" aria-hidden>·</span>
-              <span className="tabular-nums text-success-700">{readyMonitors} ready</span>
-              {degradedMonitors > 0 && (
-                <>
-                  <span className="text-slate-300" aria-hidden>·</span>
-                  {/* U-4: surface WHICH monitors are degraded + why, not just a count. */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="cursor-help tabular-nums text-warning-700 underline decoration-dotted underline-offset-2">
-                        {degradedMonitors} degraded
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" align="start" className="max-w-xs">
-                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Degraded monitors
-                      </p>
-                      <ul className="space-y-1 text-xs">
-                        {degradedMonitorList.slice(0, 8).map((monitor) => (
-                          <li key={monitor.id} className="leading-snug">
-                            <span className="font-medium text-slate-700">{monitor.label}</span>
-                            {(monitor.health_reason || monitor.last_error) && (
-                              <span className="text-slate-500"> — {monitor.health_reason || monitor.last_error}</span>
-                            )}
-                          </li>
-                        ))}
-                        {degradedMonitorList.length > 8 && (
-                          <li className="text-slate-400">+{degradedMonitorList.length - 8} more — see Settings</li>
-                        )}
-                      </ul>
-                    </TooltipContent>
-                  </Tooltip>
-                </>
-              )}
+              </span>,
+              <span className="tabular-nums text-success-700">{readyMonitors} ready</span>,
+              degradedMonitors > 0 && (
+                /* U-4: surface WHICH monitors are degraded + why, not just a count. */
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help tabular-nums text-warning-700 underline decoration-dotted underline-offset-2">
+                      {degradedMonitors} degraded
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start" className="max-w-xs">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Degraded monitors
+                    </p>
+                    <ul className="space-y-1 text-xs">
+                      {degradedMonitorList.slice(0, 8).map((monitor) => (
+                        <li key={monitor.id} className="leading-snug">
+                          <span className="font-medium text-slate-700">{monitor.label}</span>
+                          {(monitor.health_reason || monitor.last_error) && (
+                            <span className="text-slate-500"> — {monitor.health_reason || monitor.last_error}</span>
+                          )}
+                        </li>
+                      ))}
+                      {degradedMonitorList.length > 8 && (
+                        <li className="text-slate-400">+{degradedMonitorList.length - 8} more — see Settings</li>
+                      )}
+                    </ul>
+                  </TooltipContent>
+                </Tooltip>
+              ),
               <button
                 type="button"
                 data-tour="feed-monitors"
@@ -744,16 +722,12 @@ export function FeedPage() {
               >
                 <Settings2 className="h-3.5 w-3.5" />
                 <span className="underline-offset-2 group-hover:underline">Manage in Settings</span>
-              </button>
-            </div>
-            {authorFilter && (
-              <p className="text-xs text-alma-700">Filtered to {filteredAuthorLabel}.</p>
-            )}
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <div className="flex items-center gap-1 self-end">
-              <PageTour pageKey="feed" steps={FEED_TOUR} />
-            </div>
+              </button>,
+            ]}
+          />
+        }
+        actions={
+          <>
             <Button
               type="button"
               variant="default"
@@ -770,7 +744,7 @@ export function FeedPage() {
             </Button>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="cursor-default text-xs text-slate-500">
+                <span className="cursor-default text-xs text-slate-500 md:text-right">
                   {feedStatusQuery.data?.last_refresh_at
                     ? `Last refresh ${formatRelativeShort(feedStatusQuery.data.last_refresh_at)}`
                     : 'No refresh on record yet'}
@@ -782,7 +756,7 @@ export function FeedPage() {
                   : 'Run Refresh Inbox to pull the latest papers.'}
               </TooltipContent>
             </Tooltip>
-            <label className="flex cursor-pointer items-center gap-2 self-end text-xs text-slate-500">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-500 md:self-end">
               <Switch
                 checked={!!feedSettingsQuery.data?.auto_refresh_enabled}
                 disabled={!feedSettingsQuery.data || autoRefreshMutation.isPending}
@@ -799,27 +773,33 @@ export function FeedPage() {
                 description="Opt-in background refresh of the feed inbox on a schedule (set the interval in Settings). It runs without blocking the page — new papers appear automatically. Off by default."
               />
             </label>
-          </div>
-        </div>
-      </section>
-
-      {/* U-9: the four feed actions read very differently to Discovery's, and
-          the dislike-vs-dismiss split (D6) is the easy one to get wrong. One
-          quiet, collapsed explainer near the top — not per-button tooltips. */}
-      <ConceptCallout
-        eyebrow="How do the Feed actions work?"
-        summary="Save keeps a paper; Dislike keeps it visible but down-weights Discovery; Dismiss hides it for good."
+          </>
+        }
+        guide={{
+          /* U-9: the four feed actions read very differently to Discovery's,
+             and the dislike-vs-dismiss split (D6) is the easy one to get
+             wrong. One quiet, folded explainer — not per-button tooltips. */
+          summary:
+            'Save keeps a paper; Dislike keeps it visible but down-weights Discovery; Dismiss hides it for good.',
+          children: (
+            <>
+              <p className="mb-2">
+                The Feed is a chronological inbox of new papers from your monitors (last 60 days).
+                Each action sends a different signal:
+              </p>
+              <ul className="ml-4 list-disc space-y-1">
+                <li><span className="font-medium text-alma-900">Add / Like / Love</span> — saves the paper to your Library (Love rates it 5★).</li>
+                <li><span className="font-medium text-alma-900">Dislike</span> — a negative signal to Discovery, but the paper <span className="font-medium">stays in the Feed</span> so the inbox keeps its chronological record.</li>
+                <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> without changing your preference signal. You can undo it right after.</li>
+              </ul>
+            </>
+          ),
+        }}
       >
-        <p className="mb-2">
-          The Feed is a chronological inbox of new papers from your monitors (last 60 days).
-          Each action sends a different signal:
-        </p>
-        <ul className="ml-4 list-disc space-y-1">
-          <li><span className="font-medium text-alma-900">Add / Like / Love</span> — saves the paper to your Library (Love rates it 5★).</li>
-          <li><span className="font-medium text-alma-900">Dislike</span> — a negative signal to Discovery, but the paper <span className="font-medium">stays in the Feed</span> so the inbox keeps its chronological record.</li>
-          <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> without changing your preference signal. You can undo it right after.</li>
-        </ul>
-      </ConceptCallout>
+        {authorFilter && (
+          <p className="text-xs text-alma-700">Filtered to {filteredAuthorLabel}.</p>
+        )}
+      </PageIntro>
 
       {/* U-1: visible while a feed refresh runs in the background. */}
       <RefreshRunningBanner domain="feed" label="Refreshing feed inbox…" />
@@ -829,7 +809,12 @@ export function FeedPage() {
           get their own surface instead of drowning the author/topic/keyword
           inbox. The active tab drives the `monitor_scope` query param.
       ──────────────────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1 border-b border-[var(--color-border)]" role="tablist" aria-label="Feed scope">
+      <div
+        data-tour="feed-scope"
+        className="flex items-center gap-1 border-b border-[var(--color-border)]"
+        role="tablist"
+        aria-label="Feed scope"
+      >
         {([
           { scope: 'inbox' as const, label: 'Inbox', Icon: LayoutList },
           { scope: 'journals' as const, label: 'Journals', Icon: BookOpen },
@@ -1215,15 +1200,16 @@ export function FeedPage() {
                     seed: item.paper_id!,
                     seedTitle: cardPaper.title,
                   }) : undefined}
-                >
-                  <div className="mt-2 space-y-1 text-xs text-slate-500">
-                    {/* Line 1: the "why" — what monitors or followed authors
-                        surfaced this paper. This is the most Feed-specific
-                        piece of context so it leads. */}
-                    {(matchedAuthors.length > 0 || matchedMonitors.length > 0 || item.author_name) && (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  // The Feed "why" — which followed authors / monitors surfaced
+                  // this paper — rides the card's signal row next to the score
+                  // bar and the Why toggle instead of costing its own line. The
+                  // publication date that used to sit under it is gone: the
+                  // card already prints it inline after the authors.
+                  metaSlot={
+                    (matchedAuthors.length > 0 || matchedMonitors.length > 0 || item.author_name) ? (
+                      <>
                         {matchedAuthors.length > 0 ? (
-                          <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="flex flex-wrap items-center gap-1.5">
                             <span className="inline-flex items-center gap-1 text-slate-500">
                               <UserRound className="h-3.5 w-3.5" />
                               Matches
@@ -1233,7 +1219,7 @@ export function FeedPage() {
                                 {authorName}
                               </StatusBadge>
                             ))}
-                          </div>
+                          </span>
                         ) : item.author_name ? (
                           <span className="inline-flex items-center gap-1">
                             <UserRound className="h-3.5 w-3.5" />
@@ -1241,7 +1227,7 @@ export function FeedPage() {
                           </span>
                         ) : null}
                         {matchedMonitors.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="flex flex-wrap items-center gap-1.5">
                             <span className="inline-flex items-center gap-1 text-slate-500">
                               <Search className="h-3.5 w-3.5" />
                               Monitors
@@ -1253,25 +1239,15 @@ export function FeedPage() {
                                 label={monitor.monitor_label?.trim() || formatMonitorTypeLabel(monitor.monitor_type)}
                               />
                             ))}
-                          </div>
+                          </span>
                         )}
                         {matchedMonitors.length === 0 && item.monitor_type && item.monitor_type !== 'author' && item.monitor_label && (
                           <MonitorBadge monitorType={item.monitor_type} label={item.monitor_label} />
                         )}
-                      </div>
-                    )}
-                    {/* Line 2: when the paper was published. "Found {time}"
-                        used to live here too but became visual static on long
-                        scrolls — it lives only in the paper-details popup now. */}
-                    {paper?.publication_date && (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="inline-flex items-center gap-1">
-                          <CalendarClock className="h-3.5 w-3.5" />
-                          Published {formatDate(paper.publication_date)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                      </>
+                    ) : undefined
+                  }
+                >
                   {/* U-6: the "applying" spinner belongs to the in-flight card only. */}
                   {((actionMutation.isPending && actionMutation.variables?.id === item.id) ||
                     (queueMutation.isPending && queueMutation.variables?.paperId === item.paper_id)) && (

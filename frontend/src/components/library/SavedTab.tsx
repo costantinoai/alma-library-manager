@@ -8,7 +8,6 @@ import {
   Edit3,
   Loader2,
   StickyNote,
-  Calendar,
   X,
   Sparkles,
   List,
@@ -489,7 +488,13 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             ink rail, raised active segment. It used to be two hand-rolled
             buttons whose on-state was a raw slate fill: neither the active
             colour (folio) nor a token. */}
+        {/* The Library tour's "open any paper" step anchors HERE, not on a
+            card: the default view is the compact table, so a card-only anchor
+            resolved to nothing and the coachmark floated over a dimmed page
+            pointing at empty space (2026-07-27 audit). The view switch is the
+            one element present in both modes. */}
         <ToggleGroup
+          data-tour="library-card"
           type="single"
           variant="segment"
           value={viewMode}
@@ -542,10 +547,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             const isSelected = selectedKeys.has(like.id)
             return (
             <RevealItem key={like.id} index={i}>
-            <div
-              className="relative rounded-sm"
-              data-tour={i === 0 ? 'library-card' : undefined}
-            >
+            <div className="relative rounded-sm">
               <PaperCard
                 selection={{
                   checked: isSelected,
@@ -570,11 +572,9 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 reaction={(like.rating ?? 0) >= 5 ? 'love' : (like.rating ?? 0) === 4 ? 'like' : null}
                 isSaved={like.status === 'library'}
               >
-                {/* Publication / submission date */}
-                <div className="mt-2 flex items-center gap-1 text-xs text-slate-400">
-                  <Calendar className="h-3 w-3" />
-                  {like.publication_date ? formatDate(like.publication_date) : formatDate(like.added_at ?? '')}
-                </div>
+                {/* No date row here: the card prints the publication date
+                    inline after the authors, and the save date has its own
+                    "Added" column in the compact table. */}
                 {/* Notes */}
                 {like.notes && (
                   <div className="mt-2 flex items-start gap-1.5 rounded-md bg-warning-50 px-3 py-2">

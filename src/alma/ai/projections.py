@@ -109,10 +109,7 @@ def project_embeddings(
     ranges[ranges == 0] = 1  # avoid division by zero
     coords_2d = (coords_2d - mins) / ranges
 
-    return {
-        keys[i]: (float(coords_2d[i, 0]), float(coords_2d[i, 1]))
-        for i in range(len(keys))
-    }
+    return {keys[i]: (float(coords_2d[i, 0]), float(coords_2d[i, 1])) for i in range(len(keys))}
 
 
 def fuse_layout(
@@ -198,9 +195,7 @@ def fuse_layout(
     # blend changes — stable across slider steps, continuous from the default.
     init: Any = "spectral"
     if init_coords:
-        init = np.asarray(
-            [init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64
-        )
+        init = np.asarray([init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64)
 
     try:
         if not _UMAP_AVAILABLE:
@@ -227,9 +222,7 @@ def fuse_layout(
         try:
             from scipy.linalg import orthogonal_procrustes
 
-            target = np.asarray(
-                [init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64
-            )
+            target = np.asarray([init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64)
             a_c = coords_2d - coords_2d.mean(axis=0)
             b_c = target - target.mean(axis=0)
             rot, _ = orthogonal_procrustes(a_c, b_c)
@@ -322,7 +315,17 @@ def build_coauthor_network(
         clusters: list of {id, label, size, member_ids}
         method: clustering method tag
     """
-    status_filter = Scope.parse(scope).paper_filter("p")
+    # THE SPACE IS THE CORPUS. Library is a SUBSET of it, never a second fit
+    # (locked rule, restated by the user 2026-07-26): switching scope must show
+    # the same arrangement with fewer dots, so an author sits in exactly one
+    # place and wears exactly one colour whichever view you meet them in.
+    #
+    # That means NO scope filter reaches placement, eligibility, node stats, or
+    # clustering below — scope only decides which of these nodes are emitted.
+    # Filtering placement was the bug: an author's coordinate was the centroid of
+    # their IN-SCOPE papers, so 59 of 71 shared authors moved when you switched
+    # (measured 2026-07-26, median 0.05 of the plate, max 0.25).
+    requested_scope = Scope.parse(scope)
 
     # Authors keyed by OpenAlex ID, with publication stats + (optional)
     # profile enrichment from the `authors` table.
@@ -338,7 +341,7 @@ def build_coauthor_network(
                 JOIN publication_clusters pc
                   ON pc.paper_id = pa.paper_id
                  AND pc.scope = ?
-                WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''{status_filter}
+                WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''
                 GROUP BY pa.openalex_id
                 HAVING COUNT(DISTINCT pc.paper_id) >= ?
             )
@@ -359,8 +362,8 @@ def build_coauthor_network(
             JOIN papers p ON p.id = pa.paper_id
             JOIN placeable ON placeable.author_id = pa.openalex_id
             LEFT JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-            WHERE pa.openalex_id <> ''{status_filter}
-              AND {standalone_paper_sql('p')}
+            WHERE pa.openalex_id <> ''
+              AND {standalone_paper_sql("p")}
             GROUP BY pa.openalex_id,
                      a.name,
                      a.affiliation,
@@ -465,14 +468,13 @@ def build_coauthor_network(
     n_authors = len(author_ids)
     author_index = {aid: i for i, aid in enumerate(author_ids)}
 
-    # Library membership per author (for corpus-scope dimming): an author is
-    # "in library" iff they co-author >=1 paper with status='library'. In library
-    # scope every author already qualifies (the node query is already filtered to
-    # library papers), so we skip the extra lookup; in corpus scope we resolve it
-    # so the UI can dim background-only co-authors to half opacity.
-    if Scope.parse(scope) is Scope.library:
-        library_author_ids: set[str] = set(author_ids)
-    else:
+    # Library membership per author: they co-author >= 1 paper with
+    # status='library'. This is the ONE predicate that makes Library a subset —
+    # it decides which of the corpus's nodes this payload emits (library scope)
+    # and which are dimmed as background-only co-authors (corpus scope). It never
+    # touches where an author sits or which community they belong to.
+    library_author_ids: set[str] = set()
+    if author_ids:
         placeholders = ",".join("?" * len(author_ids))
         lib_rows = conn.execute(
             f"""
@@ -481,13 +483,11 @@ def build_coauthor_network(
             JOIN papers p ON p.id = pa.paper_id
             WHERE pa.openalex_id IN ({placeholders})
               AND p.status = 'library'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             """,
             author_ids,
         ).fetchall()
-        library_author_ids = {
-            (r["aid"] if isinstance(r, sqlite3.Row) else r[0]) for r in lib_rows
-        }
+        library_author_ids = {(r["aid"] if isinstance(r, sqlite3.Row) else r[0]) for r in lib_rows}
 
     # Per-author TEXT for cluster labelling — the concatenated titles of each
     # author's papers. This replaces the old per-author `publication_topics` vector
@@ -498,15 +498,16 @@ def build_coauthor_network(
     # concise: a prolific author would otherwise concatenate dozens of abstracts.
     author_text_by_id: dict[str, str] = {aid: "" for aid in author_ids}
     placeholders = ",".join(["?"] * len(author_ids))
-    text_status_filter = Scope.parse(scope).paper_filter("p")
+    # No scope filter: a cluster's words name a region of the space, so they
+    # must read the same whichever subset of dots is on screen.
     try:
         title_rows = conn.execute(
             f"""
             SELECT pa.openalex_id AS aid, p.title AS title
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
-            WHERE pa.openalex_id IN ({placeholders}){text_status_filter}
-              AND {standalone_paper_sql('p')}
+            WHERE pa.openalex_id IN ({placeholders})
+              AND {standalone_paper_sql("p")}
               AND TRIM(COALESCE(p.title, '')) <> ''
             """,
             author_ids,
@@ -559,8 +560,7 @@ def build_coauthor_network(
         )
         clustering_method = clustering.method
         cluster_member_ids = {
-            int(cluster.cluster_id): list(cluster.member_keys)
-            for cluster in clustering.clusters
+            int(cluster.cluster_id): list(cluster.member_keys) for cluster in clustering.clusters
         }
         for cluster_id, members in cluster_member_ids.items():
             for aid in members:
@@ -581,8 +581,7 @@ def build_coauthor_network(
                 ", ".join(terms) if terms else f"Cluster {cluster_id + 1}"
             )
             cluster_word_clouds[cluster_id] = [
-                {"term": term, "weight": round(float(weight), 4)}
-                for term, weight in ranked[:10]
+                {"term": term, "weight": round(float(weight), 4)} for term, weight in ranked[:10]
             ]
         clustering_panel = {
             "method": clustering.method,
@@ -593,21 +592,15 @@ def build_coauthor_network(
             "params": clustering.params,
         }
 
-    # Authors with no placed paper have NO semantic position. They used to be
-    # scattered on a radius-0.48 ring about the centre (and any residual piled
-    # exactly at 0.5/0.5) — invented geometry that read as real structure: a
-    # halo of unplaceable authors framing the corpus view, in the one region a
-    # semantic map claims nothing lives (user call 2026-07-26). A semantic map
-    # places by meaning or not at all, so they are OMITTED here and COUNTED, and
-    # the count rides the payload so the UI can say how many are missing instead
-    # of dropping them silently.
-    omitted_unplaced = max(
-        0,
-        _author_candidate_count(conn, scope=scope) - len(author_ids),
-    )
+    # SCOPE APPLIES HERE AND NOWHERE ELSE: everything above — placement,
+    # eligibility, communities, labels — is computed over the whole space, and a
+    # Library view simply emits fewer of its nodes.
+    in_scope = library_author_ids if requested_scope is Scope.library else set(author_ids)
 
     nodes = []
     for idx, aid in enumerate(author_ids):
+        if aid not in in_scope:
+            continue
         placed = coords_by_author.get(aid)
         if placed is None:
             continue
@@ -632,15 +625,24 @@ def build_coauthor_network(
                 "interests": author_interests.get(aid, []),
                 "in_library": aid in library_author_ids,
                 "cluster_id": cid,
-                "cluster_label": (
-                    cluster_topic_labels.get(cid) if cid is not None else None
-                ),
+                "cluster_label": (cluster_topic_labels.get(cid) if cid is not None else None),
                 "is_outlier": cid is None,
                 "x": x,
                 "y": y,
             }
         )
 
+    # Authors with no placed paper have NO semantic position, so they are
+    # omitted and COUNTED rather than parked on an invented ring (user call
+    # 2026-07-26). Counted against what this scope actually drew.
+    omitted_unplaced = max(
+        0,
+        _author_candidate_count(conn, scope=scope) - len(nodes),
+    )
+
+    # Communities describe the SPACE, so every payload carries the full set with
+    # its full membership — a Library view drawing 71 of them must still colour
+    # and name them exactly as Corpus does.
     clusters = [
         {
             "id": int(cid),
@@ -690,7 +692,7 @@ def _author_referenced_works(
             JOIN papers p ON p.id = r.paper_id
             JOIN publication_authors pa ON pa.paper_id = r.paper_id
             WHERE pa.openalex_id IN ({placeholders}){status_filter}
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
               AND TRIM(COALESCE(r.referenced_work_id, '')) <> ''
             """,
             author_ids,
@@ -739,7 +741,7 @@ def _author_mean_embeddings(
             JOIN papers p ON p.id = pe.paper_id
             WHERE pa.openalex_id IN ({placeholders})
               AND pe.model = ?
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             """,
             list(author_ids) + [active_model],
         ).fetchall()

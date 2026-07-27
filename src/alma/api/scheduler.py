@@ -69,6 +69,10 @@ _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
 # clears while the user is still looking at it, long enough to stay clear of the
 # 300 s staleness threshold that protects a genuinely in-flight job.
 _ORPHAN_REAP_INTERVAL_MINUTES = 5
+# Delay before the startup map warm-up fires. Long enough to be clear of
+# bootstrap/migrations and the first page load, short enough that a fresh
+# install has its maps before the user finishes onboarding.
+_GRAPH_WARMUP_DELAY_SECONDS = 90
 _ORPHAN_REAP_ERROR = (
     "Backend process restarted or exited while this job was running; "
     "ALMa marked the abandoned worker as cancelled on the next startup. "
@@ -115,6 +119,52 @@ def has_running_thread(job_id: str) -> bool:
         return False
     with _job_lock:
         return job_id in _job_threads
+
+
+def _pid_runs_marker(pid: int, marker: str) -> bool:
+    """True when OS process ``pid`` is alive AND its command line carries ``marker``.
+
+    The command-line check is what makes this safe against PID reuse: a recycled
+    pid belonging to some unrelated process must never be mistaken for a live
+    ALMa worker. When ``/proc`` is unavailable we deliberately answer False —
+    "cannot prove it is alive" keeps the orphan sweep's existing behaviour
+    instead of leaking rows that would then be stuck forever.
+    """
+    if pid <= 0 or not marker:
+        return False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmdline = fh.read().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return False
+    return marker in cmdline
+
+
+def worker_process_alive(status: dict) -> bool:
+    """True when the status row names a child process that is still working.
+
+    Long graph builds execute in a detached child process
+    (`alma.application.graph_process`), which records ``worker_pid`` /
+    ``worker_marker`` on its Activity row. The child outlives an API restart, so
+    "no worker thread in this process" is NOT evidence that the job is dead.
+    """
+    try:
+        pid = int(status.get("worker_pid"))
+    except (TypeError, ValueError):
+        return False
+    return _pid_runs_marker(pid, str(status.get("worker_marker") or ""))
+
+
+def job_worker_is_alive(status: dict) -> bool:
+    """Is SOMETHING still advancing this job — a local thread or a child process?
+
+    The single predicate the orphan sweep consults before closing a row. Both
+    halves matter: `has_running_thread` covers ordinary in-process runners,
+    `worker_process_alive` covers process-isolated graph builds (including ones
+    adopted across a restart).
+    """
+    job_id = str(status.get("job_id") or "")
+    return has_running_thread(job_id) or worker_process_alive(status)
 
 
 def kill_job_thread(job_id: str) -> bool:
@@ -210,9 +260,7 @@ def _activity_conn() -> sqlite3.Connection:
 _ACTIVITY_WRITE_STALL_S = 0.5
 
 
-def _run_activity_write(
-    unit: Callable[[sqlite3.Connection], None], *, label: str
-) -> None:
+def _run_activity_write(unit: Callable[[sqlite3.Connection], None], *, label: str) -> None:
     """Run one Activity (`operation_status` / `operation_logs`) write under the
     process writer gate.
 
@@ -314,7 +362,9 @@ def _parse_activity_time(value: object) -> datetime | None:
 def _is_stale_active_status(status: dict, stale_after_seconds: int = 300) -> bool:
     if str(status.get("status") or "").lower() not in _ACTIVE_STATUSES:
         return False
-    stamp = _parse_activity_time(status.get("updated_at")) or _parse_activity_time(status.get("started_at"))
+    stamp = _parse_activity_time(status.get("updated_at")) or _parse_activity_time(
+        status.get("started_at")
+    )
     if stamp is None:
         return True
     # Stored stamps are naive UTC (see `_parse_activity_time`); compare
@@ -394,7 +444,15 @@ def _persist_job_status(job_id: str, status: dict) -> None:
 
 
 def _persist_job_log(entry: dict) -> None:
-    """Persist one operation log row into operation_logs."""
+    """Persist one operation log row into operation_logs.
+
+    The same write also refreshes the job's ``updated_at``. The orphan sweep
+    reads that column as a liveness signal, so a runner that reports progress
+    only through logs (every graph phase, every sweep batch) must not look
+    frozen to it. One extra UPDATE inside a write we were already doing.
+    """
+    job_id = str(entry.get("job_id") or "")
+    stamp = entry.get("timestamp") or utcnow().isoformat()
 
     def _write(conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -403,16 +461,53 @@ def _persist_job_log(entry: dict) -> None:
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
-                entry.get("job_id"),
-                entry.get("timestamp") or utcnow().isoformat(),
+                job_id,
+                stamp,
                 entry.get("level") or "INFO",
                 entry.get("step"),
                 entry.get("message") or "",
                 _json_dumps_safe(entry.get("data") or {}),
             ),
         )
+        _touch_active_status(conn, job_id, stamp)
 
     _run_activity_write(_write, label=f"operation_logs {entry.get('job_id')}")
+
+
+def _touch_active_status(conn: sqlite3.Connection, job_id: str, stamp: str) -> None:
+    """Refresh ``updated_at`` for an ACTIVE job row, on the caller's connection.
+
+    Terminal rows are left alone: a completed job's timestamps are history.
+    """
+    if not job_id:
+        return
+    placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
+    conn.execute(
+        f"UPDATE operation_status SET updated_at = ? "
+        f"WHERE job_id = ? AND status IN ({placeholders})",
+        (stamp, job_id, *sorted(_ACTIVE_STATUSES)),
+    )
+
+
+def heartbeat_job(job_id: str) -> None:
+    """Prove a long-running job is alive without rewriting its status.
+
+    For work that is legitimately silent for minutes (a UMAP fit in the graph
+    worker), the supervisor calls this on a timer. Cheap: one UPDATE, no status
+    merge, no log row, no Activity churn the user has to read.
+    """
+    if not job_id:
+        return
+    stamp = utcnow().isoformat()
+    with _job_lock:
+        cached = _job_status.get(job_id)
+        if cached is not None and str(cached.get("status") or "") in _ACTIVE_STATUSES:
+            cached["updated_at"] = stamp
+
+    def _write(conn: sqlite3.Connection) -> None:
+        _touch_active_status(conn, job_id, stamp)
+
+    _run_activity_write(_write, label=f"heartbeat {job_id}")
 
 
 def _row_to_status(row: sqlite3.Row) -> dict:
@@ -659,9 +754,11 @@ def _dismiss_job_from_db(job_id: str) -> bool:
     _run_activity_write(_write, label=f"dismiss {job_id}")
     return deleted
 
+
 # ---------------------------------------------------------------------------
 # Environment configuration helpers
 # ---------------------------------------------------------------------------
+
 
 def _scheduler_enabled() -> bool:
     return os.getenv("SCHEDULER_ENABLED", "true").lower() not in ("false", "0", "no")
@@ -773,11 +870,7 @@ def _register_interval_job(
     minutes = int(interval_minutes or 0)
     hours = int(interval_hours or 0)
     if enabled and (minutes > 0 or hours > 0):
-        trigger = (
-            IntervalTrigger(minutes=minutes)
-            if minutes > 0
-            else IntervalTrigger(hours=hours)
-        )
+        trigger = IntervalTrigger(minutes=minutes) if minutes > 0 else IntervalTrigger(hours=hours)
         sched.add_job(
             func,
             trigger=trigger,
@@ -802,6 +895,7 @@ def _register_interval_job(
 # ---------------------------------------------------------------------------
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
+
 
 def active_job_namespaces(
     conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
@@ -898,12 +992,8 @@ def may_background_run(
     from alma.core.user_activity import app_is_idle
     from alma.services.background_settings import get_idle_wait_seconds
 
-    _, active_total = active_job_namespaces(
-        conn, exclude_operation_key=exclude_operation_key
-    )
-    return admit_maintenance(
-        active_total, app_idle=app_is_idle(get_idle_wait_seconds(conn))
-    )
+    _, active_total = active_job_namespaces(conn, exclude_operation_key=exclude_operation_key)
+    return admit_maintenance(active_total, app_idle=app_is_idle(get_idle_wait_seconds(conn)))
 
 
 # Graceful-stop reasons a BACKGROUND sweep stamps when it yields mid-run (task 37
@@ -1129,11 +1219,25 @@ def _reap_orphan_jobs_now(stale_after_seconds: int = 300) -> int:
                 WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')
                 """,
             ).fetchall()
-            stale_jobs = [
-                _row_to_status(row)
-                for row in rows
-                if _is_stale_active_status(_row_to_status(row), stale_after_seconds)
-            ]
+            stale_jobs = []
+            for row in rows:
+                job = _row_to_status(row)
+                if not _is_stale_active_status(job, stale_after_seconds):
+                    continue
+                # A quiet job is not a dead job. Long CPU-bound work (a corpus
+                # layout fit) can run for many minutes between status writes,
+                # and closing its row here used to cancel it AND free its
+                # operation_key dedup, so the client's next poll started a
+                # duplicate build — the 5-minute rebuild loop observed on the
+                # corpus author network (2026-07-25/26). Only close a row when
+                # nothing is advancing it.
+                if job_worker_is_alive(job):
+                    logger.debug(
+                        "Orphan sweep: %s is quiet but its worker is alive; leaving it",
+                        job.get("job_id"),
+                    )
+                    continue
+                stale_jobs.append(job)
             if stale_jobs:
                 now = utcnow().isoformat()
                 conn.executemany(
@@ -1308,7 +1412,8 @@ def setup_scheduler() -> None:
             "description": f"Checks all non-manual alerts every {interval_hours}h",
         }
     logger.info(
-        "Registered evaluate_alerts job (interval=%dh)", interval_hours,
+        "Registered evaluate_alerts job (interval=%dh)",
+        interval_hours,
     )
 
     # -- Daily author refresh (cron) ----------------------------------------
@@ -1328,7 +1433,8 @@ def setup_scheduler() -> None:
             "cron": f"0 {refresh_hour} * * *",
         }
     logger.info(
-        "Registered refresh_authors job (cron hour=%d)", refresh_hour,
+        "Registered refresh_authors job (cron hour=%d)",
+        refresh_hour,
     )
 
     # -- Author suggestion discovery (interval, background-owned) ----------
@@ -1406,9 +1512,7 @@ def setup_scheduler() -> None:
         job_id="inbox_capture_sweep",
         func=inbox_capture_sweep_periodic,
         name="Inbox capture sweep",
-        description=(
-            f"Checks your capture channels every {inbox_sweep_minutes}m"
-        ),
+        description=(f"Checks your capture channels every {inbox_sweep_minutes}m"),
         enabled=inbox_sweep_minutes > 0,
         interval_minutes=inbox_sweep_minutes,
     )
@@ -1433,7 +1537,8 @@ def setup_scheduler() -> None:
                 "description": f"Backfills missing publication references every {graph_maintenance_hours}h",
             }
         logger.info(
-            "Registered maintain_citation_graph job (interval=%dh)", graph_maintenance_hours,
+            "Registered maintain_citation_graph job (interval=%dh)",
+            graph_maintenance_hours,
         )
 
     # -- Graph layout maintenance (interval, task 50 M1) --------------------
@@ -1463,8 +1568,37 @@ def setup_scheduler() -> None:
                 ),
             }
         logger.info(
-            "Registered graph_layout_maintenance job (interval=%dh)", layout_maintenance_hours,
+            "Registered graph_layout_maintenance job (interval=%dh)",
+            layout_maintenance_hours,
         )
+
+        # One-shot warm-up: the maps should already exist when the user first
+        # opens Map / Authors / Discovery, not start fitting because they did.
+        # Delayed so it lands after bootstrap, migrations, and the first
+        # request burst; the pass itself is idle-gated and no-ops when every
+        # view is fresh.
+        sched.add_job(
+            graph_layout_warmup,
+            trigger=DateTrigger(
+                # Timezone-aware on purpose: `utcnow()` is naive UTC and
+                # APScheduler would localize it to the scheduler's timezone,
+                # firing the warm-up hours early or late.
+                run_date=datetime.now(timezone.utc) + timedelta(seconds=_GRAPH_WARMUP_DELAY_SECONDS)
+            ),
+            id="graph_layout_warmup",
+            name="Prepare semantic maps",
+            replace_existing=True,
+        )
+        with _job_lock:
+            _job_meta["graph_layout_warmup"] = {
+                "action": "graph_layout_warmup",
+                "name": "Prepare semantic maps",
+                "description": (
+                    "Builds any missing or overdue map layout shortly after "
+                    "startup so the first visit reads a finished one"
+                ),
+            }
+        logger.info("Registered graph_layout_warmup job (runs in %ds)", _GRAPH_WARMUP_DELAY_SECONDS)
 
     # -- DB maintenance (daily) -------------------------------------------
     # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
@@ -1521,7 +1655,9 @@ def setup_scheduler() -> None:
     # the durable ledgers hold pending rows, so work enqueued before a restart
     # resumes under ONE dispatcher. Idempotent (find_active_job), low cadence.
     try:
-        drain_interval_minutes = max(1, int(os.getenv("ALMA_HYDRATION_DRAIN_INTERVAL_MINUTES", "15")))
+        drain_interval_minutes = max(
+            1, int(os.getenv("ALMA_HYDRATION_DRAIN_INTERVAL_MINUTES", "15"))
+        )
     except (TypeError, ValueError):
         drain_interval_minutes = 15
     sched.add_job(
@@ -1572,6 +1708,7 @@ def shutdown_scheduler() -> None:
 # ===================================================================
 # Core scheduled jobs
 # ===================================================================
+
 
 def evaluate_scheduled_alerts() -> None:
     """Sweep all enabled, non-manual digests and evaluate due ones."""
@@ -1680,7 +1817,8 @@ def evaluate_scheduled_alerts() -> None:
         conn.close()
         logger.info(
             "Alert evaluation sweep complete: %d/%d alerts evaluated",
-            evaluated_count, len(alerts),
+            evaluated_count,
+            len(alerts),
         )
         set_job_status(
             job_id,
@@ -1709,7 +1847,9 @@ def evaluate_scheduled_alerts() -> None:
             message="Scheduled alert evaluation failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
 
 
 def refresh_authors_periodic() -> None:
@@ -1747,6 +1887,7 @@ def refresh_authors_periodic() -> None:
             # Score new feed items by relevance after refresh
             try:
                 from alma.application.feed import score_feed_items
+
                 scored = score_feed_items(conn)
                 if scored:
                     logger.info("Scored %d feed items after author refresh", scored)
@@ -1793,7 +1934,9 @@ def refresh_authors_periodic() -> None:
             message="Periodic author refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
 
 
 def refresh_author_suggestions_periodic() -> None:
@@ -1981,30 +2124,34 @@ def refresh_recommendations_periodic() -> None:
         lens_results = []
         for lens in lenses:
             try:
-                result = refresh_lens_recommendations(
-                    conn, lens["id"], trigger_source="scheduler"
-                )
+                result = refresh_lens_recommendations(conn, lens["id"], trigger_source="scheduler")
                 # refresh_lens_recommendations self-gates its lane writes; this
                 # flushes any residual on the scheduler's own connection.
                 commit_with_retry(conn, label="refresh_recommendations_periodic")
                 inserted = (result or {}).get("inserted", 0)
                 total_inserted += inserted
-                lens_results.append({
-                    "lens_id": lens["id"],
-                    "lens_name": lens["name"],
-                    "inserted": inserted,
-                })
+                lens_results.append(
+                    {
+                        "lens_id": lens["id"],
+                        "lens_name": lens["name"],
+                        "inserted": inserted,
+                    }
+                )
                 logger.info(
                     "Lens '%s' (%s): %d recommendations inserted",
-                    lens["name"], lens["id"], inserted,
+                    lens["name"],
+                    lens["id"],
+                    inserted,
                 )
             except Exception as exc:
                 logger.error("Failed to refresh lens '%s': %s", lens["name"], exc)
-                lens_results.append({
-                    "lens_id": lens["id"],
-                    "lens_name": lens["name"],
-                    "error": str(exc),
-                })
+                lens_results.append(
+                    {
+                        "lens_id": lens["id"],
+                        "lens_name": lens["name"],
+                        "error": str(exc),
+                    }
+                )
 
         # Maintenance home for the Library signal cache (43.2). The composite
         # depends on library-wide centroid/topic/feedback state that the reads
@@ -2022,7 +2169,8 @@ def refresh_recommendations_periodic() -> None:
         conn.close()
         logger.info(
             "Periodic recommendation refresh complete: %d total across %d lenses",
-            total_inserted, len(lenses),
+            total_inserted,
+            len(lenses),
         )
         set_job_status(
             job_id,
@@ -2048,7 +2196,9 @@ def refresh_recommendations_periodic() -> None:
             message="Periodic recommendation refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
 
 
 def inbox_capture_sweep_periodic() -> None:
@@ -2168,9 +2318,7 @@ def refresh_feed_inbox_periodic() -> None:
             message=final_message,
             result=result,
         )
-        logger.info(
-            "Periodic feed inbox refresh complete: %d items created", items_created
-        )
+        logger.info("Periodic feed inbox refresh complete: %d items created", items_created)
     except Exception as exc:
         logger.exception("Fatal error in refresh_feed_inbox_periodic")
         set_job_status(
@@ -2182,7 +2330,9 @@ def refresh_feed_inbox_periodic() -> None:
             message="Periodic feed inbox refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
 
 
 def maintain_citation_graph_periodic() -> None:
@@ -2229,7 +2379,63 @@ def maintain_citation_graph_periodic() -> None:
             message="Periodic citation graph maintenance failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
+
+
+def _graph_layout_views() -> list[tuple[object, str]]:
+    """The registered graph views ALMa keeps warm, in build order.
+
+    Corpus paper map FIRST: its build persists the substrate every other view
+    (and the frontier map) reads.
+    """
+    from alma.core.scope import Scope
+
+    return [
+        (Scope.corpus, Scope.corpus.view_key("paper_map")),
+        (Scope.library, Scope.library.view_key("paper_map")),
+        (Scope.library, Scope.library.view_key("author_network")),
+        (Scope.corpus, Scope.corpus.view_key("author_network")),
+    ]
+
+
+def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, str]]:
+    """``(scope, view_key, reason)`` for every graph view that needs a rebuild.
+
+    Pure reads. Computed BEFORE any gate so the pass can tell a routine
+    freshness top-up (yield freely) from "there is no map to serve at all"
+    (must happen, see `_URGENT_STALE_REASONS`).
+    """
+    from alma.api.routes.graphs import _paper_scope_gauge
+    from alma.application import materialized_views as mv
+    from alma.application.discovery.lens_crud import read_settings
+
+    settings = read_settings(conn)
+    stale: list[tuple[object, str, str]] = []
+    for scope, view_key in _graph_layout_views():
+        gauge = _paper_scope_gauge(conn, scope)
+        meta = mv.stored_meta(conn, view_key)
+        sig_kv = str(settings.get(f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}") or "")
+        if meta is None:
+            stale.append((scope, view_key, "never_built"))
+        elif not sig_kv or not gauge.is_fresh(conn, sig_kv, threshold=_LAYOUT_REBUILD_DRIFT):
+            stale.append((scope, view_key, "embedding_drift_or_version"))
+        else:
+            age_days = _iso_age_days(str(meta.get("computed_at") or ""))
+            if age_days is None or age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS * 2:
+                stale.append((scope, view_key, "age_overdue"))
+            elif age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
+                stale.append((scope, view_key, "age_floor"))
+    return stale
+
+
+# Staleness that the ordinary idle gate must not be allowed to postpone forever.
+# A never-built view means the user is looking at a "Building…" plate with
+# nothing behind it; an overdue one has already been deferred for a full extra
+# age window. Both escalate to the weaker gate (yield to the USER, not to every
+# background sibling), so a busy machine still converges.
+_URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
 def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
@@ -2251,33 +2457,47 @@ def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
         logger.warning("super_regions freshness check failed: %s", exc)
 
 
-def graph_layout_maintenance_periodic() -> None:
-    """Keep the semantic-map substrate + graph MVs fresh in the background.
+def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None:
+    """Place new vectors, then rebuild whichever graph views are stale.
 
-    Task 50 M1 — GETs on /graphs/* are pure stored reads now, so freshness is
-    owned HERE, on the embedding set (never ``papers.updated_at`` — hydration
-    churns it; see tasks/lessons.md "Semantic maps"):
+    Shared by the startup warm-up and the periodic maintenance tick, so
+    "the maps we serve exist and are fresh" has ONE implementation.
+
+    Task 50 M1 — GETs on /graphs/* are pure stored reads, so freshness is owned
+    HERE, on the embedding set (never ``papers.updated_at`` — hydration churns
+    it; see tasks/lessons.md "Semantic maps"):
 
     1. **Incremental placement** (always, cheap): papers that gained a vector
        since the last tick get nearest-centroid coords on the corpus substrate.
-    2. **Full MV rebuilds** (rare, deliberate): a registered graph view rebuilds
-       when it has never been built, its algo/model versions changed, the
-       embedding set drifted ≥ :data:`_LAYOUT_REBUILD_DRIFT`, or it is older
-       than :data:`_LAYOUT_REBUILD_MAX_AGE_DAYS`. Corpus paper map first — it
-       IS the substrate build the others read.
+    2. **Full MV rebuilds** (rare, deliberate): never-built, algo/model version
+       change, embedding drift ≥ :data:`_LAYOUT_REBUILD_DRIFT`, or older than
+       :data:`_LAYOUT_REBUILD_MAX_AGE_DAYS`.
 
-    Idle-gated: yields untouched to `may_background_run` so it never competes
-    with a user-facing action.
+    Idle-gated, with the escalation in `_URGENT_STALE_REASONS`. At most one
+    layout fit runs at a time process-wide (`graph_build_in_flight`).
     """
-    job_id = "periodic_graph_layout_maintenance"
-    operation_key = "graphs.layout_maintenance"
     from alma.api.deps import open_db_connection
 
     conn = open_db_connection()
     try:
-        ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+        stale = _graph_view_staleness(conn)
+        urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
+        gate = may_background_continue if urgent else may_background_run
+        ok, reason = gate(conn, exclude_operation_key=operation_key)
         if not ok:
-            logger.debug("graph layout maintenance skipped: %s", reason)
+            logger.debug("graph layout pass %s skipped: %s", job_id, reason)
+            return
+
+        from alma.application.discovery.lens_crud import upsert_setting
+        from alma.application.graph_process import graph_build_in_flight, run_graph_process
+        from alma.application.graph_substrate import place_missing_papers
+        from alma.core.db_write import write_section
+
+        placement = place_missing_papers(conn)
+        _ensure_super_regions_fresh(conn)
+        if not stale and not (placement.get("placed") or placement.get("outliers")):
+            # Nothing to do. Stay out of Activity entirely — a warm-up on every
+            # restart must not push real operations off the user's list.
             return
 
         set_job_status(
@@ -2286,51 +2506,29 @@ def graph_layout_maintenance_periodic() -> None:
             trigger_source="scheduler",
             started_at=utcnow().isoformat(),
             operation_key=operation_key,
-            message="Graph layout maintenance (placement + freshness)",
+            message=message,
         )
+        if placement.get("placed") or placement.get("outliers"):
+            add_job_log(
+                job_id, "Placed new vectors on the substrate", step="placement", data=placement
+            )
 
         from alma.api.routes.graphs import _paper_scope_gauge
-        from alma.application import materialized_views as mv
-        from alma.application.discovery.lens_crud import read_settings, upsert_setting
-        from alma.application.graph_substrate import place_missing_papers
-        from alma.core.db_write import write_section
-        from alma.core.scope import Scope
 
-        placement = place_missing_papers(conn)
-        _ensure_super_regions_fresh(conn)
-        if placement.get("placed") or placement.get("outliers"):
-            add_job_log(job_id, "Placed new vectors on the substrate", step="placement", data=placement)
-
-        # Corpus paper map FIRST: its build persists the substrate every other
-        # view (and the frontier map) reads.
-        views = [
-            (Scope.corpus, Scope.corpus.view_key("paper_map")),
-            (Scope.library, Scope.library.view_key("paper_map")),
-            (Scope.library, Scope.library.view_key("author_network")),
-            (Scope.corpus, Scope.corpus.view_key("author_network")),
-        ]
-        settings = read_settings(conn)
         rebuilt: list[str] = []
-        for scope, view_key in views:
-            gauge = _paper_scope_gauge(conn, scope)
-            meta = mv.stored_meta(conn, view_key)
-            sig_kv = str(settings.get(f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}") or "")
-            stale_reason: str | None = None
-            if meta is None:
-                stale_reason = "never_built"
-            elif not sig_kv or not gauge.is_fresh(conn, sig_kv, threshold=_LAYOUT_REBUILD_DRIFT):
-                stale_reason = "embedding_drift_or_version"
-            else:
-                age_days = _iso_age_days(str(meta.get("computed_at") or ""))
-                if age_days is None or age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
-                    stale_reason = "age_floor"
-            if stale_reason is None:
-                continue
+        for scope, view_key, stale_reason in stale:
+            busy = graph_build_in_flight(conn, exclude_operation_key=operation_key)
+            if busy:
+                add_job_log(
+                    job_id,
+                    f"Deferring {view_key}: {busy} is already fitting a layout",
+                    step="defer",
+                )
+                break
 
             add_job_log(job_id, f"Rebuilding {view_key} ({stale_reason})", step="rebuild")
             try:
-                from alma.application.graph_process import run_graph_process
-
+                gauge = _paper_scope_gauge(conn, scope)
                 run_graph_process(
                     {"kind": "registered_view", "view_key": view_key},
                     job_id=job_id,
@@ -2341,16 +2539,19 @@ def graph_layout_maintenance_periodic() -> None:
                     )
                 rebuilt.append(view_key)
             except Exception as exc:  # noqa: BLE001 — one view failing must not sink the rest
-                logger.warning("graph layout maintenance: rebuild failed for %s: %s", view_key, exc)
+                logger.warning("graph layout pass: rebuild failed for %s: %s", view_key, exc)
                 add_job_log(
                     job_id, f"Rebuild failed for {view_key}: {exc}", step="rebuild", level="error"
                 )
 
-            # Re-check the idle gate between expensive rebuilds: yield the
-            # moment the user does anything (pull-based pause).
-            ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+            # Re-check the gate between expensive rebuilds: yield the moment the
+            # user does anything (pull-based pause). Urgent work still yields —
+            # but only to the user, never to a background sibling.
+            ok, reason = gate(conn, exclude_operation_key=operation_key)
             if not ok:
-                add_job_log(job_id, f"Yielding after {len(rebuilt)} rebuild(s): {reason}", step="yield")
+                add_job_log(
+                    job_id, f"Yielding after {len(rebuilt)} rebuild(s): {reason}", step="yield"
+                )
                 break
 
         set_job_status(
@@ -2360,13 +2561,15 @@ def graph_layout_maintenance_periodic() -> None:
             operation_key=operation_key,
             finished_at=utcnow().isoformat(),
             message=(
-                f"Graph layout maintenance: placed {placement.get('placed', 0)}, "
+                f"Graph layouts: placed {placement.get('placed', 0)}, "
                 f"rebuilt {len(rebuilt)} view(s)"
             ),
             result={"placement": placement, "rebuilt": rebuilt},
         )
     except Exception as exc:
-        logger.exception("Fatal error in graph_layout_maintenance_periodic")
+        logger.exception("Fatal error in graph layout pass %s", job_id)
+        # Always surface a real failure, including one that happened before the
+        # pass decided it had visible work — a placement crash is not a no-op.
         set_job_status(
             job_id,
             status="failed",
@@ -2381,6 +2584,31 @@ def graph_layout_maintenance_periodic() -> None:
             conn.close()
         except Exception:
             pass
+
+
+def graph_layout_maintenance_periodic() -> None:
+    """Periodic freshness tick for the semantic-map substrate + graph MVs."""
+    _graph_layout_pass(
+        job_id="periodic_graph_layout_maintenance",
+        operation_key="graphs.layout_maintenance",
+        message="Graph layout maintenance (placement + freshness)",
+    )
+
+
+def graph_layout_warmup() -> None:
+    """Build the maps we serve BEFORE anyone asks for them.
+
+    Runs once shortly after startup. Without it, the first visit to Map /
+    Authors / Discovery after a fresh install, a schema-version bump, or a
+    restart that interrupted a build is what discovers the missing layout — and
+    the user then waits on a 202 plate for the whole fit. Same pass as the
+    periodic tick, so a view already fresh costs a handful of cheap reads.
+    """
+    _graph_layout_pass(
+        job_id="graph_layout_warmup_run",
+        operation_key="graphs.layout_warmup",
+        message="Preparing semantic maps",
+    )
 
 
 # Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set
@@ -2503,7 +2731,9 @@ def db_maintenance_periodic() -> None:
             message="DB maintenance failed",
             error=f"{type(exc).__name__}: {exc}",
         )
-        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+        add_job_log(
+            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
+        )
 
 
 def drain_pending_hydration_periodic() -> None:
@@ -2526,6 +2756,7 @@ def drain_pending_hydration_periodic() -> None:
     except Exception:
         return
     try:
+
         def _pending(table: str) -> int:
             try:
                 return int(
@@ -2602,9 +2833,7 @@ def drain_pending_hydration_periodic() -> None:
         try:
             ok, _reason = may_background_run(conn2)
             if ok and is_post_hydration_chain_pending(conn2):
-                chain = schedule_post_hydration_chain(
-                    conn2, trigger_reason="chain_rearm"
-                )
+                chain = schedule_post_hydration_chain(conn2, trigger_reason="chain_rearm")
                 # Duty discharged when we armed the S2 fetch OR there is
                 # nothing left to chain — clear the marker either way.
                 if chain.get("scheduled_jobs") or chain.get("skipped") == "no_candidates":
@@ -2633,6 +2862,7 @@ def drain_pending_hydration_periodic() -> None:
 # Internal helpers for alert evaluation
 # ===================================================================
 
+
 def _is_due(
     *,
     schedule: str,
@@ -2658,6 +2888,7 @@ def _is_due(
 # ===================================================================
 # Public scheduler API
 # ===================================================================
+
 
 def add_cron_job(
     job_id: str,
@@ -2685,14 +2916,16 @@ def list_jobs() -> list[dict]:
     with _job_lock:
         for j in sched.get_jobs():
             meta = _job_meta.get(j.id, {})
-            jobs.append({
-                "id": j.id,
-                "cron": meta.get("cron"),
-                "action": meta.get("action"),
-                "name": meta.get("name") or j.name,
-                "description": meta.get("description"),
-                "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
-            })
+            jobs.append(
+                {
+                    "id": j.id,
+                    "cron": meta.get("cron"),
+                    "action": meta.get("action"),
+                    "name": meta.get("name") or j.name,
+                    "description": meta.get("description"),
+                    "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
+                }
+            )
     return jobs
 
 
@@ -2748,9 +2981,7 @@ def get_job_status(job_id: str) -> dict | None:
     with _job_lock:
         status = dict(_job_status.get(job_id) or {})
     db_status = _load_job_status_from_db(job_id)
-    if db_status and str(db_status.get("updated_at") or "") >= str(
-        status.get("updated_at") or ""
-    ):
+    if db_status and str(db_status.get("updated_at") or "") >= str(status.get("updated_at") or ""):
         with _job_lock:
             _job_status[job_id] = dict(db_status)
         return db_status
@@ -3140,7 +3371,10 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             )
         result = func(*args, **kwargs)
         st_after = get_job_status(job_id) or {}
-        if st_after.get("cancel_requested") or st_after.get("status") in ("cancelling", "cancelled"):
+        if st_after.get("cancel_requested") or st_after.get("status") in (
+            "cancelling",
+            "cancelled",
+        ):
             cancel_result = {
                 "success": False,
                 "cancelled": True,
@@ -3253,8 +3487,13 @@ def schedule_alert(
         time_str = (schedule_config or {}).get("time", "09:00")
         hour, minute = time_str.split(":")
         day_map = {
-            "mon": "MON", "tue": "TUE", "wed": "WED",
-            "thu": "THU", "fri": "FRI", "sat": "SAT", "sun": "SUN",
+            "mon": "MON",
+            "tue": "TUE",
+            "wed": "WED",
+            "thu": "THU",
+            "fri": "FRI",
+            "sat": "SAT",
+            "sun": "SUN",
         }
         day_abbr = day_map.get(day, "MON")
         cron_expr = f"{minute} {hour} * * {day_abbr}"
@@ -3262,7 +3501,10 @@ def schedule_alert(
         return None
 
     add_cron_job(
-        job_id, cron_expr, evaluate_func, args=(alert_id,),
+        job_id,
+        cron_expr,
+        evaluate_func,
+        args=(alert_id,),
         meta={"action": "alert_evaluate", "name": f"Alert {alert_id}"},
     )
     logger.info("Scheduled alert %s with schedule=%s, cron=%s", alert_id, schedule, cron_expr)
@@ -3339,7 +3581,8 @@ def reschedule_citation_graph_maintenance(interval_hours: int) -> None:
                 "description": f"Backfills missing publication references every {interval_hours}h",
             }
         logger.info(
-            "Rescheduled maintain_citation_graph job (interval=%dh)", interval_hours,
+            "Rescheduled maintain_citation_graph job (interval=%dh)",
+            interval_hours,
         )
     else:
         logger.info("Citation graph maintenance disabled")

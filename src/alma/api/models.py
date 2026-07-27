@@ -3,7 +3,7 @@
 v3: UUID-based papers, discovery lenses, feed items, digest alerts.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +12,7 @@ from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 # ============================================================================
 # Author Models
 # ============================================================================
+
 
 class AuthorCreate(BaseModel):
     """Request model for creating a new author."""
@@ -201,6 +202,7 @@ class AuthorFollowFromPaperResponse(BaseModel):
 # Paper Models (v3 — replaces Publication models)
 # ============================================================================
 
+
 class PaperResponse(BaseModel):
     """Response model for a paper."""
 
@@ -322,6 +324,7 @@ class SavePublicationsRequest(BaseModel):
 # Feed Models (v3 — new)
 # ============================================================================
 
+
 class FeedItemResponse(BaseModel):
     """Response model for a feed item."""
 
@@ -346,8 +349,14 @@ class FeedItemResponse(BaseModel):
 class FeedMonitorCreateRequest(BaseModel):
     """Request model for creating a non-author feed monitor."""
 
-    monitor_type: str = Field(..., description="query (keyword monitor) | topic | venue | preprint | branch")
-    query: str = Field(..., min_length=1, description="Search string or boolean keyword expression used by the monitor")
+    monitor_type: str = Field(
+        ..., description="query (keyword monitor) | topic | venue | preprint | branch"
+    )
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Search string or boolean keyword expression used by the monitor",
+    )
     label: str | None = Field(default=None, description="Optional display label")
     config: dict | None = None
     source_id: str | None = Field(
@@ -363,9 +372,15 @@ class FeedMonitorCreateRequest(BaseModel):
 class FeedMonitorUpdateRequest(BaseModel):
     """Request model for updating a feed monitor."""
 
-    query: str | None = Field(default=None, min_length=1, description="Updated search string or boolean keyword expression used by the monitor")
+    query: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Updated search string or boolean keyword expression used by the monitor",
+    )
     label: str | None = Field(default=None, description="Optional display label")
-    enabled: bool | None = Field(default=None, description="Enable or disable this monitor without deleting it")
+    enabled: bool | None = Field(
+        default=None, description="Enable or disable this monitor without deleting it"
+    )
     config: dict | None = None
 
 
@@ -398,12 +413,15 @@ class FeedMonitorResponse(BaseModel):
 class ReorderRequest(BaseModel):
     """Body for a drag-reorder: ids in their new display order."""
 
-    ordered_ids: list[str] = Field(..., description="Row ids in their new order; index becomes position")
+    ordered_ids: list[str] = Field(
+        ..., description="Row ids in their new order; index becomes position"
+    )
 
 
 # ============================================================================
 # Discovery Models (v3 — lens-based)
 # ============================================================================
+
 
 class LensCreate(BaseModel):
     """Request model for creating a discovery lens."""
@@ -631,10 +649,18 @@ class DiscoverySources(BaseModel):
     """Source control plane for external discovery retrieval."""
 
     openalex: DiscoverySourcePolicy = Field(default_factory=DiscoverySourcePolicy)
-    semantic_scholar: DiscoverySourcePolicy = Field(default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.95))
-    crossref: DiscoverySourcePolicy = Field(default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.72))
-    arxiv: DiscoverySourcePolicy = Field(default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.66))
-    biorxiv: DiscoverySourcePolicy = Field(default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.62))
+    semantic_scholar: DiscoverySourcePolicy = Field(
+        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.95)
+    )
+    crossref: DiscoverySourcePolicy = Field(
+        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.72)
+    )
+    arxiv: DiscoverySourcePolicy = Field(
+        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.66)
+    )
+    biorxiv: DiscoverySourcePolicy = Field(
+        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.62)
+    )
 
 
 class DiscoveryBranchSettings(BaseModel):
@@ -737,9 +763,28 @@ class SimilarityResponse(BaseModel):
     dense_fallback_used: bool = False
 
 
+class MapSelectionLensCreate(BaseModel):
+    """Create a collection-backed lens from the current map selection."""
+
+    name: str = Field(..., min_length=1, max_length=120)
+    selection_kind: Literal["papers", "authors"]
+    ids: list[str] = Field(..., min_length=1)
+    scope: Literal["library", "corpus"]
+
+
+class MapSelectionLensResponse(BaseModel):
+    """Atomic collection + lens result for a lassoed map region."""
+
+    collection_id: str
+    lens_id: str
+    name: str
+    paper_count: int
+
+
 # ============================================================================
 # Library Models
 # ============================================================================
+
 
 class CollectionCreate(BaseModel):
     """Request model for creating a collection."""
@@ -820,6 +865,7 @@ class FollowedAuthorResponse(BaseModel):
 # ============================================================================
 # Alerts Models (digest-based)
 # ============================================================================
+
 
 class AlertRuleCreate(BaseModel):
     """Request model for creating an alert rule."""
@@ -981,6 +1027,7 @@ class AlertTemplateApplyResponse(BaseModel):
 # Job Models
 # ============================================================================
 
+
 class JobCreate(BaseModel):
     """Request model for creating a scheduled job."""
 
@@ -1013,42 +1060,105 @@ class JobResponse(BaseModel):
 
 
 # ============================================================================
+# Signal Lab Models
+# ============================================================================
+
+
+class SignalLabDirection(BaseModel):
+    """One fitted super-region movement shown on Home."""
+
+    region_id: int
+    label: str
+    value: float = Field(ge=-1, le=1)
+
+
+class SignalLabRoundEvidence(BaseModel):
+    """Recorded ledger evidence; unordered paper sets define query identity."""
+
+    today: int = Field(ge=0)
+    total: int = Field(ge=0)
+    answered: int = Field(ge=0)
+    skipped: int = Field(ge=0)
+    unique_queries: int = Field(ge=0)
+    duplicate_queries: int = Field(ge=0)
+
+
+class SignalLabFitEvidence(BaseModel):
+    """Evidence actually consumed by the current wholesale fit."""
+
+    ready: bool
+    fresh: bool
+    source_rounds: int = Field(ge=0)
+    fitted_queries: int = Field(ge=0)
+    fitted_observations: int = Field(ge=0)
+    pending_rounds: int = Field(ge=0)
+    utility_preferences: int = Field(ge=0)
+    metric_constraints: int = Field(ge=0)
+
+
+class SignalLabCoverageEvidence(BaseModel):
+    """Structural super-region and adjacency coverage."""
+
+    regions_observed: int = Field(ge=0)
+    regions_total: int = Field(ge=0)
+    edges_observed: int = Field(ge=0)
+    edges_total: int = Field(ge=0)
+
+
+class SignalLabEffects(BaseModel):
+    """Active fitted effects; empty while the feature is disabled."""
+
+    upward: list[SignalLabDirection] = Field(default_factory=list)
+    downward: list[SignalLabDirection] = Field(default_factory=list)
+    regions_moving: int = Field(ge=0)
+    boundary_overrides: int = Field(ge=0)
+
+
+class SignalLabSummaryResponse(BaseModel):
+    """Honest Home evidence; never a combinatorial possible-triplet ratio."""
+
+    active: bool
+    rounds: SignalLabRoundEvidence
+    fit: SignalLabFitEvidence
+    coverage: SignalLabCoverageEvidence
+    effects: SignalLabEffects
+
+
+# ============================================================================
 # Plugin Models
 # ============================================================================
 
+
 class PluginInfo(BaseModel):
-    """Response model for one delivery channel.
+    """Runtime plugin manifest plus current activation/configuration status."""
 
-    `capabilities` is the directions this channel supports — `send` (ALMa posts
-    to it) and/or `receive` (it feeds the Inbox). `can_send` / `can_receive` say
-    whether each of those is CONFIGURED right now, which is a different
-    question: a Slack token with a posting channel and no capture channel can
-    send and not receive.
-    """
-
-    name: str
+    id: str
     display_name: str
     version: str
     description: str
+    kind: Literal["integration"]
     config_schema: dict
-    capabilities: list[str] = []
-    is_configured: bool
+    capabilities: list[Literal["send", "receive"]] = Field(default_factory=list)
+    enabled: bool
+    configured: bool
     can_send: bool = False
     can_receive: bool = False
-    is_healthy: bool | None = None
+    status: dict = Field(default_factory=dict)
+    actions: list[str] = Field(default_factory=list)
+    docs_path: str
 
 
-class PluginTestResult(BaseModel):
-    """Response model for plugin connection test."""
+class PluginConfigResponse(BaseModel):
+    """Validated configuration for one plugin; secrets are masked."""
 
-    success: bool
-    message: str
-    timestamp: str
+    plugin_id: str
+    config: dict
 
 
 # ============================================================================
 # Statistics Models
 # ============================================================================
+
 
 class StatisticsResponse(BaseModel):
     """Response model for overall statistics."""
@@ -1063,6 +1173,7 @@ class StatisticsResponse(BaseModel):
 # ============================================================================
 # Import Models
 # ============================================================================
+
 
 class ImportResultResponse(BaseModel):
     """Response model for an import operation result."""
@@ -1114,6 +1225,7 @@ class ZoteroCollectionResponse(BaseModel):
 # System Models
 # ============================================================================
 
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -1136,6 +1248,7 @@ class ErrorResponse(BaseModel):
 # ============================================================================
 # Graph Models
 # ============================================================================
+
 
 class GraphData(BaseModel):
     """Response model for graph visualization data."""

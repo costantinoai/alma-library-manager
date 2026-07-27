@@ -63,16 +63,27 @@ It runs in this order:
     Discovery just produced (none of them already in your library),
     again applying the rating contract so the next refresh leans toward
     what you kept.
-13. **All set** — a summary, then you're dropped into Discovery.
+13. **All set** — a summary and a few signposts (Health, Map, Library →
+    Analytics, Settings), then you land on **Home**, the daily brief you
+    will open every day afterwards.
 
 When you finish, ALMa marks `onboarding.completed` and the gate stops
 showing on every future boot.
+
+### Page tours
+
+The wizard is only half the guided experience. Home, Feed, Discovery,
+Map, Authors and Library each carry a short **first-visit tour** — a
+handful of coachmarks over the real page, spotlighting the controls that
+matter. It runs once per page, automatically, and the **?** button in the
+page header replays it any time.
 
 ### Re-running it later
 
 You can replay the whole flow at any time from **Settings → First-run
 setup → Restart onboarding**. This clears the completed flag (via
-`/onboarding/reset`) so the guided welcome shows again on the next load.
+`/onboarding/reset`) and forgets every page tour's "seen it" flag, so both
+the guided welcome and the per-page tours show again on the next load.
 **Nothing is deleted** — your identity, follows, monitors, lens, and
 saved papers are all kept; it simply lets you revisit or adjust anything
 you skipped.

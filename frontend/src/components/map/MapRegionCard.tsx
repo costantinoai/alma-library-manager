@@ -34,6 +34,8 @@ export interface MapRegionCardProps {
   onClose: () => void
   /** Region meaning + host actions. Rendered only once ready. */
   children?: React.ReactNode
+  /** Shared follow-up action, available even for a sparse selection. */
+  actions?: React.ReactNode
 }
 
 export function MapRegionCard({
@@ -45,6 +47,7 @@ export function MapRegionCard({
   insufficientMessage = 'Too few here to characterize — select a larger patch (5+).',
   onClose,
   children,
+  actions,
 }: MapRegionCardProps) {
   return (
     <div className="absolute right-3 top-3 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
@@ -71,6 +74,11 @@ export function MapRegionCard({
         <p className="py-2 text-xs text-slate-500">{insufficientMessage}</p>
       ) : (
         children
+      )}
+      {actions && (
+        <div className="mt-3 border-t border-[var(--color-border)] pt-2">
+          {actions}
+        </div>
       )}
     </div>
   )

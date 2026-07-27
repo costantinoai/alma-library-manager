@@ -69,7 +69,7 @@ provider**, including the dependency environment path.
 ### Email / SMTP
 
 The email digest channel (sibling of Slack). Normally configured from
-**Settings → Email digests**; these env vars override the stored
+**Settings → Plugins → Email**; these env vars override the stored
 settings for headless setups.
 
 | Variable | Default | Purpose |
@@ -116,8 +116,35 @@ an existing install points it at a different (probably empty) profile.
 
 ### Slack (legacy env aliases)
 
-Prefer **Settings → Channels**, which writes the secret store. These are read at
+Prefer **Settings → Plugins → Slack**, which writes the secret store. These are read at
 startup for existing installs and Docker `env_file` setups.
+
+Integration activation uses the forward settings schema:
+
+| Setting | Type | Meaning |
+|---|---|---|
+| `settings_schema_version` | integer | Current settings document schema; startup migrates then validates it |
+| `plugins.slack.enabled` | boolean | Allow Slack Alert delivery and Inbox polling |
+| `plugins.email.enabled` | boolean | Allow SMTP Alert delivery |
+
+Activation is independent of configuration. Turning a plugin off retains every
+field and secret. Existing configured integrations are activated by the
+version-1 migration; fresh unconfigured integrations default off.
+
+Signal Lab is not an integration setting. **Settings → Intelligence → Signal
+Lab** owns its strict native feature schema:
+
+| Setting | Range/default | Meaning |
+|---|---|---|
+| `signal_lab.enabled` | `true` | Serve/consume retained lab evidence; off ignores without deleting |
+| `weights.lab_region_offset` | `0…2.5`, default `0` | Maximum additive region-head points in Discovery/Feed |
+| `weights.lab_utility` | `0…2.5`, default `0` | Maximum confidence-scaled utility-head points |
+| `signal_lab.map_tint_strength` | `0…1`, default `0.45` | Read-time Terrain bend; never coordinates |
+| `signal_lab.gamma_start` / `signal_lab.epsilon` | `0…1` | Library-outward ring decay and protected ring-uniform exploration share |
+| `signal_lab.coverage_target` | `1…500` | Evidence scale used to reduce already-covered region/edge priority |
+| `signal_lab.refit_every_rounds` | `1…100` | Wholesale refit cadence |
+| `signal_lab.holdout_percent` | `0…50` | Deterministic evaluation holdout |
+| `signal_lab.override_min_votes` | `1…100` | Boundary-override evidence threshold |
 
 | Variable | Purpose |
 |---|---|
@@ -145,8 +172,8 @@ Settings cards (so they never land in `settings.json`):
 
 | Key | Set from | Holds |
 |---|---|---|
-| `slack.bot_token` | Settings → Delivery channels | Slack bot OAuth token. |
-| `smtp.password` | Settings → Email digests | SMTP auth password (overridable by `SMTP_PASSWORD`). |
+| `slack.bot_token` | Settings → Plugins → Slack | Slack bot OAuth token. |
+| `smtp.password` | Settings → Plugins → Email | SMTP auth password (overridable by `SMTP_PASSWORD`). |
 | `semantic_scholar.api_key` | Settings → External APIs | Semantic Scholar API key. |
 | `openalex.api_key` | Settings → External APIs | OpenAlex API key. |
 | `openai.api_key` | Settings → Intelligence → AI provider | OpenAI embedding key. |
@@ -200,8 +227,8 @@ Settings page.
 | Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.strategies.*`, `discovery.limits.*`) |
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
-| Settings → Delivery channels | `data/secrets.json` (Slack bot token, key `slack.bot_token`) and `settings.json` (`slack_channel`, `check_interval_hours`) |
-| Settings → Email digests | `settings.json` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`, `smtp_use_tls`) and `data/secrets.json` (SMTP password, key `smtp.password`) |
+| Settings → Plugins | Secret store for credentials; `settings.json` for non-secret integration config and activation |
+| Settings → Plugins → Email | `settings.json` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`, `smtp_use_tls`) and secret store (`smtp.password`) |
 | Settings → Data & system → Corpus Explorer | (no setting; opens modal) |
 | Settings → Data & system → Backup / restore | (no setting; runs operations) |
 

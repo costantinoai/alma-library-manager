@@ -7,19 +7,21 @@ import {
   type QueryKey,
 } from '@tanstack/react-query'
 import {
+  Aperture,
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
   Eye,
   EyeOff,
   Gauge,
-  Globe,
+  GitBranch,
   LayoutGrid,
   LayoutList,
   Loader2,
   Map as MapIcon,
   RefreshCw,
   Rows3,
+  SlidersHorizontal,
 } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 
@@ -60,7 +62,6 @@ import {
 import { FrontierMap } from '@/components/discovery/FrontierMap'
 import { MapPaperPopup } from '@/components/map/MapPaperPopup'
 import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
-import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
@@ -70,13 +71,16 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
+import { PageSection } from '@/components/ui/page-section'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
-import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
+import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
   invalidatePaperSignalFields,
@@ -97,6 +101,10 @@ type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
 // truncation. The backend oversamples internally so the post-filter
 // landing reliably hits this number.
 const LENS_REFRESH_LIMIT = 50
+
+// Persisted fold state for the Suggestions Map. Versioned — see the comment at
+// its `useState` for why a default flip has to retire the old key.
+const MAP_OPEN_KEY = 'alma.discovery.mapOpen.v2'
 
 function deriveDiscoveryReaction(rec: LensRecommendation): PaperReaction {
   if (rec.user_action === 'like' || rec.user_action === 'love' || rec.user_action === 'dislike') {
@@ -172,19 +180,13 @@ export function DiscoveryPage() {
   // Falls back to the hash ID when the caller didn't supply it (e.g. the
   // user pasted the URL directly).
   const seedPaperTitle = route.params.get('seedTitle')?.trim() ?? ''
-  const routeQuery = route.params.get('query')?.trim() ?? ''
   // T8 — `?lens=<id>` pre-selects a specific lens when landing from a
   // deep-link (e.g. the "Turn this Collection into a Discovery feed"
   // button in Library). Ignored if the lens doesn't exist.
   const routeLensId = route.params.get('lens')?.trim() ?? ''
   const routePaperId = route.params.get('paper')?.trim() ?? ''
-  const routeAction = route.params.get('action')?.trim() ?? ''
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
-  // Find & add is the manual entry point at the top of the page — open by
-  // default (but collapsible; state keeps re-renders from fighting the user).
-  const [findAddOpen, setFindAddOpen] = useState(true)
-  const findAddRef = useRef<HTMLDetailsElement>(null)
   // Discovery already excludes Library papers when it BUILDS a deck, but keeps
   // a card visible the moment you save it so it doesn't vanish under the
   // cursor. This is the opt-in "clear them out" view; persisted, since it's a
@@ -206,11 +208,20 @@ export function DiscoveryPage() {
   // density (compact / normal / extended), and bulk-selection set.
   const [sort, setSort] = useState<DiscoverySort>('relevance')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
-  // Task 50 M4 (50-B): the frontier map is a PANEL above the rec list — both
-  // visible at once, selection flows down. Open state persists per user; a
-  // lasso on the map can filter the list below (cleared on lens switch).
+  // Task 50 M4 (50-B): the frontier map is a PANEL above the rec list —
+  // selection flows down into it. FOLDED by default (user call 2026-07-27):
+  // it is a ~560px plate between the reader and the list they came for, and
+  // folding it also spares the frontier query on every page load. The choice
+  // persists once made.
+  //
+  // The key is versioned because the DEFAULT flipped. The old key was written
+  // on every toggle under the old open-by-default behaviour, so anyone who had
+  // ever touched the map carried a stale `true` and kept landing on an open
+  // map after the change (user report 2026-07-27). Changing the default of a
+  // persisted preference means retiring its key — otherwise the people most
+  // affected are exactly the ones who never see the fix.
   const [mapOpen, setMapOpen] = useState(
-    () => localStorage.getItem('alma.discovery.mapOpen') !== 'false',
+    () => localStorage.getItem(MAP_OPEN_KEY) === 'true',
   )
   const [mapFilterIds, setMapFilterIds] = useState<Set<string> | null>(null)
   // Clicking a suggestion dot on the map jumps to its row: selected + a
@@ -246,20 +257,6 @@ export function DiscoveryPage() {
     setDetailOpen(true)
   }, [deepLinkPaperQuery.data, deepLinkPaperQuery.isError, routePaperId])
 
-  useEffect(() => {
-    if (routeAction !== 'find') return
-    setFindAddOpen(true)
-    window.setTimeout(() => {
-      findAddRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
-    const next = new URLSearchParams(route.params)
-    next.delete('action')
-    window.history.replaceState(
-      null,
-      '',
-      buildHashRoute('discovery', Object.fromEntries(next)),
-    )
-  }, [route.params, routeAction])
 
   const lensesQuery = useQuery({
     queryKey: ['lenses'],
@@ -1046,147 +1043,63 @@ export function DiscoveryPage() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* ── Hero strip ─────────────────────────────────────────────────────
-          Mirrors the Feed page hero so Discovery and Feed feel like the
-          same product. The TopBar already shows the "Discovery" page
-          title in font-brand, so this surface doesn't repeat it — it
-          carries the description, a live lens-status pulse, and the
-          primary Refresh action.
-      ──────────────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
-        <div className="relative flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:gap-8">
-          <div className="min-w-0 flex-1 space-y-2">
-            <p className="max-w-xl text-sm leading-relaxed text-slate-600">
-              Context-aware recommendations across lexical, vector, graph, and
-              external channels — driven by the selected lens.
-            </p>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+    <div className="space-y-6">
+      <PageIntro
+        icon={DiscoverIcon}
+        lede="Papers you haven't read yet."
+        detail="Found by a lens — a saved point of view over your library. Save what lands, pass on what doesn't; both answers teach the next round."
+        tour={<PageTour pageKey="discovery" steps={DISCOVERY_TOUR} />}
+        meta={
+          <MetaLine
+            items={[
               <span className="inline-flex items-center gap-2">
-                <span className="relative flex h-2 w-2" aria-hidden>
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success-500 opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-success-500" />
-                </span>
+                <PulseDot />
                 <span>
                   <span className="font-semibold tabular-nums text-slate-800">
                     {(lensesQuery.data ?? []).length}
                   </span>
                   <span className="ml-1 text-slate-500">lenses</span>
                 </span>
-              </span>
-              {selectedLens && (
-                <>
-                  <span className="text-slate-300" aria-hidden>·</span>
-                  <span className="truncate text-alma-700">
-                    Active: <span className="font-medium">{selectedLens.name}</span>
-                  </span>
-                </>
-              )}
-              <span className="text-slate-300" aria-hidden>·</span>
+              </span>,
+              selectedLens && (
+                <span className="truncate text-alma-700">
+                  Active: <span className="font-medium">{selectedLens.name}</span>
+                </span>
+              ),
               <span className="tabular-nums">
                 <span className="font-medium text-slate-700">{recommendations.length}</span>
                 {' '}in view
-              </span>
-            </div>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <div className="flex items-center gap-1 self-end">
-              <PageTour pageKey="discovery" steps={DISCOVERY_TOUR} />
-            </div>
-            <Button
-              type="button"
-              variant="default"
-              onClick={() => selectedLensId && refreshLensMutation.mutate({ lensId: selectedLensId, limit: LENS_REFRESH_LIMIT })}
-              disabled={!selectedLensId || refreshLensMutation.isPending}
-              className="h-10 px-5"
-            >
-              {refreshLensMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              Refresh Lens
-            </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="cursor-default text-xs text-slate-500">
-                  {discoveryStatusQuery.data?.last_refresh_at
-                    ? `Last refresh ${formatRelativeShort(discoveryStatusQuery.data.last_refresh_at)}`
-                    : 'No refresh on record yet'}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {discoveryStatusQuery.data?.last_refresh_at
-                  ? formatTimestamp(discoveryStatusQuery.data.last_refresh_at)
-                  : 'Run Refresh Lens to generate recommendations.'}
-              </TooltipContent>
-            </Tooltip>
-            <label className="flex cursor-pointer items-center gap-2 self-end text-xs text-slate-500">
-              <Switch
-                checked={!!autoRefresh?.refresh_enabled}
-                disabled={!discoverySettingsQuery.data || autoRefreshMutation.isPending}
-                onCheckedChange={(next) => autoRefreshMutation.mutate(next)}
-                aria-label="Toggle Discovery auto-refresh"
-              />
-              <span>
-                {autoRefresh?.refresh_enabled
-                  ? `Auto-refresh every ${autoRefresh.refresh_interval_hours}h`
-                  : 'Auto-refresh off'}
-              </span>
-              <JargonHint
-                title="Auto-refresh"
-                description="Opt-in background refresh of Discovery on a schedule (set the interval in Settings). It runs without blocking the page — new recommendations appear automatically. Off by default."
-              />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* Page vocabulary — lens → branches → signals, once at the top. */}
-      <ConceptCallout
-        eyebrow="How Discovery works"
-        summary="A lens sets what to recommend; branches are the sub-themes it pursues; signals show whether it's working."
-      >
-        <p className="mb-2">
-          A <span className="font-medium text-alma-900">lens</span> is a saved point of view —
-          "recommend from my whole library", or from a collection / topic / tag. It drives every
-          recommendation below.
-        </p>
-        <p className="mb-2">
-          Within a lens, Discovery clusters your taste into{' '}
-          <span className="font-medium text-alma-900">branches</span> — the distinct sub-themes it's
-          exploring. You steer them in <span className="font-medium">Tune this lens</span> (pin,
-          boost, mute) and see them coloured on the frontier <span className="font-medium">Map</span>.
-        </p>
-        <p>
-          <span className="font-medium text-alma-900">Signals</span> are the feedback loop: what you
-          save, like, and dislike reshapes the next refresh. <span className="font-medium">Lens
-          performance</span> shows how your signals are landing.
-        </p>
-      </ConceptCallout>
-
-      {/* Find & add — the manual entry point, first among the tools: search
-          any source and add a paper by hand before (or instead of) drilling
-          into a lens. Open by default; collapsible (state-controlled). */}
-      <details
-        ref={findAddRef}
-        open={findAddOpen}
-        onToggle={(e) => setFindAddOpen((e.currentTarget as HTMLDetailsElement).open)}
-        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
-      >
-        <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-          <div className="flex items-center gap-2">
-            <Globe className="h-4 w-4 text-alma-folio" />
-            <span className="font-brand text-sm font-semibold text-alma-800">Find &amp; add a paper</span>
-            <span className="text-xs text-slate-500">search any source and add it by hand</span>
-          </div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-          <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-        </summary>
-        <div className="border-t border-[var(--color-border)] p-4">
-          <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
-        </div>
-      </details>
+              </span>,
+            ]}
+          />
+        }
+        guide={{
+          summary:
+            "A lens sets what to recommend; branches are the sub-themes it pursues; signals show whether it's working.",
+          children: (
+            <>
+              <p className="mb-2">
+                A <span className="font-medium text-alma-900">lens</span> is a saved point of view —
+                "recommend from my whole library", or from a collection / topic / tag. It drives
+                every recommendation below.
+              </p>
+              <p className="mb-2">
+                Within a lens, Discovery clusters your taste into{' '}
+                <span className="font-medium text-alma-900">branches</span> — the distinct
+                sub-themes it's exploring. You steer them in{' '}
+                <span className="font-medium">Tune this lens</span> (pin, boost, mute) and see them
+                coloured on the <span className="font-medium">Suggestions Map</span>.
+              </p>
+              <p>
+                <span className="font-medium text-alma-900">Signals</span> are the feedback loop:
+                what you save, like, and dislike reshapes the next refresh.{' '}
+                <span className="font-medium">Lens performance</span> shows how your signals are
+                landing.
+              </p>
+            </>
+          ),
+        }}
+      />
 
       {/* Anchor card — only when ?seed=<paperId>. Shows immediately
           after the hero so the user knows what they're looking at
@@ -1241,101 +1154,137 @@ export function DiscoveryPage() {
         </Card>
       )}
 
-      {/* Lens manager — combined select + create + delete. Always
-          visible above the recommendations so the relationship
-          between "selected lens" and "everything below" is obvious.
-          Switching lenses respawns the recommendations + branch
-          settings + lens diagnostics queries via their lens-keyed
-          React Query keys. */}
-      <div data-tour="discovery-lenses">
-        <LensManager
-          lenses={lensesQuery.data ?? []}
-          selectedLensId={selectedLensId}
-          onSelectLens={setSelectedLensId}
-          onCreate={(payload) => createLensMutation.mutate(payload)}
-          onDelete={(lensId) => deleteLensMutation.mutate(lensId)}
-          onReorder={(orderedIds) => reorderLensesMutation.mutate(orderedIds)}
-        />
-      </div>
-
-      <div className="space-y-4">
-        {/* Branch Studio — collapsed by default. Sits above the
-            recommendations list (between the lens picker and the
-            results) so the affordance to tune branches is visible
-            in the same vertical scan as "which lens am I on".
-            Summary line carries the at-a-glance counts. */}
-        <details
-          data-tour="discovery-branches"
-          className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
-        >
-          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-brand text-sm font-semibold text-alma-800">Tune this lens</span>
-              <span className="text-xs text-slate-500">
-                Branch Studio + weights — pin, boost, or mute the sub-themes this
-                lens pursues before the next refresh.
+      {/* ── Lenses ───────────────────────────────────────────────────────
+          One band for the whole lens relationship, in the order you use it:
+          pick a lens, refresh it, read how it is doing, then steer it. The
+          picker used to float on its own and the two folds sat loose below
+          it, so nothing said they were all about the same object.
+      ──────────────────────────────────────────────────────────────────── */}
+      <PageSection
+        id="discovery-lenses-heading"
+        variant="banded"
+        icon={Aperture}
+        title="Lenses"
+        count={lensesQuery.data?.length}
+        description="A saved point of view over your library — the whole thing, or one collection, topic, or tag. The selected lens drives every suggestion on this page."
+        // Refresh belongs to the LENS, not to the page (user call 2026-07-27):
+        // it sat in the page hero above everything, where it read as a
+        // page-wide action and gave no clue which lens it would act on. In
+        // this band it is unambiguous — and it says what it does on hover,
+        // because "Refresh lens" alone doesn't tell you the list is replaced.
+        action={
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() =>
+                    selectedLensId &&
+                    refreshLensMutation.mutate({ lensId: selectedLensId, limit: LENS_REFRESH_LIMIT })
+                  }
+                  disabled={!selectedLensId || refreshLensMutation.isPending}
+                  className="h-10 px-5"
+                >
+                  {refreshLensMutation.isPending ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  Refresh lens
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end" className="max-w-xs">
+                Runs{' '}
+                <span className="font-medium">{selectedLens?.name ?? 'the selected lens'}</span>{' '}
+                again and replaces the suggestion list below with a fresh batch. It runs in the
+                background — you can keep working.
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-default text-xs text-slate-500">
+                  {discoveryStatusQuery.data?.last_refresh_at
+                    ? `Last refresh ${formatRelativeShort(discoveryStatusQuery.data.last_refresh_at)}`
+                    : 'No refresh on record yet'}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end">
+                {discoveryStatusQuery.data?.last_refresh_at
+                  ? formatTimestamp(discoveryStatusQuery.data.last_refresh_at)
+                  : 'Refresh the selected lens to generate recommendations.'}
+              </TooltipContent>
+            </Tooltip>
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-500">
+              <Switch
+                checked={!!autoRefresh?.refresh_enabled}
+                disabled={!discoverySettingsQuery.data || autoRefreshMutation.isPending}
+                onCheckedChange={(next) => autoRefreshMutation.mutate(next)}
+                aria-label="Toggle Discovery auto-refresh"
+              />
+              <span>
+                {autoRefresh?.refresh_enabled
+                  ? `Auto-refresh every ${autoRefresh.refresh_interval_hours}h`
+                  : 'Auto-refresh off'}
               </span>
-            </div>
-            <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-            <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-          </summary>
-          <div className="border-t border-[var(--color-border)]">
-            <BranchExplorerPanel lens={selectedLens} />
+              <JargonHint
+                title="Auto-refresh"
+                description="Opt-in background refresh of Discovery on a schedule (set the interval in Settings). It runs without blocking the page — new recommendations appear automatically. Off by default."
+              />
+            </label>
           </div>
-        </details>
+        }
+      >
+        <div data-tour="discovery-lenses">
+          <LensManager
+            bare
+            lenses={lensesQuery.data ?? []}
+            selectedLensId={selectedLensId}
+            onSelectLens={setSelectedLensId}
+            onCreate={(payload) => createLensMutation.mutate(payload)}
+            onDelete={(lensId) => deleteLensMutation.mutate(lensId)}
+            onReorder={(orderedIds) => reorderLensesMutation.mutate(orderedIds)}
+          />
+        </div>
 
-        {/* Lens diagnostics — taste retrieval profile + scoring weights.
-            Collapsed by default. Sits above the recommendations list so
-            the lens-context surfaces (Branch Studio + this) cluster
-            together right after the lens picker. */}
-        <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
-          <summary className="flex cursor-pointer select-none items-center justify-between gap-4 px-4 py-3 text-left">
-            <div className="flex min-w-0 items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-alma-folio">
-                <Gauge className="h-4 w-4" />
-              </span>
-              <div className="flex min-w-0 flex-col gap-1.5">
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-brand text-sm font-semibold text-alma-800">Lens performance</span>
-                  <span className="text-xs text-slate-500">
-                    What this lens learned from your signals, and how the last refresh
-                    composed its lanes.
-                  </span>
-                </div>
-                {selectedLensSummary ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {(
-                      [
-                        ['Mode', String(selectedLensSummary.recommendation_mode ?? '—')],
-                        ['Seeds', String(Number(selectedLensSummary.seed_count ?? 0))],
-                        ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
-                        [
-                          'Lanes',
-                          String(
-                            Object.keys(
-                              (selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {},
-                            ).length,
-                          ),
-                        ],
-                      ] as const
-                    ).map(([label, value]) => (
-                      <StatusBadge key={label} tone="neutral" className="items-baseline">
-                        {label}
-                        <strong className="font-mono tabular-nums text-alma-800">{value}</strong>
-                      </StatusBadge>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="text-xs text-slate-500">
-                    Refresh the lens to capture taste-driven lane composition.
-                  </span>
-                )}
+        {/* Is it working? — read the lens before you reach for its controls. */}
+        <DisclosurePanel
+          data-tour="discovery-performance"
+          icon={Gauge}
+          title="Lens performance"
+          description="What this lens learned from your signals, and how the last refresh composed its lanes."
+          contentClassName="space-y-4"
+          meta={
+            selectedLensSummary ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    ['Mode', String(selectedLensSummary.recommendation_mode ?? '—')],
+                    ['Seeds', String(Number(selectedLensSummary.seed_count ?? 0))],
+                    ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
+                    [
+                      'Lanes',
+                      String(
+                        Object.keys(
+                          (selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {},
+                        ).length,
+                      ),
+                    ],
+                  ] as const
+                ).map(([label, value]) => (
+                  <StatusBadge key={label} tone="neutral" className="items-baseline">
+                    {label}
+                    <strong className="font-mono tabular-nums text-alma-800">{value}</strong>
+                  </StatusBadge>
+                ))}
               </div>
-            </div>
-            <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-            <span className="hidden shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-          </summary>
-          <div className="space-y-4 border-t border-[var(--color-border)] p-4">
+            ) : (
+              <span className="text-xs text-slate-500">
+                Refresh the lens to capture taste-driven lane composition.
+              </span>
+            )
+          }
+        >
           <Card>
             <CardContent className="space-y-4 p-4">
               <div className="flex items-start justify-between gap-3">
@@ -1444,32 +1393,42 @@ export function DiscoveryPage() {
               suggestions any good?" is a Discovery question, so it lives on
               the surface that answers it. */}
           <RecommendationEngagement lensNames={lensNameById} />
+        </DisclosurePanel>
 
-          {/* Lens scoring weights — power-user control. Hidden behind
-              a disclosure so the everyday Discovery view stays quiet;
-              expand only when you need to tune how signals combine. */}
-          <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
-            <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-              <div className="flex flex-col gap-0.5">
-                <span className="font-brand text-sm font-semibold text-alma-800">Advanced — scoring weights</span>
-                <span className="text-xs text-slate-500">Tune how signals combine for this lens. Defaults are fine for most users.</span>
-              </div>
-              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-              <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-            </summary>
-            <div className="border-t border-[var(--color-border)] px-2 pb-2 pt-3">
-              <LensWeightsPanel
-                lens={selectedLens as Lens | null}
-                onSave={(weights) => {
-                  if (!selectedLensId) return
-                  updateLensMutation.mutate({ lensId: selectedLensId, weights })
-                }}
-              />
-            </div>
-          </details>
-          </div>
-        </details>
+        {/* Branch Studio is its own fold, called what it is (user call
+            2026-07-27). It was buried one level down inside a generic "Tune
+            this lens", so the one control most people actually want — steering
+            the sub-themes — took two clicks and had no name in the page. */}
+        <DisclosurePanel
+          data-tour="discovery-branches"
+          icon={GitBranch}
+          title="Branch Studio"
+          description="The sub-themes this lens is exploring. Pin, boost, or mute them to steer where the next refresh spends its effort."
+          contentClassName="p-0"
+        >
+          <BranchExplorerPanel bare lens={selectedLens} />
+        </DisclosurePanel>
 
+        {/* "Tune this lens" is now the ONE home for advanced knobs — the place
+            a power-user goes when the defaults are not enough. Anything new and
+            fiddly belongs in here, not as another fold on the page. */}
+        <DisclosurePanel
+          icon={SlidersHorizontal}
+          title="Tune this lens"
+          description="Advanced knobs — how this lens turns its signals into a score. The defaults are right for most people."
+          contentClassName="px-2 pb-2 pt-3"
+        >
+          <LensWeightsPanel
+            lens={selectedLens as Lens | null}
+            onSave={(weights) => {
+              if (!selectedLensId) return
+              updateLensMutation.mutate({ lensId: selectedLensId, weights })
+            }}
+          />
+        </DisclosurePanel>
+      </PageSection>
+
+      <div className="space-y-4">
         {/* U-1: visible while a lens refresh is still running in the APS pool
             (the POST returns instantly). Self-clears when the job goes
             terminal — useOperationToasts then raises the outcome toast +
@@ -1486,51 +1445,34 @@ export function DiscoveryPage() {
             control surface for the deck, not an alternative to it. Collapsible,
             persisted; lasso → adopt a Direction or filter the list below. */}
         {selectedLensId && (
-          <section>
-          {/* Proper section box in the Branch Studio idiom (user call
-              2026-07-25): Card with a tinted header band, brand-face title,
-              subtitle — the map is a first-class section, never a floating
-              plate. */}
-          <Card className="overflow-hidden">
-            <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
-                    <MapIcon className="h-5 w-5 text-alma-folio" />
-                    Suggestions Map
-                  </CardTitle>
-                  <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                    Your library, this lens&apos;s suggestions, and the space between — click a
-                    suggestion to jump to its row, lasso a region to explore it as a Direction.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {mapFilterIds && (
-                    <button
-                      type="button"
-                      onClick={() => setMapFilterIds(null)}
-                      className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
-                      title="Clear the map-region filter"
-                    >
-                      Map region · {recommendations.length} shown ×
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setMapOpen((open) => {
-                        localStorage.setItem('alma.discovery.mapOpen', String(!open))
-                        return !open
-                      })
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-                  >
-                    {mapOpen ? 'Hide map' : 'Show map'}
-                  </button>
-                </div>
-              </div>
-            </CardHeader>
-          <CardContent className="space-y-3 p-4">
+          <PageSection
+            id="discovery-map-heading"
+            variant="banded"
+            collapsible
+            open={mapOpen}
+            onOpenChange={(next) => {
+              localStorage.setItem(MAP_OPEN_KEY, String(next))
+              setMapOpen(next)
+            }}
+            icon={MapIcon}
+            title="Suggestions Map"
+            description="Your library, this lens's suggestions, and the space between — click a suggestion to jump to its row, lasso a region to explore it as a Direction."
+            // The region filter stays reachable while the map is folded: it is
+            // still narrowing the list below, so hiding its only off-switch
+            // would leave the reader with a short list and no explanation.
+            action={
+              mapFilterIds && (
+                <button
+                  type="button"
+                  onClick={() => setMapFilterIds(null)}
+                  className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
+                  title="Clear the map-region filter"
+                >
+                  Map region · {recommendations.length} shown ×
+                </button>
+              )
+            }
+          >
             {mapOpen && (
               <ConceptCallout
                 eyebrow="How to read this map"
@@ -1635,9 +1577,7 @@ export function DiscoveryPage() {
                 onFilterList={(ids) => setMapFilterIds(new Set(ids))}
               />
             )}
-          </CardContent>
-          </Card>
-          </section>
+          </PageSection>
         )}
 
         <ListControlBar
@@ -1832,14 +1772,16 @@ export function DiscoveryPage() {
                   savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
                   savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
                   trailingHeader={rec.is_new ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
+                  // Normal view: provenance rides the signal row itself, next
+                  // to the score bar and the Why toggle, so the card is four
+                  // rows deep. Extended still gets the full panel below.
+                  metaSlot={
+                    viewMode === 'normal'
+                      ? renderProvenance(rec, { variant: 'inline' })
+                      : undefined
+                  }
                 >
-                  {/* Normal view: provenance is folded into the card body
-                      as a single chip row (no standalone "Why this surfaced"
-                      section). Extended/compact still get the full panel
-                      since they have room for it. */}
-                  {renderProvenance(rec, {
-                    variant: viewMode === 'normal' ? 'inline' : 'panel',
-                  })}
+                  {viewMode !== 'normal' && renderProvenance(rec, { variant: 'panel' })}
                 </PaperCard>
                 </div>
               )

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, Save, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Save, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { PageIntro } from '@/components/ui/page-intro'
 
 import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
@@ -13,18 +14,18 @@ import { BackendCard } from '@/components/settings/BackendCard'
 import { BackgroundOpsCard } from '@/components/settings/BackgroundOpsCard'
 import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
-import { ChannelsCard } from '@/components/settings/ChannelsCard'
-import { EmailCard } from '@/components/settings/EmailCard'
+import { PluginsSection } from '@/components/settings/PluginsSection'
+import { SignalLabSettingsCard } from '@/components/settings/SignalLabSettingsCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
 import { FeedAutoRefreshCard } from '@/components/settings/FeedAutoRefreshCard'
 import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
-import { SignalLabCard } from '@/components/settings/SignalLabCard'
 import { DataManagementCard } from '@/components/settings/DataManagementCard'
 import { LibraryManagementCard } from '@/components/settings/LibraryManagementCard'
 import { CorpusExplorerCard } from '@/components/settings/CorpusExplorerCard'
 import { AboutCard } from '@/components/settings/AboutCard'
 import { clearPersistedOnboardingState } from '@/components/onboarding/useOnboardingState'
+import { clearPageTourState } from '@/components/onboarding'
 import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
@@ -49,13 +50,12 @@ import { cn } from '@/lib/utils'
  * scroll" and makes the scope of the save button legible.
  */
 
-type SectionId = 'connections' | 'intelligence' | 'system'
+type SectionId = 'connections' | 'plugins' | 'intelligence' | 'system'
 type AnchorId =
   | 'backend'
   | 'external-apis'
   | 'id-resolution'
-  | 'channels'
-  | 'email-digests'
+  | 'plugins'
   | 'discovery-weights'
   | 'feed-monitors'
   | 'feed-auto-refresh'
@@ -74,7 +74,8 @@ interface TocEntry {
 }
 
 const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Cable }[] = [
-  { id: 'connections', label: 'Connections', caption: 'Upstream sources and delivery channels', icon: Cable },
+  { id: 'connections', label: 'Connections', caption: 'Upstream publication sources', icon: Cable },
+  { id: 'plugins', label: 'Plugins', caption: 'External app and channel integrations', icon: PlugZap },
   { id: 'intelligence', label: 'Intelligence', caption: 'Discovery weights, monitor terms, AI provider', icon: Sparkles },
   { id: 'system', label: 'Data & system', caption: 'Import/export, maintenance, about', icon: Database },
 ]
@@ -83,12 +84,12 @@ const TOC: TocEntry[] = [
   { id: 'backend', label: 'Backend', section: 'connections' },
   { id: 'external-apis', label: 'External APIs', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
-  { id: 'channels', label: 'Delivery channels', section: 'connections' },
-  { id: 'email-digests', label: 'Email digests', section: 'connections' },
+  { id: 'plugins', label: 'Integration plugins', section: 'plugins' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
   { id: 'feed-auto-refresh', label: 'Feed auto-refresh', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
+  { id: 'signal-lab', label: 'Signal Lab', section: 'intelligence' },
   { id: 'background-ops', label: 'Background operations', section: 'system' },
   { id: 'data-management', label: 'Data management', section: 'system' },
   { id: 'library-management', label: 'Library maintenance', section: 'system' },
@@ -110,9 +111,6 @@ export function SettingsPage() {
     openalex_email: '',
     openalex_api_key: '',
     semantic_scholar_api_key: '',
-    slack_token: '',
-    slack_channel: '',
-    check_interval_hours: 24,
     id_resolution_semantic_scholar_enabled: true,
     id_resolution_orcid_enabled: true,
     id_resolution_scholar_scrape_auto_enabled: false,
@@ -181,7 +179,7 @@ export function SettingsPage() {
   }
 
   // Deep-link reader: `#/settings?anchor=<id>` (e.g. Health → "Open in Settings",
-  // which targets external-apis / ai-config / channels) scrolls to that card once
+  // which targets external-apis / ai-config / plugins) scrolls to that card once
   // settings + its anchors have rendered. Previously SettingsPage read NO URL
   // param, so every deep link dead-ended at the top of the page. Guarded by a ref
   // so the scroll-spy doesn't re-fire it on subsequent scrolls.
@@ -221,7 +219,12 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <PageIntro
+        icon={SlidersHorizontal}
+        lede="How ALMa runs."
+        detail="Where papers come from, what the AI does, when background work happens, and where your data lives. Changes apply as soon as you save them."
+      />
       <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
         {/* ── Sticky TOC ─────────────────────────────────────────────── */}
         <aside className="hidden lg:block">
@@ -264,7 +267,7 @@ export function SettingsPage() {
         {/* ── Grouped content ───────────────────────────────────────── */}
         <div ref={contentRef} className="space-y-10">
           {/* -- Connections -- */}
-          <SettingsSection id="connections" title="Connections" caption="Upstream sources and delivery channels.">
+          <SettingsSection id="connections" title="Connections" caption="Upstream publication and identity sources.">
             <Anchor id="backend">
               <BackendCard
                 backend={formData.backend}
@@ -290,30 +293,9 @@ export function SettingsPage() {
                 saveError={saveMutation.isError}
               />
             </Anchor>
-            <Anchor id="channels">
-              <ChannelsCard
-                formData={formData}
-                onFormDataChange={setFormData}
-                onSave={handleSave}
-                saving={saveMutation.isPending}
-                saved={saveSuccess}
-                saveError={saveMutation.isError}
-              />
-            </Anchor>
-            <Anchor id="email-digests">
-              <EmailCard
-                formData={formData}
-                onFormDataChange={setFormData}
-                onSave={handleSave}
-                saving={saveMutation.isPending}
-                saved={saveSuccess}
-                saveError={saveMutation.isError}
-              />
-            </Anchor>
-
             {/* Connection-settings save footer.
                 The legacy global "Save Settings" button only ever persisted
-                the Backend / OpenAlex / Identifier Resolution / Channels form
+                the Backend / OpenAlex / Identifier Resolution form
                 state — the other cards (Discovery Weights, Feed Monitor
                 Terms, AI Config) already self-save. Scoping the button to
                 this section's footer makes the behaviour honest. */}
@@ -340,13 +322,17 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
+          <SettingsSection id="plugins" title="Integration plugins" caption="Connect core Inbox and Alerts to external apps/channels through server-defined schemas. Deactivation keeps credentials and configuration.">
+            <Anchor id="plugins"><PluginsSection /></Anchor>
+          </SettingsSection>
+
           {/* -- Intelligence -- */}
           <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. These cards self-save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
             <Anchor id="feed-monitors"><FeedMonitorTermsCard /></Anchor>
             <Anchor id="feed-auto-refresh"><FeedAutoRefreshCard /></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
-            <Anchor id="signal-lab"><SignalLabCard /></Anchor>
+            <Anchor id="signal-lab"><SignalLabSettingsCard /></Anchor>
           </SettingsSection>
 
           {/* -- Data & system -- */}
@@ -385,6 +371,11 @@ export function SettingsPage() {
                   size="sm"
                   onClick={async () => {
                     clearPersistedOnboardingState()
+                    // Replay the PAGE tours too. Restarting the welcome but
+                    // keeping every "seen it" flag replayed only the wizard —
+                    // and the per-page tours are the half that explains the
+                    // surfaces you actually work in.
+                    clearPageTourState()
                     try {
                       await resetOnboarding()
                       invalidateQueries(queryClient, ['bootstrap'])

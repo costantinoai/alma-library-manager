@@ -1,5 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, BarChart3, BookMarked, Compass, HeartPulse, Settings as SettingsIcon, Users } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  BookMarked,
+  Compass,
+  HeartPulse,
+  Map as MapIcon,
+  Settings as SettingsIcon,
+  Users,
+} from 'lucide-react'
 import { MetricTile } from '@/components/shared'
 import { RevealItem } from '@/components/ui/reveal'
 import { BrandRule } from '@/components/ui/brand-rule'
@@ -59,14 +68,23 @@ export function StepDone({ state, back, finish, finishing }: StepContext) {
             </RevealItem>
             <RevealItem index={1}>
               <li className="flex items-start gap-3">
-                <BarChart3 className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
+                <MapIcon className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                 <span>
-                  <span className="font-medium text-alma-800">Insights</span> — maps, clusters and trends
-                  across everything you've collected. Have a wander.
+                  <span className="font-medium text-alma-800">Map</span> — your whole corpus as territory,
+                  every paper placed by what it is about. Drag a box around a patch to ask what lives there.
                 </span>
               </li>
             </RevealItem>
             <RevealItem index={2}>
+              <li className="flex items-start gap-3">
+                <BarChart3 className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
+                <span>
+                  <span className="font-medium text-alma-800">Library → Analytics</span> — source mix,
+                  topics, venues and reading progress across everything you've collected.
+                </span>
+              </li>
+            </RevealItem>
+            <RevealItem index={3}>
               <li className="flex items-start gap-3">
                 <SettingsIcon className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                 <span>

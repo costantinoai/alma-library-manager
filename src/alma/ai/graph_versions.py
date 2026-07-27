@@ -140,8 +140,14 @@ SUPER_REGION_VERSION = "2026.07-1"
 # weights, ε, BALD scoring) — stamped on each round row AND in the model
 # fingerprint, since a policy change alters what future rounds mean.
 # 2026.07-1: initial (M0 harness; no heads promoted).
-SIGNAL_LAB_FIT_VERSION = "2026.07-1"
-SIGNAL_LAB_POLICY_VERSION = 1
+# 2026.07-2: persist the game-only utility delta separately from its Library
+#            prior, so ranking and terrain do not count the prior twice.
+# 2026.07-3: deduplicate accidental repeated query sets; fit the diagonal
+#            metric ensemble used by full-outcome odd-one-out acquisition.
+SIGNAL_LAB_FIT_VERSION = "2026.07-3"
+# v2: full-pool candidates, full-outcome EIG, true staleness, recent-query
+# cooldown, posterior edge priority, and deck-conditioned diversity.
+SIGNAL_LAB_POLICY_VERSION = 2
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding

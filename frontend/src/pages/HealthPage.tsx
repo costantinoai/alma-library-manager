@@ -21,7 +21,7 @@
  * number reads the canonical endpoints (/insights/health + /health/operations).
  */
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Stethoscope } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -35,7 +35,7 @@ import {
   type MaintenanceOperation,
   type MaintenanceRunRequest,
 } from '@/api/client'
-import { ConceptCallout } from '@/components/ui/concept-callout'
+import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { Button } from '@/components/ui/button'
 import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
@@ -343,21 +343,21 @@ export function HealthPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-brand text-2xl font-semibold text-alma-900">Health</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Is my data healthy — and what do I do about it?
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {snapshot ? (
-            <span className="text-xs text-slate-400">
-              Last assessed {formatRelativeShort(snapshot.generated_at)}
-              {freshnessNote(snapshot) ? ` · ${freshnessNote(snapshot)}` : ''}
-            </span>
-          ) : null}
+      <PageIntro
+        icon={Stethoscope}
+        lede="What's incomplete, and the button that fixes it."
+        detail="ALMa watches your corpus for gaps it can repair — missing abstracts, unresolved identities, embedding coverage — and tells you what each repair will cost."
+        meta={
+          snapshot ? (
+            <MetaLine
+              items={[
+                <span>Last assessed {formatRelativeShort(snapshot.generated_at)}</span>,
+                freshnessNote(snapshot),
+              ]}
+            />
+          ) : undefined
+        }
+        actions={
           <Button
             size="sm"
             variant="ghost"
@@ -365,38 +365,40 @@ export function HealthPage() {
             disabled={snapshotQuery.isFetching || operationsQuery.isFetching}
           >
             <RefreshCw className="h-4 w-4" />
-            Refresh
+            Re-assess
           </Button>
-        </div>
-      </div>
-
-      <ConceptCallout
-        eyebrow="What is Health?"
-        summary="ALMa watches your corpus for fixable gaps and repairs them — one-click or automatically."
-      >
-        <p>
-          Each card is one <strong>repair operation</strong>. It shows the gaps it fixes — missing
-          abstracts, embedding{' '}
-          <JargonHint
-            title="Coverage"
-            description="The share of papers that have an embedding vector for the active model. Discovery's semantic ranking depends on it."
-            className="inline-flex"
-          />{' '}
-          coverage, unresolved identities — each with a severity and the affected papers, and the
-          controls to act: <strong>Run now</strong> processes a batch, <strong>Auto-repair</strong>{' '}
-          is opt-in within a daily cap. Network tasks show an <strong>ETA</strong> for how long they
-          take at the source API's rate limit. Cost tags: <em>local</em> (your database),{' '}
-          <em>network</em> (OpenAlex / Crossref / Semantic Scholar), or <em>compute</em> (local
-          SPECTER2).
-        </p>
-        <p>
-          <strong>System status</strong> above is what's degraded or failing right now —
-          monitors, sources, plugins, background jobs. Below it, <strong>Repairs</strong> is
-          what you can fix, and <strong>Activity</strong> is what already ran: failed background
-          operations with their step logs, quality scorecards, and the latest Feed / Discovery
-          refreshes. Corpus <em>analytics</em> live under <strong>Library → Analytics</strong>.
-        </p>
-      </ConceptCallout>
+        }
+        guide={{
+          summary:
+            'ALMa watches your corpus for fixable gaps and repairs them — one-click or automatically.',
+          children: (
+            <>
+              <p>
+                Each card is one <strong>repair operation</strong>. It shows the gaps it fixes — missing
+                abstracts, embedding{' '}
+                <JargonHint
+                  title="Coverage"
+                  description="The share of papers that have an embedding vector for the active model. Discovery's semantic ranking depends on it."
+                  className="inline-flex"
+                />{' '}
+                coverage, unresolved identities — each with a severity and the affected papers, and the
+                controls to act: <strong>Run now</strong> processes a batch, <strong>Auto-repair</strong>{' '}
+                is opt-in within a daily cap. Network tasks show an <strong>ETA</strong> for how long they
+                take at the source API's rate limit. Cost tags: <em>local</em> (your database),{' '}
+                <em>network</em> (OpenAlex / Crossref / Semantic Scholar), or <em>compute</em> (local
+                SPECTER2).
+              </p>
+              <p>
+                <strong>System status</strong> below is what's degraded or failing right now —
+                monitors, sources, plugins, background jobs. After it, <strong>Repairs</strong> is
+                what you can fix, and <strong>Activity</strong> is what already ran: failed background
+                operations with their step logs, quality scorecards, and the latest Feed / Discovery
+                refreshes. Corpus <em>analytics</em> live under <strong>Library → Analytics</strong>.
+              </p>
+            </>
+          ),
+        }}
+      />
 
       {/* Vitals + System status — ONE panel, PERSISTENT above the tabs. Together
           they ARE the at-a-glance "is everything OK?": the colored data-health

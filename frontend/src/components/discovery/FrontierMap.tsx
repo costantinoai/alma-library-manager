@@ -23,10 +23,11 @@ import {
   Share2,
   Sparkles,
   Type,
-  X,
 } from 'lucide-react'
 
 import { type FrontierNode, type Lens } from '@/api/client'
+import { CreateSelectionLensButton } from '@/components/map/CreateSelectionLensButton'
+import { MapRegionCard } from '@/components/map/MapRegionCard'
 import { useRegionSelection } from '@/components/map/useRegionSelection'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { CorpusMapPaperPopup } from '@/components/map/CorpusMapPaperPopup'
@@ -41,13 +42,16 @@ import {
 } from '@/components/map/MapChrome'
 import { frontierQueryOptions } from '@/components/map/mapQueries'
 import {
+  MAP_TERRAIN_OPACITY_DEFAULT,
   useMapSessionSet,
   useMapSessionState,
 } from '@/components/map/mapSessionState'
+import { buildTerrainField } from '@/components/map/terrainField'
 import { useSignalField } from '@/components/map/useSignalField'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
+import { ErrorState } from '@/components/ui/ErrorState'
 
 interface FrontierMapProps {
   lensId: string | null
@@ -169,6 +173,11 @@ export function FrontierMap({
   // Terrain (formerly "Heat") is an OVERLAY — the preference field composes
   // with ANY grouping (user call 2026-07-25), it never competes with them.
   const [showTerrain, setShowTerrain] = useMapSessionState('frontier', 'showTerrain', false)
+  const [terrainOpacity, setTerrainOpacity] = useMapSessionState(
+    'frontier',
+    'terrainOpacity',
+    MAP_TERRAIN_OPACITY_DEFAULT,
+  )
   // Legend chips as toggles: a dimmed cluster recedes (never disappears —
   // the territory stays honest), so you can mute the mega-cluster and read
   // the rest. Reset on grouping switch.
@@ -181,9 +190,6 @@ export function FrontierMap({
     'hiddenEdgeTypes',
   )
   const [selectMode, setSelectMode] = useState(false)
-  // Shared region primitive (same lifecycle as the Map page's Select
-  // region): ids + anchor + the /graphs/region/describe characterisation.
-  const region = useRegionSelection()
   // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
   // clicking the background clears it (user call 2026-07-25, all maps).
   const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
@@ -204,11 +210,26 @@ export function FrontierMap({
   const branchColors = useBranchColors(nodes)
   const branchControls = useBranchControls(lens)
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.paper_id, n])), [nodes])
+  const visibleMapIds = useMemo(
+    () => new Set(nodes.map((node) => node.paper_id)),
+    [nodes],
+  )
+  // Selection can never outlive the exact layer/filter payload that drew it.
+  const region = useRegionSelection({ visibleIds: visibleMapIds })
 
   // Corpus clusters present on the map, largest first, each with a stable hue.
   // Unclustered (-1) is deliberately excluded from the legend: it is the
   // absence of a group, not a group.
+  //
+  // The HUE comes from the space (`cluster_hues`, ranked over the whole
+  // substrate), never from this deck: Discovery renders a different subset of
+  // the same corpus layout than the Map page does, and ranking locally gave one
+  // cluster a different colour on each surface.
   const clusterColors = useMemo(() => {
+    const spaceHue = new Map<number, number>()
+    for (const [id, index] of Object.entries(data?.cluster_hues ?? {})) {
+      spaceHue.set(Number(id), Number(index))
+    }
     const tally = new Map<number, { label: string; count: number }>()
     for (const n of nodes) {
       if (typeof n.cluster_id !== 'number' || n.cluster_id < 0) continue
@@ -218,9 +239,12 @@ export function FrontierMap({
     }
     const ordered = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)
     return new Map(
-      ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i), index: i }]),
+      ordered.map(([id, v], i) => [
+        id,
+        { ...v, color: branchMapColor(spaceHue.get(id) ?? i), index: i },
+      ]),
     )
-  }, [nodes])
+  }, [nodes, data])
 
   // Recs that were NOT in the previous payload — the visible end of the
   // adopt-a-direction loop. Tracked across refetches for this session only;
@@ -249,13 +273,29 @@ export function FrontierMap({
   // "show seen" (or any layer) never changes the terrain, and a
   // library-only view still shows the red of dismissed / weak-scored
   // territory whose dots are hidden (user call 2026-07-25).
+  // The frontier is a pure read of the durable substrate — no tuning knob here
+  // re-fits it — so this host is permanently in the substrate frame and gets
+  // the whole space-owned field, off-view papers included. It still routes
+  // through the shared builder so its terrain and the Map page's are the same
+  // object with the same stats (`terrainField.ts`).
   const signalField = useSignalField(showTerrain)
+  const terrain = useMemo(
+    () =>
+      buildTerrainField({
+        frame: 'substrate',
+        fallbackIsSubstrate: true,
+        nodes: [],
+        spacePoints: signalField.points,
+        valenceById: signalField.valenceById,
+      }),
+    [signalField.points, signalField.valenceById],
+  )
 
   const yearStats = useMemo(
     () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
     [nodes],
   )
-  const terrainStats = signalField.stats
+  const terrainStats = terrain.stats
 
   // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
   const mapNodes = useMemo<SemanticMapNode[]>(() => {
@@ -348,16 +388,14 @@ export function FrontierMap({
   }
   if (query.isError && !data) {
     return (
-      <div className="flex h-[420px] flex-col items-center justify-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
-        <span>The Suggestions Map could not be loaded.</span>
-        <button
-          type="button"
-          onClick={() => void query.refetch()}
-          className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-        >
-          Try again
-        </button>
-      </div>
+      <ErrorState
+        title="The Suggestions Map could not be loaded"
+        message="Its saved layout is still intact. Retry the map request."
+        actionLabel="Try again"
+        onAction={() => void query.refetch()}
+        actionPending={query.isFetching}
+        className="min-h-[420px]"
+      />
     )
   }
   if (!data) {
@@ -424,6 +462,8 @@ export function FrontierMap({
             onSizeScale={setSizeScale}
             dotOpacity={dotOpacity}
             onDotOpacity={setDotOpacity}
+            terrainOpacity={terrainOpacity}
+            onTerrainOpacity={setTerrainOpacity}
             wordScale={wordScale}
             onWordScale={setWordScale}
             wordCount={wordCount}
@@ -516,7 +556,8 @@ export function FrontierMap({
         dotOpacity={dotOpacity}
         toponymScale={wordScale}
         toponymWordCount={wordCount}
-        heatField={showTerrain ? signalField.points : undefined}
+        heatField={showTerrain ? terrain.points : undefined}
+        terrainOpacity={terrainOpacity}
         height={520}
         lassoMode={selectMode}
         onLasso={(ids, anchor) => region.select(ids, anchor)}
@@ -598,31 +639,28 @@ export function FrontierMap({
         {/* Region popover — the describe payload + adopt action. Meaning
             (label + terms + counts) is shown before the action, per 47 §8. */}
         {region.ids && (
-          <div className="absolute right-3 top-3 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <Sparkles className="h-3.5 w-3.5 text-alma-folio" />
-                Direction
-              </div>
-              <button
-                type="button"
-                onClick={cancelRegion}
-                className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
-                aria-label="Cancel selection"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {region.describing || !region.description ? (
-              <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
-                <Loader2 className="h-4 w-4 animate-spin text-alma-folio" />
-                Characterizing {region.ids.length} papers…
-              </div>
-            ) : !region.description.sufficient ? (
-              <p className="py-2 text-xs text-slate-500">
-                Too few papers to characterize — select a larger cluster (5+).
-              </p>
-            ) : (
+          <MapRegionCard
+            kind="Direction"
+            icon={<Sparkles className="h-3.5 w-3.5 text-alma-folio" />}
+            count={region.ids.length}
+            pending={region.describing || !region.description}
+            insufficient={region.description?.sufficient === false}
+            insufficientMessage="Too few papers to characterize — select a larger cluster (5+)."
+            onClose={cancelRegion}
+            actions={
+              <CreateSelectionLensButton
+                ids={region.ids}
+                scope="corpus"
+                selectionKind="papers"
+                name={`${region.description?.label ?? 'Discovery direction'} · map selection`}
+                onCreated={() => {
+                  cancelRegion()
+                  setSelectMode(false)
+                }}
+              />
+            }
+          >
+            {region.description && (
               <>
                 <p className="text-sm font-semibold capitalize text-alma-800">
                   {region.description.label}
@@ -683,7 +721,7 @@ export function FrontierMap({
                 </div>
               </>
             )}
-          </div>
+          </MapRegionCard>
         )}
 
       </SemanticMap>
@@ -718,13 +756,12 @@ export function FrontierMap({
               />
             )}
             {showTerrain && terrainStats && (
-              // Symmetric ±max|value| (dynamic, the splat's exact scale);
-              // narrow yellow band = neutral.
+              // Fixed semantic valence domain, shared with every map.
               <ColourBarLegend
                 gradient={RAMP_GRADIENTS.terrain}
-                min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
+                min="-1"
                 mid="0"
-                max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+                max="1"
                 mean={terrainStats.mean.toFixed(2)}
               />
             )}

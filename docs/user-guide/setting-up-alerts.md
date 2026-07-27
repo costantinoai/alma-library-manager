@@ -24,7 +24,7 @@ point ALMa at a user to DM instead.
 
 ## 2. Configure Slack in ALMa
 
-Go to **Settings → Delivery channels** and fill:
+Go to **Settings → Plugins → Slack** and fill:
 
 - **Slack Bot Token** — paste the `xoxb-…` token. ALMa stores it in
   the unified secret store at `data/secrets.json` (gitignored,
@@ -44,7 +44,7 @@ Go to **Settings → Delivery channels** and fill:
 
 Save the form, then click **Test Slack Connection**. ALMa queues an
 async job (visible in the **Activity** tab as
-`alerts.slack.test`) that sends a "ALMa — Connection Test" message
+`integrations.slack.test`) that sends a "ALMa — Connection Test" message
 through the same code path real alerts use. The toast reports the
 resolved target on success or a precise `channel_not_found` on
 failure.
@@ -52,7 +52,7 @@ failure.
 ## Configure Email in ALMa (optional)
 
 Email is a second working delivery channel — pick it instead of, or
-alongside, Slack. Go to **Settings → Email digests** and fill:
+alongside, Slack. Go to **Settings → Plugins → Email** and fill:
 
 - **SMTP host** — your provider's mail server (e.g.
   `smtp.gmail.com`, `smtp.fastmail.com`).
@@ -80,7 +80,7 @@ override (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM`,
 `SMTP_TO`, `SMTP_PASSWORD`) for headless setups.
 
 Save the form, then click **Send test email**. ALMa runs the test on
-the scheduler pool (Activity op key `alerts.email.test`) using the
+the scheduler pool (Activity op key `integrations.email.test`) using the
 same `EmailNotifier` real digests use; the toast reports the
 recipients on success or the SMTP error on failure.
 
@@ -302,7 +302,7 @@ of starting a duplicate.
 
 Check the Activity row for the precise error:
 
-- `Slack token not configured` — go back to Settings → Delivery
+- `Slack token not configured` — go back to Settings → Plugins → Slack
   channels and save the token.
 - `channel_not_found: '…'` — the resolver tried `conversations.list`
   then `users.list` and didn't find a match. Verify (a) the bot is

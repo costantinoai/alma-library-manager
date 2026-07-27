@@ -66,8 +66,8 @@ Now in the **Slack app itself** (not the developer site):
 
 ### Step 2 — Tell ALMa which channel to read
 
-**Settings → Channels → Capture channel (Inbox)** → type `alma-inbox`
-(bare name, **no `#`**) → **Save**.
+**Settings → Plugins → Slack → Capture papers from** → type `alma-inbox`
+(bare name, **no `#`**) → **Save plugin settings**.
 
 Empty field = capture off.
 
@@ -87,7 +87,7 @@ Empty field = capture off.
 
         https://doi.org/10.1038/s41586-019-1666-5
 
-2. In ALMa: **Settings → Channels → Check capture channel now** — runs the check
+2. In ALMa: **Settings → Plugins → Slack → Check capture now** — runs the check
    immediately instead of waiting up to 5 minutes.
 3. Expect the toast **"Captured 1 paper"**. (With nothing new to capture you
    get **"Connected to #alma-inbox"** instead — that is also a success, and it
@@ -192,7 +192,7 @@ re-posting — or ALMa re-checking — can't duplicate it.
 **Can I use email / Telegram instead?**
 Not yet, but the capture layer is channel-agnostic by design: a new channel is a
 small adapter, not a new pipeline. See
-[Inbox](../concepts/inbox.md#adding-a-channel).
+[Building an integration](../development/integrations.md).
 
 **Why not a self-DM?**
 A Slack bot can't read the DM you have with yourself — only a user token can,

@@ -232,7 +232,7 @@ it in **Settings → Intelligence → AI provider** and store the key in
 ALMa uses `slack-sdk` through ONE client, `alma.slack.client.SlackNotifier`:
 alerts post with `chat.postMessage` (Block Kit), capture reads with
 `conversations.history` and acknowledges with `reactions.add`. No webhooks, and
-no second client — see [Delivery channels](../concepts/channels.md).
+no second client — see [External integrations](../concepts/channels.md).
 
 ## Identifier reference
 

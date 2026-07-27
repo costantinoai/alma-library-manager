@@ -6158,8 +6158,8 @@
         "tags": [
           "plugins"
         ],
-        "summary": "List all delivery channels",
-        "description": "Every channel ALMa knows about, with the directions it supports (`send` / `receive`) and whether each direction is configured.",
+        "summary": "List external integrations",
+        "description": "Every registered external integration, its send/receive capabilities, generated configuration schema, activation, and direction status.",
         "operationId": "list_plugins_api_v1_plugins_get",
         "security": [
           {
@@ -6232,14 +6232,13 @@
         }
       }
     },
-    "/api/v1/plugins/{plugin_name}": {
+    "/api/v1/plugins/{plugin_id}": {
       "get": {
         "tags": [
           "plugins"
         ],
-        "summary": "Get channel details",
-        "description": "Retrieve detailed information about a specific delivery channel.",
-        "operationId": "get_plugin_api_v1_plugins__plugin_name__get",
+        "summary": "Get integration details",
+        "operationId": "get_plugin_api_v1_plugins__plugin_id__get",
         "security": [
           {
             "HTTPBearer": []
@@ -6247,12 +6246,12 @@
         ],
         "parameters": [
           {
-            "name": "plugin_name",
+            "name": "plugin_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Plugin Name"
+              "title": "Plugin Id"
             }
           },
           {
@@ -6316,14 +6315,14 @@
         }
       }
     },
-    "/api/v1/plugins/{plugin_name}/test": {
-      "post": {
+    "/api/v1/plugins/{plugin_id}/enabled": {
+      "put": {
         "tags": [
           "plugins"
         ],
-        "summary": "Test channel connection",
-        "description": "Test if the channel can reach its service. Slack and email run asynchronously through the Activity envelope so the exact code path that delivers real alerts is what gets exercised.",
-        "operationId": "test_plugin_connection_api_v1_plugins__plugin_name__test_post",
+        "summary": "Activate or deactivate an integration",
+        "description": "Deactivation retains credentials/configuration, stops capture polling and Alert delivery, and removes the integration's Home status pills.",
+        "operationId": "set_plugin_enabled_api_v1_plugins__plugin_id__enabled_put",
         "security": [
           {
             "HTTPBearer": []
@@ -6331,12 +6330,105 @@
         ],
         "parameters": [
           {
-            "name": "plugin_name",
+            "name": "plugin_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Plugin Name"
+              "title": "Plugin Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginActivation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{plugin_id}/config": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Read validated integration configuration",
+        "operationId": "get_plugin_config_api_v1_plugins__plugin_id__config_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
             }
           },
           {
@@ -6361,7 +6453,188 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PluginConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Validate and replace integration configuration",
+        "operationId": "update_plugin_config_api_v1_plugins__plugin_id__config_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{plugin_id}/test": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "summary": "Test an integration",
+        "description": "Runs the integration manifest's registered connectivity test through the Activity envelope and the same transport used in production.",
+        "operationId": "test_plugin_connection_api_v1_plugins__plugin_id__test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Test Plugin Connection Api V1 Plugins  Plugin Id  Test Post"
+                }
               }
             }
           },
@@ -6993,7 +7266,7 @@
           "settings"
         ],
         "summary": "Get Settings",
-        "description": "Retrieve core settings.\n\nNote: slack_token is masked for security -- only the first 10 characters\nare returned so the UI can show whether a token is configured.",
+        "description": "Retrieve core settings.\n\nPlugin configuration has its own schema-driven routes.",
         "operationId": "get_settings_api_v1_settings_get",
         "security": [
           {
@@ -7399,62 +7672,6 @@
         "summary": "Test Scholar Connectivity",
         "description": "Best-effort test for scholarly availability (no real scrape).",
         "operationId": "test_scholar_connectivity_api_v1_settings_test_scholar_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/settings/test/slack": {
-      "post": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Test Slack Connectivity",
-        "description": "Send a test message to the configured Slack channel.\n\nUses Slack credentials from the unified secret store plus\n``SLACK_TOKEN``/``SLACK_CHANNEL`` environment overrides.\n\nReturns a JSON object with ``success`` (bool), ``message`` (str),\nand optionally ``error`` (str) on failure.",
-        "operationId": "test_slack_connectivity_api_v1_settings_test_slack_post",
         "security": [
           {
             "HTTPBearer": []
@@ -18021,6 +18238,74 @@
         }
       }
     },
+    "/api/v1/graphs/selection/lens": {
+      "post": {
+        "tags": [
+          "graphs"
+        ],
+        "summary": "Create a collection-backed lens from a visible map selection",
+        "description": "Atomically save selected papers into a new collection and lens.",
+        "operationId": "create_selection_lens_api_v1_graphs_selection_lens_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MapSelectionLensCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapSelectionLensResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/graphs/paper-map": {
       "get": {
         "tags": [
@@ -18176,6 +18461,24 @@
               "title": "Prefetch"
             },
             "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for."
+          },
+          {
+            "name": "if-none-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload.",
+              "title": "If-None-Match"
+            },
+            "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload."
           },
           {
             "name": "x-api-key",
@@ -18475,6 +18778,24 @@
             "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for."
           },
           {
+            "name": "if-none-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload.",
+              "title": "If-None-Match"
+            },
+            "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload."
+          },
+          {
             "name": "x-api-key",
             "in": "header",
             "required": false,
@@ -18580,7 +18901,7 @@
           "graphs"
         ],
         "summary": "Get Author Field",
-        "description": "The LIVE preference + score field for the author map.\n\nThe author analogue of `/graphs/signal-field`, and deliberately built from\nthe SAME contract: an author's valence is the mean `paper_valence` over the\nin-scope papers of theirs you have an opinion about. So \"how do I feel about\nthis author\" is derived from \"how do I feel about their papers\" \u2014 one owner\nof the weights (`alma.core.signal_valence`), no second scale to keep in sync.\n\nTwo reasons this is an endpoint rather than a field baked into the network\npayload (user catch 2026-07-26 \u2014 \"terrain is all yellow and no scores\"):\n\n* **Live.** The author network is a materialized view; the score baked into\n  it goes stale the moment Discovery re-scores, which greyed the dots and\n  flattened the terrain exactly like the paper map's baked score did.\n* **Coverage.** The old terrain used the mean recommendation score alone and\n  substituted 0 for every author without one \u2014 in corpus scope that is ~90%\n  of them, and a flood of hard zeros diluted the splat's local mean to\n  nothing: uniform yellow. Valence covers every author carrying ANY signal\n  (saved / rated / dismissed / scored), and authors with NO signal are\n  returned with `v: null` so the host can omit them from the splat instead\n  of drowning it. Pale paper where you have no opinion is the honest render.\n\nKeyed by author id (the OpenAlex id, as the network's nodes are) rather than\nby coordinates: unlike the paper substrate there is no off-view author to\naccount for \u2014 the author map always draws every author in scope \u2014 so an\nid-keyed field is view-independent for exactly the same reason.\n\nPure read.",
+        "description": "The LIVE preference + score field for the author map.\n\nThe author analogue of `/graphs/signal-field`, and deliberately built from\nthe SAME contract: an author's valence aggregates `paper_valence` evidence\nover the papers of theirs you have an opinion about. User evidence carries\nfull confidence, engine-only evidence is weak, and a neutral prior prevents\none paper from reading as a settled author verdict. So \"how do I feel about\nthis author\" is derived from \"how do I feel about their papers\" \u2014 one owner\nof the hierarchy, confidence, and weights (`alma.core.signal_valence`).\n\n**Not scoped.** How you feel about an author is a fact about the author, not\nabout which view is open, so this is computed over ALL of their papers. It\nused to take a scope and average only the in-scope ones, which recoloured 48\nauthors when you switched between Corpus and Library (measured 2026-07-26) \u2014\ntwo different opinions about the same person depending on where you stood.\n\nTwo reasons this is an endpoint rather than a field baked into the network\npayload (user catch 2026-07-26 \u2014 \"terrain is all yellow and no scores\"):\n\n* **Live.** The author network is a materialized view; the score baked into\n  it goes stale the moment Discovery re-scores, which greyed the dots and\n  flattened the terrain exactly like the paper map's baked score did.\n* **Coverage.** The old terrain used the mean recommendation score alone and\n  substituted 0 for every author without one \u2014 in corpus scope that is ~90%\n  of them, and a flood of hard zeros diluted the splat's local mean to\n  nothing: uniform yellow. Valence covers every author carrying ANY signal\n  (saved / rated / dismissed / scored), and authors with NO signal are\n  returned with `v: null` so the host can omit them from the splat instead\n  of drowning it. Pale paper where you have no opinion is the honest render.\n\nKeyed by author id (the OpenAlex id, as the network's nodes are) rather than\nby coordinates: unlike the paper substrate there is no off-view author to\naccount for \u2014 the author map always draws every author in scope \u2014 so an\nid-keyed field is view-independent for exactly the same reason.\n\nPure read.",
         "operationId": "get_author_field_api_v1_graphs_author_field_get",
         "security": [
           {
@@ -18588,18 +18909,6 @@
           }
         ],
         "parameters": [
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "library | corpus",
-              "default": "library",
-              "title": "Scope"
-            },
-            "description": "library | corpus"
-          },
           {
             "name": "x-api-key",
             "in": "header",
@@ -20774,6 +21083,298 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/games": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "List Games",
+        "description": "The explicit game roster. What is not listed cannot reach your signal.",
+        "operationId": "list_games_api_v1_signal_lab_games_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Games Api V1 Signal Lab Games Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/summary": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Get Summary",
+        "description": "Unique/fitted evidence, structural coverage, and effects. Pure read.",
+        "operationId": "get_summary_api_v1_signal_lab_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalLabSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/{game_id}/queue": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Get Queue",
+        "description": "A signed round deck for ``game_id``. Zero writes until each answer.\n\n``available: False`` (with a reason) when the substrate isn't ready or\nno region has a judgeable pool; never an error. The paper payload is the\ntile-rendering minimum; every token binds what its answer needs. Home asks\nfor twelve, and the API contract never permits fewer than ten.",
+        "operationId": "get_queue_api_v1_signal_lab__game_id__queue_get",
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Game Id"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 30,
+              "minimum": 10,
+              "default": 12,
+              "title": "Count"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Queue Api V1 Signal Lab  Game Id  Queue Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/{game_id}/round/answer": {
+      "post": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Answer Round",
+        "description": "Persist one answered round \u2014 one INSERT through the layer's writer.",
+        "operationId": "answer_round_api_v1_signal_lab__game_id__round_answer_post",
+        "parameters": [
+          {
+            "name": "game_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Game Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoundAnswer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Answer Round Api V1 Signal Lab  Game Id  Round Answer Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/settings": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Get Signal Lab Settings",
+        "description": "Read first-class Signal Lab feature settings.",
+        "operationId": "get_signal_lab_settings_api_v1_signal_lab_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalLabSettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Update Signal Lab Settings",
+        "description": "Replace Signal Lab settings after strict Pydantic validation.",
+        "operationId": "update_signal_lab_settings_api_v1_signal_lab_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalLabSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalLabSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/model": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Get Model",
+        "description": "The fitted model summary \u2014 heads, counts, holdout metrics.\n\nPure stored read (task 50 ownership split): never fits inline. ``ready``\nis False until the first background fit lands.",
+        "operationId": "get_model_api_v1_signal_lab_model_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Model Api V1 Signal Lab Model Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/eval": {
+      "get": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Get Eval",
+        "description": "Stage-1 promotion evidence: held-out accuracy + hypothetical churn.\n\nUses ``mv.get`` (fingerprint-driven): first call builds inline (bounded \u2014\n\u2264200 recommendation vectors), later calls serve the cached row and refresh\nin the background when rounds or the live list change.",
+        "operationId": "get_eval_api_v1_signal_lab_eval_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Eval Api V1 Signal Lab Eval Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signal-lab/purge": {
+      "post": {
+        "tags": [
+          "signal-lab"
+        ],
+        "summary": "Purge Signal Lab",
+        "description": "Delete every lab round and everything derived from them (D20).\n\nLibrary, ratings, and the always-on feedback history are untouched.\nIrreversible by design \u2014 the confirm lives in the Settings UI.",
+        "operationId": "purge_signal_lab_api_v1_signal_lab_purge_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Purge Signal Lab Api V1 Signal Lab Purge Post"
                 }
               }
             }
@@ -25484,6 +26085,78 @@
         ],
         "title": "ManualSearchRequest"
       },
+      "MapSelectionLensCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "selection_kind": {
+            "type": "string",
+            "enum": [
+              "papers",
+              "authors"
+            ],
+            "title": "Selection Kind"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "library",
+              "corpus"
+            ],
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "selection_kind",
+          "ids",
+          "scope"
+        ],
+        "title": "MapSelectionLensCreate",
+        "description": "Create a collection-backed lens from the current map selection."
+      },
+      "MapSelectionLensResponse": {
+        "properties": {
+          "collection_id": {
+            "type": "string",
+            "title": "Collection Id"
+          },
+          "lens_id": {
+            "type": "string",
+            "title": "Lens Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "paper_count": {
+            "type": "integer",
+            "title": "Paper Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection_id",
+          "lens_id",
+          "name",
+          "paper_count"
+        ],
+        "title": "MapSelectionLensResponse",
+        "description": "Atomic collection + lens result for a lassoed map region."
+      },
       "MergeProfilesRequest": {
         "properties": {
           "alt_author_ids": {
@@ -26401,11 +27074,45 @@
         ],
         "title": "PickAffiliationRequest"
       },
+      "PluginActivation": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "PluginActivation"
+      },
+      "PluginConfigResponse": {
+        "properties": {
+          "plugin_id": {
+            "type": "string",
+            "title": "Plugin Id"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plugin_id",
+          "config"
+        ],
+        "title": "PluginConfigResponse",
+        "description": "Validated configuration for one plugin; secrets are masked."
+      },
       "PluginInfo": {
         "properties": {
-          "name": {
+          "id": {
             "type": "string",
-            "title": "Name"
+            "title": "Id"
           },
           "display_name": {
             "type": "string",
@@ -26419,6 +27126,11 @@
             "type": "string",
             "title": "Description"
           },
+          "kind": {
+            "type": "string",
+            "const": "integration",
+            "title": "Kind"
+          },
           "config_schema": {
             "additionalProperties": true,
             "type": "object",
@@ -26426,15 +27138,22 @@
           },
           "capabilities": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "send",
+                "receive"
+              ]
             },
             "type": "array",
-            "title": "Capabilities",
-            "default": []
+            "title": "Capabilities"
           },
-          "is_configured": {
+          "enabled": {
             "type": "boolean",
-            "title": "Is Configured"
+            "title": "Enabled"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
           },
           "can_send": {
             "type": "boolean",
@@ -26446,29 +27165,37 @@
             "title": "Can Receive",
             "default": false
           },
-          "is_healthy": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Healthy"
+          "status": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Status"
+          },
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "docs_path": {
+            "type": "string",
+            "title": "Docs Path"
           }
         },
         "type": "object",
         "required": [
-          "name",
+          "id",
           "display_name",
           "version",
           "description",
+          "kind",
           "config_schema",
-          "is_configured"
+          "enabled",
+          "configured",
+          "docs_path"
         ],
         "title": "PluginInfo",
-        "description": "Response model for one delivery channel.\n\n`capabilities` is the directions this channel supports \u2014 `send` (ALMa posts\nto it) and/or `receive` (it feeds the Inbox). `can_send` / `can_receive` say\nwhether each of those is CONFIGURED right now, which is a different\nquestion: a Slack token with a posting channel and no capture channel can\nsend and not receive."
+        "description": "Runtime plugin manifest plus current activation/configuration status."
       },
       "ProfileRequest": {
         "properties": {
@@ -27092,6 +27819,42 @@
         "type": "object",
         "title": "ResolveOwnerRequest"
       },
+      "RoundAnswer": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "reaction_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reaction Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "RoundAnswer"
+      },
       "RunMaintenanceRequest": {
         "properties": {
           "target_ids": {
@@ -27334,128 +28097,6 @@
             "title": "Database",
             "description": "Relative path to the unified scholar database"
           },
-          "slack_token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Slack Token",
-            "description": "Slack Bot User OAuth Token"
-          },
-          "slack_channel": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Slack Channel",
-            "description": "Default Slack channel for notifications"
-          },
-          "slack_inbox_channel": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Slack Inbox Channel",
-            "description": "Slack channel ALMa POLLS for papers you send yourself (e.g. alma-inbox). Empty disables Inbox capture."
-          },
-          "smtp_host": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp Host",
-            "description": "SMTP server host for email digests"
-          },
-          "smtp_port": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp Port",
-            "description": "SMTP port (587 = STARTTLS, 465 = implicit TLS)",
-            "default": 587
-          },
-          "smtp_username": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp Username",
-            "description": "SMTP auth username"
-          },
-          "smtp_password": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp Password",
-            "description": "SMTP auth password (stored in the secret store)"
-          },
-          "smtp_from": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp From",
-            "description": "From address for digest emails"
-          },
-          "smtp_to": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp To",
-            "description": "Recipient list (comma / newline separated)"
-          },
-          "smtp_use_tls": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Smtp Use Tls",
-            "description": "Use STARTTLS (ignored on port 465)",
-            "default": true
-          },
           "openalex_api_key": {
             "anyOf": [
               {
@@ -27533,8 +28174,314 @@
             "default": false
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "SettingsModel"
+      },
+      "SignalLabCoverageEvidence": {
+        "properties": {
+          "regions_observed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Regions Observed"
+          },
+          "regions_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Regions Total"
+          },
+          "edges_observed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Edges Observed"
+          },
+          "edges_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Edges Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "regions_observed",
+          "regions_total",
+          "edges_observed",
+          "edges_total"
+        ],
+        "title": "SignalLabCoverageEvidence",
+        "description": "Structural super-region and adjacency coverage."
+      },
+      "SignalLabDirection": {
+        "properties": {
+          "region_id": {
+            "type": "integer",
+            "title": "Region Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "region_id",
+          "label",
+          "value"
+        ],
+        "title": "SignalLabDirection",
+        "description": "One fitted super-region movement shown on Home."
+      },
+      "SignalLabEffects": {
+        "properties": {
+          "upward": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLabDirection"
+            },
+            "type": "array",
+            "title": "Upward"
+          },
+          "downward": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLabDirection"
+            },
+            "type": "array",
+            "title": "Downward"
+          },
+          "regions_moving": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Regions Moving"
+          },
+          "boundary_overrides": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Boundary Overrides"
+          }
+        },
+        "type": "object",
+        "required": [
+          "regions_moving",
+          "boundary_overrides"
+        ],
+        "title": "SignalLabEffects",
+        "description": "Active fitted effects; empty while the feature is disabled."
+      },
+      "SignalLabFitEvidence": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "fresh": {
+            "type": "boolean",
+            "title": "Fresh"
+          },
+          "source_rounds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Source Rounds"
+          },
+          "fitted_queries": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fitted Queries"
+          },
+          "fitted_observations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fitted Observations"
+          },
+          "pending_rounds": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Rounds"
+          },
+          "utility_preferences": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Utility Preferences"
+          },
+          "metric_constraints": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Metric Constraints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "fresh",
+          "source_rounds",
+          "fitted_queries",
+          "fitted_observations",
+          "pending_rounds",
+          "utility_preferences",
+          "metric_constraints"
+        ],
+        "title": "SignalLabFitEvidence",
+        "description": "Evidence actually consumed by the current wholesale fit."
+      },
+      "SignalLabRoundEvidence": {
+        "properties": {
+          "today": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Today"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "answered": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Answered"
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Skipped"
+          },
+          "unique_queries": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unique Queries"
+          },
+          "duplicate_queries": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Duplicate Queries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "today",
+          "total",
+          "answered",
+          "skipped",
+          "unique_queries",
+          "duplicate_queries"
+        ],
+        "title": "SignalLabRoundEvidence",
+        "description": "Recorded ledger evidence; unordered paper sets define query identity."
+      },
+      "SignalLabSettings": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enable Signal Lab",
+            "description": "Offer games on Home and consume their retained model.",
+            "default": true
+          },
+          "region_offset_points": {
+            "type": "number",
+            "maximum": 2.5,
+            "minimum": 0.0,
+            "title": "Region scoring nudge",
+            "description": "Maximum additive Discovery/Feed points from region preference. Together the two Signal Lab heads cannot exceed the five-point citation-evidence band.",
+            "default": 0.0
+          },
+          "utility_points": {
+            "type": "number",
+            "maximum": 2.5,
+            "minimum": 0.0,
+            "title": "Utility scoring nudge",
+            "description": "Maximum additive Discovery/Feed points from the confidence-scaled learned utility direction.",
+            "default": 0.0
+          },
+          "map_tint_strength": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Map taste tint",
+            "description": "How strongly learned region preference bends terrain.",
+            "default": 0.45
+          },
+          "ring_decay": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Ring decay",
+            "description": "Library-outward sampling decay \u03b3.",
+            "default": 0.35
+          },
+          "exploration_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Exploration rate",
+            "description": "Ring-uniform sampling fraction \u03b5.",
+            "default": 0.2
+          },
+          "coverage_target": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Coverage Target",
+            "default": 20
+          },
+          "refit_every_rounds": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Refit Every Rounds",
+            "default": 5
+          },
+          "holdout_percent": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Holdout Percent",
+            "default": 15
+          },
+          "override_min_votes": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Override Min Votes",
+            "default": 3
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SignalLabSettings"
+      },
+      "SignalLabSummaryResponse": {
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "rounds": {
+            "$ref": "#/components/schemas/SignalLabRoundEvidence"
+          },
+          "fit": {
+            "$ref": "#/components/schemas/SignalLabFitEvidence"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/SignalLabCoverageEvidence"
+          },
+          "effects": {
+            "$ref": "#/components/schemas/SignalLabEffects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active",
+          "rounds",
+          "fit",
+          "coverage",
+          "effects"
+        ],
+        "title": "SignalLabSummaryResponse",
+        "description": "Honest Home evidence; never a combinatorial possible-triplet ratio."
       },
       "SimilarityRequest": {
         "properties": {
