@@ -313,16 +313,39 @@ export const TERRAIN_SCALE_MIN = 0.08
 export const TERRAIN_SCALE_MAX = 1
 /** Which quantile of |valence| becomes the scale endpoint.
  *
- *  p75, not the max and not p95. Valence is long-tailed: on the real paper
- *  field the 95th percentile is 0.46 while the MEDIAN is 0.157, so a p95 scale
- *  leaves half the map below t=0.35 — pale, which is exactly the complaint this
- *  replaces. At p75 the median renders around t=0.6 and the map reads.
+ *  **The colourbar is the field's real range, symmetric about zero**, trimmed
+ *  at p95 so a handful of outliers cannot set it. Only the strongest 5% clip.
  *
- *  The top quartile saturates, and that is the right trade: those are genuinely
- *  the strongest opinions, and clipping them costs nothing a reader needs. The
- *  original "never data-derived" rule was guarding against a WEAK population
- *  being stretched to look strong — that is what TERRAIN_SCALE_MIN is for. */
-export const TERRAIN_SCALE_QUANTILE = 0.75
+ *  ONE knob, for every terrain on every map. `terrainScaleFor` is reached only
+ *  through `terrainField.ts` → `useMapField`, which is what all three hosts
+ *  (Map papers, Map authors, Discovery) use — so changing this number changes
+ *  every colourbar at once, and no host can hold a different opinion about what
+ *  green means. `oneFieldOwner.test.ts` is what keeps that true.
+ *
+ *  It was p75, which is a QUARTER of every point drawn at full saturation, and
+ *  on a skewed field it collapses (measured on dev, 2026-07-28):
+ *
+ *  | field | p75 \|v\| | p95 \|v\| | max \|v\| |
+ *  |---|---|---|---|
+ *  | papers  | 0.26  | 0.455 | 1.00 |
+ *  | authors | 0.071 | 0.333 | 0.48 |
+ *
+ *  The author field is mostly small POSITIVE predictions (83% above zero,
+ *  median 0.015), so a p75 endpoint of 0.071 — below the 0.08 floor — rendered
+ *  a 0.02 prediction at t=0.25 and a 0.05 one at t=0.6. The map came out green
+ *  nearly everywhere, claiming an opinion the numbers do not support. That is
+ *  the user report this replaces (2026-07-28).
+ *
+ *  Why the earlier "p75 or it reads pale" reasoning no longer holds: two other
+ *  things were fixed in the same session. The ramp is standard RdYlGn at
+ *  natural spacing (yellow used to be squeezed into ±0.12, so anything outside
+ *  a sliver ran to saturated colour), and alpha no longer fades a second time
+ *  with |t|. A weak value now LOOKS weak instead of being erased, so the scale
+ *  no longer has to lie about magnitude to make the plate visible.
+ *
+ *  The floor (TERRAIN_SCALE_MIN) is what guards the opposite failure — a
+ *  near-empty field stretched until noise looks like strong opinion. */
+export const TERRAIN_SCALE_QUANTILE = 0.95
 
 /** The ±scale this field should be drawn on, derived from the field itself.
  *
