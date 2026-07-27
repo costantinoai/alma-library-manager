@@ -105,7 +105,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 |---|---|
 | `publication_embeddings` | SPECTER2 vectors per paper. `source` ∈ `{'s2', 'local'}` for provenance. |
 | `publication_embedding_fetch_status` | Per-paper S2 fetch state (`unmatched`, `missing_vector`, `lookup_error`, etc.). |
-| `publication_clusters` | HDBSCAN cluster assignment per paper. |
+| `publication_clusters` | **The one durable semantic layout** (`scope='corpus'`): each paper's 2-D coordinate, HDBSCAN cluster id (`-1` = Unclustered), and c-TF-IDF label. A Library map filters these rows; it never fits its own. `placement` records how the coordinate was obtained — `layout` (the UMAP fit) or `interpolated` (approximated between rebuilds from the paper's nearest already-placed neighbours), `NULL` on rows written before migration 35 tracked it. |
 | `graph_cache` | Legacy 1-hour TTL graph cache. **Superseded by `materialized_views`** (2026-05-06) — kept for one release as a fallback, no longer read or written. |
 | `graph_cluster_labels` | LLM-generated cluster labels. |
 | `paper_network_cache` | Cached citation / co-author graphs per paper. |
