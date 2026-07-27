@@ -32,6 +32,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
       weighted: detail?.weighted ?? 0,
       color: SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR,
       degraded: isSignalDegraded(key, breakdown),
+      diagnostic: detail?.diagnostic_only === true,
     }
   })
 
@@ -110,6 +111,16 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                 {s.degraded && (
                   <span className="ml-1 text-[10px] text-warning-600" title={s.description}>
                     keyword
+                  </span>
+                )}
+                {s.diagnostic && (
+                  // Weight 0 by decision, not by accident. Without this the row
+                  // reads as a signal that happened to measure zero today.
+                  <span
+                    className="ml-1 text-[10px] text-slate-400"
+                    title="Measured and shown for diagnosis, but weighted 0 — it does not affect the score."
+                  >
+                    diagnostic
                   </span>
                 )}
               </span>

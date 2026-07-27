@@ -516,4 +516,20 @@ def signal_impact(conn: sqlite3.Connection) -> dict[str, Any]:
             pos_cohort >= stats.MIN_GROUP_SAMPLE and neg_cohort >= stats.MIN_GROUP_SAMPLE
         ),
         "signals": signal_comparison,
+        # The multivariate view of the SAME cohort. It rides in this payload
+        # rather than behind a second route because the pair is the point: a
+        # signal whose marginal and partial coefficients disagree is reading a
+        # confound, and that is only visible when both are on screen together.
+        "tuning": _signal_tuning_or_none(conn),
     }
+
+
+def _signal_tuning_or_none(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """Attach the multivariate fit, but never let it take the report down."""
+    from alma.application.discovery.signal_tuning import signal_tuning
+
+    try:
+        return signal_tuning(conn)
+    except Exception as exc:  # noqa: BLE001 — the marginal report stands alone
+        logger.warning("Failed to compute signal tuning: %s", exc)
+        return None

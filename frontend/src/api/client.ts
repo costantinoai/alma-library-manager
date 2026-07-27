@@ -1791,6 +1791,10 @@ export interface ScoreSignalDetail {
   weight: number
   weighted: number
   description?: string
+  /** Measured and shown, but weight 0 — it contributes nothing to the score.
+   *  A signal demoted to diagnostic renders an empty bar, which is
+   *  indistinguishable from "measured 0" unless the panel says which it is. */
+  diagnostic_only?: boolean
 }
 
 export interface ScoreBreakdown {
