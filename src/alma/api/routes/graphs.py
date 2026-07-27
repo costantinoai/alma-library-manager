@@ -1560,6 +1560,11 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
 
     Pure read.
     """
+    from alma.application.signal_lab.fit import author_match_keys
+    from alma.application.signal_lab.map_terms import (
+        apply_lab_author_tint,
+        load_lab_map_context,
+    )
     from alma.core.signal_valence import (
         NEGATIVE_REC_ACTIONS,
         aggregate_author_valence,
@@ -1570,7 +1575,9 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
     try:
         rows = conn.execute(
             f"""
-            SELECT pa.openalex_id AS aid, p.status AS status,
+            SELECT pa.openalex_id AS aid,
+                   MIN(pa.display_name) OVER (PARTITION BY pa.openalex_id) AS aname,
+                   p.status AS status,
                    COALESCE(p.rating, 0) AS rating,
                    latest.score AS rec_score,
                    COALESCE(neg.n_neg, 0) AS n_neg
@@ -1603,8 +1610,11 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
             "papers": 0,
         }
     )
+    names: dict[str, str] = {}
     for row in rows:
         entry = agg[str(row["aid"])]
+        if row["aname"]:
+            names.setdefault(str(row["aid"]), str(row["aname"]))
         entry["papers"] += 1
         rec_score = row["rec_score"]
         if rec_score is not None:
@@ -1627,6 +1637,11 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
     # property of the space, and a Library view is a subset of its DOTS only.
     coords = _author_space_coordinates(conn)
 
+    # Signal Lab's author head bends this terrain the same way its region head
+    # bends the paper terrain — same context, same `map_tint_strength` gate, so
+    # answering a round moves both maps or neither.
+    lab = load_lab_map_context(conn)
+
     authors: list[dict] = []
     vmin = float("inf")
     vmax = float("-inf")
@@ -1634,6 +1649,8 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
     n_valenced = 0
     for aid, entry in agg.items():
         raw_v = aggregate_author_valence(entry["evidence"])
+        keys = tuple(author_match_keys(names.get(aid, ""))) + (aid.strip().lower(),)
+        raw_v = apply_lab_author_tint(raw_v, match_keys=keys, context=lab)
         v = round(raw_v, 3) if raw_v is not None else None
         point = coords.get(aid.strip().lower())
         authors.append(

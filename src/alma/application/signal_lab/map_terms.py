@@ -9,7 +9,7 @@ game signals are ignored without being deleted.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -32,6 +32,11 @@ class LabMapContext:
     region_utility: dict[int, float]
     cluster_to_region: dict[int, int]
     paper_overrides: dict[str, int]
+    #: Fitted per-author win rates, by ranker match key. The author map's
+    #: terrain reads these so answering a round moves BOTH maps; before this,
+    #: the paper terrain learned from Signal Lab and the author terrain did not,
+    #: so the same answers visibly bent one map and left the other flat.
+    author_offsets: dict[str, float] = field(default_factory=dict)
 
     def offset_for(self, paper_id: str, cluster_id: int) -> float:
         region_id = self.paper_overrides.get(
@@ -42,6 +47,20 @@ class LabMapContext:
             return 0.0
         raw = self.region_offsets.get(region_id, 0.0) + self.region_utility.get(region_id, 0.0)
         return self.strength * max(-1.0, min(1.0, raw))
+
+    def author_offset_for(self, *match_keys: str) -> float:
+        """Learned tint for one author, by any of the keys that name them.
+
+        Strongest-magnitude wins when a person is indexed under several keys
+        (full name and `last|initial`), matching how the ranker resolves the
+        same collision.
+        """
+        best = 0.0
+        for key in match_keys:
+            value = self.author_offsets.get(key)
+            if value is not None and abs(value) > abs(best):
+                best = float(value)
+        return self.strength * max(-1.0, min(1.0, best))
 
 
 def project_utility_to_regions(
@@ -124,7 +143,11 @@ def load_lab_map_context(conn: sqlite3.Connection) -> LabMapContext | None:
         int(cluster_id): int(region_id)
         for cluster_id, region_id in (regions.get("cluster_to_region") or {}).items()
     }
-    if (not offsets and not region_utility) or not cluster_to_region:
+    author_offsets = {
+        str(key): float(value)
+        for key, value in (model.get("author_offsets") or {}).items()
+    }
+    if (not offsets and not region_utility and not author_offsets) or not cluster_to_region:
         return None
 
     return LabMapContext(
@@ -136,7 +159,29 @@ def load_lab_map_context(conn: sqlite3.Connection) -> LabMapContext | None:
             str(paper_id): int(details["region_id"])
             for paper_id, details in (model.get("region_overrides") or {}).items()
         },
+        author_offsets=author_offsets,
     )
+
+
+def apply_lab_author_tint(
+    base_valence: float | None,
+    *,
+    match_keys: tuple[str, ...],
+    context: LabMapContext | None,
+) -> float | None:
+    """The author analogue of :func:`apply_lab_map_tint`.
+
+    `None` in means "no opinion, leave the paper bare" — and the lab may CREATE
+    an opinion where feedback had none, because a learned preference for a
+    person is exactly the signal the terrain is for. The canonical `[-1, 1]`
+    domain is preserved either way.
+    """
+    if context is None:
+        return base_valence
+    offset = context.author_offset_for(*match_keys)
+    if offset == 0.0:
+        return base_valence
+    return max(-1.0, min(1.0, (base_valence or 0.0) + offset))
 
 
 def apply_lab_map_tint(

@@ -160,13 +160,28 @@ author on BOTH papers of a comparison is dropped from it, and an author needs
 `AUTHOR_MIN_COMPARISONS` usable comparisons before being published at all, so a
 prolific name cannot drift on noise.
 
-It is consumed by **one** reader: `build_discovery_author_affinity()` in
+It reaches two places, the two the locked geometry answer allows — **ranking**
+and a read-time **tint** — and nowhere else.
+
+*Ranking.* It is consumed by one reader: `build_discovery_author_affinity()` in
 `application/author_signal.py`, the canonical definition of "how much do I care
 about this author". Folding it in there rather than adding a second author term
 to the ranker keeps one definition — a parallel `lab_author` signal beside
 `author_affinity` would let the same evidence count twice. The offset is ADDED
 to the signal your Library already produces; Signal Lab nudges, your Library
-decides. Guarded by `tests/test_geometry_admission_contract.py`.
+decides.
+
+*Tint.* The author map's terrain reads the head through the same
+`LabMapContext` the paper terrain uses, behind the same `map_tint_strength`
+gate — so answering a round bends both maps or neither. Before this the paper
+terrain learned from Signal Lab and the author terrain did not, which made the
+same answers visibly move one map and leave the other flat. The tint may CREATE
+an opinion where feedback had none (a learned preference for a person is
+exactly what the terrain is for), stays inside the canonical `[-1, 1]` domain,
+and never moves an author's coordinate or community.
+
+Guarded by `tests/test_geometry_admission_contract.py`, which pins the reader
+list: a new consumer has to be a deliberate edit with a reason.
 
 Ranking terms are separately promotion-gated.
 `weights.lab_region_offset`, `weights.lab_utility` and
