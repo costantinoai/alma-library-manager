@@ -87,43 +87,74 @@ On a collection lens the toggle also overrides that lens's usual exception (it
 normally still surfaces Library papers filed under *other* collections so you
 can pull them in), so "unsaved only" means the same thing on every lens type.
 
-### Retrieval channels
+### Retrieval families
 
-| Channel | Source | What it returns |
-|---|---|---|
-| **OpenAlex related works** | OpenAlex `/works/{id}/related-works` | Papers OpenAlex itself flags as related to your saved papers. |
-| **OpenAlex topic search** | OpenAlex `/works?filter=topics.id:…` | New papers in topics you've saved into. |
-| **Followed-author works** | OpenAlex `/works?filter=author.id:…` | Recent works from authors on your follow list. |
-| **Taste-author search** | OpenAlex / S2 keyword search | Targeted queries built from your top preferred authors — but **only authors who don't dominate your library** (cap: 40% of saved papers). Sending an explicit "Smith et al." query when 60% of your library is already Smith just amplifies him; that author still gets ranking credit through `author_affinity`, we just don't fan out external API budget at him. |
-| **Co-author network** | OpenAlex graph | Papers by frequent co-authors of your saved authors. |
-| **Citation chain** | OpenAlex / S2 | Papers that cite your highly-rated papers. |
-| **Semantic Scholar related** | S2 `/recommendations` | S2's own recommender, with optional filters. |
-| **SPECTER2 cosine** | local cache | Top-k cosine neighbours of your library centroid (if embeddings are enabled). The lane scores **every embedded paper in the corpus** against the centroid — not a sampled subset — so the top-K is the actual best-K, not the best-K of an arbitrary first-1000 rows. |
-| **Local references (graph)** | local `publication_references` | Papers your seeds cite, ranked by how many papers across the **entire local corpus** cite each reference (with a tie-break by how many seeds cite it). The corpus-wide count cushions the recency penalty seed-only counting would create — a 2024 paper cited by one seed and four other corpus papers outranks a 2010 paper cited by one seed and nothing else. The recency_boost in the scorer takes over from there once OpenAlex enrichment supplies the publication date. |
+Retrievers are grouped into four **evidence families**. A family groups
+retrievers that fail the same way, which is what lets their ranks be fused
+fairly — see [Discovery pipeline](../reference/discovery-pipeline.md) for the
+full architecture.
 
-Channels can be enabled / disabled / weighted in **Settings →
-Discovery weights**. Each channel runs with a per-lane deadline so a
-single slow source can't stall the whole refresh.
+| Family | Retrievers | What it knows | How it fails |
+|---|---|---|---|
+| **Lexical** | per-topic query over the local corpus + frontier | surface wording | misses paraphrase; rewards common words |
+| **Semantic** | SPECTER2 kNN, one query per **branch centroid**, over corpus ∪ frontier | meaning | blind without a vector; jargon collisions |
+| **Citation** | local references, bibliographic coupling, co-citation, OpenAlex `cites:`, S2 related, Personalized PageRank | who builds on whom | silent on brand-new work |
+| **Taste** | author-id lane, venue lane, followed authors, S2 recommendations, branch queries | your declared interests | echoes what you already know |
+
+Three things about how these query are worth knowing, because each fixed a lane
+that was retrieving the wrong thing:
+
+- **Phrases are quoted.** OpenAlex combines adjacent bare words with an implicit
+  AND, so `working memory OR visual cortex` used to parse as
+  `working AND (memory OR visual) AND cortex`. Quoting restores the intended
+  union — measurably: the old form's top hit for a vision query was a paper on
+  support vector machines, matched on the loose token "recognition".
+- **Author and venue lanes filter, they don't search.** OpenAlex `search` indexes
+  title, abstract and fulltext — *not* author or venue names. Those lanes now use
+  `authorships.author.id` and `primary_location.source.display_name.search`.
+- **The dense lane uses one centroid per branch, not one global centroid.** The
+  mean of a multi-topic library sits in the empty middle between its topics; a
+  reader working on vision *and* on methods got the midpoint, which matches
+  neither.
+
+Families can be enabled / disabled / weighted in **Settings → Discovery
+weights**. Each lane runs with a per-lane deadline so one slow source cannot
+stall a refresh.
+
+#### Every appearance is kept
+
+A lane emits one **retrieval hit** per (candidate, query) — not per candidate.
+A paper found by four different topic queries carries four hits, and that
+cross-query agreement is the strongest precision signal available. The previous
+merge kept only the winning appearance and discarded the rest.
+
+#### Where new papers come from
+
+The dense lane used to search only `publication_embeddings JOIN papers`, so it
+could never return a paper the corpus did not already hold — the heaviest
+channel contributed zero new papers. It now also searches the **frontier**: a
+bounded citation neighbourhood resolved by a background job, so the network is
+off the refresh path entirely. Bibliographic coupling decides what to fetch
+using reference edges already in your database, at no API cost.
 
 #### Best-of-K vs first-N
 
-Every channel that we pick from a candidate list (lexical, vector,
-graph, external) ranks before truncating to the per-lane budget:
+Every lane ranks before truncating to its budget:
 
-| Channel | Sort order |
+| Lane | Sort order |
 |---|---|
-| Lexical (OpenAlex search) | `relevance_score:desc` |
-| Vector (local SPECTER2) | cosine similarity to your library centroid (full corpus, not sampled) |
-| Graph: local references | `corpus_overlap DESC, seed_overlap DESC` (see above) |
-| Graph: OpenAlex related-works | OpenAlex's own relatedness algorithm |
+| Lexical | local query-match score, fused across per-topic runs by RRF |
+| Semantic | cosine to each branch centroid (full pool, never sampled) |
+| Graph: local references | `corpus_overlap DESC, seed_overlap DESC` |
+| Graph: OpenAlex related-works | OpenAlex's own relatedness |
 | Graph: citing-works | `cited_by_count:desc` |
-| Graph: referenced-works | `publication_year:desc` (recency-prioritized) |
-| Followed-author works | `publication_date:desc` (newest first) |
-| Taste-author / -topic / -keyword search | `relevance_score:desc` |
+| Graph: PPR | personalized-PageRank stationary probability |
+| Followed / taste author | `publication_date:desc` under an author-id filter |
+| Taste venue | `publication_date:desc` under a source filter |
 | S2 recommendations | S2's own recommender ranking |
 
-So whatever the per-lane cap is set to, you're getting *the best* of
-that source — not whatever the source happened to surface first.
+So whatever the per-lane cap is, you get *the best* of that source — not
+whatever it happened to return first.
 
 ### Ranking signals
 

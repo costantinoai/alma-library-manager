@@ -1,14 +1,20 @@
 ---
 title: Scoring formulas
-description: The 10-weight Discovery scorer, in numbers.
+description: The weighted Discovery signals, in numbers.
 ---
 
 # Scoring formulas
 
 A Discovery candidate is a paper proposed by one of the
-[retrieval channels](../concepts/discovery.md#retrieval-channels). The
-scorer combines several signals into a single number used for
-ranking. This page documents how.
+[retrieval families](./discovery-pipeline.md#1-retrieval-four-evidence-families).
+The scorer combines several signals into a single number used for ranking. This
+page documents the arithmetic of each signal.
+
+> **Read [Discovery pipeline](./discovery-pipeline.md) first** for the
+> architecture this sits inside: how lanes retrieve, how their ranks are fused
+> (two-level RRF), which features are admissible as *reward* versus *exposure*,
+> why the ranker is a prior-centred linear model rather than a bigger one, how
+> exploration keeps the feedback loop honest, and where Signal Lab enters.
 
 ## The hybrid scorer
 
@@ -21,6 +27,22 @@ $$
 where $w_i$ is the weight from
 [Discovery settings](../reference/configuration.md#where-each-settings-card-stores-its-values)
 and $s_i$ is one of the signal functions below.
+
+**Nine signals carry weight**: `source_relevance`, `topic_score`,
+`text_similarity`, `author_affinity`, `journal_affinity`, `recency_boost`,
+`citation_quality`, `feedback_adj`, `preference_affinity`.
+
+`usefulness_boost` is still computed and logged, but is **diagnostic only and
+carries no weight**. It was
+`0.45·novelty + 0.25·recency + 0.20·citation_quality + 0.10·metadata_quality` —
+a composite of features already present as independent inputs to the same linear
+model, so it double-counted recency and citation quality and made the fit
+collinear by construction. Its atomic ingredients remain available as features.
+
+Weights are a **prior**, not a fit. They are the centre that the shadow
+prior-centred ridge model shrinks toward; see
+[the ranker ladder](./discovery-pipeline.md#4-ranking) for what has to be true
+before a fitted model is promoted over them.
 
 ## Signals
 
