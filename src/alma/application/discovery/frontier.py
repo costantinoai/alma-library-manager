@@ -57,6 +57,73 @@ class FrontierBuildResult:
         }
 
 
+def run_frontier_maintenance(
+    db: sqlite3.Connection,
+    *,
+    job_id: str | None = None,
+) -> dict[str, dict[str, int]]:
+    """THE frontier build sequence: coupling → discovery queries → vectors.
+
+    One owner, two triggers. The periodic scheduler job and the manual
+    ``POST /discovery/frontier/rebuild`` button both call this, so the order of
+    the three phases and the commit discipline between them are stated once.
+
+    Each phase gathers over HTTP with no transaction open and then performs one
+    bounded write. The commit BETWEEN phases is not cosmetic: it closes the
+    write txn before the next phase starts its network calls, which is
+    CLAUDE.md's "never hold a write txn across network I/O".
+
+    Args:
+        db: Open connection owned by the caller (a background runner's own
+            connection, never a request's).
+        job_id: Activity job to narrate into, when there is one.
+
+    Returns:
+        ``{phase_name: FrontierBuildResult.as_dict()}`` for the three phases.
+    """
+    from alma.core.db_write import commit_unless_gated
+
+    def _log(message: str, step: str, data: dict[str, int] | None = None) -> None:
+        if not job_id:
+            return
+        from alma.api.scheduler import add_job_log
+
+        add_job_log(job_id, message, step=step, data=data)
+
+    phases: dict[str, dict[str, int]] = {}
+
+    coupling = build_frontier(db)
+    commit_unless_gated(db, label="discovery frontier build")
+    phases["frontier"] = coupling.as_dict()
+    _log(
+        f"Bibliographic coupling: {coupling.rows_written} leads, "
+        f"{coupling.edges_written} edges",
+        "frontier",
+        phases["frontier"],
+    )
+
+    discovery = build_discovery_frontier(db)
+    commit_unless_gated(db, label="discovery source frontier build")
+    phases["discovery_frontier"] = discovery.as_dict()
+    _log(
+        f"Query + taste frontier: {discovery.rows_written} leads",
+        "discovery_frontier",
+        phases["discovery_frontier"],
+    )
+
+    vectors = fill_frontier_vectors(db)
+    commit_unless_gated(db, label="discovery frontier vector fill")
+    phases["vectors"] = vectors.as_dict()
+    _log(
+        f"Vectors: {vectors.vectors_written} filled, "
+        f"{vectors.terminal_ids} terminal, {vectors.retryable_ids} retryable",
+        "vectors",
+        phases["vectors"],
+    )
+
+    return phases
+
+
 def coupling_candidates(
     db: sqlite3.Connection,
     *,

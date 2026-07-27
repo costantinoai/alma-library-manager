@@ -2328,11 +2328,7 @@ def maintain_citation_graph_periodic() -> None:
     logger.info("Starting periodic citation graph maintenance")
     try:
         from alma.api.deps import open_db_connection
-        from alma.application.discovery.frontier import (
-            build_discovery_frontier,
-            build_frontier,
-            fill_frontier_vectors,
-        )
+        from alma.application.discovery.frontier import run_frontier_maintenance
         from alma.openalex.client import backfill_missing_publication_references
 
         conn = open_db_connection()
@@ -2342,20 +2338,11 @@ def maintain_citation_graph_periodic() -> None:
             # (write_section); this flushes any residual on this own connection.
             commit_with_retry(conn, label="citation graph reference backfill")
 
-            frontier = build_frontier(conn)
-            # End frontier metadata write before S2 vector HTTP begins.
-            commit_with_retry(conn, label="discovery frontier build")
-
-            discovery_frontier = build_discovery_frontier(conn)
-            commit_with_retry(conn, label="discovery source frontier build")
-
-            vectors = fill_frontier_vectors(conn)
-            commit_with_retry(conn, label="discovery frontier vector fill")
+            # The three frontier phases and the commit between each network
+            # phase live in ONE place, shared with the manual rebuild button.
             result = {
                 "references": references,
-                "frontier": frontier.as_dict(),
-                "discovery_frontier": discovery_frontier.as_dict(),
-                "vectors": vectors.as_dict(),
+                **run_frontier_maintenance(conn, job_id=job_id),
             }
             set_job_status(
                 job_id,

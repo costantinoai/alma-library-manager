@@ -1006,6 +1006,70 @@ def clear_recommendations(
     )
 
 
+@router.post(
+    "/frontier/rebuild",
+    summary="Rebuild the candidate frontier",
+)
+def rebuild_frontier(
+    _user: dict = Depends(get_current_user),
+):
+    """Build the citation/query frontier on demand.
+
+    The frontier is what lets Discovery return a paper the corpus has never
+    held: works cited by the Library that we hold no row for, plus query and
+    taste leads, each carrying an S2 vector so the dense lane can reach it.
+    Until now it was built only by the periodic citation-graph job, so a fresh
+    install had an empty frontier and a dense lane that could only re-rank
+    papers already in the corpus.
+
+    Runs in the background on its own connection: the three phases each make
+    network calls, and a request connection may not hold a write txn across
+    those (CLAUDE.md → SQLite write discipline).
+    """
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+    from alma.application.discovery.frontier import run_frontier_maintenance
+
+    operation_key = "discovery.frontier.rebuild"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="Frontier rebuild already running",
+        )
+
+    job_id = f"frontier_rebuild_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=utcnow().isoformat(),
+        message="Rebuilding the candidate frontier",
+    )
+
+    def _runner() -> dict:
+        bg_conn = open_db_connection()
+        try:
+            return run_frontier_maintenance(bg_conn, job_id=job_id)
+        finally:
+            bg_conn.close()
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="Frontier rebuild queued",
+    )
+
+
 @router.get(
     "/stats",
     summary="Get discovery stats",
