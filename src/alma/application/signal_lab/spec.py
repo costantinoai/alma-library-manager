@@ -26,6 +26,22 @@ from typing import Any, Literal
 #              (metric / boundary information)
 RegionMode = Literal["within", "boundary"]
 
+# Which single attribute a MATCHED-PAIR round isolates.
+#
+# A triplet round asks "which of these do you prefer", and the papers differ on
+# every axis at once — topic, venue, authors, method, era. That one bit of
+# preference cannot be attributed to any single attribute without confounding
+# it with the rest, which is why the triplet games fit only region, a global
+# utility direction, and (from within-region rounds, where topic is held
+# roughly constant) authors.
+#
+# A matched-pair round is drawn so the two papers agree on region and differ on
+# exactly ONE attribute. The same single bit then carries clean evidence about
+# that attribute, because nothing else varied. Venue is the first axis because
+# SPECTER2 does not encode the journal at all, so no existing signal can learn
+# "at equal topic, which venue would you rather read".
+ContrastAxis = Literal["venue"]
+
 
 @dataclass(frozen=True)
 class DrawSpec:
@@ -33,6 +49,12 @@ class DrawSpec:
 
     region_mode: RegionMode
     k: int = 3  # papers per round
+    contrast: ContrastAxis | None = None
+    """Set for MATCHED-PAIR games: the one attribute the pair isolates.
+
+    ``None`` is the ordinary triplet draw. When set, the policy draws papers
+    that agree on region and differ on this attribute, and the fit attributes
+    the resulting preference to it."""
 
 
 @dataclass(frozen=True)
