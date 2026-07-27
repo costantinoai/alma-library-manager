@@ -144,7 +144,12 @@ SUPER_REGION_VERSION = "2026.07-1"
 #            prior, so ranking and terrain do not count the prior twice.
 # 2026.07-3: deduplicate accidental repeated query sets; fit the diagonal
 #            metric ensemble used by full-outcome odd-one-out acquisition.
-SIGNAL_LAB_FIT_VERSION = "2026.07-3"
+# 2026.07-4: the author head (`author_offsets`). MUST bump: the payload gained
+#            a key, and the view's fingerprint keys only on round count/max-id,
+#            so without this every existing install keeps a model with no
+#            `author_offsets` until the next answered round — the head would be
+#            fitted and then read by nobody.
+SIGNAL_LAB_FIT_VERSION = "2026.07-4"
 # v2: full-pool candidates, full-outcome EIG, true staleness, recent-query
 # cooldown, posterior edge priority, and deck-conditioned diversity.
 SIGNAL_LAB_POLICY_VERSION = 2
