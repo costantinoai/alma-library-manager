@@ -151,6 +151,14 @@ atomically; a failure leaves none of them behind.
 
 ## Author placement
 
+Papers and authors are two views of ONE territory, so they live on **one page**
+behind a Papers / Authors switcher (Map, 2026-07-27) — same masthead, same
+guide, same plate; only the substrate changes. The Authors page is
+people-management: who you follow, who to follow next, and which identities
+need a decision. The identity lookups both surfaces need (who is followed, who
+is currently suggested) come from one hook, `useAuthorIdentity`, over the same
+query caches, so the map and the page cannot disagree.
+
 Authors do not get a second manifold projection. An author is eligible only
 when at least two of their papers are already placed on the corpus paper
 substrate; their coordinate is the centroid of those paper positions. This

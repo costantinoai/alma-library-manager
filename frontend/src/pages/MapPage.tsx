@@ -44,7 +44,12 @@ import {
   useMapSessionState,
 } from '@/components/map/mapSessionState'
 import { useRegionSelection } from '@/components/map/useRegionSelection'
+import { AuthorMapPanel } from '@/components/map/AuthorMapPanel'
 import { useSignalField } from '@/components/map/useSignalField'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+
+/** The two substrates this page can draw. */
+type MapKind = 'papers' | 'authors'
 import {
   MapDisplayTuningRows,
   MapModeSwitch,
@@ -141,6 +146,9 @@ export function MapPage() {
     'blend',
     PAPER_MAP_DEFAULTS.blend,
   )
+  // Which substrate is on the plate. Session-scoped like every other map
+  // control, so switching tabs and coming back keeps the view you were in.
+  const [mapKind, setMapKind] = useMapSessionState<MapKind>('paper-map', 'kind', 'papers')
   const [payload, setPayload] = useState<GraphData | null>(null)
   const [selected, setSelected] = useState<GraphNode | null>(null)
   // Region selection (lasso): the inspector characterises the selected
@@ -351,7 +359,11 @@ export function MapPage() {
       <PageIntro
         icon={MapIcon}
         lede="Your corpus as territory."
-        detail="Every paper placed by what it is about — click one to inspect it, its cluster, and its neighbourhood."
+        detail={
+          mapKind === 'authors'
+            ? 'Every author placed by what they write about — click one to inspect them, their community, and who sits nearby.'
+            : 'Every paper placed by what it is about — click one to inspect it, its cluster, and its neighbourhood.'
+        }
         tour={<PageTour pageKey="map" steps={MAP_TOUR} />}
         meta={<MetaLine items={[<span>Layout rebuilt under Fine tuning, never per visit</span>]} />}
         guide={{
@@ -385,620 +397,643 @@ export function MapPage() {
         }}
       />
 
-      <div className="space-y-4">
-        <div data-tour="map-plate">
-        <GraphMapView
-          endpoint="paper-map"
-          params={params}
-          nodeKind={(n) => (n.in_library === false ? 'corpus' : 'library')}
-          onPayload={setPayload}
-          selectedNodeId={selected?.id ?? null}
-          focusClusterId={
-            selected && typeof selected.cluster_id === 'number' && selected.cluster_id >= 0
-              ? selected.cluster_id
-              : null
-          }
-          sizeScale={sizeScale}
-          dotOpacity={dotOpacity}
-          terrainOpacity={terrainOpacity}
-          toponymScale={wordScale}
-          toponymWordCount={wordCount}
-          // Popup-primary click semantics: the shared mini-card opens at the
-          // dot; selection + cluster focus + inspector remain side effects.
-          // Background clears both the card (inside SemanticMap) and focus.
-          onOpenNode={(n) => {
-            regionSel.clear()
-            setSelected(n)
-          }}
-          onBackgroundClick={() => {
-            setSelected(null)
-            regionSel.clear()
-          }}
-          lassoMode={selectMode}
-          onLasso={(ids, anchor) => {
-            setSelected(null)
-            setSelectMode(false)
-            regionSel.select(ids, anchor)
-          }}
-          // BOTH surfaces, deliberately (user call 2026-07-26): the on-plate
-          // card answers the gesture where it happened, the dense drilldown
-          // below keeps the full breakdown. A spatial act needs immediate
-          // feedback; a region worth reading needs room.
-          plateOverlay={
-            region && (
-              <MapRegionCard
-                kind="Area"
-                icon={<LassoSelect className="h-3.5 w-3.5 text-alma-folio" />}
-                count={region.papers.length}
-                pending={regionSel.describing}
-                insufficient={region.papers.length < 5}
-                insufficientMessage="Too few papers to characterize — drag a larger patch (5+)."
-                onClose={() => regionSel.clear()}
-                actions={
-                  <CreateSelectionLensButton
-                    ids={regionIds ?? []}
-                    scope={scope}
-                    selectionKind="papers"
-                    name={`${regionSel.description?.label ?? 'Map selection'} · map selection`}
-                    onCreated={() => regionSel.clear()}
-                  />
-                }
-              >
-                <p className="text-sm font-semibold capitalize text-alma-800">
-                  {regionSel.description?.label ?? `${region.papers.length} papers`}
-                </p>
-                <p className="mt-1.5 text-[11px] text-slate-500">
-                  {region.inLibrary} in your library ·{' '}
-                  {region.papers.length - region.inLibrary} tracked
-                  {region.areaScore != null
-                    ? ` · area score ${Math.round(region.areaScore)}/100`
-                    : ''}
-                </p>
-                {region.highest.length > 0 && (
-                  <ul className="mt-1.5 space-y-0.5">
-                    {region.highest.map(({ node }) => (
-                      <li key={node.id} className="line-clamp-1 text-[11px] text-slate-400">
-                        · {node.name}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <p className="mt-2 text-[11px] text-slate-400">
-                  Full breakdown — vocabulary, strongest and weakest papers, top
-                  authors — is in the Region panel below.
-                </p>
-              </MapRegionCard>
-            )
-          }
-          hoverCard={(n) => {
-            const score = scoresById.get(n.id)
-            const areaScore =
-              typeof n.cluster_id === 'number' && n.cluster_id >= 0
-                ? clusterAreaScores.get(n.cluster_id)
-                : undefined
-            return (
-              <>
-                <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
-                {typeof n.metadata?.authors === 'string' && n.metadata.authors && (
-                  <p className="mt-0.5 line-clamp-1 text-slate-500">{String(n.metadata.authors)}</p>
-                )}
-                <p className="mt-0.5 text-slate-500">
-                  {n.in_library === false ? 'Tracked' : 'In your library'}
-                  {n.metadata?.year ? ` · ${n.metadata.year}` : ''}
-                  {n.metadata?.journal ? ` · ${String(n.metadata.journal)}` : ''}
-                  {typeof n.metadata?.cited_by_count === 'number'
-                    ? ` · ${n.metadata.cited_by_count} citations`
-                    : ''}
-                </p>
-                {(score != null || areaScore != null) && (
-                  <p className="mt-0.5 font-medium text-alma-800">
-                    {score != null ? `Score ${Math.round(score)}/100` : 'Never scored'}
-                    {areaScore != null ? ` · area ${Math.round(areaScore)}/100` : ''}
+      <ToggleGroup
+        type="single"
+        variant="segment"
+        value={mapKind}
+        onValueChange={(next) => next && setMapKind(next as MapKind)}
+        aria-label="Which map to show"
+        className="w-fit"
+        data-tour="map-kind"
+      >
+        <ToggleGroupItem value="papers">Papers</ToggleGroupItem>
+        <ToggleGroupItem value="authors">Authors</ToggleGroupItem>
+      </ToggleGroup>
+
+      {/* Papers and authors are two views of ONE territory, so they share
+          this page: same masthead, same guide, same plate — only the
+          substrate changes (user call 2026-07-27). The author map used to be
+          a banded section on the Authors page, which left that page carrying
+          a map AND people-management, and split the map vocabulary across
+          two surfaces. */}
+      {mapKind === 'authors' ? (
+        <AuthorMapPanel />
+      ) : (
+        <div className="space-y-4">
+          <div data-tour="map-plate">
+          <GraphMapView
+            endpoint="paper-map"
+            params={params}
+            nodeKind={(n) => (n.in_library === false ? 'corpus' : 'library')}
+            onPayload={setPayload}
+            selectedNodeId={selected?.id ?? null}
+            focusClusterId={
+              selected && typeof selected.cluster_id === 'number' && selected.cluster_id >= 0
+                ? selected.cluster_id
+                : null
+            }
+            sizeScale={sizeScale}
+            dotOpacity={dotOpacity}
+            terrainOpacity={terrainOpacity}
+            toponymScale={wordScale}
+            toponymWordCount={wordCount}
+            // Popup-primary click semantics: the shared mini-card opens at the
+            // dot; selection + cluster focus + inspector remain side effects.
+            // Background clears both the card (inside SemanticMap) and focus.
+            onOpenNode={(n) => {
+              regionSel.clear()
+              setSelected(n)
+            }}
+            onBackgroundClick={() => {
+              setSelected(null)
+              regionSel.clear()
+            }}
+            lassoMode={selectMode}
+            onLasso={(ids, anchor) => {
+              setSelected(null)
+              setSelectMode(false)
+              regionSel.select(ids, anchor)
+            }}
+            // BOTH surfaces, deliberately (user call 2026-07-26): the on-plate
+            // card answers the gesture where it happened, the dense drilldown
+            // below keeps the full breakdown. A spatial act needs immediate
+            // feedback; a region worth reading needs room.
+            plateOverlay={
+              region && (
+                <MapRegionCard
+                  kind="Area"
+                  icon={<LassoSelect className="h-3.5 w-3.5 text-alma-folio" />}
+                  count={region.papers.length}
+                  pending={regionSel.describing}
+                  insufficient={region.papers.length < 5}
+                  insufficientMessage="Too few papers to characterize — drag a larger patch (5+)."
+                  onClose={() => regionSel.clear()}
+                  actions={
+                    <CreateSelectionLensButton
+                      ids={regionIds ?? []}
+                      scope={scope}
+                      selectionKind="papers"
+                      name={`${regionSel.description?.label ?? 'Map selection'} · map selection`}
+                      onCreated={() => regionSel.clear()}
+                    />
+                  }
+                >
+                  <p className="text-sm font-semibold capitalize text-alma-800">
+                    {regionSel.description?.label ?? `${region.papers.length} papers`}
                   </p>
-                )}
-                {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
-                  <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
-                )}
-                {typeof n.metadata?.cluster_label === 'string' &&
-                  n.metadata.cluster_label !== 'Unclustered' && (
-                    <p className="mt-0.5 text-slate-400">cluster: {String(n.metadata.cluster_label)}</p>
+                  <p className="mt-1.5 text-[11px] text-slate-500">
+                    {region.inLibrary} in your library ·{' '}
+                    {region.papers.length - region.inLibrary} tracked
+                    {region.areaScore != null
+                      ? ` · area score ${Math.round(region.areaScore)}/100`
+                      : ''}
+                  </p>
+                  {region.highest.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5">
+                      {region.highest.map(({ node }) => (
+                        <li key={node.id} className="line-clamp-1 text-[11px] text-slate-400">
+                          · {node.name}
+                        </li>
+                      ))}
+                    </ul>
                   )}
-              </>
-            )
-          }}
-          renderClickCard={(n, close) => {
-            const paperId = String(n.metadata?.paper_id ?? n.id)
-            const score = scoresById.get(n.id)
-            return (
-              <CorpusMapPaperPopup
-                paperId={paperId}
-                onClose={close}
-                onOpenDetails={() => {
-                  close()
-                  void openPaperDetails(paperId)
-                }}
-                fallback={{
-                  id: paperId,
-                  title: n.name,
-                  authors:
-                    typeof n.metadata?.authors === 'string'
-                      ? n.metadata.authors
-                      : undefined,
-                  year:
-                    typeof n.metadata?.year === 'number'
-                      ? n.metadata.year
-                      : undefined,
-                  journal:
-                    typeof n.metadata?.journal === 'string'
-                      ? n.metadata.journal
-                      : undefined,
-                  citedByCount:
-                    typeof n.metadata?.cited_by_count === 'number'
-                      ? n.metadata.cited_by_count
-                      : undefined,
-                  score,
-                  statusLabel: n.in_library === false ? 'Tracked' : 'In your library',
-                  clusterLabel:
-                    typeof n.metadata?.cluster_label === 'string'
-                      ? n.metadata.cluster_label
-                      : undefined,
-                  neighbours: popupNeighbours(payload, n.id),
-                }}
-              />
-            )
-          }}
-          height={620}
-          toolbarExtras={
-            <>
-              {/* Real box, not `display:contents` — a spotlight needs a
-                  measurable rect, and the child is inline-flex either way. */}
-              <span data-tour="map-scope" className="inline-flex">
-                <MapModeSwitch
-                  value={scope}
-                  onChange={(v) => {
-                    setScope(v)
-                    setSelected(null)
-                    regionSel.clear()
-                  }}
-                  options={[
-                    { value: 'corpus', label: 'Corpus', title: 'Every tracked paper' },
-                    { value: 'library', label: 'Library', title: 'Only papers you saved' },
-                  ]}
-                />
-              </span>
-              <button
-                type="button"
-                data-tour="map-select"
-                onClick={() => {
-                  setSelectMode((s) => !s)
-                  regionSel.clear()
-                }}
-                className={
-                  selectMode
-                    ? 'inline-flex items-center gap-1.5 rounded-sm border border-accent-edge bg-accent-soft px-2.5 py-1 text-xs font-medium text-alma-folio'
-                    : 'inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet'
-                }
-                title="Drag a box around a patch of papers — the inspector characterises the region (vocabulary, area score, strongest papers, top authors)"
-              >
-                <LassoSelect className="h-3.5 w-3.5" />
-                Select region
-              </button>
-              <MapTuningPopover title="Fine tuning — terrain opacity, cluster detail, dot size, dot opacity, words, layout blend, rebuilds">
-                <SliderRow
-                  label="Cluster detail"
-                  value={resolution}
-                  min={0.5}
-                  max={3}
-                  step={0.1}
-                  format={(v) => `${v.toFixed(1)}×`}
-                  onCommit={(v) => setResolution(Number(v.toFixed(1)))}
-                />
-                <MapDisplayTuningRows
-                  sizeScale={sizeScale}
-                  onSizeScale={setSizeScale}
-                  dotOpacity={dotOpacity}
-                  onDotOpacity={setDotOpacity}
-                  terrainOpacity={terrainOpacity}
-                  onTerrainOpacity={setTerrainOpacity}
-                  wordScale={wordScale}
-                  onWordScale={setWordScale}
-                  wordCount={wordCount}
-                  onWordCount={setWordCount}
-                />
-                  {scope === 'library' ? (
-                    <div className="space-y-3 border-t border-[var(--color-border)] pt-3">
-                      <p className="font-medium text-alma-800">
-                        Layout blend
-                        <span className="ml-1 font-normal text-slate-400">
-                          — pull related papers together
-                        </span>
-                      </p>
-                      <SliderRow label="Semantic" value={blend.sem} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, sem: v }))} />
-                      <SliderRow label="Shared authors" value={blend.coauth} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, coauth: v }))} />
-                      <SliderRow label="Shared references" value={blend.refs} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, refs: v }))} />
-                      <SliderRow label="Cited together" value={blend.cocite} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, cocite: v }))} />
-                    </div>
-                  ) : (
-                    <p className="border-t border-[var(--color-border)] pt-2 text-[11px] text-slate-400">
-                      Layout blend is available on the Library scope — the corpus keeps the fast cached layout.
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    Full breakdown — vocabulary, strongest and weakest papers, top
+                    authors — is in the Region panel below.
+                  </p>
+                </MapRegionCard>
+              )
+            }
+            hoverCard={(n) => {
+              const score = scoresById.get(n.id)
+              const areaScore =
+                typeof n.cluster_id === 'number' && n.cluster_id >= 0
+                  ? clusterAreaScores.get(n.cluster_id)
+                  : undefined
+              return (
+                <>
+                  <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
+                  {typeof n.metadata?.authors === 'string' && n.metadata.authors && (
+                    <p className="mt-0.5 line-clamp-1 text-slate-500">{String(n.metadata.authors)}</p>
+                  )}
+                  <p className="mt-0.5 text-slate-500">
+                    {n.in_library === false ? 'Tracked' : 'In your library'}
+                    {n.metadata?.year ? ` · ${n.metadata.year}` : ''}
+                    {n.metadata?.journal ? ` · ${String(n.metadata.journal)}` : ''}
+                    {typeof n.metadata?.cited_by_count === 'number'
+                      ? ` · ${n.metadata.cited_by_count} citations`
+                      : ''}
+                  </p>
+                  {(score != null || areaScore != null) && (
+                    <p className="mt-0.5 font-medium text-alma-800">
+                      {score != null ? `Score ${Math.round(score)}/100` : 'Never scored'}
+                      {areaScore != null ? ` · area ${Math.round(areaScore)}/100` : ''}
                     </p>
                   )}
-                  <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2">
-                    <Button size="sm" variant="outline" className="w-full" disabled={rebuildMutation.isPending} onClick={() => rebuildMutation.mutate()}>
-                      Rebuild layout ({scope})
-                    </Button>
-                    <Button size="sm" variant="outline" className="w-full" disabled={relabelMutation.isPending} onClick={() => relabelMutation.mutate()}>
-                      Refresh cluster labels
-                    </Button>
-                  </div>
-              </MapTuningPopover>
-            </>
-          }
-        />
-        </div>
-
-        {/* Drilldowns live BELOW the full-width plate. Selecting a paper
-            reveals two balanced columns: paper/relationships and
-            cluster/authors (user call 2026-07-26). */}
-        {region ? (
-          <Card>
-            <CardContent className="space-y-4 p-4 text-xs">
-              <div className="flex items-start justify-between gap-2">
-                <p className="text-sm font-semibold text-alma-800">
-                  Region — {region.papers.length} papers
-                </p>
+                  {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
+                    <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
+                  )}
+                  {typeof n.metadata?.cluster_label === 'string' &&
+                    n.metadata.cluster_label !== 'Unclustered' && (
+                      <p className="mt-0.5 text-slate-400">cluster: {String(n.metadata.cluster_label)}</p>
+                    )}
+                </>
+              )
+            }}
+            renderClickCard={(n, close) => {
+              const paperId = String(n.metadata?.paper_id ?? n.id)
+              const score = scoresById.get(n.id)
+              return (
+                <CorpusMapPaperPopup
+                  paperId={paperId}
+                  onClose={close}
+                  onOpenDetails={() => {
+                    close()
+                    void openPaperDetails(paperId)
+                  }}
+                  fallback={{
+                    id: paperId,
+                    title: n.name,
+                    authors:
+                      typeof n.metadata?.authors === 'string'
+                        ? n.metadata.authors
+                        : undefined,
+                    year:
+                      typeof n.metadata?.year === 'number'
+                        ? n.metadata.year
+                        : undefined,
+                    journal:
+                      typeof n.metadata?.journal === 'string'
+                        ? n.metadata.journal
+                        : undefined,
+                    citedByCount:
+                      typeof n.metadata?.cited_by_count === 'number'
+                        ? n.metadata.cited_by_count
+                        : undefined,
+                    score,
+                    statusLabel: n.in_library === false ? 'Tracked' : 'In your library',
+                    clusterLabel:
+                      typeof n.metadata?.cluster_label === 'string'
+                        ? n.metadata.cluster_label
+                        : undefined,
+                    neighbours: popupNeighbours(payload, n.id),
+                  }}
+                />
+              )
+            }}
+            height={620}
+            toolbarExtras={
+              <>
+                {/* Real box, not `display:contents` — a spotlight needs a
+                    measurable rect, and the child is inline-flex either way. */}
+                <span data-tour="map-scope" className="inline-flex">
+                  <MapModeSwitch
+                    value={scope}
+                    onChange={(v) => {
+                      setScope(v)
+                      setSelected(null)
+                      regionSel.clear()
+                    }}
+                    options={[
+                      { value: 'corpus', label: 'Corpus', title: 'Every tracked paper' },
+                      { value: 'library', label: 'Library', title: 'Only papers you saved' },
+                    ]}
+                  />
+                </span>
                 <button
                   type="button"
-                  onClick={() => regionSel.clear()}
-                  className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
-                  aria-label="Clear region"
+                  data-tour="map-select"
+                  onClick={() => {
+                    setSelectMode((s) => !s)
+                    regionSel.clear()
+                  }}
+                  className={
+                    selectMode
+                      ? 'inline-flex items-center gap-1.5 rounded-sm border border-accent-edge bg-accent-soft px-2.5 py-1 text-xs font-medium text-alma-folio'
+                      : 'inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet'
+                  }
+                  title="Drag a box around a patch of papers — the inspector characterises the region (vocabulary, area score, strongest papers, top authors)"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <LassoSelect className="h-3.5 w-3.5" />
+                  Select region
                 </button>
-              </div>
-              {regionSel.describing && <p className="text-slate-400">Characterising…</p>}
-              {regionDesc?.sufficient && regionDesc.label && (
-                <p className="font-medium text-alma-800">“{regionDesc.label}”</p>
-              )}
-              {regionDesc && !regionDesc.sufficient && (
-                <p className="text-slate-400">Too few papers to characterise the vocabulary.</p>
-              )}
-              {(regionDesc?.top_terms ?? []).length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {(regionDesc?.top_terms ?? []).slice(0, 8).map((term) => (
-                    <StatusBadge key={term} tone="neutral" size="sm">{term}</StatusBadge>
-                  ))}
-                </div>
-              )}
-              <p className="text-slate-500">
-                {region.inLibrary} in your library · {region.papers.length - region.inLibrary} tracked
-                {region.areaScore != null
-                  ? ` · area score ${Math.round(region.areaScore)}/100 (${region.scored.length} scored)`
-                  : ' · no scored papers here yet'}
-              </p>
-              <div className="grid gap-4 border-t border-[var(--color-border)] pt-3 md:grid-cols-3">
-                <div>
-                  <p className="mb-1 font-medium text-alma-800">Strongest here</p>
-                  <ul className="space-y-1">
-                    {region.highest.map(({ node, score }) => (
-                      <li key={node.id} className="flex items-baseline justify-between gap-2">
-                        <button
-                          type="button"
-                          className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
-                          onClick={() => {
-                            regionSel.clear()
-                            setSelected(node)
-                          }}
-                        >
-                          {node.name}
-                        </button>
-                        <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <p className="mb-1 font-medium text-alma-800">Weakest here</p>
-                  <ul className="space-y-1">
-                    {region.lowest.map(({ node, score }) => (
-                      <li key={node.id} className="flex items-baseline justify-between gap-2">
-                        <button
-                          type="button"
-                          className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
-                          onClick={() => {
-                            regionSel.clear()
-                            setSelected(node)
-                          }}
-                        >
-                          {node.name}
-                        </button>
-                        <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <p className="mb-1 font-medium text-alma-800">Most present authors</p>
-                  <ul className="space-y-1">
-                    {region.topAuthors.map(([name, count]) => (
-                      <li key={name} className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-slate-600">{name}</span>
-                        <span className="shrink-0 tabular-nums text-slate-400">{count}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : selected ? (
-          <div className="grid items-start gap-4 lg:grid-cols-2">
+                <MapTuningPopover title="Fine tuning — terrain opacity, cluster detail, dot size, dot opacity, words, layout blend, rebuilds">
+                  <SliderRow
+                    label="Cluster detail"
+                    value={resolution}
+                    min={0.5}
+                    max={3}
+                    step={0.1}
+                    format={(v) => `${v.toFixed(1)}×`}
+                    onCommit={(v) => setResolution(Number(v.toFixed(1)))}
+                  />
+                  <MapDisplayTuningRows
+                    sizeScale={sizeScale}
+                    onSizeScale={setSizeScale}
+                    dotOpacity={dotOpacity}
+                    onDotOpacity={setDotOpacity}
+                    terrainOpacity={terrainOpacity}
+                    onTerrainOpacity={setTerrainOpacity}
+                    wordScale={wordScale}
+                    onWordScale={setWordScale}
+                    wordCount={wordCount}
+                    onWordCount={setWordCount}
+                  />
+                    {scope === 'library' ? (
+                      <div className="space-y-3 border-t border-[var(--color-border)] pt-3">
+                        <p className="font-medium text-alma-800">
+                          Layout blend
+                          <span className="ml-1 font-normal text-slate-400">
+                            — pull related papers together
+                          </span>
+                        </p>
+                        <SliderRow label="Semantic" value={blend.sem} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, sem: v }))} />
+                        <SliderRow label="Shared authors" value={blend.coauth} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, coauth: v }))} />
+                        <SliderRow label="Shared references" value={blend.refs} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, refs: v }))} />
+                        <SliderRow label="Cited together" value={blend.cocite} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, cocite: v }))} />
+                      </div>
+                    ) : (
+                      <p className="border-t border-[var(--color-border)] pt-2 text-[11px] text-slate-400">
+                        Layout blend is available on the Library scope — the corpus keeps the fast cached layout.
+                      </p>
+                    )}
+                    <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2">
+                      <Button size="sm" variant="outline" className="w-full" disabled={rebuildMutation.isPending} onClick={() => rebuildMutation.mutate()}>
+                        Rebuild layout ({scope})
+                      </Button>
+                      <Button size="sm" variant="outline" className="w-full" disabled={relabelMutation.isPending} onClick={() => relabelMutation.mutate()}>
+                        Refresh cluster labels
+                      </Button>
+                    </div>
+                </MapTuningPopover>
+              </>
+            }
+          />
+          </div>
+
+          {/* Drilldowns live BELOW the full-width plate. Selecting a paper
+              reveals two balanced columns: paper/relationships and
+              cluster/authors (user call 2026-07-26). */}
+          {region ? (
             <Card>
               <CardContent className="space-y-4 p-4 text-xs">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                      Paper drilldown
-                    </p>
-                    <h2 className="mt-1 text-base font-semibold leading-snug text-alma-800">
-                      {selectedPaper?.title || selected.name}
-                    </h2>
-                  </div>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-alma-800">
+                    Region — {region.papers.length} papers
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setSelected(null)}
-                    className="shrink-0 rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
-                    aria-label="Clear selection"
+                    onClick={() => regionSel.clear()}
+                    className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
+                    aria-label="Clear region"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
-
-                {selectedPaperAuthorNames.length > 0 && (
-                  <p className="text-slate-500">{selectedPaperAuthorNames.join(' · ')}</p>
+                {regionSel.describing && <p className="text-slate-400">Characterising…</p>}
+                {regionDesc?.sufficient && regionDesc.label && (
+                  <p className="font-medium text-alma-800">“{regionDesc.label}”</p>
                 )}
-                <div className="flex flex-wrap gap-1">
-                  <StatusBadge tone={selected.in_library === false ? 'neutral' : 'accent'} size="sm">
-                    {selected.in_library === false ? 'Tracked corpus' : 'In your library'}
-                  </StatusBadge>
-                  {selectedYear != null && (
-                    <StatusBadge tone="neutral" size="sm">
-                      {selectedYear}
-                    </StatusBadge>
-                  )}
-                  {selectedJournal && (
-                    <StatusBadge tone="neutral" size="sm">
-                      {selectedJournal}
-                    </StatusBadge>
-                  )}
-                  {(selectedPaper?.cited_by_count ??
-                    (typeof selected.metadata?.cited_by_count === 'number'
-                      ? selected.metadata.cited_by_count
-                      : 0)) > 0 && (
-                    <StatusBadge tone="neutral" size="sm">
-                      {(selectedPaper?.cited_by_count ??
-                        Number(selected.metadata?.cited_by_count ?? 0)).toLocaleString()} citations
-                    </StatusBadge>
-                  )}
-                </div>
-
-                {scoresById.get(selected.id) != null && (
-                  <div className="flex items-center justify-between rounded-sm border border-edge-2 px-3 py-2">
-                    <div>
-                      <p className="font-medium text-alma-800">Internal score</p>
-                      <p className="text-[10px] text-slate-400">Latest Discovery relevance</p>
-                    </div>
-                    <ScoreMeter score={scoresById.get(selected.id) as number} />
+                {regionDesc && !regionDesc.sufficient && (
+                  <p className="text-slate-400">Too few papers to characterise the vocabulary.</p>
+                )}
+                {(regionDesc?.top_terms ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(regionDesc?.top_terms ?? []).slice(0, 8).map((term) => (
+                      <StatusBadge key={term} tone="neutral" size="sm">{term}</StatusBadge>
+                    ))}
                   </div>
                 )}
-
-                {selectedPaper?.tldr && (
-                  <div className="rounded-sm border border-edge-2 bg-surface-2 px-3 py-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                      TLDR
-                    </p>
-                    <p className="text-xs italic leading-relaxed text-slate-600">
-                      {selectedPaper.tldr}
-                    </p>
-                  </div>
-                )}
-                {selectedPaper?.abstract && (
+                <p className="text-slate-500">
+                  {region.inLibrary} in your library · {region.papers.length - region.inLibrary} tracked
+                  {region.areaScore != null
+                    ? ` · area score ${Math.round(region.areaScore)}/100 (${region.scored.length} scored)`
+                    : ' · no scored papers here yet'}
+                </p>
+                <div className="grid gap-4 border-t border-[var(--color-border)] pt-3 md:grid-cols-3">
                   <div>
-                    <p className="mb-1 font-medium text-alma-800">Abstract</p>
-                    <p className="line-clamp-6 leading-relaxed text-slate-600">
-                      {selectedPaper.abstract}
-                    </p>
-                  </div>
-                )}
-
-                <Button
-                  size="sm"
-                  onClick={() => void openPaperDetails(selectedPaperId as string)}
-                >
-                  <BookOpen className="mr-1.5 h-3.5 w-3.5" />
-                  Open full paper
-                </Button>
-
-                {neighbours.length > 0 && (
-                  <div className="border-t border-[var(--color-border)] pt-3">
-                    <p className="mb-2 font-medium text-alma-800">Strongest relationships</p>
-                    <ul className="space-y-2">
-                      {neighbours.map((neighbour) => (
-                        <li key={neighbour.id}>
+                    <p className="mb-1 font-medium text-alma-800">Strongest here</p>
+                    <ul className="space-y-1">
+                      {region.highest.map(({ node, score }) => (
+                        <li key={node.id} className="flex items-baseline justify-between gap-2">
                           <button
                             type="button"
-                            className="line-clamp-1 text-left font-medium text-slate-700 hover:text-alma-800 hover:underline"
+                            className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
                             onClick={() => {
-                              const node = payload?.nodes.find((item) => item.id === neighbour.id)
-                              if (node) setSelected(node)
+                              regionSel.clear()
+                              setSelected(node)
                             }}
                           >
-                            {neighbour.name}
+                            {node.name}
                           </button>
-                          <p className="text-[10px] text-slate-400">{neighbour.type}</p>
+                          <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
                         </li>
                       ))}
                     </ul>
+                  </div>
+                  <div>
+                    <p className="mb-1 font-medium text-alma-800">Weakest here</p>
+                    <ul className="space-y-1">
+                      {region.lowest.map(({ node, score }) => (
+                        <li key={node.id} className="flex items-baseline justify-between gap-2">
+                          <button
+                            type="button"
+                            className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
+                            onClick={() => {
+                              regionSel.clear()
+                              setSelected(node)
+                            }}
+                          >
+                            {node.name}
+                          </button>
+                          <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="mb-1 font-medium text-alma-800">Most present authors</p>
+                    <ul className="space-y-1">
+                      {region.topAuthors.map(([name, count]) => (
+                        <li key={name} className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-slate-600">{name}</span>
+                          <span className="shrink-0 tabular-nums text-slate-400">{count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : selected ? (
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              <Card>
+                <CardContent className="space-y-4 p-4 text-xs">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                        Paper drilldown
+                      </p>
+                      <h2 className="mt-1 text-base font-semibold leading-snug text-alma-800">
+                        {selectedPaper?.title || selected.name}
+                      </h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(null)}
+                      className="shrink-0 rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
+                      aria-label="Clear selection"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  {selectedPaperAuthorNames.length > 0 && (
+                    <p className="text-slate-500">{selectedPaperAuthorNames.join(' · ')}</p>
+                  )}
+                  <div className="flex flex-wrap gap-1">
+                    <StatusBadge tone={selected.in_library === false ? 'neutral' : 'accent'} size="sm">
+                      {selected.in_library === false ? 'Tracked corpus' : 'In your library'}
+                    </StatusBadge>
+                    {selectedYear != null && (
+                      <StatusBadge tone="neutral" size="sm">
+                        {selectedYear}
+                      </StatusBadge>
+                    )}
+                    {selectedJournal && (
+                      <StatusBadge tone="neutral" size="sm">
+                        {selectedJournal}
+                      </StatusBadge>
+                    )}
+                    {(selectedPaper?.cited_by_count ??
+                      (typeof selected.metadata?.cited_by_count === 'number'
+                        ? selected.metadata.cited_by_count
+                        : 0)) > 0 && (
+                      <StatusBadge tone="neutral" size="sm">
+                        {(selectedPaper?.cited_by_count ??
+                          Number(selected.metadata?.cited_by_count ?? 0)).toLocaleString()} citations
+                      </StatusBadge>
+                    )}
+                  </div>
+
+                  {scoresById.get(selected.id) != null && (
+                    <div className="flex items-center justify-between rounded-sm border border-edge-2 px-3 py-2">
+                      <div>
+                        <p className="font-medium text-alma-800">Internal score</p>
+                        <p className="text-[10px] text-slate-400">Latest Discovery relevance</p>
+                      </div>
+                      <ScoreMeter score={scoresById.get(selected.id) as number} />
+                    </div>
+                  )}
+
+                  {selectedPaper?.tldr && (
+                    <div className="rounded-sm border border-edge-2 bg-surface-2 px-3 py-2">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                        TLDR
+                      </p>
+                      <p className="text-xs italic leading-relaxed text-slate-600">
+                        {selectedPaper.tldr}
+                      </p>
+                    </div>
+                  )}
+                  {selectedPaper?.abstract && (
+                    <div>
+                      <p className="mb-1 font-medium text-alma-800">Abstract</p>
+                      <p className="line-clamp-6 leading-relaxed text-slate-600">
+                        {selectedPaper.abstract}
+                      </p>
+                    </div>
+                  )}
+
+                  <Button
+                    size="sm"
+                    onClick={() => void openPaperDetails(selectedPaperId as string)}
+                  >
+                    <BookOpen className="mr-1.5 h-3.5 w-3.5" />
+                    Open full paper
+                  </Button>
+
+                  {neighbours.length > 0 && (
+                    <div className="border-t border-[var(--color-border)] pt-3">
+                      <p className="mb-2 font-medium text-alma-800">Strongest relationships</p>
+                      <ul className="space-y-2">
+                        {neighbours.map((neighbour) => (
+                          <li key={neighbour.id}>
+                            <button
+                              type="button"
+                              className="line-clamp-1 text-left font-medium text-slate-700 hover:text-alma-800 hover:underline"
+                              onClick={() => {
+                                const node = payload?.nodes.find((item) => item.id === neighbour.id)
+                                if (node) setSelected(node)
+                              }}
+                            >
+                              {neighbour.name}
+                            </button>
+                            <p className="text-[10px] text-slate-400">{neighbour.type}</p>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-2 text-[10px] text-slate-400">
+                        Turn on Links to see these relationships on the plate.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="space-y-4 p-4 text-xs">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                      Cluster &amp; authors
+                    </p>
+                    <h2 className="mt-1 text-base font-semibold text-alma-800">
+                      {selectedCluster?.label ?? 'Unclustered'}
+                    </h2>
+                  </div>
+
+                  {selectedCluster ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        <MetricTile label="Papers" value={selectedCluster.size} align="center" />
+                        <MetricTile
+                          label="Area score"
+                          value={
+                            clusterAreaScores.get(selectedCluster.id) != null
+                              ? Math.round(clusterAreaScores.get(selectedCluster.id) as number)
+                              : '—'
+                          }
+                          align="center"
+                        />
+                        <MetricTile
+                          label="Avg citations"
+                          value={
+                            selectedCluster.avg_citations != null
+                              ? Math.round(selectedCluster.avg_citations)
+                              : '—'
+                          }
+                          align="center"
+                        />
+                      </div>
+                      {selectedCluster.year_range?.min && (
+                        <p className="text-slate-500">
+                          Publication span {selectedCluster.year_range.min}–
+                          {selectedCluster.year_range.max ?? selectedCluster.year_range.min}
+                        </p>
+                      )}
+                      {(selectedCluster.top_topics ?? []).length > 0 && (
+                        <div>
+                          <p className="mb-1.5 font-medium text-alma-800">Cluster vocabulary</p>
+                          <div className="flex flex-wrap gap-1">
+                            {(selectedCluster.top_topics ?? []).slice(0, 8).map((topic) => (
+                              <StatusBadge key={topic} tone="neutral" size="sm">{topic}</StatusBadge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {(selectedCluster.sample_papers ?? []).length > 0 && (
+                        <div>
+                          <p className="mb-1.5 font-medium text-alma-800">Representative papers</p>
+                          <ul className="space-y-1">
+                            {(selectedCluster.sample_papers ?? []).slice(0, 4).map((paper, index) => (
+                              <li key={`${paper.title}-${index}`} className="text-slate-600">
+                                <span className="line-clamp-1">{paper.title}</span>
+                                <span className="text-[10px] text-slate-400">
+                                  {paper.year ? `${paper.year}` : ''}
+                                  {paper.cited_by_count != null
+                                    ? `${paper.year ? ' · ' : ''}${paper.cited_by_count} citations`
+                                    : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-slate-500">
+                      This paper is outside the current cluster assignment.
+                    </p>
+                  )}
+
+                  <div className="border-t border-[var(--color-border)] pt-3">
+                    <p className="mb-2 font-medium text-alma-800">Authors in this area</p>
+                    {selectedClusterAuthors.length > 0 ? (
+                      <ul className="grid gap-1.5 sm:grid-cols-2">
+                        {selectedClusterAuthors.map(([name, count]) => {
+                          const onPaper = selectedPaperAuthorNames.includes(name)
+                          return (
+                            <li key={name} className="flex min-w-0 items-center gap-2">
+                              <a
+                                href={`#/authors?q=${encodeURIComponent(name)}`}
+                                className="min-w-0 flex-1 truncate font-medium text-slate-700 hover:text-alma-800 hover:underline"
+                              >
+                                {name}
+                              </a>
+                              {onPaper && <StatusBadge tone="accent" size="sm">this paper</StatusBadge>}
+                              <span className="shrink-0 tabular-nums text-slate-400">{count}</span>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="text-slate-400">No author metadata is available for this area.</p>
+                    )}
                     <p className="mt-2 text-[10px] text-slate-400">
-                      Turn on Links to see these relationships on the plate.
+                      Count = papers by that author inside this cluster.
                     </p>
                   </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <Card data-tour="map-inspector">
               <CardContent className="space-y-4 p-4 text-xs">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                    Cluster &amp; authors
-                  </p>
-                  <h2 className="mt-1 text-base font-semibold text-alma-800">
-                    {selectedCluster?.label ?? 'Unclustered'}
-                  </h2>
+                <p className="text-sm font-semibold text-alma-800">Map overview</p>
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  <MetricTile label="Papers" value={payload?.nodes.length ?? '—'} align="center" />
+                  <MetricTile label="Links" value={payload?.edges.length ?? '—'} align="center" />
+                  <MetricTile label="Clusters" value={String(clustering.n_clusters ?? clusters.length ?? '—')} align="center" />
+                  <MetricTile
+                    label="Clustered"
+                    value={
+                      typeof clustering.coverage === 'number'
+                        ? `${Math.round((clustering.coverage as number) * 100)}%`
+                        : '—'
+                    }
+                    align="center"
+                  />
                 </div>
-
-                {selectedCluster ? (
-                  <>
-                    <div className="grid grid-cols-3 gap-2">
-                      <MetricTile label="Papers" value={selectedCluster.size} align="center" />
-                      <MetricTile
-                        label="Area score"
-                        value={
-                          clusterAreaScores.get(selectedCluster.id) != null
-                            ? Math.round(clusterAreaScores.get(selectedCluster.id) as number)
-                            : '—'
-                        }
-                        align="center"
-                      />
-                      <MetricTile
-                        label="Avg citations"
-                        value={
-                          selectedCluster.avg_citations != null
-                            ? Math.round(selectedCluster.avg_citations)
-                            : '—'
-                        }
-                        align="center"
-                      />
-                    </div>
-                    {selectedCluster.year_range?.min && (
-                      <p className="text-slate-500">
-                        Publication span {selectedCluster.year_range.min}–
-                        {selectedCluster.year_range.max ?? selectedCluster.year_range.min}
-                      </p>
-                    )}
-                    {(selectedCluster.top_topics ?? []).length > 0 && (
-                      <div>
-                        <p className="mb-1.5 font-medium text-alma-800">Cluster vocabulary</p>
-                        <div className="flex flex-wrap gap-1">
-                          {(selectedCluster.top_topics ?? []).slice(0, 8).map((topic) => (
-                            <StatusBadge key={topic} tone="neutral" size="sm">{topic}</StatusBadge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {(selectedCluster.sample_papers ?? []).length > 0 && (
-                      <div>
-                        <p className="mb-1.5 font-medium text-alma-800">Representative papers</p>
-                        <ul className="space-y-1">
-                          {(selectedCluster.sample_papers ?? []).slice(0, 4).map((paper, index) => (
-                            <li key={`${paper.title}-${index}`} className="text-slate-600">
-                              <span className="line-clamp-1">{paper.title}</span>
-                              <span className="text-[10px] text-slate-400">
-                                {paper.year ? `${paper.year}` : ''}
-                                {paper.cited_by_count != null
-                                  ? `${paper.year ? ' · ' : ''}${paper.cited_by_count} citations`
-                                  : ''}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-slate-500">
-                    This paper is outside the current cluster assignment.
-                  </p>
-                )}
-
+                <p className="text-[11px] text-slate-400">
+                  {String(clustering.method ?? '')}
+                  {clustering.stability != null ? ` · stability ${clustering.stability}` : ''}
+                  {typeof clustering.outlier_count === 'number'
+                    ? ` · ${clustering.outlier_count} unclustered`
+                    : ''}
+                </p>
                 <div className="border-t border-[var(--color-border)] pt-3">
-                  <p className="mb-2 font-medium text-alma-800">Authors in this area</p>
-                  {selectedClusterAuthors.length > 0 ? (
-                    <ul className="grid gap-1.5 sm:grid-cols-2">
-                      {selectedClusterAuthors.map(([name, count]) => {
-                        const onPaper = selectedPaperAuthorNames.includes(name)
-                        return (
-                          <li key={name} className="flex min-w-0 items-center gap-2">
-                            <a
-                              href={`#/authors?q=${encodeURIComponent(name)}`}
-                              className="min-w-0 flex-1 truncate font-medium text-slate-700 hover:text-alma-800 hover:underline"
-                            >
-                              {name}
-                            </a>
-                            {onPaper && <StatusBadge tone="accent" size="sm">this paper</StatusBadge>}
-                            <span className="shrink-0 tabular-nums text-slate-400">{count}</span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="text-slate-400">No author metadata is available for this area.</p>
-                  )}
-                  <p className="mt-2 text-[10px] text-slate-400">
-                    Count = papers by that author inside this cluster.
-                  </p>
+                  <p className="mb-1.5 font-medium text-alma-800">Largest clusters</p>
+                  <ul className="grid gap-x-6 gap-y-1 md:grid-cols-2">
+                    {clusters
+                      .slice()
+                      .sort((a, b) => b.size - a.size)
+                      .slice(0, 8)
+                      .map((cluster) => (
+                        <li key={cluster.id} className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-slate-600">{cluster.label}</span>
+                          <span className="shrink-0 tabular-nums text-slate-400">{cluster.size}</span>
+                        </li>
+                      ))}
+                  </ul>
                 </div>
+                <p className="text-[11px] text-slate-400">
+                  Click a paper for its popup and the paper / cluster / author drilldowns below.
+                </p>
               </CardContent>
             </Card>
-          </div>
-        ) : (
-          <Card data-tour="map-inspector">
-            <CardContent className="space-y-4 p-4 text-xs">
-              <p className="text-sm font-semibold text-alma-800">Map overview</p>
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                <MetricTile label="Papers" value={payload?.nodes.length ?? '—'} align="center" />
-                <MetricTile label="Links" value={payload?.edges.length ?? '—'} align="center" />
-                <MetricTile label="Clusters" value={String(clustering.n_clusters ?? clusters.length ?? '—')} align="center" />
-                <MetricTile
-                  label="Clustered"
-                  value={
-                    typeof clustering.coverage === 'number'
-                      ? `${Math.round((clustering.coverage as number) * 100)}%`
-                      : '—'
-                  }
-                  align="center"
-                />
-              </div>
-              <p className="text-[11px] text-slate-400">
-                {String(clustering.method ?? '')}
-                {clustering.stability != null ? ` · stability ${clustering.stability}` : ''}
-                {typeof clustering.outlier_count === 'number'
-                  ? ` · ${clustering.outlier_count} unclustered`
-                  : ''}
-              </p>
-              <div className="border-t border-[var(--color-border)] pt-3">
-                <p className="mb-1.5 font-medium text-alma-800">Largest clusters</p>
-                <ul className="grid gap-x-6 gap-y-1 md:grid-cols-2">
-                  {clusters
-                    .slice()
-                    .sort((a, b) => b.size - a.size)
-                    .slice(0, 8)
-                    .map((cluster) => (
-                      <li key={cluster.id} className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-slate-600">{cluster.label}</span>
-                        <span className="shrink-0 tabular-nums text-slate-400">{cluster.size}</span>
-                      </li>
-                    ))}
-                </ul>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Click a paper for its popup and the paper / cluster / author drilldowns below.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <PaperDetailPanel paper={panelPaper} open={panelOpen} onOpenChange={setPanelOpen} />
     </div>

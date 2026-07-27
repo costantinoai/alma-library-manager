@@ -60,12 +60,9 @@ export const FEED_TOUR: TourStep[] = [
   },
 ]
 
+// The author MAP is not here any more — it moved to the Map page behind the
+// Papers / Authors switcher (2026-07-27). This tour is about managing people.
 export const AUTHORS_TOUR: TourStep[] = [
-  {
-    target: '[data-tour="authors-network"]',
-    title: 'The people behind your corpus',
-    body: 'One shared space for authors, placed by what they write about. Filled dots are yours, hollow ones are suggestions. Drag a box around a patch to characterise it.',
-  },
   {
     target: '[data-tour="authors-suggestions"]',
     title: 'People you might follow',
@@ -113,6 +110,9 @@ export const LIBRARY_TOUR: TourStep[] = [
   },
 ]
 
+// Step order follows the page's own top-to-bottom order (lenses → performance
+// → Branch Studio → results). A tour that jumps back up the page reads as
+// broken even when every target resolves.
 export const DISCOVERY_TOUR: TourStep[] = [
   {
     target: '[data-tour="discovery-lenses"]',
@@ -120,14 +120,19 @@ export const DISCOVERY_TOUR: TourStep[] = [
     body: 'A lens is a saved lookout built from a set of papers. Switch lenses to point Discovery at different interests.',
   },
   {
-    target: '[data-tour="discovery-branches"]',
-    title: 'Branches shape what surfaces',
-    body: 'ALMa clusters each lens into branches. Pin, boost, or mute them under "Tune this lens" to steer where Discovery spends its effort.',
-  },
-  {
     target: '[data-tour="discovery-performance"]',
     title: 'Is it working?',
     body: 'Lens performance reads your reactions back: how much of what you save came from the lens core versus its exploratory push.',
+  },
+  {
+    target: '[data-tour="discovery-branches"]',
+    title: 'Branches shape what surfaces',
+    body: 'ALMa clusters each lens into branches — its sub-themes. Pin, boost, or mute them in Branch Studio to steer where the next refresh spends its effort.',
+  },
+  {
+    target: '[data-tour="discovery-map"]',
+    title: 'See where the suggestions sit',
+    body: 'Your library, this lens’s suggestions, and the space between. Click a suggestion to jump to its row, or lasso a region to explore it as a Direction.',
   },
   {
     target: '[data-tour="discovery-card"]',
@@ -138,6 +143,11 @@ export const DISCOVERY_TOUR: TourStep[] = [
 ]
 
 export const MAP_TOUR: TourStep[] = [
+  {
+    target: '[data-tour="map-kind"]',
+    title: 'Papers or authors',
+    body: 'One territory, two views. Papers are placed by what they are about; authors sit at the centre of what they write. Everything else on the page is shared.',
+  },
   {
     target: '[data-tour="map-plate"]',
     title: 'Your corpus as territory',
