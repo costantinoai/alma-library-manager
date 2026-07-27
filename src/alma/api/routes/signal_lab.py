@@ -53,17 +53,37 @@ router = APIRouter()
 _TOKEN_SECRET = secrets.token_bytes(32)
 
 
+_MAC_BYTES = 16
+"""Length of the truncated HMAC a round token carries.
+
+The MAC is split off by LENGTH, never by a separator byte. It used to be
+appended after a literal ``b"."`` and recovered with ``raw.rsplit(b".", 1)`` —
+but the MAC is raw binary, so any MAC containing byte 0x2E ('.') moved the
+split point INTO the signature. Body and MAC both came back corrupted, the
+comparison failed, and the user was told their round token was "from a previous
+backend run" and to fetch a new one.
+
+That is 1 - (255/256)^16 of every round answer: **~6%**, measured at 5.99% over
+20,000 tokens. It presented as a rare, unreproducible flake — one test failed
+once in a 1,327-test suite on 2026-07-27 and passed in isolation every time —
+because nothing about it depends on state or ordering. It is a coin flip per
+token. A fixed-width slice cannot be ambiguous, so the separator is gone.
+"""
+
+
 def _sign_round(claims: dict) -> str:
     body = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()
-    mac = hmac.new(_TOKEN_SECRET, body, hashlib.sha256).digest()[:16]
-    return base64.urlsafe_b64encode(body + b"." + mac).decode("ascii")
+    mac = hmac.new(_TOKEN_SECRET, body, hashlib.sha256).digest()[:_MAC_BYTES]
+    return base64.urlsafe_b64encode(body + mac).decode("ascii")
 
 
 def _verify_round(token: str) -> dict:
     try:
         raw = base64.urlsafe_b64decode(token.encode("ascii"))
-        body, mac = raw.rsplit(b".", 1)
-        expected = hmac.new(_TOKEN_SECRET, body, hashlib.sha256).digest()[:16]
+        if len(raw) <= _MAC_BYTES:
+            raise ValueError("token too short to carry a signature")
+        body, mac = raw[:-_MAC_BYTES], raw[-_MAC_BYTES:]
+        expected = hmac.new(_TOKEN_SECRET, body, hashlib.sha256).digest()[:_MAC_BYTES]
         if not hmac.compare_digest(mac, expected):
             raise ValueError("bad signature")
         return json.loads(body)
