@@ -9,6 +9,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
 
@@ -549,6 +550,86 @@ def _scope_clause(scope: str) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class AuthorIdentity:
+    """Who an author id refers to, curated or not.
+
+    ``curated`` says whether an ``authors`` row exists. It does NOT gate the
+    read paths — it tells a WRITE path (follow, merge, delete) that there is a
+    record to act on.
+    """
+
+    id: str
+    name: str
+    openalex_id: str
+    curated: bool
+
+
+def resolve_author_identity(
+    db: sqlite3.Connection, author_id: str
+) -> AuthorIdentity | None:
+    """THE answer to "who is this author id", for every read path.
+
+    Two populations reach these endpoints and only one of them has a row:
+
+    * **curated** authors — followed, imported, merged. 93 of them on dev.
+    * **corpus** authors — everyone who appears on a paper you hold. 17,870 on
+      dev, so 99.5% have NO ``authors`` row.
+
+    The author MAP is built from corpus co-authorship, so almost every dot on
+    it is the second kind. Resolving identity from the ``authors`` table alone
+    made those dots unopenable — clicking one and asking for its publications
+    answered 404, which the panel renders as "Failed to load publications"
+    (user report 2026-07-28). The id the caller passes IS an OpenAlex id (that
+    is what the map's node ids are) and ``publication_authors`` already knows
+    the person, so this resolves them there.
+
+    ``None`` means genuinely unknown: no curated row AND on no paper. That is
+    the case the 404 was always for.
+
+    Spelled once because it was about to be spelled twice — publications and
+    detail are the same question — and two copies is how one endpoint starts
+    recognising a person the other does not.
+    """
+    row = db.execute(
+        "SELECT id, name, openalex_id FROM authors WHERE lower(id) = lower(?)",
+        (author_id,),
+    ).fetchone()
+    if row:
+        return AuthorIdentity(
+            id=str(row["id"] or author_id),
+            name=str(row["name"] or "").strip(),
+            openalex_id=str(row["openalex_id"] or "").strip(),
+            curated=True,
+        )
+
+    openalex_id = str(author_id or "").strip()
+    if not openalex_id or not _table_exists(db, "publication_authors"):
+        return None
+    # The most-used spelling of the name across their papers — an author can
+    # appear under several, and the popular one is the one to show.
+    corpus = db.execute(
+        """
+        SELECT display_name, COUNT(*) AS papers
+        FROM publication_authors
+        WHERE lower(trim(openalex_id)) = lower(trim(?))
+          AND COALESCE(TRIM(display_name), '') <> ''
+        GROUP BY lower(trim(display_name))
+        ORDER BY papers DESC, display_name ASC
+        LIMIT 1
+        """,
+        (openalex_id,),
+    ).fetchone()
+    if corpus is None:
+        return None
+    return AuthorIdentity(
+        id=openalex_id,
+        name=str(corpus["display_name"] or "").strip(),
+        openalex_id=openalex_id,
+        curated=False,
+    )
+
+
 def list_author_publications(
     db: sqlite3.Connection,
     author_id: str,
@@ -558,51 +639,11 @@ def list_author_publications(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict] | None:
-    author = db.execute(
-        "SELECT id, name, openalex_id FROM authors WHERE lower(id) = lower(?)",
-        (author_id,),
-    ).fetchone()
-    if author:
-        author_name = str(
-            (author["name"] if isinstance(author, sqlite3.Row) else author[1]) or ""
-        ).strip()
-        openalex_id = str(
-            (author["openalex_id"] if isinstance(author, sqlite3.Row) else author[2]) or ""
-        ).strip()
-    else:
-        # A CORPUS author: someone who appears on your papers but whom you have
-        # never followed or curated, so there is no `authors` row. That is the
-        # overwhelming majority of the people on the author map — measured
-        # 2026-07-28 on dev, 17,777 of 17,870 (99.5%). Returning None here made
-        # the map's own dots unopenable: clicking almost any author and asking
-        # for their publications answered 404, which the panel renders as
-        # "Failed to load publications" (user report 2026-07-28).
-        #
-        # The identity the caller passed IS an OpenAlex id — that is what the
-        # map's node ids are — and `publication_authors` already knows this
-        # person's papers, so resolve the display name from there and let the
-        # SAME clause below do the work. Nothing else in this function changes.
-        openalex_id = str(author_id or "").strip()
-        author_name = ""
-        if openalex_id and _table_exists(db, "publication_authors"):
-            row = db.execute(
-                """
-                SELECT display_name, COUNT(*) AS papers
-                FROM publication_authors
-                WHERE lower(trim(openalex_id)) = lower(trim(?))
-                  AND COALESCE(TRIM(display_name), '') <> ''
-                GROUP BY lower(trim(display_name))
-                ORDER BY papers DESC, display_name ASC
-                LIMIT 1
-                """,
-                (openalex_id,),
-            ).fetchone()
-            if row is None:
-                # Not a curated author AND not on any paper — genuinely unknown.
-                return None
-            author_name = str(row["display_name"] or "").strip()
-        else:
-            return None
+    identity = resolve_author_identity(db, author_id)
+    if identity is None:
+        return None
+    author_name = identity.name
+    openalex_id = identity.openalex_id
 
     clause, params = _author_paper_clause(
         db,
@@ -788,7 +829,27 @@ def get_author_detail(db: sqlite3.Connection, author_id: str) -> dict | None:
     """
     author = get_author(db, author_id)
     if author is None:
-        return None
+        # A CORPUS author — on your papers, never curated. 99.5% of the people
+        # on the author map (see `resolve_author_identity`), so refusing them
+        # here made almost every dot open onto a broken panel. They have no
+        # curated record, so the profile is the empty one their absence
+        # implies; everything below is computed from the PAPERS instead, which
+        # is where a corpus author's whole story lives anyway.
+        identity = resolve_author_identity(db, author_id)
+        if identity is None:
+            return None
+        author = {
+            "id": identity.id,
+            "name": identity.name,
+            "openalex_id": identity.openalex_id,
+            "author_type": "corpus",
+            "publication_count": get_author_publication_count(
+                db,
+                author_id=identity.id,
+                author_name=identity.name,
+                openalex_id=identity.openalex_id,
+            ),
+        }
 
     author_name = str(author.get("name") or "").strip()
     openalex_id = str(author.get("openalex_id") or "").strip()
