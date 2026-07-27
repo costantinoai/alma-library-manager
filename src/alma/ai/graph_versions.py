@@ -149,7 +149,12 @@ SUPER_REGION_VERSION = "2026.07-1"
 #            so without this every existing install keeps a model with no
 #            `author_offsets` until the next answered round — the head would be
 #            fitted and then read by nobody.
-SIGNAL_LAB_FIT_VERSION = "2026.07-4"
+# 2026.07-5: the venue head (`venue_offsets`), fitted from matched-pair rounds
+#            only. MUST bump for the same reason as -4: the payload gained a
+#            key, and the fingerprint keys only on round count/max-id, so
+#            otherwise an install that already has a model would keep one with
+#            no `venue_offsets` until the next answered round.
+SIGNAL_LAB_FIT_VERSION = "2026.07-5"
 # v2: full-pool candidates, full-outcome EIG, true staleness, recent-query
 # cooldown, posterior edge priority, and deck-conditioned diversity.
 SIGNAL_LAB_POLICY_VERSION = 2

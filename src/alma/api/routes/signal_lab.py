@@ -40,6 +40,7 @@ from alma.application.signal_lab import purge as lab_purge
 from alma.application.signal_lab import rounds as lab_rounds
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
 from alma.application.signal_lab.settings import SignalLabSettings
+from alma.application.signal_lab.spec import SKIP_OPTION
 from alma.core.db_write import run_write_unit
 from alma.core.time import utcnow
 
@@ -182,13 +183,9 @@ def get_queue(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown game {game_id!r}") from exc
 
-    specs = lab_policy.build_queue(
-        db,
-        game_id=game.id,
-        count=count,
-        k=game.draw.k,
-        region_mode=game.draw.region_mode,
-    )
+    # ONE entry point. The sampler a game needs is decided by its draw spec, in
+    # the policy — never branched on here.
+    specs = lab_policy.build_queue_for(db, game=game, count=count)
     if len(specs) < 10:
         return {
             "available": False,
@@ -244,7 +241,7 @@ def answer_round(game_id: str, body: RoundAnswer, db: sqlite3.Connection = Depen
             detail="Signal Lab is switched off; retained signals were not changed.",
         )
     try:
-        lab.get_game(game_id)
+        game = lab.get_game(game_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown game {game_id!r}") from exc
 
@@ -257,8 +254,14 @@ def answer_round(game_id: str, body: RoundAnswer, db: sqlite3.Connection = Depen
     skipped = answer is None
     if answer is not None:
         # The answer may only reference shown papers — reject junk early so
-        # the fit never has to defend against it.
-        for key in ("best", "worst", "odd"):
+        # the fit never has to defend against it. The keys come from the GAME's
+        # own vocabulary (everything but the skip sentinel), so a new game is
+        # validated without touching this route; the previous hardcoded
+        # ("best", "worst", "odd") would have let `matched_pair`'s `picked`
+        # through unchecked.
+        for key in game.options:
+            if key == SKIP_OPTION:
+                continue
             value = answer.get(key)
             if value is not None and value not in shown:
                 raise HTTPException(status_code=422, detail=f"{key!r} not in shown set")

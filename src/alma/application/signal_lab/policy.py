@@ -33,9 +33,20 @@ from alma.application.signal_lab.evidence import (
     load_ledger_evidence,
 )
 from alma.application.signal_lab.query import canonical_query_key
+from alma.application.signal_lab.spec import MiniGame
 
 # Protected ring-uniform exploration share.
 EPSILON = 0.20
+
+# Matched-pair draw (task 65). Bounded random sample per round: there is no EIG
+# to maximise over venue pairs, so a big candidate set would only cost latency.
+MATCHED_PAIR_DRAWS = 64
+# Deck-diversity decays. A paper already shown once in this deck is worth ~55%
+# as much; a venue already asked about is worth ~65%, the softer of the two
+# because a region may only have a few journals and forbidding repeats outright
+# would empty it.
+PAIR_PAPER_DECAY = 0.55
+PAIR_VENUE_DECAY = 0.65
 
 # Candidate budget grows with region size but remains latency-bounded.
 MIN_CANDIDATES = 256
@@ -78,6 +89,10 @@ class QueueContext:
     payload: dict
     pools: dict[int, list[str]]
     paper_regions: dict[str, int]
+    # paper → normalised journal, for the matched-pair (venue contrast) draw.
+    # Absent for a paper with no journal, which is why the pair sampler works
+    # from venue GROUPS rather than filtering the pool.
+    paper_venues: dict[str, str]
     vectors: dict[str, np.ndarray]
     rings: dict[int, int]
     adjacency: dict[int, list[int]]
@@ -391,17 +406,24 @@ def _load_region_pools(
     payload: dict,
     *,
     model: str,
-) -> tuple[dict[int, list[str]], dict[str, int]]:
-    """Every judgeable active-model paper, grouped by durable super-region."""
+) -> tuple[dict[int, list[str]], dict[str, int], dict[str, str]]:
+    """Every judgeable active-model paper, grouped by durable super-region.
+
+    Also returns paper → venue key, read from the same rows: the matched-pair
+    sampler needs it to draw two papers that differ on journal, and asking for
+    it here costs one extra column rather than a second pass over the pool.
+    """
+    from alma.application.signal_lab.fit import venue_key
+
     cluster_to_region = {
         int(cluster_id): int(region_id)
         for cluster_id, region_id in (payload.get("cluster_to_region") or {}).items()
     }
     if not cluster_to_region:
-        return {}, {}
+        return {}, {}, {}
     rows = conn.execute(
         """
-        SELECT DISTINCT pc.paper_id, pc.cluster_id
+        SELECT DISTINCT pc.paper_id, pc.cluster_id, p.journal
         FROM publication_clusters pc
         JOIN papers p ON p.id = pc.paper_id
         JOIN publication_embeddings pe
@@ -416,6 +438,7 @@ def _load_region_pools(
     ).fetchall()
     pools: dict[int, list[str]] = {}
     paper_regions: dict[str, int] = {}
+    paper_venues: dict[str, str] = {}
     for row in rows:
         region_id = cluster_to_region.get(int(row["cluster_id"]))
         if region_id is None:
@@ -423,7 +446,10 @@ def _load_region_pools(
         paper_id = str(row["paper_id"])
         pools.setdefault(region_id, []).append(paper_id)
         paper_regions[paper_id] = region_id
-    return pools, paper_regions
+        venue = venue_key(row["journal"])
+        if venue:
+            paper_venues[paper_id] = venue
+    return pools, paper_regions, paper_venues
 
 
 def _region_posterior_factors(
@@ -473,7 +499,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
         return None
     payload = stored["payload"]
     model = get_active_embedding_model(conn)
-    pools, paper_regions = _load_region_pools(conn, payload, model=model)
+    pools, paper_regions, paper_venues = _load_region_pools(conn, payload, model=model)
     all_ids = [paper_id for pool in pools.values() for paper_id in pool]
     vectors = load_vectors_by_id(conn, all_ids, model)
     pools = {
@@ -540,6 +566,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
         payload=payload,
         pools=pools,
         paper_regions=paper_regions,
+        paper_venues=paper_venues,
         vectors=vectors,
         rings=rings,
         adjacency=adjacency,
@@ -713,6 +740,190 @@ def _ordered_boundary_neighbours(
         neighbour, _ = remaining.pop(index)
         ordered.append(neighbour)
     return ordered
+
+
+def _matched_pair_candidates(
+    context: QueueContext,
+    *,
+    game_id: str,
+    region_id: int,
+    excluded: set[str],
+    rng: np.random.Generator,
+) -> list[tuple[str, str]]:
+    """Pairs from one region that agree on region and DIFFER on venue.
+
+    Bounded random draw rather than the triplet path's exhaustive candidate
+    set: a region with V venues has O(V²) venue pairs and there is no EIG to
+    maximise over them. The matched-pair head is a shrunk win-rate, so what a
+    pair is worth depends on whether the two venues differ and on how often
+    each has already been asked about — both handled by the caller's scoring —
+    not on where the papers sit in embedding space.
+    """
+    by_venue: dict[str, list[str]] = {}
+    for paper_id in context.pools.get(region_id, []):
+        venue = context.paper_venues.get(paper_id)
+        if venue:
+            by_venue.setdefault(venue, []).append(paper_id)
+    venues = sorted(by_venue)
+    if len(venues) < 2:
+        return []
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _ in range(MATCHED_PAIR_DRAWS):
+        left, right = (int(i) for i in rng.choice(len(venues), size=2, replace=False))
+        a_pool = by_venue[venues[left]]
+        b_pool = by_venue[venues[right]]
+        pair = (
+            str(a_pool[int(rng.integers(len(a_pool)))]),
+            str(b_pool[int(rng.integers(len(b_pool)))]),
+        )
+        key = canonical_query_key(game_id, pair)
+        if key in excluded or key in seen:
+            continue
+        seen.add(key)
+        out.append(pair)
+    return out
+
+
+def _pair_freshness(
+    pair: tuple[str, str],
+    *,
+    paper_exposure: dict[str, int],
+    venue_exposure: dict[str, int],
+    paper_venues: dict[str, str],
+) -> float:
+    """How much NEW evidence this pair adds to the deck built so far, in [0, 1].
+
+    1.0 for two unseen papers from two unasked venues; it decays as either has
+    already been used. Deck-local only — cross-deck repetition is handled by the
+    ledger's recent-query exclusion, which is a hard filter rather than a
+    preference.
+    """
+    papers = sum(paper_exposure.get(paper_id, 0) for paper_id in pair)
+    venues = sum(venue_exposure.get(paper_venues.get(paper_id, ""), 0) for paper_id in pair)
+    return (PAIR_PAPER_DECAY**papers) * (PAIR_VENUE_DECAY**venues)
+
+
+def _build_matched_pair_queue(
+    conn: sqlite3.Connection,
+    *,
+    game: MiniGame,
+    count: int,
+    rng: np.random.Generator | None = None,
+) -> list[dict]:
+    """A deck of matched pairs — same region, different venue (task 65).
+
+    Shares the triplet path's region allocation exactly (``_build_context`` →
+    ``choose_region``), so ring priority, coverage, staleness, answerability and
+    protected exploration all still apply. Only the WITHIN-region draw differs,
+    because the round is asking a different question.
+    """
+    from alma.application.signal_lab import lab_tuning
+
+    context = _build_context(conn)
+    if context is None:
+        return []
+    tuning = lab_tuning(conn)
+    rng = rng or np.random.default_rng()
+    excluded = set(context.ledger.recent_queries)
+    selected_regions: dict[int, int] = {}
+    paper_exposure: dict[str, int] = {}
+    # How often a venue has already been asked about IN THIS DECK. Without it a
+    # deck drawn from one big region keeps re-asking about its two largest
+    # journals, and twelve rounds produce two venues' worth of evidence.
+    venue_exposure: dict[str, int] = {}
+    exhausted_regions: set[int] = set()
+    out: list[dict] = []
+
+    for _ in range(count):
+        chosen_spec: dict | None = None
+        for _attempt in range(max(12, len(context.base_region_weights) * 2)):
+            effective_weights = {
+                region_id: weight / (1.0 + selected_regions.get(region_id, 0))
+                for region_id, weight in context.base_region_weights.items()
+                if region_id not in exhausted_regions
+            }
+            choice = choose_region(
+                effective_weights,
+                context.rings,
+                rng,
+                epsilon=tuning["epsilon"],
+            )
+            if choice is None:
+                break
+
+            candidates = _matched_pair_candidates(
+                context,
+                game_id=game.id,
+                region_id=choice.region_id,
+                excluded=excluded,
+                rng=rng,
+            )
+            if not candidates:
+                exhausted_regions.add(choice.region_id)
+                continue
+
+            best = max(
+                candidates,
+                key=lambda pair: _pair_freshness(
+                    pair,
+                    paper_exposure=paper_exposure,
+                    venue_exposure=venue_exposure,
+                    paper_venues=context.paper_venues,
+                ),
+            )
+            shown = list(best)
+            # Order is shuffled only AFTER selection, so presentation never
+            # changes query identity — the same rule the triplet path follows.
+            rng.shuffle(shown)
+            chosen_spec = {
+                "shown": shown,
+                "region_id": choice.region_id,
+                "pair_region_id": None,
+                "region_version": int(context.payload.get("version") or 1),
+                "ring": choice.ring,
+                "explored": choice.explored,
+            }
+            excluded.add(canonical_query_key(game.id, best))
+            selected_regions[choice.region_id] = selected_regions.get(choice.region_id, 0) + 1
+            for paper_id in best:
+                paper_exposure[paper_id] = paper_exposure.get(paper_id, 0) + 1
+                venue = context.paper_venues.get(paper_id)
+                if venue:
+                    venue_exposure[venue] = venue_exposure.get(venue, 0) + 1
+            break
+
+        if chosen_spec is None:
+            break
+        out.append(chosen_spec)
+    return out
+
+
+def build_queue_for(
+    conn: sqlite3.Connection,
+    *,
+    game: MiniGame,
+    count: int,
+    rng: np.random.Generator | None = None,
+) -> list[dict]:
+    """THE queue entry point. Dispatches on the game's own draw spec.
+
+    One call site (``routes/signal_lab.py::get_queue``) and one place that knows
+    which sampler a game needs. The route must never branch on game shape: it
+    would then be a second, silently divergent copy of this decision — the same
+    fork the paper-action contract guard exists to prevent.
+    """
+    if game.draw.contrast is not None:
+        return _build_matched_pair_queue(conn, game=game, count=count, rng=rng)
+    return build_queue(
+        conn,
+        game_id=game.id,
+        count=count,
+        k=game.draw.k,
+        region_mode=game.draw.region_mode,
+        rng=rng,
+    )
 
 
 def build_queue(

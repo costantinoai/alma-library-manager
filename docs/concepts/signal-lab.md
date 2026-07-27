@@ -15,17 +15,50 @@ model that can sharpen paper scores and paper-map taste terrain. It is
 **signal-only**: a round never changes Library membership, ratings, reading
 state, feedback profiles, or semantic coordinates.
 
-## The two rounds
+## The three rounds
 
 | Game | Question | What it teaches |
 |---|---|---|
 | **Best / worst** | Which would you read first — and which would you skip? | What should score high: region taste offsets and a utility direction. |
 | **Odd one out** | Which paper does not belong with the other two? | Relative semantic distance and region-boundary overrides. |
+| **Same field** | These two are on the same topic — which would you rather read? | Venue preference at equal topic. |
 
 Always answerable with **Can't tell**; a skip records no verdict. Home queues a
 deck of at least ten signed rounds, shows progress through it, and can fetch
-another deck without leaving the page. Best/worst is the ordinary game; every
-third UTC calendar day uses odd-one-out.
+another deck without leaving the page. The day picks the default game and the
+segmented toggle overrides it; best/worst is the most common, because it trains
+the utility direction every other head is measured against.
+
+### Why a matched pair is a different instrument
+
+The two triplet rounds show papers that differ on **every axis at once** —
+topic, venue, authors, method, era, writing. The single bit of preference they
+produce cannot be attributed to any one of those without confounding it with
+the rest, which is exactly why they fit only three things: region, a global
+utility direction, and (from within-region rounds, where topic is roughly held
+constant) authors.
+
+A **matched pair** is drawn so the two papers agree on region and differ on
+exactly ONE attribute. The same click then carries clean evidence about that
+attribute, because nothing else varied. It is the difference between "I
+preferred this paper" and "at equal topic, I preferred this venue".
+
+**Venue is the first axis, and topics are deliberately excluded.** SPECTER2
+does not encode the journal, so the learned utility direction cannot represent
+venue preference at all, and `journal_affinity` is Library prevalence only — it
+knows which venues you *save from*, never which you would *choose between*. No
+existing signal can learn this. Topics are the opposite case: SPECTER2 space is
+largely topical, so the utility direction already encodes topic preference and
+`topic_score` estimates the same quantity from hundreds of real Library
+decisions. A third estimator of one quantity is how a model becomes collinear
+with itself — the trap `usefulness_boost` fell into before it was demoted to
+diagnostic.
+
+Attribution happens at **fit** time, not in the game. A game sees paper ids and
+nothing else, so it cannot know the venues and must not (games are I/O-free by
+contract). The fit holds the paper→venue map and keys the attribution on the
+game's declared contrast axis, which is also what keeps interpretation
+retroactively fixable.
 
 ## The band on Home
 
@@ -191,13 +224,41 @@ and never moves an author's coordinate or community.
 Guarded by `tests/test_geometry_admission_contract.py`, which pins the reader
 list: a new consumer has to be a deliberate edit with a reason.
 
-Ranking terms are separately promotion-gated.
-`weights.lab_region_offset`, `weights.lab_utility` and
-`weights.lab_author_offset` default to zero; when
-promoted they add bounded points through the same scorer used by Discovery and
-Feed. Each term is limited to 2.5 points, so the combined game nudge stays in
-the same small additive evidence band as sibling scoring sources. Settings
-shows the held-out and churn evidence used to decide.
+### The venue head
+
+Fitted by the same `shrunk_win_rates()` as regions and authors, from
+**matched-pair rounds only** — an ordinary triplet whose papers happen to carry
+journals contributes nothing to it, or the head would just be topic preference
+wearing a journal's name. A pair whose two papers share a venue also
+contributes nothing: nothing differed, so nothing was learned.
+
+It reaches ranking through exactly one door, `journal_affinity` — never a
+parallel `lab_venue` signal beside it, which would let the same evidence be
+counted twice and drift apart. The fold is the shared
+`scoring_terms.fold_lab_offsets()`, so the author and venue heads cannot
+disagree about what "disabled" means.
+
+Two shrinkage guards, both continuous rather than a gate: `VENUE_SHRINKAGE`
+(8.0 — a venue judged once contributes ~11% of its raw vote, ~71% at twenty)
+and `VENUE_MIN_COMPARISONS` (2), because one comparison cannot distinguish a
+preference from a misclick.
+
+### Promotion and units
+
+Ranking terms are separately promotion-gated: `weights.lab_region_offset`,
+`weights.lab_utility`, `weights.lab_author_offset` and
+`weights.lab_venue_offset`, each `0…10` points on the 0-100 score.
+
+The region and utility heads are added to that score directly. The **categorical
+heads are not** — they are folded into an affinity map that the scorer then
+clamps to `[0, 1]`, so their setting is converted from score points into
+affinity units (`CATEGORICAL_HEAD_MAX_AFFINITY`, 0.35 at the maximum setting).
+Without that conversion the default of 5.0 made a +0.2 offset land as +1.0 on a
+`[0, 1]` map, and the clamp turned every judged entity into a hard 1.0 or 0.0 —
+a binary override of the curated signal, in a feature whose contract is
+"Signal Lab nudges, your Library decides".
+
+Settings shows the held-out and churn evidence used to decide.
 
 ## Disable is not purge
 

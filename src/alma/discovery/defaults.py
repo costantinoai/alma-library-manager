@@ -39,9 +39,10 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # early-returns when no usable model exists.
     "weights.lab_region_offset": "5.0",
     "weights.lab_utility": "5.0",
-    # The author head folds into the canonical author signal rather than
-    # scoring on its own.
+    # The author and venue heads fold into the canonical author / journal
+    # signals rather than scoring on their own.
     "weights.lab_author_offset": "5.0",
+    "weights.lab_venue_offset": "5.0",
     # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
     # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
     # epsilon: ring-uniform exploration share — the self-confirmation guard.

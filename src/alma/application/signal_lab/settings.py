@@ -75,6 +75,16 @@ class SignalLabSettings(BaseModel):
             "your Library already produces — never a replacement for it."
         ),
     )
+    venue_offset_points: Annotated[float, Field(ge=0, le=LAB_HEAD_MAX_POINTS)] = Field(
+        LAB_HEAD_DEFAULT_POINTS,
+        title="Venue scoring nudge",
+        description=(
+            "How much affinity a fully-preferred journal gains. Fitted only "
+            "from same-field, different-venue rounds — the one place ALMa can "
+            "learn which venue you would rather read at equal topic — and "
+            "ADDED to the venue signal your Library already produces."
+        ),
+    )
     map_tint_strength: Annotated[float, Field(ge=0, le=1)] = Field(
         0.45,
         title="Map taste tint",
@@ -101,6 +111,7 @@ _KEYS = {
     "region_offset_points": "weights.lab_region_offset",
     "utility_points": "weights.lab_utility",
     "author_offset_points": "weights.lab_author_offset",
+    "venue_offset_points": "weights.lab_venue_offset",
     "map_tint_strength": "signal_lab.map_tint_strength",
     "ring_decay": "signal_lab.gamma_start",
     "exploration_rate": "signal_lab.epsilon",
@@ -120,6 +131,7 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
         region_offset_points=float(stored[_KEYS["region_offset_points"]]),
         utility_points=float(stored[_KEYS["utility_points"]]),
         author_offset_points=float(stored[_KEYS["author_offset_points"]]),
+        venue_offset_points=float(stored[_KEYS["venue_offset_points"]]),
         map_tint_strength=float(stored[_KEYS["map_tint_strength"]]),
         ring_decay=float(stored[_KEYS["ring_decay"]]),
         exploration_rate=float(stored[_KEYS["exploration_rate"]]),

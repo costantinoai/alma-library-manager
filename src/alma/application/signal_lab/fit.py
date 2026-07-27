@@ -23,7 +23,18 @@ Heads, in order of statistical safety (task 53):
   WITHIN-REGION preferences only so topic cannot masquerade as taste for a
   person. Consumed by the canonical author signal, not by a second ranker
   term (see ``application/author_signal.py``).
+* ``venue_offsets`` — the same estimator over journals, fitted ONLY from
+  matched-pair rounds (``DrawSpec.contrast == "venue"``), where the two papers
+  were drawn to agree on region and differ on venue. An ordinary triplet varies
+  every axis at once, so crediting its outcome to whichever journal happened to
+  win is how you learn "I like this venue" from "I like this topic".
 * ``region_overrides`` — odd-one-out boundary votes past a threshold.
+
+**Contrast attribution happens HERE, not in the game.** A game sees paper ids
+and nothing else, so it cannot know the venues — and must not, or it would need
+I/O. The fit holds the paper→venue map, so it keys the attribution on the
+game's declared ``draw.contrast``. Adding a second axis is a new entry in
+``_CONTRAST_FITTERS``, not new plumbing.
 
 M0 note: the prior is the Library vector centroid. M1 wires the true Rocchio
 prior (``feedback_positive_centroid − feedback_negative_centroid``) once the
@@ -74,6 +85,15 @@ OFFSET_SHRINKAGE = 8.0
 # drifting away from zero on noise because it simply appears more often.
 AUTHOR_SHRINKAGE = 12.0
 AUTHOR_MIN_COMPARISONS = 4
+
+# The venue head is fitted from matched pairs only, so ONE round is ONE
+# comparison — the scarcest evidence the lab collects. Same shrinkage mass as
+# regions (a venue judged once contributes ~11% of its raw vote, ~71% at
+# twenty), and a two-comparison floor: with a single vote the difference
+# between a real preference and a misclick is not observable, and shrinkage
+# alone would still publish a (tiny) number for it.
+VENUE_SHRINKAGE = 8.0
+VENUE_MIN_COMPARISONS = 2
 
 # Bootstrap ensemble size for full-outcome expected-information acquisition.
 ENSEMBLE_K = 8
@@ -136,6 +156,7 @@ def fit_model(
     vectors: dict[str, np.ndarray],
     paper_regions: dict[str, int],
     paper_authors: dict[str, list[str]] | None = None,
+    paper_venues: dict[str, str] | None = None,
     prior: np.ndarray | None,
     gamma_start: float = GAMMA_START,
     override_min_votes: int = OVERRIDE_MIN_VOTES,
@@ -146,6 +167,12 @@ def fit_model(
     payload, the resume/golden-file property).
     """
     train_prefs: list[Pref] = []
+    # Preferences from MATCHED-PAIR rounds, kept per contrast axis. They also
+    # enter `train_prefs` — a pair is a genuine preference and trains the
+    # utility direction like any other — but only these may attribute the
+    # outcome to the isolated attribute, because only these held everything
+    # else constant.
+    contrast_prefs: defaultdict[str, list[Pref]] = defaultdict(list)
     holdout_prefs: list[Pref] = []
     train_sims: list[Sim] = []
     holdout_sims: list[Sim] = []
@@ -178,6 +205,8 @@ def fit_model(
         for c in constraints:
             if isinstance(c, Pref):
                 (holdout_prefs if rnd.holdout else train_prefs).append(c)
+                if game.draw.contrast is not None and not rnd.holdout:
+                    contrast_prefs[game.draw.contrast].append(c)
             elif isinstance(c, Sim):
                 (holdout_sims if rnd.holdout else train_sims).append(c)
             elif isinstance(c, RegionVote):
@@ -188,6 +217,7 @@ def fit_model(
     prior_unit = _unit_or_none(prior)
     offsets = _fit_region_offsets(train_prefs, paper_regions)
     author_offsets = _fit_author_offsets(train_prefs, paper_authors or {}, paper_regions)
+    venue_offsets = _fit_venue_offsets(contrast_prefs.get("venue", []), paper_venues or {})
     utility, ensemble = _fit_utility(train_prefs, vectors, prior_unit)
     metric, metric_ensemble = _fit_metric(train_sims, vectors)
     utility_delta = (
@@ -215,9 +245,12 @@ def fit_model(
             "train_sims": len(train_sims),
             "holdout_sims": len(holdout_sims),
             "authors_fitted": len(author_offsets),
+            "venue_prefs": len(contrast_prefs.get("venue", [])),
+            "venues_fitted": len(venue_offsets),
         },
         "region_offsets": {str(k): round(v, 4) for k, v in offsets.items()},
         "author_offsets": {k: round(v, 4) for k, v in author_offsets.items()},
+        "venue_offsets": {k: round(v, 4) for k, v in venue_offsets.items()},
         "utility_b64": _b64(utility) if utility is not None else None,
         "utility_delta_b64": _b64(utility_delta) if utility_delta is not None else None,
         "ensemble_b64": [_b64(w) for w in ensemble],
@@ -358,6 +391,42 @@ def _fit_author_offsets(
 
     return shrunk_win_rates(
         votes, shrinkage=AUTHOR_SHRINKAGE, min_observations=AUTHOR_MIN_COMPARISONS
+    )
+
+
+def venue_key(journal: str | None) -> str:
+    """Normalise a journal name to the key the ranker looks venues up by.
+
+    Exactly ``compute_preference_profile``'s rule (``strip().lower()``), spelled
+    here so the fitted offset lands on the same key the curated
+    ``journal_affinity`` uses. A second normalisation would produce a head that
+    fits perfectly and then matches nothing.
+    """
+    return (journal or "").strip().lower()
+
+
+def _fit_venue_offsets(prefs: list[Pref], paper_venues: dict[str, str]) -> dict[str, float]:
+    """Per-venue win-rate offsets, from MATCHED-PAIR rounds only.
+
+    The caller has already restricted ``prefs`` to rounds whose game declared
+    ``contrast="venue"``, i.e. pairs drawn to agree on region and differ on
+    journal. That is what makes the attribution clean: the reader chose between
+    two papers on one topic, so the venue is what was left to choose on.
+
+    A pair whose two papers turn out to share a venue — or where either venue is
+    unknown — contributes nothing. Nothing differed, so nothing was learned; a
+    zero-difference vote would only drag the grand mean.
+    """
+    votes: list[tuple[str, float]] = []
+    for pref in prefs:
+        won = venue_key(paper_venues.get(pref.a))
+        lost = venue_key(paper_venues.get(pref.b))
+        if not won or not lost or won == lost:
+            continue
+        votes.append((won, 1.0))
+        votes.append((lost, -1.0))
+    return shrunk_win_rates(
+        votes, shrinkage=VENUE_SHRINKAGE, min_observations=VENUE_MIN_COMPARISONS
     )
 
 
@@ -603,23 +672,29 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         except sqlite3.OperationalError:
             pass
 
-    # paper → author names, for the author head. Parsed with the ranker's own
+    # paper → author names (author head) and paper → venue (venue head), in ONE
+    # pass over the shown papers. Names are parsed with the ranker's own
     # splitter so "Last, First" imports and "A and B" strings land as the same
     # people the ranker will later look up.
     paper_authors: dict[str, list[str]] = {}
+    paper_venues: dict[str, str] = {}
     if shown_ids:
         from alma.discovery.scoring import parse_author_names
 
         placeholders = ",".join("?" for _ in shown_ids)
         try:
             rows = conn.execute(
-                f"SELECT id, authors FROM papers WHERE id IN ({placeholders})",
+                f"SELECT id, authors, journal FROM papers WHERE id IN ({placeholders})",
                 shown_ids,
             ).fetchall()
             for row in rows:
+                paper_id = str(row["id"])
                 names = parse_author_names(row["authors"] or "")
                 if names:
-                    paper_authors[str(row["id"])] = names
+                    paper_authors[paper_id] = names
+                venue = venue_key(row["journal"])
+                if venue:
+                    paper_venues[paper_id] = venue
         except sqlite3.OperationalError:
             pass
 
@@ -652,6 +727,7 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         vectors=vectors,
         paper_regions=paper_regions,
         paper_authors=paper_authors,
+        paper_venues=paper_venues,
         prior=prior,
         gamma_start=tuning["gamma_start"],
         override_min_votes=tuning["override_min_votes"],

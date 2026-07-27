@@ -25,6 +25,7 @@ def available_games() -> list[MiniGame]:
     answered, and its historical rounds are skipped (with a counted warning)
     at fit time.
     """
+    from alma.application.signal_lab.games.matched_pair import MATCHED_PAIR_VENUE
     from alma.application.signal_lab.games.triplet_best_worst import (
         TRIPLET_BEST_WORST,
     )
@@ -32,7 +33,7 @@ def available_games() -> list[MiniGame]:
         TRIPLET_ODD_ONE_OUT,
     )
 
-    return [TRIPLET_BEST_WORST, TRIPLET_ODD_ONE_OUT]
+    return [TRIPLET_BEST_WORST, TRIPLET_ODD_ONE_OUT, MATCHED_PAIR_VENUE]
 
 
 def get_game(game_id: str) -> MiniGame:

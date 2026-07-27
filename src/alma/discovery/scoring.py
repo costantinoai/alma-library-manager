@@ -28,6 +28,7 @@ import sqlite3
 from typing import Any
 
 from alma.application.author_signal import build_discovery_author_affinity
+from alma.application.signal_lab.scoring_terms import fold_lab_offsets
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
@@ -465,6 +466,23 @@ def compute_preference_profile(
     # of being drowned by the linear max.
     topic_weights = log_prevalence_weights(topic_weights)
     journal_affinity = log_prevalence_weights(journal_affinity)
+
+    # Signal Lab's venue head, folded into the SAME map (task 65). Everything
+    # above is Library prevalence — which venues you save FROM. Matched-pair
+    # rounds are the only source of the other half: at equal topic, which venue
+    # you would rather READ. SPECTER2 does not encode the journal, so no other
+    # signal in the ranker can learn it.
+    #
+    # Folded after normalisation on purpose: the offset is a win rate on the
+    # same [-1, 1] scale the normalised prevalence weights now live on, so the
+    # two are commensurable. Folding before would have put a raw count and a
+    # win rate through one log curve together.
+    fold_lab_offsets(
+        conn,
+        journal_affinity,
+        head="venue_offsets",
+        weight_key="weights.lab_venue_offset",
+    )
 
     # Author affinity is the canonical author signal (one definition, shared
     # with the Authors page, suggestions, and rankings — see

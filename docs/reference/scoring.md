@@ -106,6 +106,15 @@ this dict; the resulting weight is the signal value.
 This is a log-prevalence scheme — sharing the user's #1 venue gets
 weight 1.0, and a venue that only appears in 5/50 of the user's
 papers gets ~0.42 (versus ~0.10 under naive linear normalization).
+
+**Second, gated input: Signal Lab's venue head.** Prevalence answers which
+venues you save *from*. Signal Lab's *Same field* rounds — two papers on one
+topic, differing on journal — answer which you would *choose between* at equal
+topic, which nothing else in the ranker can learn (SPECTER2 does not encode the
+journal). The fitted offsets are ADDED into this same map after normalisation,
+behind `signal_lab.enabled` and `weights.lab_venue_offset`; at zero weight the
+model view is never even read. There is deliberately no parallel `lab_venue`
+signal — one question, one signal.
 Long-tail venues stay visible in scoring instead of being drowned
 by the dominant outlet. Same shape as `topic_score` and the
 author-rail prevalence pattern.

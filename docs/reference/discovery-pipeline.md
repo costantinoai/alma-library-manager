@@ -387,6 +387,11 @@ Answers accumulate into a model with two heads, refit on a debounce
   preference.
 - **`lab_author_offset`** — the same idea over the author map, folded into the
   canonical author signal rather than scoring separately.
+- **`lab_venue_offset`** — per-venue win rates from *matched-pair* rounds (two
+  papers, same region, different journal), folded into `journal_affinity`. The
+  only head fitted from a round type that holds topic constant, and the only
+  way the ranker can learn venue preference at all — SPECTER2 does not encode
+  the journal, so the utility direction cannot represent it.
 
 Two guards are built into the fitting loop. A **ring prior**
 (`gamma_start`, default 0.35) decays influence outward, so ring 1 pulls about a

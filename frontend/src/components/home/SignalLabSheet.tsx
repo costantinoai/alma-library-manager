@@ -59,30 +59,54 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-/** The two games, as a segmented choice. They teach different things — one
- *  what you rate highly, the other where a region's boundary really lies — so
- *  which one you answer is a decision worth exposing rather than a hidden
- *  every-third-day rule. */
+/** The games, as a segmented choice. They teach different things — what you
+ *  rate highly, where a region's boundary really lies, and which venue you
+ *  would rather read at equal topic — so which one you answer is a decision
+ *  worth exposing rather than a hidden every-third-day rule.
+ *
+ *  `tiles` is how many papers a round of that game shows. The skeleton and the
+ *  grid read it, so a k=2 game does not flash three placeholders. */
 const GAMES = [
   {
     id: 'triplet_best_worst',
     label: 'Favourites',
+    tiles: 3,
     hint: 'Pick your most and least favourite — teaches what should score high',
+    task: 'Pick your most favourite of these three, and your least favourite.',
   },
   {
     id: 'triplet_odd_one_out',
     label: 'Odd one out',
+    tiles: 3,
     hint: 'Pick the one that does not belong — teaches where region boundaries lie',
+    task: 'Pick the one that does not belong with the other two.',
+  },
+  {
+    id: 'matched_pair_venue',
+    label: 'Same field',
+    tiles: 2,
+    hint: 'Two papers on one topic — teaches which venue you would rather read',
+    // Says WHY the two look alike, because that is the whole instrument: the
+    // pair was drawn so topic is held constant and the venue is what is left
+    // to choose on.
+    task: 'These two are on the same topic. Which would you rather read?',
   },
 ] as const
 
 /** Which game the day opens on. The rotation still sets the DEFAULT, so the
- *  boundary question keeps getting answered without being asked for; the
- *  toggle just makes it overridable. Stable for the day, so a reload cannot
- *  swap the rules under an unfinished deck. */
+ *  questions nobody would go looking for keep getting answered; the toggle just
+ *  makes it overridable. Stable for the day, so a reload cannot swap the rules
+ *  under an unfinished deck.
+ *
+ *  Best–worst stays the most common — it trains the utility direction, which
+ *  every other head is measured against. The other two get a regular share
+ *  because they are the ONLY source of their evidence: boundary votes for
+ *  regions, matched pairs for venues. */
 function gameForToday(): string {
   const day = Number(todayKey().split('-').join(''))
-  return day % 3 === 0 ? 'triplet_odd_one_out' : 'triplet_best_worst'
+  if (day % 3 === 0) return 'triplet_odd_one_out'
+  if (day % 3 === 1) return 'matched_pair_venue'
+  return 'triplet_best_worst'
 }
 
 function directionText(direction: SignalLabDirection): string {
@@ -90,9 +114,9 @@ function directionText(direction: SignalLabDirection): string {
   return `${direction.label} ${direction.value >= 0 ? '+' : '−'}${change}%`
 }
 
-type Verdict = 'best' | 'worst' | 'odd'
+type Verdict = 'best' | 'worst' | 'odd' | 'picked'
 type Marks = Record<Verdict, string | null>
-const NO_MARKS: Marks = { best: null, worst: null, odd: null }
+const NO_MARKS: Marks = { best: null, worst: null, odd: null, picked: null }
 
 interface VerdictSpec {
   id: Verdict
@@ -112,8 +136,13 @@ interface VerdictSpec {
 // Copy is owned here, not taken from the API's `question`. The task has to be
 // unequivocal in three words on a button, and "most / least favourite" is the
 // plainest framing of the same best–worst judgement the backend records.
-const BEST_WORST: VerdictSpec[] = [
-  {
+//
+// WHICH of these a round shows is decided by the API's `options` — the game's
+// own answer vocabulary — not by a per-game branch here. That is the same
+// contract the answer route validates against, so a new game reaches the UI by
+// adding its verdict below and nothing else.
+const VERDICTS: Record<Verdict, VerdictSpec> = {
+  best: {
     id: 'best',
     label: 'Most favourite',
     icon: BookOpen,
@@ -122,7 +151,7 @@ const BEST_WORST: VerdictSpec[] = [
     tile: 'border-success-700/30 bg-success-700/[0.07]',
     name: (title) => `“${title}” is your most favourite of the three`,
   },
-  {
+  worst: {
     id: 'worst',
     label: 'Least favourite',
     icon: X,
@@ -131,10 +160,7 @@ const BEST_WORST: VerdictSpec[] = [
     tile: 'border-critical-700/30 bg-critical-700/[0.07]',
     name: (title) => `“${title}” is your least favourite of the three`,
   },
-]
-
-const ODD_ONE_OUT: VerdictSpec[] = [
-  {
+  odd: {
     id: 'odd',
     label: "Doesn't belong",
     icon: Split,
@@ -145,13 +171,31 @@ const ODD_ONE_OUT: VerdictSpec[] = [
     tile: 'border-accent-edge bg-accent-soft/60',
     name: (title) => `“${title}” is the one that does not belong`,
   },
-]
+  picked: {
+    id: 'picked',
+    label: 'Rather read this',
+    icon: BookOpen,
+    // Success, like `best`: it is the same judgement — which of these would you
+    // read — asked of two papers instead of three. The pair carries cleaner
+    // evidence, not a different kind of opinion, so it must not wear a
+    // different colour.
+    tone: 'success',
+    badge: 'positive',
+    tile: 'border-success-700/30 bg-success-700/[0.07]',
+    name: (title) => `you would rather read “${title}”`,
+  },
+}
 
-/** The instruction, in the app's own words rather than the API's. */
-const TASK = {
-  bestWorst: 'Pick your most favourite of these three, and your least favourite.',
-  oddOneOut: 'Pick the one that does not belong with the other two.',
-} as const
+/** Verdicts a game asks for, in display order, derived from its API vocabulary.
+ *
+ *  `cant_tell` is the skip sentinel and has its own control in the header, so
+ *  it never becomes a tile button. An unknown option is dropped rather than
+ *  crashing the band: a backend a deploy ahead must not white-screen Home. */
+function verdictsFor(options: readonly string[] | undefined): VerdictSpec[] {
+  return (options ?? [])
+    .map((option) => VERDICTS[option as Verdict])
+    .filter((spec): spec is VerdictSpec => Boolean(spec))
+}
 
 /**
  * Tone classes for the verdict controls.
@@ -272,9 +316,12 @@ export function SignalLabSheet() {
   const roundIndex = progress[gameId] ?? 0
   const round = rounds[roundIndex]
   const deckComplete = rounds.length > 0 && roundIndex >= rounds.length
-  const isOddGame = queueQuery.data?.options?.includes('odd') ?? false
-  const verdicts = isOddGame ? ODD_ONE_OUT : BEST_WORST
+  const verdicts = useMemo(
+    () => verdictsFor(queueQuery.data?.options),
+    [queueQuery.data?.options],
+  )
   const deckReady = queueQuery.data?.available === true && rounds.length >= 10
+  const tileCount = GAMES.find((game) => game.id === gameId)?.tiles ?? 3
 
   // Switching games switches the query KEY, so the new deck starts with no
   // cached data. Without this latch the "no deck" guard below — which is also
@@ -292,7 +339,7 @@ export function SignalLabSheet() {
   }, [round])
 
   const answerMutation = useMutation({
-    mutationFn: (answer: { best?: string; worst?: string; odd?: string } | null) =>
+    mutationFn: (answer: Partial<Record<Verdict, string>> | null) =>
       answerSignalLabRound(gameId, {
         token: round?.token ?? '',
         answer,
@@ -333,21 +380,24 @@ export function SignalLabSheet() {
 
   const give = (verdict: Verdict, paperId: string) => {
     if (!round || answerMutation.isPending) return
-    if (isOddGame) {
-      setMarks({ ...NO_MARKS, odd: paperId })
-      answerMutation.mutate({ odd: paperId })
-      return
-    }
-    // One paper cannot be both the one you would read and the one you would
-    // skip, so giving it one verdict lifts the other it may hold.
-    const next: Marks = {
-      ...NO_MARKS,
-      best: verdict === 'best' ? paperId : marks.best === paperId ? null : marks.best,
-      worst: verdict === 'worst' ? paperId : marks.worst === paperId ? null : marks.worst,
+    // Marking a paper lifts whatever verdict it already held: one paper cannot
+    // be both the one you would read and the one you would skip. Written over
+    // the game's OWN verdict list rather than per game, so a one-verdict round
+    // (odd one out, matched pair) is simply the case where the set is complete
+    // after the first click.
+    const next = { ...NO_MARKS }
+    for (const spec of verdicts) {
+      next[spec.id] =
+        spec.id === verdict ? paperId : marks[spec.id] === paperId ? null : marks[spec.id]
     }
     setMarks(next)
-    if (next.best && next.worst) {
-      answerMutation.mutate({ best: next.best, worst: next.worst })
+
+    // The round records only once every verdict it asked for has an answer —
+    // the complete set IS the datum.
+    if (verdicts.every((spec) => next[spec.id])) {
+      answerMutation.mutate(
+        Object.fromEntries(verdicts.map((spec) => [spec.id, next[spec.id] as string])),
+      )
     }
   }
 
@@ -386,10 +436,11 @@ export function SignalLabSheet() {
   const authorsDown = effects?.authors_down ?? []
   const hasEffects =
     upward.length + downward.length + authorsUp.length + authorsDown.length > 0
-  // Best–worst needs both verdicts before it can record. Say so only while the
-  // round is half-answered: an instruction that is always on screen is read
+  // A multi-verdict round needs all of them before it can record. Say so only
+  // while it is part-answered: an instruction that is always on screen is read
   // once and then becomes furniture.
-  const halfMarked = !isOddGame && Boolean(marks.best) !== Boolean(marks.worst)
+  const marked = verdicts.filter((spec) => marks[spec.id]).length
+  const halfMarked = marked > 0 && marked < verdicts.length
 
   return (
     <PageSection
@@ -469,7 +520,10 @@ export function SignalLabSheet() {
             </div>
           </div>
           <p className="mb-3 text-sm font-medium text-alma-800">
-            {deckReady ? (isOddGame ? TASK.oddOneOut : TASK.bestWorst) : 'Dealing a new deck…'}
+            {deckReady
+              ? (GAMES.find((game) => game.id === gameId)?.task ??
+                queueQuery.data?.question)
+              : 'Dealing a new deck…'}
           </p>
 
           {/* The same measured tile grid every other band on this page uses.
@@ -482,8 +536,13 @@ export function SignalLabSheet() {
               question, not a link. */}
           <SurfaceProvider level={2}>
             {!deckReady ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                {[0, 1, 2].map((slot) => (
+              <div
+                className={cn(
+                  'grid gap-3',
+                  tileCount === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-3',
+                )}
+              >
+                {Array.from({ length: tileCount }, (_, slot) => (
                   <Skeleton key={slot} className="h-44" />
                 ))}
               </div>

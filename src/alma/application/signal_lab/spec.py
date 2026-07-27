@@ -42,6 +42,17 @@ RegionMode = Literal["within", "boundary"]
 # "at equal topic, which venue would you rather read".
 ContrastAxis = Literal["venue"]
 
+SKIP_OPTION = "cant_tell"
+"""The one option in every game's vocabulary that is NOT a paper reference.
+
+``MiniGame.options`` is the answer vocabulary: every other key names a verdict
+whose value is one of the shown paper ids. That makes ``options - {SKIP_OPTION}``
+the exact set of keys the answer route must validate against ``shown``, so a new
+game is validated by existing code instead of by remembering to extend a
+hardcoded tuple (which is how ``matched_pair``'s ``picked`` would have arrived
+unchecked).
+"""
+
 
 @dataclass(frozen=True)
 class DrawSpec:
