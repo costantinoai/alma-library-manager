@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Save, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Save, SlidersHorizontal, Sparkles, UserRound } from 'lucide-react'
 import { PageIntro } from '@/components/ui/page-intro'
 
 import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
@@ -16,6 +16,7 @@ import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { PluginsSection } from '@/components/settings/PluginsSection'
 import { SignalLabSettingsCard } from '@/components/settings/SignalLabSettingsCard'
+import { UserProfileCard } from '@/components/settings/UserProfileCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
 import { FeedAutoRefreshCard } from '@/components/settings/FeedAutoRefreshCard'
 import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
@@ -50,8 +51,9 @@ import { cn } from '@/lib/utils'
  * scroll" and makes the scope of the save button legible.
  */
 
-type SectionId = 'connections' | 'plugins' | 'intelligence' | 'system'
+type SectionId = 'you' | 'connections' | 'plugins' | 'intelligence' | 'system'
 type AnchorId =
+  | 'user-profile'
   | 'backend'
   | 'external-apis'
   | 'id-resolution'
@@ -74,6 +76,7 @@ interface TocEntry {
 }
 
 const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Cable }[] = [
+  { id: 'you', label: 'You', caption: 'Your name and author profile', icon: UserRound },
   { id: 'connections', label: 'Connections', caption: 'Upstream publication sources', icon: Cable },
   { id: 'plugins', label: 'Plugins', caption: 'External app and channel integrations', icon: PlugZap },
   { id: 'intelligence', label: 'Intelligence', caption: 'Discovery weights, monitor terms, AI provider', icon: Sparkles },
@@ -81,6 +84,7 @@ const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Ca
 ]
 
 const TOC: TocEntry[] = [
+  { id: 'user-profile', label: 'Your profile', section: 'you' },
   { id: 'backend', label: 'Backend', section: 'connections' },
   { id: 'external-apis', label: 'External APIs', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
@@ -266,6 +270,16 @@ export function SettingsPage() {
 
         {/* ── Grouped content ───────────────────────────────────────── */}
         <div ref={contentRef} className="space-y-10">
+          {/* -- You -- ALMa puts a person at the centre of a literature, so
+              the person is the first thing Settings talks about. */}
+          <SettingsSection
+            id="you"
+            title="You"
+            caption="Who ALMa is working for. Set during onboarding — changeable here."
+          >
+            <Anchor id="user-profile"><UserProfileCard /></Anchor>
+          </SettingsSection>
+
           {/* -- Connections -- */}
           <SettingsSection id="connections" title="Connections" caption="Upstream publication and identity sources.">
             <Anchor id="backend">

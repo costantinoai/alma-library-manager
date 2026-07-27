@@ -107,6 +107,22 @@ class ProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class OwnerIdentity(BaseModel):
+    author_id: str
+    name: str | None = None
+    openalex_id: str | None = None
+    orcid: str | None = None
+
+
+class UserProfileResponse(BaseModel):
+    """Who ALMa thinks you are — the greeting name, and the author row you
+    claimed as yourself. Read by Settings so the identity set during onboarding
+    stops being write-once."""
+
+    name: str | None = None
+    owner: OwnerIdentity | None = None
+
+
 class ResolveOwnerRequest(BaseModel):
     orcid: str | None = None
     openalex_id: str | None = None
@@ -170,6 +186,62 @@ def set_onboarding_profile(
         db,
         lambda: upsert_setting(db, _USER_NAME_KEY, name),
         label="onboarding_profile",
+    )
+
+
+@router.get("/user-profile", response_model=UserProfileResponse)
+def get_user_profile(
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """The greeting name plus the claimed owner identity, for Settings.
+
+    `/status` reports `has_owner` as a boolean because onboarding only needs to
+    know whether to ask. Settings has to SHOW who you claimed and let you change
+    it, which needs the row itself.
+    """
+    owner: OwnerIdentity | None = None
+    try:
+        row = db.execute(
+            """
+            SELECT fa.author_id AS author_id,
+                   COALESCE(NULLIF(a.name, ''), fa.author_id) AS name,
+                   a.openalex_id AS openalex_id,
+                   a.orcid AS orcid
+            FROM followed_authors fa
+            LEFT JOIN authors a ON a.id = fa.author_id
+            WHERE fa.is_owner = 1
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row is not None:
+        owner = OwnerIdentity(
+            author_id=str(row["author_id"]),
+            name=row["name"],
+            openalex_id=row["openalex_id"],
+            orcid=row["orcid"],
+        )
+    return UserProfileResponse(name=_get_kv(db, _USER_NAME_KEY), owner=owner)
+
+
+@router.post("/clear-owner", status_code=204)
+def clear_owner(
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Un-claim the "this is me" author WITHOUT unfollowing them.
+
+    Two different statements: "I am not this person" and "I do not want their
+    papers". Clearing the owner flag leaves the follow — and therefore the Feed
+    monitor and everything already in the Library — exactly as it was. Use the
+    Authors page to stop following.
+    """
+    run_write_unit(
+        db,
+        lambda: db.execute("UPDATE followed_authors SET is_owner = 0 WHERE is_owner = 1"),
+        label="onboarding_clear_owner",
     )
 
 

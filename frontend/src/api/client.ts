@@ -4725,6 +4725,30 @@ export function setOnboardingProfile(name: string): Promise<void> {
   return api.post<void>('/onboarding/profile', { name })
 }
 
+export interface OwnerIdentity {
+  author_id: string
+  name: string | null
+  openalex_id: string | null
+  orcid: string | null
+}
+
+export interface UserProfile {
+  name: string | null
+  owner: OwnerIdentity | null
+}
+
+/** Who ALMa thinks you are. Settings reads this so the name and the "this is
+ *  me" author set during onboarding stay editable afterwards. */
+export function getUserProfile(): Promise<UserProfile> {
+  return api.get<UserProfile>('/onboarding/user-profile')
+}
+
+/** Un-claim the owner author. Deliberately does NOT unfollow them — "I am not
+ *  this person" and "I do not want their papers" are different statements. */
+export function clearOwnerIdentity(): Promise<void> {
+  return api.post<void>('/onboarding/clear-owner', {})
+}
+
 export function resolveOwnerIdentity(body: {
   orcid?: string
   openalex_id?: string
