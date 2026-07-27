@@ -535,9 +535,9 @@ export function HomePage() {
           for you. An empty Inbox keeps its header bar and a `0` pill, folded
           shut (2026-07-27) — the desk's shelves are always where you left
           them; only their contents change. */}
-      <div data-tour="home-inbox">
       <PageSection
         id="home-inbox"
+        data-tour="home-inbox"
         collapsible
         title="Inbox"
         icon={Inbox}
@@ -589,11 +589,10 @@ export function HomePage() {
           )}
         />
       </PageSection>
-      </div>
 
-      <div data-tour="home-picked">
       <PageSection
         id="home-highlights"
+        data-tour="home-picked"
         collapsible
         title="Picked for you"
         icon={Sparkles}
@@ -639,7 +638,6 @@ export function HomePage() {
           )}
         />
       </PageSection>
-      </div>
 
       <PageSection
         id="home-reading"

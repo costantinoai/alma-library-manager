@@ -88,6 +88,15 @@ export interface PageSectionProps {
   emptyState?: ReactNode
   children: ReactNode
   className?: string
+  /**
+   * Onboarding-tour anchor for the band (`onboarding/tours.ts`).
+   *
+   * The other two band primitives (`PageIntro`, `DisclosurePanel`) already take
+   * one; without it a page had to wrap the section in a bare `<div>` just to
+   * hang an anchor, which is markup that exists for no other reason and gets
+   * dropped by the next refactor.
+   */
+  'data-tour'?: string
 }
 
 /**
@@ -115,6 +124,7 @@ export function PageSection({
   emptyState,
   children,
   className,
+  'data-tour': dataTour,
 }: PageSectionProps) {
   // `null` = the reader has not touched the fold yet, so it follows the
   // content: open when there is something to read, shut when the section is
@@ -218,7 +228,7 @@ export function PageSection({
     )
 
     return (
-      <section aria-labelledby={id} className={className}>
+      <section data-tour={dataTour} aria-labelledby={id} className={className}>
         <Card className="overflow-hidden p-0">
           {collapsible ? (
             <Collapsible open={open} onOpenChange={setOpen}>
@@ -240,7 +250,7 @@ export function PageSection({
 
   if (!collapsible) {
     return (
-      <section className={cn('space-y-3', className)} aria-labelledby={id}>
+      <section data-tour={dataTour} className={cn('space-y-3', className)} aria-labelledby={id}>
         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-end sm:justify-between sm:gap-3">
           {heading}
           {action}
@@ -254,7 +264,7 @@ export function PageSection({
   // its paper. Card is a plain div with no `asChild`, so nesting the other way
   // would need one.
   return (
-    <section aria-labelledby={id} className={className}>
+    <section data-tour={dataTour} aria-labelledby={id} className={className}>
       <Card className="overflow-hidden p-0">
         <Collapsible open={open} onOpenChange={setOpen}>
           {/* The whole header row is the toggle, but `action` sits OUTSIDE the

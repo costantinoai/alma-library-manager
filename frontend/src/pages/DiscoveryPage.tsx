@@ -1447,6 +1447,7 @@ export function DiscoveryPage() {
         {selectedLensId && (
           <PageSection
             id="discovery-map-heading"
+            data-tour="discovery-map"
             variant="banded"
             collapsible
             open={mapOpen}

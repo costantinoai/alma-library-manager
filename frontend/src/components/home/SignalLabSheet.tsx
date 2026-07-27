@@ -366,6 +366,8 @@ export function SignalLabSheet() {
   const coverage = summary?.coverage
   const upward = effects?.upward ?? []
   const downward = effects?.downward ?? []
+  const authorsUp = effects?.authors_up ?? []
+  const authorsDown = effects?.authors_down ?? []
   // Best–worst needs both verdicts before it can record. Say so only while the
   // round is half-answered: an instruction that is always on screen is read
   // once and then becomes furniture.
@@ -533,7 +535,17 @@ export function SignalLabSheet() {
           <Fact label="Down" tone={downward.length > 0 ? 'negative' : 'neutral'}>
             {downward.length > 0 ? downward.map(directionText).join(' · ') : 'not fitted'}
           </Fact>
-          <Fact label="Boundaries">
+          <Fact label="Authors up" tone={authorsUp.length > 0 ? 'positive' : 'neutral'}>
+          {authorsUp.length > 0
+            ? authorsUp.map((a) => a.label).join(' · ')
+            : 'not fitted'}
+        </Fact>
+        <Fact label="Authors down" tone={authorsDown.length > 0 ? 'negative' : 'neutral'}>
+          {authorsDown.length > 0
+            ? authorsDown.map((a) => a.label).join(' · ')
+            : 'not fitted'}
+        </Fact>
+        <Fact label="Boundaries">
             {effects?.boundary_overrides ?? 0} sharpened · {effects?.regions_moving ?? 0}{' '}
             moving
           </Fact>

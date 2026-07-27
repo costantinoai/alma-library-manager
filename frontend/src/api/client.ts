@@ -5030,6 +5030,7 @@ export interface SignalLabSettings {
   enabled: boolean
   region_offset_points: number
   utility_points: number
+  author_offset_points: number
   map_tint_strength: number
   ring_decay: number
   exploration_rate: number
@@ -5146,6 +5147,12 @@ export interface SignalLabDirection {
   value: number
 }
 
+export interface SignalLabAuthorDirection {
+  key: string
+  label: string
+  value: number
+}
+
 export interface SignalLabSummary {
   active: boolean
   rounds: {
@@ -5177,6 +5184,10 @@ export interface SignalLabSummary {
     downward: SignalLabDirection[]
     regions_moving: number
     boundary_overrides: number
+    /** The author head, in the same up/down shape as the regions. */
+    authors_up: SignalLabAuthorDirection[]
+    authors_down: SignalLabAuthorDirection[]
+    authors_moving: number
   }
 }
 
