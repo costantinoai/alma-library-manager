@@ -34,7 +34,20 @@ export interface TerrainPoint {
   x: number
   y: number
   v: number
+  /** How much this value is to be believed, 0–1.
+   *
+   *  1.0 is something you said. Anything less is inferred: the backend fits a
+   *  preference field over the corpus and reports the fraction of variance its
+   *  labels actually explain at this point. Rendering a guess at the same
+   *  weight as a fact is the failure this channel exists to prevent — most of
+   *  a corpus sits far from anything you have rated, and it must LOOK that way.
+   *  Absent (older payloads) means "fully believed", the pre-field behaviour. */
+  c?: number
 }
+
+/** Confidence to use when a payload predates the field. Treating it as a
+ *  certainty reproduces exactly the old rendering, so nothing shifts silently. */
+export const ASSUMED_CONFIDENCE = 1
 
 export interface TerrainField {
   /** World-coordinate points for `SemanticMap`'s `heatField`. */
@@ -79,6 +92,7 @@ export function buildTerrainField({
   nodes,
   spacePoints,
   valenceById,
+  confidenceById,
 }: {
   /** `metadata.layout.frame` from the rendered payload. */
   frame?: unknown
@@ -90,6 +104,10 @@ export function buildTerrainField({
   spacePoints: ReadonlyArray<TerrainPoint>
   /** Valence per node id, live. */
   valenceById: ReadonlyMap<string, number>
+  /** Confidence per node id, live — travels with the valence for the same
+   *  reason: a re-fitted layout has its own coordinates, so the field's values
+   *  AND their believability both have to be joined onto its own nodes. */
+  confidenceById?: ReadonlyMap<string, number>
 }): TerrainField {
   if (isSubstrateFrame(frame, fallbackIsSubstrate)) {
     if (!spacePoints.length) return EMPTY
@@ -112,6 +130,7 @@ export function buildTerrainField({
       // Same y convention as every host: higher y draws at the top.
       y: 1 - node.y,
       v: known ? v : VALENCE_NO_SIGNAL,
+      c: known ? (confidenceById?.get(node.id) ?? ASSUMED_CONFIDENCE) : 0,
     })
   }
   if (!points.length) {

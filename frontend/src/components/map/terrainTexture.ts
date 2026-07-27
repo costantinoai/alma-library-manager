@@ -21,7 +21,7 @@
  * field; the camera can only decide which part of it you are looking at.
  */
 import { TERRAIN_SCALE_ABS_MAX, terrainColor } from './mapNodeStyle'
-import type { TerrainPoint } from './terrainField'
+import { ASSUMED_CONFIDENCE, type TerrainPoint } from './terrainField'
 
 /** Texture resolution over the substrate's unit square. Terrain is a smooth
  *  wash, so this is upscaled with interpolation rather than drawn per pixel. */
@@ -32,6 +32,16 @@ export const TERRAIN_KERNEL_WORLD = 0.08
 /** A no-opinion point still covers ground (the substrate has no holes) but must
  *  not drown the pockets that do carry signal — see the 2026-07-25 contract. */
 const NEUTRAL_WEIGHT = 0.15
+/** Floor on how much an inferred point may tint.
+ *
+ *  Since 2026-07-27 most of the substrate carries a PREDICTED valence rather
+ *  than none (see `alma.application.terrain`), and predictions come with a
+ *  confidence that is usually low — the corpus is mostly far from anything you
+ *  rated. Multiplying tint straight by confidence would erase the field's whole
+ *  point; ignoring confidence would paint the corpus as if we knew it. This
+ *  floor keeps a low-confidence region visible as a faint suggestion while a
+ *  region you actually worked stays several times stronger. */
+const MIN_CONFIDENCE_TINT = 0.2
 
 export interface TerrainGrid {
   /** RGBA over a `size` x `size` grid covering the world unit square. */
@@ -62,7 +72,7 @@ export function buildTerrainGrid(
 
   const size = TERRAIN_TEXTURE_SIZE
   const wsum = new Float32Array(size * size) // signal-weighted mass → colour
-  const dsum = new Float32Array(size * size) // plain density → alpha
+  const dsum = new Float32Array(size * size) // confidence-weighted mass → alpha
   const vsum = new Float32Array(size * size)
   const radius = TERRAIN_KERNEL_WORLD * size
   const twoSigmaSq = 2 * (radius / 2) ** 2
@@ -76,7 +86,16 @@ export function buildTerrainGrid(
     const x1 = Math.min(size - 1, Math.ceil(gx + radius))
     const y0 = Math.max(0, Math.floor(gy - radius))
     const y1 = Math.min(size - 1, Math.ceil(gy + radius))
-    const signalW = NEUTRAL_WEIGHT + (1 - NEUTRAL_WEIGHT) * Math.abs(p.v)
+    // Two independent channels. `signalW` is HOW STRONG an opinion this point
+    // carries; `confW` is HOW MUCH WE BELIEVE it. Multiplying them into the
+    // colour means a confident mild opinion and a wild guess do not tint the
+    // same, and accumulating `confW` separately means the wash's opacity
+    // reports evidence rather than mere point density.
+    const confW = Math.max(
+      MIN_CONFIDENCE_TINT,
+      typeof p.c === 'number' ? p.c : ASSUMED_CONFIDENCE,
+    )
+    const signalW = (NEUTRAL_WEIGHT + (1 - NEUTRAL_WEIGHT) * Math.abs(p.v)) * confW
     for (let yy = y0; yy <= y1; yy++) {
       const dy2 = (yy - gy) ** 2
       for (let xx = x0; xx <= x1; xx++) {
@@ -84,7 +103,7 @@ export function buildTerrainGrid(
         const wgt = Math.exp(-d2 / twoSigmaSq)
         if (wgt < 0.01) continue
         const idx = yy * size + xx
-        dsum[idx] += wgt
+        dsum[idx] += wgt * confW
         wsum[idx] += wgt * signalW
         vsum[idx] += wgt * signalW * p.v
       }
@@ -93,7 +112,7 @@ export function buildTerrainGrid(
 
   const rgba = new Uint8ClampedArray(size * size * 4)
 
-  // Density reference over the WHOLE world, so a region's opacity says how much
+  // Evidence reference over the WHOLE world, so a region's opacity says how much
   // evidence sits there rather than how much of it happens to be on screen.
   let maxDensity = 0
   for (let i = 0; i < dsum.length; i++) if (dsum[i] > maxDensity) maxDensity = dsum[i]

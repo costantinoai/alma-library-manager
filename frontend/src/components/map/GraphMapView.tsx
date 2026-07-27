@@ -319,6 +319,10 @@ export function GraphMapView({
         // either map is a subset of the same terrain, not a smaller terrain.
         spacePoints: isPaperMap ? signalField.points : authorField.points,
         valenceById: isPaperMap ? signalField.valenceById : authorField.valenceById,
+        // Papers carry a fitted field, so a value may be inferred and must be
+        // drawn as such. The author field is observed-only, so it has no
+        // confidence to pass and every author reads as fully believed.
+        confidenceById: isPaperMap ? signalField.confidenceById : undefined,
       }),
     [
       isPaperMap,
@@ -327,6 +331,7 @@ export function GraphMapView({
       nodes,
       signalField.points,
       signalField.valenceById,
+      signalField.confidenceById,
       authorField.points,
       authorField.valenceById,
     ],
@@ -658,6 +663,21 @@ export function GraphMapView({
               max="1"
               mean={terrainStats.mean.toFixed(2)}
             />
+          )}
+          {showTerrain && isPaperMap && signalField.model?.fitted && (
+            // The terrain is mostly INFERRED, and a reader who thinks they are
+            // looking at recorded opinions everywhere would badly misread it.
+            // Say the split out loud: faint regions are the model guessing.
+            <span
+              className="text-slate-400"
+              title={
+                `Fitted from ${signalField.model.n_labels.toLocaleString()} of your signals in ` +
+                `SPECTER2 space. Faded areas are low-confidence predictions, not recorded opinions.`
+              }
+            >
+              {signalField.model.n_observed.toLocaleString()} recorded ·{' '}
+              {signalField.model.n_predicted.toLocaleString()} inferred
+            </span>
           )}
           {showTerrain && terrain.frame === 'own' && (
             // A tuned layout is its own space. The terrain follows it — and

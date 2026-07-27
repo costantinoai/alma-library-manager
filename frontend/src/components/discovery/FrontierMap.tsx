@@ -287,8 +287,9 @@ export function FrontierMap({
         nodes: [],
         spacePoints: signalField.points,
         valenceById: signalField.valenceById,
+        confidenceById: signalField.confidenceById,
       }),
-    [signalField.points, signalField.valenceById],
+    [signalField.points, signalField.valenceById, signalField.confidenceById],
   )
 
   const yearStats = useMemo(
