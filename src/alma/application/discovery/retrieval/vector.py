@@ -6,9 +6,9 @@ Two changes over the original single-centroid, corpus-only implementation:
 and search around it. For a multi-topic library that point is not in any of the
 topics — the mean of a bimodal distribution sits in the empty middle. A reader
 working on vision *and* on methods got neither; they got the midpoint, which
-matches nothing. The lane now clusters the seeds (reusing the same branch
-clustering the rest of Discovery uses) and searches around each branch centroid,
-so every region of the library gets representation.
+matches nothing. The lane now builds deterministic spherical branch centroids
+and searches around each one, so every region of the library gets
+representation without invoking layout machinery on the request path.
 
 **Corpus ∪ frontier.** The lane queried `publication_embeddings JOIN papers`,
 so it could only ever return a paper already in the local corpus — the heaviest
@@ -21,14 +21,15 @@ never seen.
 
 from __future__ import annotations
 
+import math
 import sqlite3
+from dataclasses import dataclass
 from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 
 from ..frontier import load_frontier_vectors
-from ..seed_profile import _cluster_seed_papers_vector
 from ._common import FAMILY_SEMANTIC, attach_hits
 
 try:
@@ -53,13 +54,11 @@ _MAX_BRANCH_CENTROIDS = 6
 # topic by definition and a single centroid is the honest summary.
 _MIN_SEEDS_FOR_BRANCHING = 8
 
-# NOTE on cost: the first branch-clustering call in a fresh process takes
-# ~11.6 s and every later call ~0.15 s (measured: 11.65 / 0.15 / 0.14 on the
-# dev library). That is numba JIT compilation inside UMAP, paid once per
-# process, NOT a per-refresh cost — the long-running server pays it on the
-# first refresh after boot and never again. An earlier revision capped the
-# fitting sample to "fix" this; the cap was measuring warm-up, not size, so it
-# was removed rather than kept as unjustified complexity.
+@dataclass(frozen=True)
+class _VectorPool:
+    keys: tuple[str, ...]
+    matrix: Any
+    metadata: tuple[dict, ...]
 
 
 def _retrieve_vector_channel(
@@ -83,7 +82,7 @@ def _retrieve_vector_channel(
         return []
 
     pool = _load_search_pool(db, active_model, exclude=set(seed_vectors))
-    if not pool:
+    if pool is None:
         return []
 
     # Each centroid runs its own kNN and contributes its own ranked list, so a
@@ -166,23 +165,21 @@ def _branch_centroids(
     branch meaningfully — one topic does not need splitting, and clustering
     noise would only fragment the query.
     """
-    embedded_seeds = [s for s in seeds if str(s.get("id") or "") in seed_vectors]
-
     centroids: list[tuple[str, Any]] = []
-    if len(embedded_seeds) >= _MIN_SEEDS_FOR_BRANCHING:
-        try:
-            clusters = _cluster_seed_papers_vector(
-                embedded_seeds, seed_vectors, _MAX_BRANCH_CENTROIDS
-            )
-        except Exception:
-            clusters = []
-        for idx, cluster in enumerate(clusters[:_MAX_BRANCH_CENTROIDS]):
-            centroid = cluster.get("centroid")
-            if centroid is None:
-                continue
-            unit = _unit(centroid)
-            if unit is not None:
-                centroids.append((f"vector_branch_{idx}", unit))
+    embedded_seed_ids = sorted(
+        str(seed.get("id") or "")
+        for seed in seeds
+        if str(seed.get("id") or "") in seed_vectors
+    )
+    if len(embedded_seed_ids) >= _MIN_SEEDS_FOR_BRANCHING:
+        branch_vectors = _spherical_branch_centroids(
+            {paper_id: seed_vectors[paper_id] for paper_id in embedded_seed_ids},
+            max_centroids=_MAX_BRANCH_CENTROIDS,
+        )
+        centroids = [
+            (f"vector_branch_{idx}", centroid)
+            for idx, centroid in enumerate(branch_vectors)
+        ]
 
     if not centroids:
         stacked = np.vstack(list(seed_vectors.values()))
@@ -199,6 +196,61 @@ def _branch_centroids(
     if directions:
         centroids = [(bid, _blend(vec, directions)) for bid, vec in centroids]
     return centroids
+
+
+def _spherical_branch_centroids(
+    vectors: dict[str, Any],
+    *,
+    max_centroids: int,
+) -> list[Any]:
+    """Build several dense query directions without layout/JIT machinery.
+
+    Retrieval needs semantic branch centroids, not a 2-D visualization.
+    Farthest-first spherical k-means is deterministic, keeps every seed in a
+    branch, and runs in milliseconds for a personal library.
+    """
+
+    if not vectors:
+        return []
+    ordered_ids = sorted(vectors)
+    matrix = np.vstack([vectors[paper_id] for paper_id in ordered_ids]).astype(
+        np.float32,
+        copy=False,
+    )
+    if len(matrix) == 1:
+        return [matrix[0]]
+
+    desired = max(2, int(round(math.sqrt(len(matrix) / 8.0))))
+    cluster_count = min(max(1, int(max_centroids)), desired, len(matrix))
+
+    global_centroid = _unit(np.mean(matrix, axis=0))
+    if global_centroid is None:
+        return []
+    first = int(np.argmin(matrix @ global_centroid))
+    centroids = [matrix[first]]
+    while len(centroids) < cluster_count:
+        similarities = matrix @ np.vstack(centroids).T
+        next_idx = int(np.argmin(np.max(similarities, axis=1)))
+        centroids.append(matrix[next_idx])
+
+    centroid_matrix = np.vstack(centroids)
+    assignments = np.full(len(matrix), -1, dtype=np.int32)
+    for _ in range(12):
+        updated_assignments = np.argmax(matrix @ centroid_matrix.T, axis=1)
+        if np.array_equal(assignments, updated_assignments):
+            break
+        assignments = updated_assignments
+        updated: list[Any] = []
+        for cluster_idx in range(cluster_count):
+            members = matrix[assignments == cluster_idx]
+            centroid = _unit(np.mean(members, axis=0)) if len(members) else None
+            updated.append(
+                centroid
+                if centroid is not None
+                else centroid_matrix[cluster_idx]
+            )
+        centroid_matrix = np.vstack(updated)
+    return [row for row in centroid_matrix]
 
 
 def _direction_centroids(
@@ -252,16 +304,17 @@ def _direction_centroids(
 
 def _load_search_pool(
     db: sqlite3.Connection, active_model: str, *, exclude: set[str]
-) -> list[tuple[str, Any, dict]]:
+) -> _VectorPool | None:
     """Every searchable vector: corpus rows plus frontier rows.
 
-    Returns ``(key, unit vector, candidate template)``. Frontier entries carry
-    no ``paper_id`` — they are not corpus rows yet — which is exactly what
-    marks them as genuinely new suggestions downstream.
+    Frontier entries carry no ``paper_id`` — they are not corpus rows yet —
+    which is exactly what marks them as genuinely new suggestions downstream.
     """
     from alma.core.vector_blob import decode_vector
 
-    pool: list[tuple[str, Any, dict]] = []
+    keys: list[str] = []
+    vectors: list[Any] = []
+    metadata: list[dict] = []
 
     rows = db.execute(
         f"""
@@ -284,36 +337,51 @@ def _load_search_pool(
             continue
         if unit is None:
             continue
-        pool.append(
-            (
-                paper_id,
-                unit,
-                {
-                    # Carried so the scoring seam can reuse this vector
-                    # directly instead of re-resolving identity.
-                    "paper_id": paper_id,
-                    "title": row["title"] or "",
-                    "authors": row["authors"] or "",
-                    "url": row["url"] or "",
-                    "doi": row["doi"] or "",
-                    "openalex_id": row["openalex_id"] or "",
-                    "year": row["year"],
-                    "journal": row["journal"] or "",
-                    "cited_by_count": row["cited_by_count"] or 0,
-                },
-            )
+        keys.append(paper_id)
+        vectors.append(unit)
+        metadata.append(
+            {
+                "paper_id": paper_id,
+                "title": row["title"] or "",
+                "authors": row["authors"] or "",
+                "url": row["url"] or "",
+                "doi": row["doi"] or "",
+                "openalex_id": row["openalex_id"] or "",
+                "year": row["year"],
+                "journal": row["journal"] or "",
+                "cited_by_count": row["cited_by_count"] or 0,
+            }
         )
 
     for frontier_key, vector, meta in load_frontier_vectors(db, model=active_model):
         unit = _unit(vector)
         if unit is None:
             continue
-        pool.append((f"frontier:{frontier_key}", unit, {**meta, "frontier_key": frontier_key}))
+        keys.append(f"frontier:{frontier_key}")
+        vectors.append(unit)
+        metadata.append(
+            {
+                **meta,
+                "frontier_key": frontier_key,
+                # Reuse the already-loaded exact-model vector during
+                # scoring and semantic MMR. Dropping it here forced a
+                # frontier hit back to lexical-only scoring even though
+                # dense retrieval had just used the vector.
+                "specter2_embedding": vector.tolist(),
+                "specter2_model": active_model,
+            }
+        )
 
-    return pool
+    if not vectors:
+        return None
+    return _VectorPool(
+        keys=tuple(keys),
+        matrix=np.vstack(vectors).astype(np.float32, copy=False),
+        metadata=tuple(metadata),
+    )
 
 
-def _search(centroid: Any, pool: list[tuple[str, Any, dict]], *, limit: int) -> list[dict]:
+def _search(centroid: Any, pool: _VectorPool, *, limit: int) -> list[dict]:
     """Cosine-rank the whole pool against one centroid.
 
     Scores every row rather than sampling: a previous `max_scan` cap stopped
@@ -321,10 +389,9 @@ def _search(centroid: Any, pool: list[tuple[str, Any, dict]], *, limit: int) -> 
     best-N-of-an-arbitrary-1000 instead of the best-N-of-the-corpus. With
     float16 vectors and a numpy dot this is milliseconds.
     """
-    if not pool:
+    if not pool.keys:
         return []
-    matrix = np.vstack([vec for _key, vec, _meta in pool])
-    sims = matrix @ centroid
+    sims = pool.matrix @ centroid
 
     top_idx = np.argsort(sims)[::-1][: max(1, limit)]
     out: list[dict] = []
@@ -332,7 +399,8 @@ def _search(centroid: Any, pool: list[tuple[str, Any, dict]], *, limit: int) -> 
         score = float((sims[idx] + 1.0) / 2.0)
         if score <= 0.0:
             continue
-        key, _vec, meta = pool[int(idx)]
+        key = pool.keys[int(idx)]
+        meta = pool.metadata[int(idx)]
         out.append(
             {
                 **meta,
@@ -360,4 +428,7 @@ def _blend(centroid: Any, directions: list[tuple[float, Any]]) -> Any:
     combined = centroid.copy()
     for weight, direction in directions:
         combined = combined + (weight * direction)
-    return _unit(combined) or centroid
+    blended = _unit(combined)
+    # Explicit None check: `x or y` on a numpy array raises
+    # "truth value of an array with more than one element is ambiguous".
+    return centroid if blended is None else blended

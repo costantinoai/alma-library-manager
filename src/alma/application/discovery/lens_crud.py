@@ -546,6 +546,7 @@ def mark_recommendation_action(
                 action=feedback_action,
                 rating=effective_rating,
                 source_surface="discovery",
+                recommendation_id=rec_id,
             )
         lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
         if lens_id and paper_id and feedback_action:
@@ -1337,7 +1338,7 @@ def list_lens_recommendations(
                        AND {collection_unactioned})
                     {kept_arm}
                   )
-            ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
+            ORDER BY COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
             """,
             (lens_collection_id, lens_id, limit, offset),
@@ -1358,7 +1359,7 @@ def list_lens_recommendations(
                        AND COALESCE(TRIM(p.reading_status), '') = '')
                     {kept_arm}
                   )
-            ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
+            ORDER BY COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
             """,
             (lens_id, limit, offset),

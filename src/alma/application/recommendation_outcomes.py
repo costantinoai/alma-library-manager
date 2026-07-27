@@ -22,9 +22,9 @@ negatively, or neutrally?" from the authoritative sources:
 Every Insights/report call site joins the ``recommendations`` provenance
 (source / branch / day) to this outcome and aggregates — none of them
 re-derive "positive" on their own, so the word means the same thing
-everywhere. The ``user_action`` column is still read, but ONLY for the things
-it actually records: exposure (was the rec seen / acted on at all) and the
-save/remove corroboration that already feeds the signal map.
+everywhere. Actual exposure comes only from ``discovery_impressions``. A
+lens-level seen stamp, an old rank, or a missing action is never converted
+into an item view.
 """
 
 from __future__ import annotations
@@ -119,9 +119,11 @@ class RecommendationOutcome:
     Carries every grouping dimension the Insights/report call sites need
     (source / branch / day / mode / publication_date) so they only aggregate,
     never re-derive polarity. ``classification`` comes from the paper outcome;
-    ``is_seen`` uses ``user_action`` for what it reliably records — exposure.
+    ``is_seen`` means an actual item impression exists.
     """
 
+    recommendation_id: str
+    suggestion_set_id: str | None
     paper_id: str
     source_type: str
     source_api: str
@@ -136,6 +138,13 @@ class RecommendationOutcome:
     day: str | None
     user_action: str | None
     classification: str
+    impression_at: str | None
+    impression_position: int | None
+    impression_surface: str | None
+    impression_sort_mode: str | None
+    exploration: bool
+    inclusion_probability: float | None
+    position_probability: float | None
 
     @property
     def is_positive(self) -> bool:
@@ -147,9 +156,17 @@ class RecommendationOutcome:
 
     @property
     def is_seen(self) -> bool:
-        # Exposure: any stamped action (save/read/dismiss/seen) means the rec
-        # was surfaced/acted on. D6-safe — we never treat this as a "like".
-        return bool((self.user_action or "").strip())
+        return self.impression_at is not None
+
+    @property
+    def has_known_propensity(self) -> bool:
+        return bool(
+            self.exploration
+            and self.inclusion_probability is not None
+            and self.position_probability is not None
+            and self.inclusion_probability > 0
+            and self.position_probability > 0
+        )
 
 
 def build_recommendation_outcomes(
@@ -167,6 +184,8 @@ def build_recommendation_outcomes(
 
     sql = f"""
         SELECT
+            r.id AS recommendation_id,
+            r.suggestion_set_id AS suggestion_set_id,
             r.paper_id AS paper_id,
             COALESCE(NULLIF(r.source_type, ''), 'unknown') AS source_type,
             COALESCE(NULLIF(r.source_api, ''), 'unknown') AS source_api,
@@ -178,10 +197,33 @@ def build_recommendation_outcomes(
             p.publication_date AS publication_date,
             r.created_at AS created_at,
             r.action_at AS action_at,
-            r.user_action AS user_action
+            r.user_action AS user_action,
+            imp.seen_at AS impression_at,
+            imp.position AS impression_position,
+            imp.surface AS impression_surface,
+            imp.sort_mode AS impression_sort_mode,
+            COALESCE(rc.exploration, 0) AS exploration,
+            rc.inclusion_probability AS inclusion_probability,
+            rc.position_probability AS position_probability
         FROM recommendations r
         JOIN papers p ON p.id = r.paper_id
          AND {standalone_paper_sql_for_db(db, 'p')}
+        LEFT JOIN (
+            SELECT recommendation_id, seen_at, position, surface, sort_mode
+            FROM (
+                SELECT di.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY recommendation_id
+                           ORDER BY seen_at ASC, id ASC
+                       ) AS rn
+                FROM discovery_impressions di
+            )
+            WHERE rn = 1
+        ) imp ON imp.recommendation_id = r.id
+        LEFT JOIN discovery_ranking_candidates rc
+          ON rc.suggestion_set_id = r.suggestion_set_id
+         AND rc.paper_id = r.paper_id
+         AND rc.selected = 1
     """
     params: tuple = ()
     if since:
@@ -198,6 +240,8 @@ def build_recommendation_outcomes(
         outcome = outcomes.get(pid)
         records.append(
             RecommendationOutcome(
+                recommendation_id=str(row["recommendation_id"]),
+                suggestion_set_id=row["suggestion_set_id"],
                 paper_id=pid,
                 source_type=str(row["source_type"]),
                 source_api=str(row["source_api"]),
@@ -212,6 +256,13 @@ def build_recommendation_outcomes(
                 day=day,
                 user_action=row["user_action"],
                 classification=outcome.classification if outcome else "neutral",
+                impression_at=row["impression_at"],
+                impression_position=row["impression_position"],
+                impression_surface=row["impression_surface"],
+                impression_sort_mode=row["impression_sort_mode"],
+                exploration=bool(row["exploration"]),
+                inclusion_probability=row["inclusion_probability"],
+                position_probability=row["position_probability"],
             )
         )
     return records

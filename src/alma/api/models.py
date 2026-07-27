@@ -523,6 +523,26 @@ class SuggestionSetResponse(BaseModel):
     created_at: str
 
 
+class DiscoveryImpressionItem(BaseModel):
+    """One recommendation that was actually visible on a Discovery surface."""
+
+    recommendation_id: str = Field(..., min_length=1)
+    position: int = Field(..., ge=1)
+    surface: Literal["discovery_card", "discovery_compact"]
+    sort_mode: Literal["relevance", "recent", "custom"]
+
+
+class DiscoveryImpressionBatch(BaseModel):
+    """Idempotent batch of first-visibility observations."""
+
+    items: list[DiscoveryImpressionItem] = Field(..., min_length=1, max_length=200)
+
+
+class DiscoveryImpressionBatchResponse(BaseModel):
+    received: int
+    inserted: int
+
+
 class RecommendationResponse(BaseModel):
     """Response model for a recommendation."""
 
@@ -588,7 +608,6 @@ class DiscoveryWeights(BaseModel):
     citation_quality: float = Field(0.05, ge=0.0, le=1.0)
     feedback_adj: float = Field(0.10, ge=0.0, le=1.0)
     preference_affinity: float = Field(0.10, ge=0.0, le=1.0)
-    usefulness_boost: float = Field(0.06, ge=0.0, le=1.0)
 
 
 class DiscoveryStrategies(BaseModel):
@@ -639,10 +658,9 @@ class DiscoveryCache(BaseModel):
 
 
 class DiscoverySourcePolicy(BaseModel):
-    """One external source toggle + weight."""
+    """One external source toggle."""
 
     enabled: bool = True
-    weight: float = Field(1.0, ge=0.0, le=2.5)
 
 
 class DiscoverySources(BaseModel):
@@ -650,16 +668,19 @@ class DiscoverySources(BaseModel):
 
     openalex: DiscoverySourcePolicy = Field(default_factory=DiscoverySourcePolicy)
     semantic_scholar: DiscoverySourcePolicy = Field(
-        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.95)
+        default_factory=DiscoverySourcePolicy
     )
     crossref: DiscoverySourcePolicy = Field(
-        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.72)
+        default_factory=DiscoverySourcePolicy
     )
     arxiv: DiscoverySourcePolicy = Field(
-        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.66)
+        default_factory=DiscoverySourcePolicy
     )
     biorxiv: DiscoverySourcePolicy = Field(
-        default_factory=lambda: DiscoverySourcePolicy(enabled=True, weight=0.62)
+        default_factory=DiscoverySourcePolicy
+    )
+    europe_pmc: DiscoverySourcePolicy = Field(
+        default_factory=DiscoverySourcePolicy
     )
 
 

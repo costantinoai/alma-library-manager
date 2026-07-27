@@ -4,7 +4,7 @@ Extracted from DiscoveryEngine for reuse by both the lens system and
 the legacy engine.  All functions are stateless — they take a DB connection
 and settings dict rather than depending on class state.
 
-10-signal scoring:
+9 independent signal families:
   1. source_relevance  — retrieval confidence from the channel that found the paper
   2. topic_score       — overlap between paper topics and user preference profile
   3. text_similarity   — semantic (embedding) or lexical (TF-IDF) text match
@@ -14,7 +14,9 @@ and settings dict rather than depending on class state.
   7. citation_quality  — log-scaled citation count
   8. feedback_adj      — adjustment from explicit paper preference history
   9. preference_affinity — Signal Lab swipe/game feedback
-  10. usefulness_boost — reward for timely, credible, non-redundant candidates
+
+``usefulness_boost`` remains diagnostic only.  It is not weighted because it
+duplicates recency/citation/similarity and would reward metadata completeness.
 """
 
 from __future__ import annotations
@@ -407,6 +409,21 @@ def compute_preference_profile(
     # same feedback. This replaces the old name-prevalence count and gives the
     # ranker embedding-similarity-aware author affinity for free.
     author_affinity = build_discovery_author_affinity(conn)
+    followed_author_ids: set[str] = set()
+    followed_author_names: set[str] = set()
+    for row in conn.execute(
+        """
+        SELECT a.openalex_id, a.name
+        FROM followed_authors fa
+        JOIN authors a ON a.id = fa.author_id
+        """
+    ).fetchall():
+        author_id = str(row["openalex_id"] or "").strip().lower()
+        author_name = " ".join(str(row["name"] or "").lower().split())
+        if author_id:
+            followed_author_ids.add(author_id)
+        if author_name:
+            followed_author_names.add(author_name)
 
     # -- Feedback centroids from past recommendations --
     # Structured per-author / per-topic / per-venue / per-keyword / per-tag
@@ -420,6 +437,8 @@ def compute_preference_profile(
     return {
         "topic_weights": topic_weights,
         "author_affinity": author_affinity,
+        "followed_author_ids": followed_author_ids,
+        "followed_author_names": followed_author_names,
         "journal_affinity": journal_affinity,
         "feedback_positive_centroid": feedback_pos_centroid,
         "feedback_negative_centroid": feedback_neg_centroid,
@@ -719,17 +738,30 @@ def score_candidate(
 
     # -- 4. Author affinity --
     author_score = 0.0
+    author_affinity_values: list[float] = []
     authors_str = (candidate.get("authors") or "").strip()
     affinity = preference_profile.get("author_affinity", {})
     if authors_str:
         parts = parse_author_names(authors_str)
         for name in parts:
+            value = 0.0
             for key in author_affinity_keys(name):
                 if key in affinity:
-                    author_score += affinity[key]
+                    value = float(affinity[key])
                     break
+            author_affinity_values.append(value)
+            author_score += value
         if parts:
             author_score = min(1.0, max(0.0, author_score / max(len(parts), 1)))
+    candidate_author_ids = set(_candidate_author_ids(candidate))
+    candidate_author_names = {
+        " ".join(name.lower().split()) for name in parse_author_names(authors_str)
+    }
+    followed_author_match = bool(
+        candidate_author_ids & set(preference_profile.get("followed_author_ids") or ())
+        or candidate_author_names
+        & set(preference_profile.get("followed_author_names") or ())
+    )
 
     # -- 5. Journal affinity --
     journal = (candidate.get("journal") or "").strip().lower()
@@ -806,11 +838,24 @@ def score_candidate(
     feedback_adj = 0.0
     fb_pos_centroid = preference_profile.get("feedback_positive_centroid")
     fb_neg_centroid = preference_profile.get("feedback_negative_centroid")
-    projected_adj = _projected_feedback_adjustment(
+    projected_axes = _projected_feedback_axes(
         candidate,
         paper_topics,
         authors_str,
         preference_profile.get("projected_feedback"),
+    )
+    projected_adj = _clamp(
+        (0.65 * projected_axes["paper"])
+        + (0.55 * projected_axes["semantic_neighbor"])
+        + (0.45 * projected_axes["citation_neighbor"])
+        + (0.35 * projected_axes["venue"])
+        + (0.45 * projected_axes["topic"])
+        + (0.30 * projected_axes["keyword"])
+        + (0.30 * projected_axes["tag"])
+        + (0.40 * projected_axes["author"])
+        + (0.30 * projected_axes["author_name"]),
+        -0.6,
+        0.6,
     )
 
     if fb_pos_centroid is not None and candidate_embedding is not None:
@@ -886,7 +931,6 @@ def score_candidate(
         "citation_quality": float(settings.get("weights.citation_quality", "0.05")),
         "feedback_adj": float(settings.get("weights.feedback_adj", "0.10")),
         "preference_affinity": float(settings.get("weights.preference_affinity", "0.10")),
-        "usefulness_boost": float(settings.get("weights.usefulness_boost", "0.06")),
     }
 
     # -- Apply recommendation mode adjustments --
@@ -922,7 +966,6 @@ def score_candidate(
         "citation_quality": citation_quality,
         "feedback_adj": feedback_adj_norm,
         "preference_affinity": pref_affinity,
-        "usefulness_boost": usefulness_boost,
     }
 
     final = sum(values[k] * weights[k] for k in weights)
@@ -1002,6 +1045,12 @@ def score_candidate(
             "weight": w,
             "weighted": round(v * w, 4),
         }
+    breakdown["usefulness_boost"] = {
+        "value": round(float(usefulness_boost), 4),
+        "weight": 0.0,
+        "weighted": 0.0,
+        "diagnostic_only": True,
+    }
     breakdown["final_score"] = round(float(final_score), 4)
     breakdown["weighted_score_pre_consensus"] = round(float(weighted_score), 4)
     breakdown["consensus_buckets"] = list(consensus_buckets)
@@ -1036,6 +1085,24 @@ def score_candidate(
     breakdown["candidate_embedding_ready"] = bool(semantic_details.get("candidate_embedding_ready"))
     breakdown["topic_match_mode"] = topic_match_mode
     breakdown["projected_feedback_raw"] = round(float(projected_adj or 0.0), 4)
+    breakdown["projected_feedback_axes_raw"] = {
+        key: round(float(value), 6)
+        for key, value in projected_axes.items()
+    }
+    breakdown["author_affinity_atoms"] = {
+        "max": round(max(author_affinity_values, default=0.0), 6),
+        "mean": round(
+            sum(author_affinity_values) / max(1, len(author_affinity_values)), 6
+        ),
+        "first": round(author_affinity_values[0], 6)
+        if author_affinity_values
+        else 0.0,
+        "last": round(author_affinity_values[-1], 6)
+        if author_affinity_values
+        else 0.0,
+        "followed": 1.0 if followed_author_match else 0.0,
+        "evidence_count": len(author_affinity_values),
+    }
     # Citation-fabric provenance (task 47 §7): the two [0,1] strengths, the bonus
     # they earned, and — when a channel fired — the raw count + the single
     # best-matching high-signal paper id, so the UI can render an evidence string
@@ -1064,33 +1131,51 @@ def score_candidate(
     return final_score, breakdown
 
 
-def _projected_feedback_adjustment(
+def _projected_feedback_axes(
     candidate: dict,
     paper_topics: list[dict],
     authors_str: str,
     projected: Any,
-) -> float:
-    """Signed adjustment from paper-feedback projections.
+) -> dict[str, float]:
+    """Return all nine raw projection axes before model weights or clamping."""
 
-    The adjustment is intentionally bounded before it enters
-    `feedback_adj`, so one explicitly disliked/removed paper can pull down related
-    authors/topics/venues without overwhelming direct similarity and
-    retrieval signals.
-    """
-
+    axis_names = (
+        "paper",
+        "author",
+        "author_name",
+        "topic",
+        "venue",
+        "keyword",
+        "tag",
+        "semantic_neighbor",
+        "citation_neighbor",
+    )
     if not isinstance(projected, ProjectedPaperSignals):
-        return 0.0
+        return {
+            key: 0.0
+            for axis in axis_names
+            for key in (axis, f"{axis}_evidence_count")
+        }
 
-    adjustment = 0.0
+    axes = {
+        key: 0.0
+        for axis in axis_names
+        for key in (axis, f"{axis}_evidence_count")
+    }
+
+    def add(axis: str, value: float) -> None:
+        axes[axis] += float(value)
+        axes[f"{axis}_evidence_count"] += 1.0
+
     paper_id = str(candidate.get("paper_id") or candidate.get("id") or "").strip().lower()
     if paper_id:
-        adjustment += 0.65 * float(projected.paper.get(paper_id, 0.0))
-        adjustment += 0.55 * float(projected.semantic_neighbor.get(paper_id, 0.0))
-        adjustment += 0.45 * float(projected.citation_neighbor.get(paper_id, 0.0))
+        add("paper", projected.paper.get(paper_id, 0.0))
+        add("semantic_neighbor", projected.semantic_neighbor.get(paper_id, 0.0))
+        add("citation_neighbor", projected.citation_neighbor.get(paper_id, 0.0))
 
     journal = str(candidate.get("journal") or "").strip().lower()
     if journal:
-        adjustment += 0.35 * float(projected.venue.get(journal, 0.0))
+        add("venue", projected.venue.get(journal, 0.0))
 
     for topic in paper_topics or []:
         term = str(topic.get("term") or topic.get("name") or "").strip().lower()
@@ -1101,19 +1186,26 @@ def _projected_feedback_adjustment(
             topic_strength = float(topic.get("score") or topics.DEFAULT_TOPIC_SCORE)
         except (TypeError, ValueError):
             topic_strength = topics.DEFAULT_TOPIC_SCORE
-        adjustment += 0.45 * _clamp(topic_strength, 0.1, 1.0) * float(projected.topic.get(term, 0.0))
+        add(
+            "topic",
+            _clamp(topic_strength, 0.1, 1.0)
+            * float(projected.topic.get(term, 0.0)),
+        )
 
     for keyword in _candidate_keywords(candidate):
-        adjustment += 0.30 * float(projected.keyword.get(keyword, 0.0))
-        adjustment += 0.30 * float(projected.tag.get(keyword, 0.0))
+        add("keyword", projected.keyword.get(keyword, 0.0))
+        add("tag", projected.tag.get(keyword, 0.0))
 
     for author_id in _candidate_author_ids(candidate):
-        adjustment += 0.40 * float(projected.author.get(author_id, 0.0))
+        add("author", projected.author.get(author_id, 0.0))
 
     for author_name in parse_author_names(authors_str):
-        adjustment += 0.30 * float(projected.author_name.get(author_name.strip().lower(), 0.0))
+        add(
+            "author_name",
+            projected.author_name.get(author_name.strip().lower(), 0.0),
+        )
 
-    return _clamp(adjustment, -0.6, 0.6)
+    return axes
 
 
 def _dismissal_cluster_penalty(
@@ -1206,6 +1298,20 @@ def _dismissal_cluster_penalty(
 
 def _candidate_author_ids(candidate: dict) -> list[str]:
     out: list[str] = []
+    seen: set[str] = set()
+    for authorship in candidate.get("authorships") or []:
+        if not isinstance(authorship, dict):
+            continue
+        author = authorship.get("author")
+        raw = (
+            authorship.get("openalex_id")
+            or authorship.get("author_id")
+            or (author.get("id") if isinstance(author, dict) else None)
+        )
+        normalized = str(raw or "").strip().rstrip("/").split("/")[-1].lower()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
     for key in ("author_openalex_ids", "openalex_author_ids", "author_ids"):
         raw = candidate.get(key)
         values: list[Any]
@@ -1217,7 +1323,8 @@ def _candidate_author_ids(candidate: dict) -> list[str]:
             values = []
         for value in values:
             normalized = str(value or "").strip().lower()
-            if normalized:
+            if normalized and normalized not in seen:
+                seen.add(normalized)
                 out.append(normalized)
     return out
 

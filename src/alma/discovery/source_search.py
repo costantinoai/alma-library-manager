@@ -10,19 +10,22 @@ from typing import Any
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.http_sources import bind_source_diagnostics, get_source_http_client
 from alma.core.scoring_math import clamp as _clamp
+from alma.core.scoring_math import query_match_score, rrf_weight
+from alma.core.scoring_math import query_tokens as build_query_tokens
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
-)
-from alma.core.settings_helpers import (
-    setting_float as _setting_float,
 )
 from alma.core.utils import (
     candidate_dedup_key as _candidate_key,
 )
-from alma.core.utils import (
-    normalize_text as _normalize_text,
+from alma.discovery import (
+    arxiv,
+    biorxiv,
+    crossref,
+    europe_pmc,
+    openalex_related,
+    semantic_scholar,
 )
-from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
 
 logger = logging.getLogger(__name__)
 
@@ -44,22 +47,15 @@ DEFAULT_LANE_DEADLINE_S: float = 8.0
 # finish instead of showing "timeout" on most searches.
 FINDADD_LANE_DEADLINE_S: float = 15.0
 
-# Reciprocal-rank-fusion constant (Cormack et al.) for the Find & Add
-# query-relevance ranking.  60 is the standard value: it compresses the
-# difference between rank 1 and rank 10 enough that cross-source
-# consensus (the same paper returned by several engines) outweighs a
-# single engine's top slot.
-RRF_K: int = 60
 
-# Tokens too common to discriminate results for the query-text match.
-# Deliberately tiny — only glue words that appear in almost every
-# academic title.  Dropping them stops "the role of X in Y" queries
-# from scoring every paper containing "the/of/in".
-_QUERY_STOPWORDS = frozenset(
-    {"a", "an", "and", "are", "at", "by", "for", "from", "in", "is", "of", "on", "or", "the", "to", "with"}
+SOURCE_KEYS = (
+    "openalex",
+    "semantic_scholar",
+    "crossref",
+    "arxiv",
+    "biorxiv",
+    "europe_pmc",
 )
-
-SOURCE_KEYS = ("openalex", "semantic_scholar", "crossref", "arxiv", "biorxiv")
 PREPRINT_SOURCE_KEYS = frozenset({"arxiv", "biorxiv"})
 DEFAULT_SOURCE_ENABLED: dict[str, bool] = {
     "openalex": True,
@@ -67,18 +63,8 @@ DEFAULT_SOURCE_ENABLED: dict[str, bool] = {
     "crossref": True,
     "arxiv": True,
     "biorxiv": True,
+    "europe_pmc": True,
 }
-DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
-    "openalex": 1.0,
-    "semantic_scholar": 0.95,
-    "crossref": 0.72,
-    "arxiv": 0.66,
-    "biorxiv": 0.62,
-}
-
-
-
-
 def _is_blank(value: object) -> bool:
     if value is None:
         return True
@@ -176,39 +162,19 @@ def _split_csv_setting(settings: dict[str, str] | None, key: str) -> list[str]:
 
 def resolve_source_policy(
     settings: dict[str, str] | None,
-) -> tuple[dict[str, bool], dict[str, float]]:
-    """Resolve source enable flags and normalized source weights."""
+) -> dict[str, bool]:
+    """Resolve source enable flags; API identity never supplies rank weight."""
+
     cfg = settings or {}
     enabled: dict[str, bool] = {}
-    raw_weights: dict[str, float] = {}
     for source in SOURCE_KEYS:
         enabled[source] = _setting_bool(
             cfg,
             f"sources.{source}.enabled",
             DEFAULT_SOURCE_ENABLED[source],
         )
-        raw_weights[source] = _setting_float(
-            cfg,
-            f"sources.{source}.weight",
-            DEFAULT_SOURCE_WEIGHTS[source],
-        )
 
-    # Backward compatibility with the existing semantic scholar strategy toggle.
-    if "strategies.semantic_scholar" in cfg:
-        enabled["semantic_scholar"] = _setting_bool(
-            cfg,
-            "strategies.semantic_scholar",
-            enabled["semantic_scholar"],
-        )
-
-    active_total = sum(max(0.0, raw_weights[s]) for s in SOURCE_KEYS if enabled[s])
-    if active_total <= 0:
-        return enabled, dict(DEFAULT_SOURCE_WEIGHTS)
-    normalized = {
-        source: (max(0.0, raw_weights[source]) / active_total) if enabled[source] else 0.0
-        for source in SOURCE_KEYS
-    }
-    return enabled, normalized
+    return enabled
 
 
 def _build_source_calls(
@@ -274,6 +240,17 @@ def _build_source_calls(
         source_calls.append(
             ("biorxiv", lambda: biorxiv.search_works(query, limit=per_source_limit, from_year=from_year))
         )
+    if enabled["europe_pmc"]:
+        source_calls.append(
+            (
+                "europe_pmc",
+                lambda: europe_pmc.search_works(
+                    query,
+                    limit=per_source_limit,
+                    from_year=from_year,
+                ),
+            )
+        )
     return source_calls
 
 
@@ -292,11 +269,19 @@ def _stamp_candidate_provenance(candidate: dict, source_name: str, query: str) -
     candidate["query"] = query
 
 
-def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weights, mode, temperature, enabled=None):
-    """Dedup + personal-rescore candidates from ``(source_name, items)`` pairs.
-    Shared by ``search_across_sources`` + ``merge_streamed_results``; ``enabled``
-    filters sources when provided (the streamed path passes it)."""
+def _merge_candidates_from_sources(
+    items_by_source,
+    query,
+    *,
+    limit,
+    mode,
+    temperature,
+    enabled=None,
+):
+    """Dedup one query without making API identity a relevance feature."""
+
     merged: dict[str, dict] = {}
+    best_rank_score: dict[str, float] = {}
     for source_name, items in items_by_source:
         if enabled is not None and not enabled.get(source_name):
             continue
@@ -310,63 +295,41 @@ def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weig
             if key in ("url:", "title:"):
                 continue
 
-            base = float(candidate.get("score", 0.0) or 0.0)
             rank_factor = _clamp(1.0 - (idx / total), 0.05, 1.0)
-            source_weight = float(source_weights.get(source_name, 0.0) or 0.0)
-            if source_weight <= 0.0:
-                continue
-
-            # Explore mode intentionally rewards slightly deeper ranks to broaden
-            # retrieval surface; core mode stays closer to top-ranked items.
-            mode_bias = 0.6 if mode == "explore" else 0.85
-            temperature_bias = _clamp(0.75 + (temperature * 0.5), 0.65, 1.15)
-            weighted = _clamp(
-                ((base * mode_bias) + (rank_factor * (1.0 - mode_bias))) * source_weight * temperature_bias,
-                0.01,
-                1.0,
-            )
-            candidate["score"] = round(weighted, 4)
+            candidate["score"] = round(rank_factor, 4)
             _stamp_candidate_provenance(candidate, source_name, query)
 
             prev = merged.get(key)
             if prev is None:
                 merged[key] = candidate
+                best_rank_score[key] = rank_factor
                 continue
-            if float(prev.get("score", 0.0) or 0.0) < candidate["score"]:
+            if best_rank_score[key] < rank_factor:
                 merged[key] = _merge_candidate_metadata(candidate, prev)
+                best_rank_score[key] = rank_factor
             else:
                 merged[key] = _merge_candidate_metadata(prev, candidate)
 
+    query_norm, tokens = build_query_tokens(query)
+    text_weight = _clamp(
+        0.78 - (0.30 * float(temperature or 0.0))
+        - (0.08 if mode == "explore" else 0.0),
+        0.40,
+        0.80,
+    )
+    for key, candidate in merged.items():
+        text_match = query_match_score(query_norm, tokens, candidate)
+        candidate["score"] = round(
+            _clamp(
+                (text_weight * text_match)
+                + ((1.0 - text_weight) * best_rank_score[key]),
+                0.0,
+                1.0,
+            ),
+            4,
+        )
     ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     return ranked[: max(1, limit)]
-
-
-def _query_match_score(query_norm: str, query_tokens: list[str], candidate: dict) -> float:
-    """Lexical closeness of one candidate to the search query, in [0, 1].
-
-    Two ingredients, both over `normalize_text` output:
-    - token coverage: fraction of query tokens found in the title/authors
-      (full weight) or the abstract (half weight — a token buried in the
-      abstract is weaker evidence than one in the title);
-    - exact phrase: the whole normalized query appearing inside the title
-      (or, weaker, the abstract) — the strongest "this is the paper I
-      typed" signal, e.g. pasting a full title.
-    """
-    if not query_tokens:
-        return 0.0
-    title_norm = _normalize_text(str(candidate.get("title") or ""))
-    authors_norm = _normalize_text(str(candidate.get("authors") or ""))
-    abstract_norm = _normalize_text(str(candidate.get("abstract") or ""))
-    strong_tokens = set(title_norm.split()) | set(authors_norm.split())
-    abstract_tokens = set(abstract_norm.split())
-
-    covered = sum(
-        1.0 if token in strong_tokens else (0.5 if token in abstract_tokens else 0.0)
-        for token in query_tokens
-    )
-    coverage = covered / len(query_tokens)
-    phrase = 1.0 if query_norm in title_norm else (0.5 if query_norm in abstract_norm else 0.0)
-    return _clamp((0.8 * coverage) + (0.2 * phrase), 0.0, 1.0)
 
 
 def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
@@ -379,7 +342,7 @@ def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
       (every engine sorts by relevance; arXiv/Crossref are asked to
       explicitly). A paper returned by several engines accumulates
       ``1/(RRF_K + rank)`` per appearance, so cross-source consensus rises.
-    - **Query-text match** (`_query_match_score`): exact/near title, author
+    - **Query-text match** (`core.scoring_math.query_match_score`): exact/near title, author
       and abstract matches dominate — pasting a title puts that paper first.
 
     Final score = 0.7 · text match + 0.3 · normalized RRF. Deliberately
@@ -391,10 +354,7 @@ def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
     ``enabled`` filters sources when provided (the streamed path passes it).
     """
     query = (query or "").strip()
-    query_norm = _normalize_text(query)
-    all_tokens = query_norm.split()
-    # Drop glue words unless the query is nothing but glue words.
-    query_tokens = [t for t in all_tokens if t not in _QUERY_STOPWORDS] or all_tokens
+    query_norm, query_tokens = build_query_tokens(query)
 
     merged: dict[str, dict] = {}
     rrf_by_key: dict[str, float] = {}
@@ -406,7 +366,7 @@ def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
             key = _candidate_key(candidate)
             if key in ("url:", "title:"):
                 continue
-            rrf_by_key[key] = rrf_by_key.get(key, 0.0) + 1.0 / (RRF_K + idx + 1)
+            rrf_by_key[key] = rrf_by_key.get(key, 0.0) + rrf_weight(idx + 1)
             _stamp_candidate_provenance(candidate, source_name, query)
             prev = merged.get(key)
             merged[key] = candidate if prev is None else _merge_candidate_metadata(prev, candidate)
@@ -416,7 +376,7 @@ def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
 
     max_rrf = max(rrf_by_key.values())
     for key, candidate in merged.items():
-        text_match = _query_match_score(query_norm, query_tokens, candidate)
+        text_match = query_match_score(query_norm, query_tokens, candidate)
         consensus = (rrf_by_key[key] / max_rrf) if max_rrf > 0 else 0.0
         candidate["score"] = round(_clamp((0.7 * text_match) + (0.3 * consensus), 0.0, 1.0), 4)
 
@@ -458,7 +418,7 @@ def search_across_sources(
     if not query:
         return []
 
-    enabled, source_weights = resolve_source_policy(settings)
+    enabled = resolve_source_policy(settings)
     if not any(enabled.values()):
         return []
 
@@ -500,7 +460,7 @@ def search_across_sources(
     # `shutdown(wait=False)` — background HTTP threads finish on their
     # own (each source library already caps its per-request timeout).
     executor = bounded_thread_pool(
-        max(1, min(5, len(source_calls))),
+        max(1, min(6, len(source_calls))),
         thread_name_prefix="lens-source",
     )
     try:
@@ -549,7 +509,6 @@ def search_across_sources(
         results_by_source,
         query,
         limit=limit,
-        source_weights=source_weights,
         mode=mode,
         temperature=temperature,
     )
@@ -584,7 +543,7 @@ def stream_across_sources(
     if not query:
         return
 
-    enabled, _source_weights = resolve_source_policy(settings)
+    enabled = resolve_source_policy(settings)
     if not any(enabled.values()):
         return
 
@@ -607,7 +566,7 @@ def stream_across_sources(
         yield {"type": "source_pending", "source": source_name}
 
     executor = bounded_thread_pool(
-        max(1, min(5, len(source_calls))),
+        max(1, min(6, len(source_calls))),
         thread_name_prefix="findadd-stream",
     )
     started_at = perf_counter()
@@ -663,14 +622,13 @@ def merge_streamed_results(
     `stream_across_sources` by query relevance (RRF + query-text match).
 
     This is the Find & Add ranking: closeness to what the user *typed*
-    decides the order, search-engine style. The Discovery lens merge
-    (`_merge_candidates_from_sources`, with source weights and
-    explore/temperature bias) is intentionally not used here."""
+    decides the order, search-engine style. The Discovery lens merge and its
+    branch exploration policy are intentionally not used here."""
     query = (query or "").strip()
     if not query or not raw_by_source:
         return []
 
-    enabled, _source_weights = resolve_source_policy(settings)
+    enabled = resolve_source_policy(settings)
     return rank_by_query_relevance(
         raw_by_source.items(),
         query,

@@ -8,6 +8,7 @@ import logging
 import sqlite3
 import uuid
 from collections import defaultdict
+from concurrent.futures import wait
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -15,9 +16,9 @@ from typing import Any
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
 from alma.core.paper_groups import resolve_paper_root_id
-from alma.core.scoring_math import clamp
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
+from alma.core.utils import resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.scoring import (
     compute_preference_profile,
@@ -30,6 +31,7 @@ from alma.discovery.semantic_scholar import upsert_specter2_embedding
 from .. import library as library_app
 from ..feed import _commit_if_pending
 from .citation_fabric import build_citation_fabric_maps
+from .exploration import build_slate
 
 # --- D-9: re-exported from .lens_crud (moved out of this god-module) ---
 from .lens_crud import (
@@ -96,23 +98,27 @@ from .lens_crud import (
     update_lens,
     upsert_setting,
 )
+from .observations import (
+    insert_ranking_candidates,
+    load_ltr_observations,
+    ranking_candidate_rows,
+    record_impressions,
+)
+from .ranker import RANKER_VERSION, apply_repaired_prior, fit_shadow_ranker
 
 # --- D-9: re-exported from .retrieval (moved out of this god-module) ---
 from .retrieval import (
-    _GRAPH_FALLBACK_DEADLINE_S,
     _candidate_author_keys,
     _candidate_key,
     _candidate_source_bucket,
     _candidate_topic_keys,
     _candidate_venue_key,
-    _drain_futures_within_deadline,
     _merge_channel_candidates,
     _recommendation_mix_summary,
     _retrieve_external_channel,
     _retrieve_graph_channel,
     _retrieve_lexical_channel,
     _retrieve_vector_channel,
-    _select_diverse_recommendation_candidates,
 )
 from .scoring_loop import SIGNAL_NAMES, ScoringContext, score_candidates
 
@@ -147,8 +153,6 @@ from .seed_profile import (
     split_preference_pubs,
 )
 
-_clamp = clamp  # D-3: canonical clamp under the legacy local name
-
 
 def _jsonable_numeric(value: Any) -> Any:
     """json.dumps default for numpy scalars / arrays.
@@ -164,19 +168,6 @@ def _jsonable_numeric(value: Any) -> Any:
     if callable(tolist):
         return tolist()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def _calibration_block(cal) -> dict:
-    """Serialize an `OutcomeCalibration` into the retrieval_summary
-    diagnostic shape — multipliers, quality, raw counts, impressions.
-    Empty fields on a fresh DB: caller's contract."""
-    return {
-        "multipliers": dict(cal.multipliers),
-        "quality": {k: round(v, 4) for k, v in cal.quality.items()},
-        "positive_counts": {k: round(v, 2) for k, v in cal.positive_counts.items()},
-        "negative_counts": {k: round(v, 2) for k, v in cal.negative_counts.items()},
-        "impressions": dict(cal.impressions),
-    }
 
 
 logger = logging.getLogger(__name__)
@@ -322,9 +313,33 @@ def refresh_lens_recommendations(
     else:
         positive_pubs, negative_pubs = split_preference_pubs(seeds)
         scope_paper_ids = {str(s["id"]) for s in seeds if s.get("id")}
-    profile = compute_preference_profile(
-        db, positive_pubs, negative_pubs, scoring_settings, scope_paper_ids=scope_paper_ids
+    # Build the read-only preference projection alongside the local retrieval
+    # lanes. On the dev corpus this substrate takes about as long as graph
+    # retrieval; doing them serially doubled warm refresh latency.
+    from alma.api.deps import open_db_connection as _open_lane_conn
+
+    profile_pool = bounded_thread_pool(
+        1,
+        thread_name_prefix="lens-preference",
     )
+
+    def _build_preference_profile():
+        conn = _open_lane_conn()
+        try:
+            return compute_preference_profile(
+                conn,
+                positive_pubs,
+                negative_pubs,
+                scoring_settings,
+                scope_paper_ids=scope_paper_ids,
+            )
+        finally:
+            conn.close()
+
+    profile_future = profile_pool.submit(_build_preference_profile)
+
+    def _await_preference_profile():
+        return profile_future.result()
     # A collection lens is *tied* to its collection: it excludes only papers
     # already in that collection, and still surfaces Library papers that live in
     # OTHER collections (so the user can pull them into this one). Non-collection
@@ -433,25 +448,20 @@ def refresh_lens_recommendations(
         return result
 
     # F3: run the 4 retrieval lanes CONCURRENTLY instead of sequentially.
-    # Each lane gets its OWN SQLite connection (open_db_connection →
-    # check_same_thread=False, WAL): the graph lane writes (reference
-    # backfill) while the others read, so sharing one connection across
-    # threads would be unsafe. Results merge after. Per-source HTTP clients
-    # already gate their own concurrency (S2 is serialized at max_concurrency
-    # =1 process-wide), so this does not stampede a rate-limited upstream.
-    from alma.api.deps import open_db_connection as _open_lane_conn
-
+    # Each local-read lane gets its own SQLite connection. Network population
+    # and frontier writes belong to scheduled maintenance, never this refresh.
     lane_specs = (
-        ("lexical", "Lexical (OpenAlex topic search)",
+        ("lexical", "Lexical (local corpus + frontier)",
          lambda c: _retrieve_lexical_channel(c, lens, seeds, limit=limit)),
         ("vector", "Vector (local SPECTER2 cosine)",
          lambda c: _retrieve_vector_channel(c, lens, seeds, limit=limit)),
-        ("graph", "Graph (citation references)",
+        ("graph", "Graph (local references + PPR)",
          lambda c: _retrieve_graph_channel(c, lens, seeds, limit=limit)),
-        ("external", "External (taste-author / -topic / -venue / S2)",
+        ("external", "Taste/branch (offline frontier)",
          lambda c: _retrieve_external_channel(
              c, lens, seeds, limit=limit,
-             preference_profile=profile, positive_pubs=positive_pubs)),
+             preference_profile=_await_preference_profile(),
+             positive_pubs=positive_pubs)),
     )
 
     def _run_lane_with_conn(lane_name: str, label: str, fn):
@@ -459,14 +469,6 @@ def refresh_lens_recommendations(
         try:
             return _run_lane_subtask(lane_name, lambda: fn(conn), label=label)
         finally:
-            try:
-                # Defensive flush of the lane's own connection. The lane's real
-                # writes (e.g. reference backfill) already self-gate + commit via
-                # write_section in their helpers; this just retries the residual
-                # commit on transient lock instead of a raw, un-retried one.
-                commit_with_retry(conn, label=f"discovery lane {lane_name}")
-            except Exception:
-                pass
             try:
                 conn.close()
             except Exception:
@@ -479,16 +481,35 @@ def refresh_lens_recommendations(
             lane_pool.submit(_run_lane_with_conn, name, label, fn): name
             for name, label, fn in lane_specs
         }
+        done, _pending = wait(
+            fut_to_name,
+            timeout=_LANE_HARD_CAP_S,
+        )
         for fut, name in fut_to_name.items():
+            if fut not in done:
+                logger.warning(
+                    "lens lane %s exceeded the %.1fs local-read deadline",
+                    name,
+                    _LANE_HARD_CAP_S,
+                )
+                fut.cancel()
+                lane_results[name] = (
+                    ([], {}) if name in ("graph", "external") else []
+                )
+                continue
             try:
-                lane_results[name] = fut.result(timeout=_LANE_HARD_CAP_S)
+                lane_results[name] = fut.result()
             except Exception as exc:
-                logger.warning("lens lane %s did not complete (%s); using empty result", name, exc)
-                if not fut.done():
-                    fut.cancel()
-                lane_results[name] = ([], {}) if name in ("graph", "external") else []
+                logger.warning("lens lane %s failed: %s", name, exc)
+                lane_results[name] = (
+                    ([], {}) if name in ("graph", "external") else []
+                )
     finally:
         lane_pool.shutdown(wait=False)
+    try:
+        profile = _await_preference_profile()
+    finally:
+        profile_pool.shutdown(wait=False)
 
     lexical = lane_results.get("lexical") or []
     vector = lane_results.get("vector") or []
@@ -511,12 +532,11 @@ def refresh_lens_recommendations(
             "external_lanes": external_summary.get("external_lanes") or {},
         },
     )
-    if (external_summary.get("lane_runs") or []) or graph_summary.get("fallback_sources"):
+    if external_summary.get("lane_runs") or []:
         _log(
             "retrieval_detail",
             f"Lens '{lens_name}': retrieval plan used {len(external_summary.get('lane_runs') or [])} external lane runs",
             data={
-                "graph_fallback": graph_summary,
                 "external_lane_runs": (external_summary.get("lane_runs") or [])[:20],
             },
         )
@@ -673,10 +693,39 @@ def refresh_lens_recommendations(
     phase_started = perf_counter()
     candidate_embedding_map: dict[str, Any] = {}
     reused_embedding_count = 0
+    in_memory_embedding_count = 0
+    incompatible_embedding_count = 0
     # Citation-fabric scoring features (task 47 §7): candidate→paper coupling +
     # co-citation strengths vs the high-signal set, precomputed once (see below).
     citation_fabric_map: dict[str, Any] = {}
     if cached_embeddings_available and candidate_text_map:
+        # First choice: vectors already returned by the retrieval transport.
+        # They are usable only when their declared model exactly matches the
+        # active local space; cosine across model spaces is meaningless even
+        # when dimensions happen to match.
+        for key, candidate in merged.items():
+            vector = candidate.get("specter2_embedding")
+            model = str(candidate.get("specter2_model") or "").strip()
+            if vector is None:
+                continue
+            if model != active_embedding_model:
+                candidate["embedding_model_compatible"] = False
+                incompatible_embedding_count += 1
+                continue
+            try:
+                decoded = np.asarray(vector, dtype=np.float32)
+            except (TypeError, ValueError):
+                continue
+            if decoded.ndim != 1 or decoded.size == 0:
+                continue
+            if positive_centroid is not None and decoded.shape != positive_centroid.shape:
+                candidate["embedding_model_compatible"] = False
+                incompatible_embedding_count += 1
+                continue
+            candidate["embedding_model_compatible"] = True
+            candidate_embedding_map[key] = decoded
+            in_memory_embedding_count += 1
+
         # Map each candidate key to a real DB paper_id for the
         # embedding lookup. External / graph lane candidates carry a
         # fresh UUID `id` rather than a paper_id — look them up via
@@ -772,6 +821,8 @@ def refresh_lens_recommendations(
                     except Exception:
                         continue
                     for matched_key in pid_to_keys.get(str(row["paper_id"]), []):
+                        if matched_key in candidate_embedding_map:
+                            continue
                         candidate_embedding_map[matched_key] = decoded
                         reused_embedding_count += 1
 
@@ -802,7 +853,9 @@ def refresh_lens_recommendations(
             "lexical_profile_ready": lexical_profile is not None,
             "candidate_texts": len(candidate_text_map),
             "candidate_embeddings_ready": len(candidate_embedding_map),
+            "candidate_embeddings_in_memory": in_memory_embedding_count,
             "candidate_embeddings_reused": reused_embedding_count,
+            "candidate_embeddings_incompatible": incompatible_embedding_count,
             "candidate_embeddings_computed": 0,
             "centroid_cache_hit": centroid_cache_hit,
             "library_fingerprint": lib_fp,
@@ -845,17 +898,12 @@ def refresh_lens_recommendations(
     phase_started = perf_counter()
     user_topic_embeddings: dict[str, Any] | None = None
     user_topic_weights = profile.get("topic_weights") or {}
-    # Resolve the embedding provider ONCE per refresh and reuse it for the
-    # whole scoring loop. `get_active_provider()` probes the configured
-    # dependency env via a SUBPROCESS; the scoring loop otherwise called it
-    # per candidate (inside `compute_topic_overlap` + the topic_match_mode
-    # check), which cProfile showed costing ~22 s/refresh in 385 subprocess
-    # probes (task 19 follow-up, uncovered once F1 cut the embedding cost).
-    try:
-        from alma.ai.providers import get_active_provider
-        _topic_provider = get_active_provider(db)
-    except Exception:
-        _topic_provider = None
+    # Topic remains an explicit lexical/ontology family in online scoring.
+    # Do not invoke an embedding provider here: a configured OpenAI provider
+    # would put HTTP back on the refresh path, while cold local SPECTER2
+    # inference took minutes and duplicated the candidate-level semantic
+    # family already computed from stored exact-model vectors.
+    _topic_provider = None
     if user_topic_weights and _topic_provider is not None:
         user_topic_embeddings = {}
         for ut in user_topic_weights:
@@ -942,22 +990,6 @@ def refresh_lens_recommendations(
         )
     timings_ms["preference_profile_preload"] = int(round((perf_counter() - phase_started) * 1000))
 
-    # Outcome calibration: per-dimension multipliers on `source_relevance`
-    # based on observed explicit preference outcomes from prior refreshes. Three
-    # calibration axes compose multiplicatively per candidate:
-    #   - source_api  (which API surfaced it: openalex / s2 / …)
-    #   - branch_mode (which retrieval lane: core / explore / safe)
-    #   - branch_id   (which specific branch within the lens)
-    # On a fresh DB all three return empty maps → multiplier 1.0 (no
-    # behavior change). After enough events accumulate, axes where
-    # negative ratings/removals dominate get pulled toward 0.5x, axes where saves
-    # dominate get pushed toward 1.5x. Composite is clamped to the
-    # same band so three positives can't push past 1.5x.
-    from alma.application.outcome_calibration import compute_outcome_calibration
-    calibration_source = compute_outcome_calibration(db, dimension="source_api")
-    calibration_branch_mode = compute_outcome_calibration(db, dimension="branch_mode")
-    calibration_branch_id = compute_outcome_calibration(db, dimension="branch_id")
-
     # Score each candidate with the full 10-signal system. The per-candidate
     # pass is extracted into scoring_loop.score_candidates (D-9): it mutates
     # each candidate in place (score + breakdown + provenance) and returns the
@@ -989,11 +1021,29 @@ def refresh_lens_recommendations(
             user_topic_embeddings=user_topic_embeddings,
             preloaded_preference_profile=preloaded_preference_profile,
             topic_provider=_topic_provider,
-            calibration_source=calibration_source,
-            calibration_branch_mode=calibration_branch_mode,
-            calibration_branch_id=calibration_branch_id,
         ),
     )
+    feature_timestamp = utcnow().isoformat()
+    shadow_model, shadow_training_size = fit_shadow_ranker(
+        load_ltr_observations(db),
+        scoring_settings=scoring_settings,
+    )
+    apply_repaired_prior(
+        merged,
+        timestamp=feature_timestamp,
+        scoring_settings=scoring_settings,
+        shadow_model=shadow_model,
+        shadow_training_size=shadow_training_size,
+    )
+    # MMR consumes the same verified, same-model vectors as semantic scoring.
+    # Keep them private/in-memory: ranking snapshots record the semantic atoms,
+    # not a duplicated 768-float payload.
+    for key, candidate in merged.items():
+        ranking_vector = candidate_embedding_map.get(key)
+        if ranking_vector is not None:
+            candidate["_ranking_embedding"] = ranking_vector
+            candidate["_ranking_embedding_model"] = active_embedding_model
+            candidate["embedding_model_compatible"] = True
     timings_ms["scoring"] = int(round((perf_counter() - phase_started) * 1000))
     signal_value_sums = _scoring_aggregates.signal_value_sums
     signal_weighted_sums = _scoring_aggregates.signal_weighted_sums
@@ -1006,7 +1056,7 @@ def refresh_lens_recommendations(
     raw_lexical_word_scores = _scoring_aggregates.raw_lexical_word_scores
     raw_lexical_char_scores = _scoring_aggregates.raw_lexical_char_scores
     raw_lexical_term_scores = _scoring_aggregates.raw_lexical_term_scores
-    final_scores = _scoring_aggregates.final_scores
+    final_scores = [float(candidate.get("score") or 0.0) for candidate in merged.values()]
     embedding_ready_count = _scoring_aggregates.embedding_ready_count
     compressed_similarity_count = _scoring_aggregates.compressed_similarity_count
     low_similarity_count = _scoring_aggregates.low_similarity_count
@@ -1057,18 +1107,19 @@ def refresh_lens_recommendations(
     )
 
     full_ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
-    staging_limit = min(
-        len(full_ranked),
-        max(max(1, limit), min(max(1, limit) * 3, max(1, limit) + 60)),
-    )
-    ranked, diversity_summary = _select_diverse_recommendation_candidates(
-        full_ranked,
-        limit=max(1, limit),
-        staging_limit=staging_limit,
-    )
+    # Freeze the complete counterfactual pool before lifecycle filtering.
+    # Two hundred candidates is large enough for exploration/evaluation while
+    # keeping the single batch write and paper staging bounded.
+    staging_limit = min(len(full_ranked), 200)
+    ranked = full_ranked[:staging_limit]
+    diversity_summary: dict[str, Any] = {
+        "candidate_pool": len(full_ranked),
+        "staged_pool": len(ranked),
+        "policy": "mmr-explore-v1",
+    }
     _log(
         "scoring_result",
-        f"Lens '{lens_name}': selected {len(ranked)} diverse candidates after scoring",
+        f"Lens '{lens_name}': froze top {len(ranked)} candidates after scoring",
         data={
             "ranked": len(ranked),
             "candidate_pool": len(full_ranked),
@@ -1118,18 +1169,8 @@ def refresh_lens_recommendations(
         "budgets": external_summary.get("budgets") or {},
         "lane_runs": external_summary.get("lane_runs") or [],
         "diversity": diversity_summary,
-        # Outcome calibration snapshot — three axes (source_api,
-        # branch_mode, branch_id), each empty on a fresh DB. Per-axis
-        # block carries quality `0..1`, the resulting `[0.5, 1.5]`
-        # multiplier, and the raw counts so a developer can read this
-        # and tell whether an estimate is grounded in real traffic
-        # or still mostly Bayesian prior. Composed multiplicatively in
-        # log-space at scoring time, see `compose_calibration_multipliers`.
-        "calibration": {
-            "source_api": _calibration_block(calibration_source),
-            "branch_mode": _calibration_block(calibration_branch_mode),
-            "branch_id": _calibration_block(calibration_branch_id),
-        },
+        "feature_schema_version": "discovery-features-v3",
+        "feature_timestamp": feature_timestamp,
     }
     cold_start_summary = _build_topic_keyword_cold_start_summary(
         lens,
@@ -1154,67 +1195,28 @@ def refresh_lens_recommendations(
     # NOTE: old recommendations are deleted atomically with the insert below,
     # NOT here — so a crash during scoring doesn't wipe existing recommendations.
 
-    _log("insert", f"Lens '{lens_name}': staging top {len(ranked)} recommendations")
+    _log(
+        "insert",
+        f"Lens '{lens_name}': resolving lifecycle for top {len(ranked)} candidates",
+    )
 
     phase_started = perf_counter()
-    staged_candidates: list[tuple[int, dict, str]] = []
-    staged_paper_ids: list[str] = []
+    staged_candidates: list[tuple[int, dict, str | None]] = []
     for idx, candidate in enumerate(ranked, start=1):
-        paper_id = library_app.upsert_paper(
+        paper_id = resolve_existing_paper_id(
             db,
-            # S-4/S-9: defer hydration scheduling — staging up to ~110 papers
-            # auto-scheduled (and re-scanned operation_status for) a sweep PER
-            # paper. Write the ledger rows here, fire ONE sweep after the loop.
-            auto_schedule_hydration=False,
-            title=candidate["title"],
-            authors=candidate.get("authors"),
-            abstract=candidate.get("abstract"),
-            year=candidate.get("year"),
-            journal=candidate.get("journal"),
-            url=candidate.get("url"),
-            doi=candidate.get("doi"),
             openalex_id=candidate.get("openalex_id"),
-            semantic_scholar_id=candidate.get("semantic_scholar_id"),
-            semantic_scholar_corpus_id=candidate.get("semantic_scholar_corpus_id"),
-            cited_by_count=int(candidate.get("cited_by_count") or 0),
-            # T5 — persist S2 TLDR + influential citation count so Library +
-            # PaperCard + citation_quality scoring can use them without
-            # re-fetching. Falsy values are skipped by `upsert_paper` so
-            # existing rows don't get their TLDRs clobbered by later
-            # non-S2 lanes.
-            tldr=(candidate.get("tldr") or None),
-            influential_citation_count=(
-                int(candidate["influential_citation_count"])
-                if candidate.get("influential_citation_count") is not None
-                else None
-            ),
-            status="tracked",
-            added_from="discovery",
+            doi=candidate.get("doi"),
+            title=candidate.get("title"),
+            year=candidate.get("year"),
         )
-        upsert_specter2_embedding(db, paper_id, candidate)
-        candidate["paper_id"] = paper_id
+        if paper_id:
+            paper_id = resolve_paper_root_id(db, paper_id, strict=False)
+            candidate["paper_id"] = paper_id
         staged_candidates.append((idx, candidate, paper_id))
-        staged_paper_ids.append(paper_id)
-    timings_ms["paper_upsert"] = int(round((perf_counter() - phase_started) * 1000))
-    # S-4/S-9: one bounded hydration sweep for everything staged this refresh,
-    # instead of an auto-scheduled job + operation_status scan per paper.
-    if staged_paper_ids:
-        try:
-            from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
-
-            schedule_pending_hydration_sweep(
-                reason="lens_refresh",
-                target_paper_ids=list(dict.fromkeys(staged_paper_ids)),
-            )
-        except Exception as exc:
-            logger.debug("Lens refresh hydration sweep skipped: %s", exc)
-    # Commit the tracked-paper upserts independently of the rec swap below.
-    # Per `lessons.md` → "Background jobs must release the writer lock ...
-    # AND between phases" + "commit per unit of work": the paper rows are
-    # useful on their own (Corpus, Feed, Library backfill) even if a later
-    # phase fails. Keeping them in one txn with the swap means an 11-min
-    # refresh that crashes at the swap discards the entire upsert phase.
-    _commit_if_pending(db)
+    timings_ms["paper_identity_resolution"] = int(
+        round((perf_counter() - phase_started) * 1000)
+    )
 
     phase_started = perf_counter()
     status_by_paper: dict[str, str] = {}
@@ -1223,7 +1225,13 @@ def refresh_lens_recommendations(
     # For a collection lens: which candidates are already IN the linked
     # collection (the only Library papers that stay hidden for this lens).
     in_linked_collection: set[str] = set()
-    unique_paper_ids = [paper_id for paper_id in dict.fromkeys(staged_paper_ids) if str(paper_id).strip()]
+    unique_paper_ids = [
+        paper_id
+        for paper_id in dict.fromkeys(
+            paper_id for _idx, _candidate, paper_id in staged_candidates
+        )
+        if paper_id and str(paper_id).strip()
+    ]
     for chunk in _chunked(unique_paper_ids, 200):
         placeholders = ", ".join("?" for _ in chunk)
         status_rows = db.execute(
@@ -1267,13 +1275,22 @@ def refresh_lens_recommendations(
             if score <= _PAPER_DISMISS_SUPPRESSION_THRESHOLD:
                 actioned_paper_ids.add(paper_id)
 
-    rec_rows: list[tuple] = []
-    inserted_paper_ids: list[str] = []
-    seen_paper_ids: set[str] = set()
+    eligible_candidates: list[dict] = []
+    seen_candidate_identities: set[str] = set()
     skipped_library = 0
     skipped_actioned = 0
     skipped_duplicate_paper = 0
     skipped_low_score = 0
+    for candidate in ranked:
+        # Every frozen candidate gets an exact policy probability. Lifecycle,
+        # score-floor, and identity exclusions are deterministically
+        # ineligible—not unknown.
+        candidate["_selection"] = {
+            "exploration": False,
+            "inclusion_probability": 0.0,
+            "position_probability": None,
+            "final_position": None,
+        }
     # Relevance floor (0-100). Recommendations below it are dropped so the feed
     # doesn't pad with weak, off-topic matches once real neighbours run out.
     # 0 = keep everything (default). See limits.min_score in discovery settings.
@@ -1311,12 +1328,88 @@ def refresh_lens_recommendations(
         # UNIQUE (lens_id, paper_id, suggestion_set_id) constraint, so
         # a second insert for the same paper would crash the whole
         # batch. Keep the higher-ranked candidate (lower idx) only.
-        if paper_id in seen_paper_ids:
+        dedup_identity = str(paper_id or candidate.get("candidate_key") or "")
+        if dedup_identity in seen_candidate_identities:
             skipped_duplicate_paper += 1
             continue
-        seen_paper_ids.add(paper_id)
+        seen_candidate_identities.add(dedup_identity)
+        if paper_id:
+            candidate["paper_id"] = paper_id
+        eligible_candidates.append(candidate)
+
+    slate, slate_summary = build_slate(
+        eligible_candidates,
+        limit=max(1, limit),
+    )
+    diversity_summary.update(slate_summary)
+    phase_started = perf_counter()
+    materialized_slate: list[dict] = []
+    staged_paper_ids: list[str] = []
+    for candidate in slate:
+        paper_id = str(candidate.get("paper_id") or "").strip()
+        if not paper_id:
+            paper_id = library_app.upsert_paper(
+                db,
+                auto_schedule_hydration=False,
+                title=candidate["title"],
+                authors=candidate.get("authors"),
+                abstract=candidate.get("abstract"),
+                year=candidate.get("year"),
+                journal=candidate.get("journal"),
+                url=candidate.get("url"),
+                doi=candidate.get("doi"),
+                openalex_id=candidate.get("openalex_id"),
+                semantic_scholar_id=candidate.get("semantic_scholar_id"),
+                semantic_scholar_corpus_id=candidate.get(
+                    "semantic_scholar_corpus_id"
+                ),
+                cited_by_count=int(candidate.get("cited_by_count") or 0),
+                tldr=(candidate.get("tldr") or None),
+                influential_citation_count=(
+                    int(candidate["influential_citation_count"])
+                    if candidate.get("influential_citation_count") is not None
+                    else None
+                ),
+                status="tracked",
+                added_from="discovery",
+            )
+        paper_id = resolve_paper_root_id(db, paper_id, strict=False)
+        if paper_id in staged_paper_ids:
+            raise RuntimeError(
+                "Two ranked candidate keys resolved to one canonical paper; "
+                "retrieval identity merge must deduplicate before slate selection"
+            )
+        candidate["paper_id"] = paper_id
+        upsert_specter2_embedding(db, paper_id, candidate)
+        staged_paper_ids.append(paper_id)
+        materialized_slate.append(candidate)
+    slate = materialized_slate
+    timings_ms["paper_upsert"] = int(
+        round((perf_counter() - phase_started) * 1000)
+    )
+    # Publish promoted papers before a target-scoped hydration worker opens its
+    # own connection; scheduling first races SQLite visibility and can make the
+    # worker conclude that every just-selected target is absent.
+    _commit_if_pending(db)
+    if staged_paper_ids:
+        try:
+            from alma.services.corpus_rehydrate import (
+                schedule_pending_hydration_sweep,
+            )
+
+            schedule_pending_hydration_sweep(
+                reason="lens_refresh",
+                target_paper_ids=staged_paper_ids,
+            )
+        except Exception as exc:
+            logger.debug("Lens refresh hydration sweep skipped: %s", exc)
+
+    rec_rows: list[tuple] = []
+    inserted_paper_ids: list[str] = []
+    for candidate in slate:
+        paper_id = str(candidate["paper_id"])
         provenance = _derive_recommendation_provenance(candidate, lens_id)
-        display_rank = len(rec_rows) + 1
+        display_rank = int((candidate.get("_selection") or {}).get("final_position") or len(rec_rows) + 1)
         rec_rows.append(
             (
                 uuid.uuid4().hex,
@@ -1339,8 +1432,6 @@ def refresh_lens_recommendations(
             )
         )
         inserted_paper_ids.append(paper_id)
-        if len(rec_rows) >= max(1, limit):
-            break
     timings_ms["filter_existing"] = int(round((perf_counter() - phase_started) * 1000))
 
     retrieval_summary["filters"] = {
@@ -1353,6 +1444,7 @@ def refresh_lens_recommendations(
         "min_score": min_score,
         "insertable": len(rec_rows),
     }
+    retrieval_summary["diversity"] = diversity_summary
     retrieval_summary["final_mix"] = _recommendation_mix_summary(rec_rows, ranked_by_paper=ranked)
     _log(
         "filter_result",
@@ -1376,7 +1468,7 @@ def refresh_lens_recommendations(
             lens["context_type"],
             trigger_source,
             json.dumps(retrieval_summary),
-            "lens-v2-9signal",
+            RANKER_VERSION,
             now,
         ),
     )
@@ -1392,6 +1484,15 @@ def refresh_lens_recommendations(
             """,
             rec_rows,
         )
+    insert_ranking_candidates(
+        db,
+        ranking_candidate_rows(
+            suggestion_set_id=suggestion_set_id,
+            lens_id=lens_id,
+            candidates=ranked,
+            created_at=now,
+        ),
+    )
     timings_ms["recommendation_insert"] = int(round((perf_counter() - phase_started) * 1000))
 
     # 50-L NOTE (audited 2026-07-25): candidates already arrive enriched via
@@ -1441,10 +1542,5 @@ def refresh_lens_recommendations(
     }
 
 
-# Backstop wall-clock cap per retrieval lane when the 4 lanes run
-# concurrently (F3). Lanes are bounded internally (external: 8 s source-lane
-# deadline; graph fallbacks: _GRAPH_FALLBACK_DEADLINE_S), so this only catches
-# a pathological hang in a section not otherwise bounded (e.g. an OpenAlex
-# batch-fetch helper). The lane pool is shut down wait=False so an abandoned
-# lane can't block the refresh.
-_LANE_HARD_CAP_S: float = 60.0
+# Backstop for pathological local computation. Network never runs in refresh.
+_LANE_HARD_CAP_S: float = 8.0

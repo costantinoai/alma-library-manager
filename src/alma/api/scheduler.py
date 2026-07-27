@@ -2095,30 +2095,9 @@ def refresh_recommendations_periodic() -> None:
                 )
                 commit_with_retry(conn, label="refresh_recommendations_periodic bootstrap")
                 lenses = [new_lens]
-            except sqlite3.OperationalError as exc:
-                logger.warning(
-                    "Default lens bootstrap failed (%s); falling back to legacy discovery refresh",
-                    exc,
-                )
-                from alma.config import get_db_path
-                from alma.discovery.engine import DiscoveryEngine
-
-                legacy_recs = DiscoveryEngine(get_db_path()).refresh_recommendations()
+            except sqlite3.OperationalError:
                 conn.close()
-                set_job_status(
-                    job_id,
-                    status="completed",
-                    trigger_source="scheduler",
-                    operation_key=operation_key,
-                    finished_at=utcnow().isoformat(),
-                    message="Periodic recommendation refresh complete (legacy fallback)",
-                    result={
-                        "total_inserted": len(legacy_recs or []),
-                        "lenses_refreshed": 0,
-                        "details": [{"mode": "legacy_global_refresh"}],
-                    },
-                )
-                return
+                raise
 
         total_inserted = 0
         lens_results = []
@@ -2336,7 +2315,7 @@ def refresh_feed_inbox_periodic() -> None:
 
 
 def maintain_citation_graph_periodic() -> None:
-    """Periodically backfill local citation/reference edges from OpenAlex."""
+    """Backfill citation edges, then rebuild and vectorize offline frontier."""
     job_id = "periodic_citation_graph_maintenance"
     set_job_status(
         job_id,
@@ -2349,14 +2328,35 @@ def maintain_citation_graph_periodic() -> None:
     logger.info("Starting periodic citation graph maintenance")
     try:
         from alma.api.deps import open_db_connection
+        from alma.application.discovery.frontier import (
+            build_discovery_frontier,
+            build_frontier,
+            fill_frontier_vectors,
+        )
         from alma.openalex.client import backfill_missing_publication_references
 
         conn = open_db_connection()
         try:
-            result = backfill_missing_publication_references(conn, limit=500)
+            references = backfill_missing_publication_references(conn, limit=500)
             # backfill_missing_publication_references self-gates its upsert window
             # (write_section); this flushes any residual on this own connection.
-            commit_with_retry(conn, label="maintain_citation_graph_periodic")
+            commit_with_retry(conn, label="citation graph reference backfill")
+
+            frontier = build_frontier(conn)
+            # End frontier metadata write before S2 vector HTTP begins.
+            commit_with_retry(conn, label="discovery frontier build")
+
+            discovery_frontier = build_discovery_frontier(conn)
+            commit_with_retry(conn, label="discovery source frontier build")
+
+            vectors = fill_frontier_vectors(conn)
+            commit_with_retry(conn, label="discovery frontier vector fill")
+            result = {
+                "references": references,
+                "frontier": frontier.as_dict(),
+                "discovery_frontier": discovery_frontier.as_dict(),
+                "vectors": vectors.as_dict(),
+            }
             set_job_status(
                 job_id,
                 status="completed",

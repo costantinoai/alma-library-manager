@@ -423,8 +423,12 @@ def signal_impact(conn: sqlite3.Connection) -> dict[str, Any]:
         from alma.application.recommendation_outcomes import build_recommendation_outcomes
 
         for rec in build_recommendation_outcomes(conn):
+            # Unrendered candidates are not examples. Historical lens-level
+            # "seen" and ranks are not item impressions.
+            if not rec.is_seen:
+                continue
             # Cohort sizes count every classified recommendation (the true
-            # population), independent of whether it carried a score breakdown.
+            # impressed population), independent of score-breakdown coverage.
             if rec.is_positive:
                 pos_cohort += 1
             elif rec.is_negative:
@@ -496,8 +500,9 @@ def signal_impact(conn: sqlite3.Connection) -> dict[str, Any]:
         # user only reacts to recommendations they were shown, in the order shown.
         "note": (
             "Association, not causation. Compares scoring components between "
-            "positively- and negatively-received papers; subject to exposure and "
-            "ranking-position selection bias."
+            "positively- and negatively-received impressed papers. Deterministic "
+            "positions remain subject to ranking-position selection bias; "
+            "counterfactual estimates use only randomized rows with propensities."
         ),
         "liked_count": pos_cohort,
         "dismissed_count": neg_cohort,

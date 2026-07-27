@@ -35,12 +35,9 @@ the layout builders' import closure so
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 
 from alma.core.sql_helpers import standalone_paper_sql
-
-logger = logging.getLogger(__name__)
 
 # Restart probability complement. 0.85 is the classic PageRank damping factor;
 # lower values keep the walk tighter around the seeds.
@@ -79,89 +76,124 @@ def compute_ppr(
         top_k: How many scored papers to return.
 
     Returns:
-        ``{paper_id: score}``, empty when numpy/scipy are unavailable, the
-        graph is empty, or there are no seeds.
+        ``{paper_id: score}``, empty when the graph is empty or there are no
+        seeds.
     """
-    # Validate the argument BEFORE any work: a caller passing a bad scope has a
-    # bug, and returning an empty dict would hide it behind "the graph was
-    # empty". Fail fast, loudly, at the boundary.
-    if seed_scope not in (SEED_LIBRARY, SEED_LOVED):
-        raise ValueError(
-            f"seed_scope must be {SEED_LIBRARY!r} or {SEED_LOVED!r}, got {seed_scope!r}"
-        )
+    return compute_ppr_variants(
+        db,
+        seed_scopes=(seed_scope,),
+        alpha=alpha,
+        top_k=top_k,
+    )[seed_scope]
 
-    try:
-        import numpy as np
-        from scipy import sparse
-    except ImportError:
-        logger.debug("PPR unavailable: numpy/scipy not installed")
+
+def compute_ppr_variants(
+    db: sqlite3.Connection,
+    *,
+    seed_scopes: tuple[str, ...] = (SEED_LIBRARY, SEED_LOVED),
+    alpha: float = DEFAULT_ALPHA,
+    top_k: int = 2000,
+) -> dict[str, dict[str, float]]:
+    """Compute several personalized walks over one shared graph substrate."""
+
+    invalid = [
+        scope
+        for scope in seed_scopes
+        if scope not in (SEED_LIBRARY, SEED_LOVED)
+    ]
+    if invalid:
+        raise ValueError(
+            f"seed_scope must be {SEED_LIBRARY!r} or {SEED_LOVED!r}, "
+            f"got {invalid[0]!r}"
+        )
+    if not seed_scopes:
         return {}
+
+    import numpy as np
+    from scipy import sparse
 
     edges = _load_edges(db)
     if not edges:
-        return {}
-    seeds = _load_seed_ids(db, seed_scope)
-    if not seeds:
-        return {}
+        return {scope: {} for scope in seed_scopes}
 
-    # Build a compact index over every node that appears in the graph.
     nodes: dict[str, int] = {}
     for src, dst in edges:
         if src not in nodes:
             nodes[src] = len(nodes)
         if dst not in nodes:
             nodes[dst] = len(nodes)
-    seed_idx = [nodes[s] for s in seeds if s in nodes]
-    if not seed_idx:
-        return {}
+    node_by_index = [""] * len(nodes)
+    for node, index in nodes.items():
+        node_by_index[index] = node
 
-    n = len(nodes)
-    rows = np.fromiter((nodes[s] for s, _ in edges), dtype=np.int32, count=len(edges))
-    cols = np.fromiter((nodes[d] for _, d in edges), dtype=np.int32, count=len(edges))
+    rows = np.fromiter(
+        (nodes[src] for src, _ in edges),
+        dtype=np.int32,
+        count=len(edges),
+    )
+    cols = np.fromiter(
+        (nodes[dst] for _, dst in edges),
+        dtype=np.int32,
+        count=len(edges),
+    )
     data = np.ones(len(edges), dtype=np.float32)
-
-    # Citation edges are directed, but influence flows both ways for
-    # similarity: a paper is close to my taste whether it cites my Library or
-    # is cited by it. Symmetrising is what makes this a proximity measure
-    # rather than a prestige measure — an asymmetric walk would drift toward
-    # highly-cited hubs, which is exactly the prestige signal that measured
-    # NEGATIVE for this user.
-    adjacency = sparse.coo_matrix((data, (rows, cols)), shape=(n, n)).tocsr()
+    adjacency = sparse.coo_matrix(
+        (data, (rows, cols)),
+        shape=(len(nodes), len(nodes)),
+    ).tocsr()
     adjacency = adjacency + adjacency.T
 
-    # Column-normalise to a stochastic matrix. Dangling nodes (no out-edges)
-    # keep a zero column; their mass is returned to the seeds by the restart
-    # term rather than leaking out of the system.
+    # Column-normalise to a stochastic matrix. Dangling mass returns through
+    # the personalized restart distribution, not a uniform/global substitute.
     out_degree = np.asarray(adjacency.sum(axis=0)).ravel()
-    inv = np.divide(1.0, out_degree, out=np.zeros_like(out_degree), where=out_degree > 0)
+    inv = np.divide(
+        1.0,
+        out_degree,
+        out=np.zeros_like(out_degree),
+        where=out_degree > 0,
+    )
     transition = adjacency @ sparse.diags(inv)
+    dangling = out_degree == 0
 
-    restart = np.zeros(n, dtype=np.float64)
-    restart[seed_idx] = 1.0 / len(seed_idx)
+    output: dict[str, dict[str, float]] = {}
+    for scope in dict.fromkeys(seed_scopes):
+        seeds = _load_seed_ids(db, scope)
+        seed_idx = [nodes[seed] for seed in seeds if seed in nodes]
+        if not seed_idx:
+            output[scope] = {}
+            continue
 
-    rank = restart.copy()
-    for _ in range(MAX_ITERATIONS):
-        nxt = alpha * (transition @ rank) + (1.0 - alpha) * restart
-        total = nxt.sum()
-        if total > 0:
-            nxt /= total
-        if np.abs(nxt - rank).sum() < CONVERGENCE_TOL:
+        restart = np.zeros(len(nodes), dtype=np.float64)
+        restart[seed_idx] = 1.0 / len(seed_idx)
+        rank = restart.copy()
+        for _ in range(MAX_ITERATIONS):
+            dangling_mass = float(rank[dangling].sum())
+            nxt = alpha * (
+                (transition @ rank) + (dangling_mass * restart)
+            ) + (1.0 - alpha) * restart
+            total = nxt.sum()
+            if total > 0:
+                nxt /= total
+            if np.abs(nxt - rank).sum() < CONVERGENCE_TOL:
+                rank = nxt
+                break
             rank = nxt
-            break
-        rank = nxt
 
-    seed_set = set(seeds)
-    index_to_node = {idx: node for node, idx in nodes.items()}
-    scored = [
-        (index_to_node[i], float(rank[i]))
-        for i in np.argsort(rank)[::-1]
-        if index_to_node[i] not in seed_set and rank[i] > 0.0
-    ][: max(1, top_k)]
-    if not scored:
-        return {}
-
-    top = scored[0][1] or 1.0
-    return {node: round(score / top, 6) for node, score in scored}
+        seed_set = set(seeds)
+        scored = [
+            (node_by_index[index], float(rank[index]))
+            for index in np.argsort(rank)[::-1]
+            if node_by_index[index] not in seed_set and rank[index] > 0.0
+        ][: max(1, top_k)]
+        if not scored:
+            output[scope] = {}
+            continue
+        top = scored[0][1] or 1.0
+        output[scope] = {
+            node: round(score / top, 6)
+            for node, score in scored
+        }
+    return output
 
 
 def _load_edges(db: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -171,21 +203,17 @@ def _load_edges(db: sqlite3.Connection) -> list[tuple[str, str]]:
     work we hold no row for cannot be scored or recommended, and including it
     would inflate the graph with millions of dangling nodes for no gain.
     """
-    try:
-        rows = db.execute(
-            f"""
-            SELECT pr.paper_id AS src, q.id AS dst
-            FROM publication_references pr
-            JOIN papers q ON q.openalex_id = 'W' || pr.referenced_work_id
-            JOIN papers p ON p.id = pr.paper_id
-            WHERE COALESCE(TRIM(pr.referenced_work_id), '') != ''
-              AND {standalone_paper_sql('p')}
-              AND {standalone_paper_sql('q')}
-            """
-        ).fetchall()
-    except sqlite3.OperationalError as exc:
-        logger.warning("PPR edge load failed: %s", exc)
-        return []
+    rows = db.execute(
+        f"""
+        SELECT pr.paper_id AS src, q.id AS dst
+        FROM publication_references pr
+        JOIN papers q ON q.openalex_id = 'W' || pr.referenced_work_id
+        JOIN papers p ON p.id = pr.paper_id
+        WHERE COALESCE(TRIM(pr.referenced_work_id), '') != ''
+          AND {standalone_paper_sql('p')}
+          AND {standalone_paper_sql('q')}
+        """
+    ).fetchall()
     return [(str(r["src"]), str(r["dst"])) for r in rows if r["src"] and r["dst"]]
 
 

@@ -16,7 +16,6 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.citation_quality": "0.05",
     "weights.feedback_adj": "0.10",
     "weights.preference_affinity": "0.10",
-    "weights.usefulness_boost": "0.06",
     # Signal Lab heads (task 54, D20). BOTH default 0.0 — promoted manually,
     # per head, only on stage-1 held-out + churn evidence. At 0.0 the lab
     # context is never even loaded and scoring is byte-identical to a
@@ -87,23 +86,13 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "branches.max_active_for_retrieval": "4",
     "branches.query_core_variants": "2",
     "branches.query_explore_variants": "2",
-    # Absolute minimum per-branch budget for the external retrieval
-    # lane. Without a floor, a low-auto_weight branch can be starved
-    # to 4-5 recommendations — too few to ever accumulate enough
-    # save/dislike outcome evidence to recover. 8 keeps an "underexplored"
-    # branch viable while the user evaluates it.
-    "branches.min_budget_per_branch": "8",
     "lens.max_seeds": "500",
     "sources.openalex.enabled": "true",
     "sources.semantic_scholar.enabled": "true",
     "sources.crossref.enabled": "true",
     "sources.arxiv.enabled": "true",
     "sources.biorxiv.enabled": "true",
-    "sources.openalex.weight": "1.0",
-    "sources.semantic_scholar.weight": "0.95",
-    "sources.crossref.weight": "0.72",
-    "sources.arxiv.weight": "0.66",
-    "sources.biorxiv.weight": "0.62",
+    "sources.europe_pmc.enabled": "true",
     # Semantic Scholar bulk-search filters (T12, 2026-04-25).  All opt-in
     # (empty default = no filter emitted → same request shape as before),
     # so existing lens behavior is preserved for users who don't set

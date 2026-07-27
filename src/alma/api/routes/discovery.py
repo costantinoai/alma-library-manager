@@ -15,6 +15,8 @@ from alma.api.helpers import raise_internal
 from alma.api.models import (
     DiscoveryBranchSettings,
     DiscoveryCache,
+    DiscoveryImpressionBatch,
+    DiscoveryImpressionBatchResponse,
     DiscoveryLimits,
     DiscoveryMonitorDefaults,
     DiscoverySchedule,
@@ -34,11 +36,6 @@ from alma.api.models import (
 from alma.application import discovery as discovery_app
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit
-from alma.core.http_sources import (
-    openalex_usage_delta,
-    openalex_usage_snapshot,
-    source_diagnostics_scope,
-)
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
 from alma.core.sql_helpers import standalone_paper_sql
@@ -46,9 +43,6 @@ from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
 logger = logging.getLogger(__name__)
-
-# Backwards-compatible helper name still referenced by tests and older docs.
-_openalex_usage_delta = openalex_usage_delta
 
 router = APIRouter(
     dependencies=[Depends(get_current_user)],
@@ -71,7 +65,6 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
             citation_quality=float(kv.get("weights.citation_quality", "0.05")),
             feedback_adj=float(kv.get("weights.feedback_adj", "0.10")),
             preference_affinity=float(kv.get("weights.preference_affinity", "0.10")),
-            usefulness_boost=float(kv.get("weights.usefulness_boost", "0.06")),
         ),
         strategies=DiscoveryStrategies(
             related_works=kv.get("strategies.related_works", "true").lower() == "true",
@@ -105,23 +98,21 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
         sources=DiscoverySources(
             openalex=DiscoverySourcePolicy(
                 enabled=kv.get("sources.openalex.enabled", "true").lower() == "true",
-                weight=float(kv.get("sources.openalex.weight", "1.0")),
             ),
             semantic_scholar=DiscoverySourcePolicy(
                 enabled=kv.get("sources.semantic_scholar.enabled", "true").lower() == "true",
-                weight=float(kv.get("sources.semantic_scholar.weight", "0.95")),
             ),
             crossref=DiscoverySourcePolicy(
                 enabled=kv.get("sources.crossref.enabled", "true").lower() == "true",
-                weight=float(kv.get("sources.crossref.weight", "0.72")),
             ),
             arxiv=DiscoverySourcePolicy(
                 enabled=kv.get("sources.arxiv.enabled", "true").lower() == "true",
-                weight=float(kv.get("sources.arxiv.weight", "0.66")),
             ),
             biorxiv=DiscoverySourcePolicy(
                 enabled=kv.get("sources.biorxiv.enabled", "true").lower() == "true",
-                weight=float(kv.get("sources.biorxiv.weight", "0.62")),
+            ),
+            europe_pmc=DiscoverySourcePolicy(
+                enabled=kv.get("sources.europe_pmc.enabled", "true").lower() == "true",
             ),
         ),
         branches=DiscoveryBranchSettings(
@@ -164,7 +155,6 @@ _SIGNAL_DESCRIPTIONS: dict[str, str] = {
     "citation_quality": "Citation count quality indicator",
     "feedback_adj": "Adjusted based on your past feedback",
     "preference_affinity": "Affinity learned from your accumulated feedback profile",
-    "usefulness_boost": "Rewards timely, credible, and less redundant papers",
 }
 
 
@@ -305,7 +295,6 @@ def update_discovery_settings(
             _upsert_setting(db, "weights.citation_quality", str(w.citation_quality))
             _upsert_setting(db, "weights.feedback_adj", str(w.feedback_adj))
             _upsert_setting(db, "weights.preference_affinity", str(w.preference_affinity))
-            _upsert_setting(db, "weights.usefulness_boost", str(w.usefulness_boost))
         if body.strategies is not None:
             s = body.strategies
             _upsert_setting(db, "strategies.related_works", str(s.related_works).lower())
@@ -336,15 +325,11 @@ def update_discovery_settings(
         if body.sources is not None:
             sources = body.sources
             _upsert_setting(db, "sources.openalex.enabled", str(sources.openalex.enabled).lower())
-            _upsert_setting(db, "sources.openalex.weight", str(sources.openalex.weight))
             _upsert_setting(db, "sources.semantic_scholar.enabled", str(sources.semantic_scholar.enabled).lower())
-            _upsert_setting(db, "sources.semantic_scholar.weight", str(sources.semantic_scholar.weight))
             _upsert_setting(db, "sources.crossref.enabled", str(sources.crossref.enabled).lower())
-            _upsert_setting(db, "sources.crossref.weight", str(sources.crossref.weight))
             _upsert_setting(db, "sources.arxiv.enabled", str(sources.arxiv.enabled).lower())
-            _upsert_setting(db, "sources.arxiv.weight", str(sources.arxiv.weight))
             _upsert_setting(db, "sources.biorxiv.enabled", str(sources.biorxiv.enabled).lower())
-            _upsert_setting(db, "sources.biorxiv.weight", str(sources.biorxiv.weight))
+            _upsert_setting(db, "sources.europe_pmc.enabled", str(sources.europe_pmc.enabled).lower())
         if body.branches is not None:
             branches = body.branches
             _upsert_setting(db, "branches.temperature", str(branches.temperature))
@@ -437,177 +422,6 @@ def reset_discovery_settings(
         return _read_settings(db)
     except Exception as e:
         raise_internal("Failed to reset discovery settings", e)
-
-
-# ===================================================================
-# Refresh / Generate
-# ===================================================================
-
-@router.post(
-    "/refresh",
-    summary="Refresh recommendations",
-)
-def refresh_recommendations(
-    background: bool = Query(True, description="Run refresh in background and track in Activity"),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Trigger the discovery engine to generate new recommendations.
-
-    Clears existing neutral (unseen/undismissed/unliked) recommendations
-    and regenerates fresh ones based on the user's liked publications.
-
-    Returns:
-        Dict with the count of new recommendations generated.
-    """
-    from alma.api.scheduler import (
-        activity_envelope,
-        add_job_log,
-        find_active_job,
-        schedule_immediate,
-        set_job_status,
-    )
-    from alma.discovery.engine import refresh_recommendations as refresh_global_recommendations
-
-    db_path = str(get_db_path())
-    operation_key = "discovery.refresh_recommendations"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            str(existing.get("job_id") or ""),
-            status="already_running",
-            operation_key=operation_key,
-            message="Discovery refresh already running",
-        )
-
-    def _run_refresh(job_id: str) -> dict:
-        conn = open_db_connection()
-        usage_before = openalex_usage_snapshot()
-        try:
-            liked_count = conn.execute(
-                f"SELECT COUNT(*) FROM papers WHERE status='library' AND {standalone_paper_sql('papers')}"
-            ).fetchone()[0]
-            existing_count = conn.execute(
-                f"""
-                SELECT COUNT(*)
-                FROM recommendations r
-                JOIN papers p ON p.id = r.paper_id
-                WHERE {standalone_paper_sql('p')}
-                """
-            ).fetchone()[0]
-            add_job_log(
-                job_id,
-                f"Starting discovery refresh (liked={liked_count}, existing_recommendations={existing_count})",
-                step="preflight",
-            )
-
-            with source_diagnostics_scope() as source_diag:
-                new_recs = refresh_global_recommendations(db_path)
-                http_source_diagnostics = source_diag.summary()
-            new_count = len(new_recs or [])
-            after_count = conn.execute(
-                f"""
-                SELECT COUNT(*)
-                FROM recommendations r
-                JOIN papers p ON p.id = r.paper_id
-                WHERE {standalone_paper_sql('p')}
-                """
-            ).fetchone()[0]
-            usage_after = openalex_usage_snapshot()
-            usage_delta = openalex_usage_delta(usage_before, usage_after)
-            add_job_log(
-                job_id,
-                (
-                    "OpenAlex usage: "
-                    f"calls={usage_delta['openalex_calls']}, "
-                    f"saved_by_cache={usage_delta['openalex_calls_saved_by_cache']}, "
-                    f"retries={usage_delta['openalex_retries']}, "
-                    f"rate_limited={usage_delta['openalex_rate_limited_events']}, "
-                    f"credits_used={usage_delta['openalex_credits_used']}, "
-                    f"credits_remaining={usage_delta['openalex_credits_remaining']}"
-                ),
-                step="api_summary",
-                data=usage_delta,
-            )
-            add_job_log(
-                job_id,
-                "Discovery refresh source diagnostics recorded",
-                step="source_diagnostics",
-                data=http_source_diagnostics,
-            )
-            add_job_log(
-                job_id,
-                f"Discovery refresh finished (new={new_count}, total_recommendations={after_count})",
-                step="done",
-            )
-            return {
-                "new_recommendations": new_count,
-                "total_recommendations": after_count,
-                "openalex_usage": usage_delta,
-                "source_diagnostics": http_source_diagnostics,
-            }
-        finally:
-            conn.close()
-
-    if not background:
-        job_id = f"discovery_refresh_{uuid.uuid4().hex[:10]}"
-        try:
-            set_job_status(
-                job_id,
-                status="running",
-                operation_key=operation_key,
-                trigger_source="user",
-                started_at=utcnow().isoformat(),
-                message="Refreshing discovery recommendations",
-            )
-            result = _run_refresh(job_id)
-            set_job_status(
-                job_id,
-                status="completed",
-                finished_at=utcnow().isoformat(),
-                message="Discovery refresh completed",
-                result=result,
-            )
-            return activity_envelope(job_id, status="completed", operation_key=operation_key, **result)
-        except Exception as e:
-            set_job_status(
-                job_id,
-                status="failed",
-                finished_at=utcnow().isoformat(),
-                message="Discovery refresh failed",
-                error=str(e),
-            )
-            raise_internal("Discovery refresh failed", e)
-
-    job_id = f"discovery_refresh_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=utcnow().isoformat(),
-        message="Refreshing discovery recommendations",
-    )
-
-    def _runner() -> dict:
-        return _run_refresh(job_id)
-
-    try:
-        schedule_immediate(job_id, _runner)
-        return activity_envelope(
-            job_id,
-            status="queued",
-            operation_key=operation_key,
-            message="Discovery refresh queued",
-        )
-    except Exception as e:
-        set_job_status(
-            job_id,
-            status="failed",
-            finished_at=utcnow().isoformat(),
-            message="Discovery refresh scheduling failed",
-            error=str(e),
-        )
-        raise_internal("Failed to schedule discovery refresh", e)
 
 
 # ===================================================================
@@ -1023,6 +837,33 @@ def manual_discovery_add(
 # ===================================================================
 # Recommendations
 # ===================================================================
+
+@router.post(
+    "/impressions",
+    response_model=DiscoveryImpressionBatchResponse,
+    summary="Record visible Discovery recommendations",
+)
+def record_discovery_impressions(
+    body: DiscoveryImpressionBatch,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Persist actual item visibility; unrendered recommendations stay unlabeled."""
+
+    try:
+        result = run_write_unit(
+            db,
+            lambda: discovery_app.record_impressions(
+                db,
+                [item.model_dump() for item in body.items],
+            ),
+            label="discovery_impressions",
+        )
+        return DiscoveryImpressionBatchResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise_internal("Failed to record Discovery impressions", exc)
+
 
 @router.get(
     "/recommendations",

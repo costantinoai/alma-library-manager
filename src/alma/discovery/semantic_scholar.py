@@ -515,9 +515,11 @@ def fetch_vectors_for_identifiers(
             return
 
         if resp.status_code == 200:
+            resolved_positions: set[int] = set()
             for idx, row in _coerce_batch_rows_with_positions(resp.json() or {}):
                 if idx >= len(chunk):
                     continue
+                resolved_positions.add(idx)
                 requested_id = chunk[idx]
                 enriched = dict(row)
                 enriched["_requested_id"] = requested_id
@@ -526,6 +528,11 @@ def fetch_vectors_for_identifiers(
                     enriched["specter2_embedding"] = vector
                     enriched["specter2_model"] = S2_SPECTER2_MODEL
                 rows[requested_id] = enriched
+            terminal.update(
+                requested_id
+                for idx, requested_id in enumerate(chunk)
+                if idx not in resolved_positions
+            )
             return
 
         # Oversized response: the ids are fine, split regardless of size.
@@ -866,7 +873,7 @@ def search_papers_bulk(
                 resp.status_code,
                 query[:80],
             )
-            return search_papers(query, limit=limit)
+            return []
 
         papers = [row for row in ((resp.json() or {}).get("data") or []) if isinstance(row, dict)]
         if not papers:
@@ -915,7 +922,7 @@ def search_papers_bulk(
         return out[:keep]
     except Exception as exc:
         logger.warning("Semantic Scholar bulk search failed: %s", exc)
-        return search_papers(query, limit=limit)
+        return []
 
 
 def fetch_related_papers(doi: str, limit: int = 20) -> list[dict]:

@@ -792,6 +792,107 @@ def init_db_schema() -> None:
                 conn.execute(idx_sql)
 
             conn.execute(
+                """CREATE TABLE IF NOT EXISTS discovery_ranking_candidates (
+                    id TEXT PRIMARY KEY,
+                    suggestion_set_id TEXT NOT NULL REFERENCES suggestion_sets(id) ON DELETE CASCADE,
+                    lens_id TEXT NOT NULL REFERENCES discovery_lenses(id) ON DELETE CASCADE,
+                    candidate_key TEXT NOT NULL,
+                    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+                    fused_rank INTEGER NOT NULL,
+                    prior_score REAL NOT NULL,
+                    shadow_score REAL,
+                    reward_features TEXT NOT NULL DEFAULT '{}',
+                    exposure_features TEXT NOT NULL DEFAULT '{}',
+                    retrieval_hits TEXT NOT NULL DEFAULT '[]',
+                    feature_schema_version TEXT NOT NULL,
+                    feature_timestamp TEXT NOT NULL,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    exploration INTEGER NOT NULL DEFAULT 0,
+                    inclusion_probability REAL,
+                    position_probability REAL,
+                    final_position INTEGER,
+                    policy_version TEXT NOT NULL,
+                    ranker_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(suggestion_set_id, candidate_key)
+                )"""
+            )
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_ranking_candidates_set ON discovery_ranking_candidates(suggestion_set_id, fused_rank)",
+                "CREATE INDEX IF NOT EXISTS idx_ranking_candidates_paper ON discovery_ranking_candidates(paper_id, created_at)",
+            ]:
+                conn.execute(idx_sql)
+
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS discovery_impressions (
+                    id TEXT PRIMARY KEY,
+                    ranking_candidate_id TEXT REFERENCES discovery_ranking_candidates(id) ON DELETE SET NULL,
+                    recommendation_id TEXT NOT NULL,
+                    suggestion_set_id TEXT NOT NULL,
+                    lens_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    surface TEXT NOT NULL,
+                    sort_mode TEXT NOT NULL,
+                    seen_at TEXT NOT NULL,
+                    UNIQUE(recommendation_id, surface)
+                )"""
+            )
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_discovery_impressions_set ON discovery_impressions(suggestion_set_id, seen_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discovery_impressions_paper ON discovery_impressions(paper_id, seen_at)",
+            ]:
+                conn.execute(idx_sql)
+
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS discovery_frontier (
+                    frontier_key TEXT PRIMARY KEY,
+                    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+                    title TEXT NOT NULL,
+                    authors TEXT,
+                    doi TEXT,
+                    openalex_id TEXT,
+                    s2_id TEXT,
+                    year INTEGER,
+                    venue TEXT,
+                    cited_by_count INTEGER NOT NULL DEFAULT 0,
+                    coupling_count INTEGER NOT NULL DEFAULT 0,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    vector BLOB,
+                    vector_model TEXT,
+                    field_provenance TEXT NOT NULL DEFAULT '{}',
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    terminal_at TEXT,
+                    last_error TEXT
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discovery_frontier_expiry ON discovery_frontier(expires_at, last_seen_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discovery_frontier_coupling ON discovery_frontier(coupling_count DESC, first_seen_at)"
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS discovery_frontier_edges (
+                    id TEXT PRIMARY KEY,
+                    source_key TEXT NOT NULL,
+                    destination_key TEXT NOT NULL,
+                    relation TEXT NOT NULL,
+                    source_api TEXT,
+                    observed_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    UNIQUE(source_key, destination_key, relation, source_api)
+                )"""
+            )
+            for idx_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_frontier_edges_source ON discovery_frontier_edges(source_key, relation)",
+                "CREATE INDEX IF NOT EXISTS idx_frontier_edges_destination ON discovery_frontier_edges(destination_key, relation)",
+            ]:
+                conn.execute(idx_sql)
+
+            conn.execute(
                 """CREATE TABLE IF NOT EXISTS lens_signals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     lens_id TEXT NOT NULL REFERENCES discovery_lenses(id) ON DELETE CASCADE,

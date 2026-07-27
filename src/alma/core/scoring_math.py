@@ -31,6 +31,38 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+# Reciprocal-rank-fusion smoothing constant (Cormack et al., SIGIR 2009). 60 is
+# the value from that paper and the de-facto standard: it compresses the gap
+# between rank 1 and rank 10 enough that agreement ACROSS retrievers outweighs
+# any single retriever's top slot.
+#
+# Declared here, once. Three modules fuse ranks — the Find & Add search merge,
+# the Discovery lexical lane, and the two-level channel merge — and each used
+# to carry its own `60` and its own inline `1/(k+rank)`. A constant that means
+# "how much do we trust rank position" cannot live in three files.
+RRF_K: int = 60
+
+
+def rrf_weight(rank: int, *, k: int = RRF_K) -> float:
+    """Contribution of ONE appearance at 1-based ``rank`` to an RRF score.
+
+    Summed across every list a candidate appears in. Unbounded above (a
+    candidate in many lists scores higher), which is the property that makes
+    RRF reward consensus.
+    """
+    return 1.0 / (k + max(1, int(rank)))
+
+
+def rrf_score_normalized(rank: int, *, k: int = RRF_K) -> float:
+    """RRF contribution rescaled so rank 1 == 1.0.
+
+    Used where a fused value has to stay on a comparable 0–1 scale before being
+    multiplied by a channel weight — summing raw ``rrf_weight`` there would let
+    the absolute pool size leak into the blend.
+    """
+    return (k + 1.0) / (k + max(1, int(rank)))
+
+
 def query_tokens(query: str) -> tuple[str, list[str]]:
     """``(normalized_query, discriminating_tokens)`` for `query_match_score`.
 

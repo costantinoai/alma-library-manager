@@ -648,14 +648,19 @@ def run_s2_vector_backfill(
                             )
                             continue
                         if terminal_for_paper:
-                            lookup_failures += 1
+                            # A terminal identifier includes a successful 200
+                            # batch position whose row is null/absent. At the
+                            # paper level that is a durable no-match, not a
+                            # transport/contract error.
+                            unmatched += 1
                             _upsert_fetch_status(
                                 conn,
                                 row=row,
                                 model=model,
-                                status="lookup_error",
+                                status="unmatched",
                                 reason=(
-                                    "Semantic Scholar rejected the current DOI/S2 lookup id: "
+                                    "Semantic Scholar returned no paper for the "
+                                    "current DOI/S2 lookup id: "
                                     f"{next(iter(terminal_for_paper.values()))}"
                                 ),
                                 lookup_ids=lookup_ids_for_paper,

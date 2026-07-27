@@ -1012,6 +1012,7 @@ def record_paper_feedback(
     action: str,
     rating: int | None = None,
     source_surface: str,
+    recommendation_id: str | None = None,
 ) -> None:
     """Record a paper feedback event through the one feedback engine.
 
@@ -1048,6 +1049,7 @@ def record_paper_feedback(
             "surface": source_surface,
             "paper_id": paper_id,
             "acted_at": utcnow().isoformat(),
+            **({"recommendation_id": recommendation_id} if recommendation_id else {}),
         },
     )
 

@@ -1180,6 +1180,233 @@ def _m_0035_cluster_placement_provenance(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "publication_clusters", {"placement": "TEXT"})
 
 
+def _finalize_discovery_observation_schema(conn: sqlite3.Connection) -> None:
+    """Replace the short-lived draft frontier shape with the final contract.
+
+    The observation work was exercised against the dev database before its
+    frontier columns were finalized.  That database can therefore already be
+    stamped at v36 while still carrying ``candidate_key`` / ``metadata_json``.
+    Keep the repair in the migration layer: application code sees exactly one
+    current schema and needs no column probes or compatibility branches.
+    """
+    _add_columns(
+        conn,
+        "discovery_impressions",
+        {"sort_mode": "TEXT NOT NULL DEFAULT 'unknown'"},
+    )
+
+    columns = _table_columns(conn, "discovery_frontier")
+    if not columns or "frontier_key" in columns:
+        return
+    if not {"candidate_key", "metadata_json"}.issubset(columns):
+        raise RuntimeError(
+            "Unsupported discovery_frontier schema: expected the v36 draft "
+            "candidate_key/metadata_json columns"
+        )
+
+    legacy_table = "discovery_frontier_legacy_0037"
+    if _table_exists(conn, legacy_table):
+        raise RuntimeError(
+            f"Cannot finalize discovery_frontier: {legacy_table} already exists"
+        )
+
+    # Index names are database-global. Drop the draft indexes before creating
+    # the same canonical names on the replacement table.
+    conn.execute("DROP INDEX IF EXISTS idx_discovery_frontier_expiry")
+    conn.execute("DROP INDEX IF EXISTS idx_discovery_frontier_coupling")
+    conn.execute(f"ALTER TABLE discovery_frontier RENAME TO {legacy_table}")
+    conn.execute(
+        """
+        CREATE TABLE discovery_frontier (
+            frontier_key TEXT PRIMARY KEY,
+            paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            authors TEXT,
+            doi TEXT,
+            openalex_id TEXT,
+            s2_id TEXT,
+            year INTEGER,
+            venue TEXT,
+            cited_by_count INTEGER NOT NULL DEFAULT 0,
+            coupling_count INTEGER NOT NULL DEFAULT 0,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            vector BLOB,
+            vector_model TEXT,
+            field_provenance TEXT NOT NULL DEFAULT '{}',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            expires_at TEXT,
+            terminal_at TEXT,
+            last_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT INTO discovery_frontier (
+            frontier_key, paper_id, title, authors, doi, openalex_id, s2_id,
+            year, venue, cited_by_count, coupling_count, metadata, vector,
+            vector_model, field_provenance, first_seen_at, last_seen_at,
+            expires_at, terminal_at, last_error
+        )
+        SELECT
+            candidate_key,
+            paper_id,
+            COALESCE(json_extract(metadata_json, '$.title'), ''),
+            json_extract(metadata_json, '$.authors'),
+            json_extract(metadata_json, '$.doi'),
+            json_extract(metadata_json, '$.openalex_id'),
+            COALESCE(
+                json_extract(metadata_json, '$.semantic_scholar_id'),
+                json_extract(metadata_json, '$.s2_id')
+            ),
+            json_extract(metadata_json, '$.year'),
+            COALESCE(
+                json_extract(metadata_json, '$.venue'),
+                json_extract(metadata_json, '$.journal')
+            ),
+            COALESCE(json_extract(metadata_json, '$.cited_by_count'), 0),
+            COALESCE(json_extract(metadata_json, '$.coupling_count'), 0),
+            metadata_json,
+            vector,
+            vector_model,
+            field_provenance,
+            first_seen_at,
+            last_seen_at,
+            expires_at,
+            terminal_at,
+            last_error
+        FROM {legacy_table}
+        """
+    )
+    conn.execute(f"DROP TABLE {legacy_table}")
+
+
+def _m_0036_discovery_ranking_observations(conn: sqlite3.Connection) -> None:
+    """Immutable v3 candidate, exposure, and reusable frontier substrate."""
+    # A dev database may already carry the draft frontier table that preceded
+    # this migration. Repair it before the canonical index DDL below runs.
+    _finalize_discovery_observation_schema(conn)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS discovery_ranking_candidates (
+            id TEXT PRIMARY KEY,
+            suggestion_set_id TEXT NOT NULL
+                REFERENCES suggestion_sets(id) ON DELETE CASCADE,
+            lens_id TEXT NOT NULL
+                REFERENCES discovery_lenses(id) ON DELETE CASCADE,
+            candidate_key TEXT NOT NULL,
+            paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+            fused_rank INTEGER NOT NULL,
+            prior_score REAL NOT NULL,
+            shadow_score REAL,
+            reward_features TEXT NOT NULL DEFAULT '{}',
+            exposure_features TEXT NOT NULL DEFAULT '{}',
+            retrieval_hits TEXT NOT NULL DEFAULT '[]',
+            feature_schema_version TEXT NOT NULL,
+            feature_timestamp TEXT NOT NULL,
+            selected INTEGER NOT NULL DEFAULT 0,
+            exploration INTEGER NOT NULL DEFAULT 0,
+            inclusion_probability REAL,
+            position_probability REAL,
+            final_position INTEGER,
+            policy_version TEXT NOT NULL,
+            ranker_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(suggestion_set_id, candidate_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ranking_candidates_set
+            ON discovery_ranking_candidates(suggestion_set_id, fused_rank);
+        CREATE INDEX IF NOT EXISTS idx_ranking_candidates_paper
+            ON discovery_ranking_candidates(paper_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS discovery_impressions (
+            id TEXT PRIMARY KEY,
+            ranking_candidate_id TEXT
+                REFERENCES discovery_ranking_candidates(id) ON DELETE SET NULL,
+            recommendation_id TEXT NOT NULL,
+            suggestion_set_id TEXT NOT NULL,
+            lens_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            surface TEXT NOT NULL,
+            sort_mode TEXT NOT NULL,
+            seen_at TEXT NOT NULL,
+            UNIQUE(recommendation_id, surface)
+        );
+        CREATE INDEX IF NOT EXISTS idx_discovery_impressions_set
+            ON discovery_impressions(suggestion_set_id, seen_at);
+        CREATE INDEX IF NOT EXISTS idx_discovery_impressions_paper
+            ON discovery_impressions(paper_id, seen_at);
+
+        CREATE TABLE IF NOT EXISTS discovery_frontier (
+            frontier_key TEXT PRIMARY KEY,
+            paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            authors TEXT,
+            doi TEXT,
+            openalex_id TEXT,
+            s2_id TEXT,
+            year INTEGER,
+            venue TEXT,
+            cited_by_count INTEGER NOT NULL DEFAULT 0,
+            coupling_count INTEGER NOT NULL DEFAULT 0,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            vector BLOB,
+            vector_model TEXT,
+            field_provenance TEXT NOT NULL DEFAULT '{}',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            expires_at TEXT,
+            terminal_at TEXT,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_discovery_frontier_expiry
+            ON discovery_frontier(expires_at, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_discovery_frontier_coupling
+            ON discovery_frontier(coupling_count DESC, first_seen_at);
+
+        CREATE TABLE IF NOT EXISTS discovery_frontier_edges (
+            id TEXT PRIMARY KEY,
+            source_key TEXT NOT NULL,
+            destination_key TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            source_api TEXT,
+            observed_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(source_key, destination_key, relation, source_api)
+        );
+        CREATE INDEX IF NOT EXISTS idx_frontier_edges_source
+            ON discovery_frontier_edges(source_key, relation);
+        CREATE INDEX IF NOT EXISTS idx_frontier_edges_destination
+            ON discovery_frontier_edges(destination_key, relation);
+        """
+    )
+    # API/source identity is exposure metadata, never reward. Remove obsolete
+    # per-provider relevance knobs instead of retaining dead compatibility keys.
+    conn.execute(
+        """
+        DELETE FROM discovery_settings
+        WHERE key IN (
+            'sources.openalex.weight',
+            'sources.semantic_scholar.weight',
+            'sources.crossref.weight',
+            'sources.arxiv.weight',
+            'sources.biorxiv.weight',
+            'weights.usefulness_boost',
+            -- The external lane searches the local frontier now, so there
+            -- is no scarce per-branch API budget left to floor.
+            'branches.min_budget_per_branch'
+        )
+        """
+    )
+
+
+def _m_0037_finalize_discovery_observation_schema(conn: sqlite3.Connection) -> None:
+    """Finalize any database already stamped with the draft v36 schema."""
+    _finalize_discovery_observation_schema(conn)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1216,6 +1443,8 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (33, "author_seed_status", _m_0033_author_seed_status),
     (34, "inbox_messages", _m_0034_inbox_messages),
     (35, "cluster_placement_provenance", _m_0035_cluster_placement_provenance),
+    (36, "discovery_ranking_observations", _m_0036_discovery_ranking_observations),
+    (37, "finalize_discovery_observation_schema", _m_0037_finalize_discovery_observation_schema),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

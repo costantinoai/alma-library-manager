@@ -152,6 +152,7 @@ nav:
       - Configuration: reference/configuration.md
       - Database schema: reference/database.md
       - External APIs: reference/external-apis.md
+      - Discovery pipeline: reference/discovery-pipeline.md
       - Scoring formulas: reference/scoring.md
   - Operations:
       - operations/index.md
