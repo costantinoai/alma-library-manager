@@ -123,12 +123,24 @@ export function buildTerrainGrid(
     const mean = vsum[i] / wsum[i]
     const t = Math.max(-1, Math.min(1, mean / TERRAIN_SCALE_ABS_MAX))
     const [r, g, b] = terrainColor(t)
-    const densityAlpha = Math.min(0.9, 0.45 + 0.6 * (dsum[i] / maxDensity))
+    // Opacity carries EVIDENCE and nothing else.
+    //
+    // It used to be `(0.45 + 0.6·evidence) · (0.6 + 0.4·|t|)`, so a weak value
+    // was faded twice: once for having little evidence, again for being near
+    // neutral. That second term existed because the old ramp squeezed yellow
+    // into ±0.12, which made near-zero read as green or red — alpha had to
+    // undo it. The ramp is now standard RdYlGn with yellow at its natural
+    // width, so a weak value already LOOKS weak, and fading it as well just
+    // produced a wash you could barely see.
+    //
+    // Evidence still moves it: a well-worked region is near-solid, an inferred
+    // one keeps the floor. The floor is high enough that the terrain reads as
+    // terrain rather than a hint.
     const o = i * 4
     rgba[o] = r
     rgba[o + 1] = g
     rgba[o + 2] = b
-    rgba[o + 3] = densityAlpha * (0.6 + 0.4 * Math.abs(t)) * 255
+    rgba[o + 3] = Math.min(0.95, 0.7 + 0.3 * (dsum[i] / maxDensity)) * 255
   }
   return { rgba, size, absMax }
 }

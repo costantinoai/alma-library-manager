@@ -46,7 +46,10 @@ import {
   MAP_NODE_DRAW_ORDER,
   MAP_NODE_STYLES,
   RAMP_GRADIENTS,
+  SCORE_LEGEND,
+  scoreRampColor,
   summarizeValues,
+  TERRAIN_LEGEND,
   yearRampColor,
   yearRampLimits,
   type MapNodeKind,
@@ -280,16 +283,15 @@ export function GraphMapView({
         return yearRampColor(y, yearRange.lo, yearRange.hi)
       }
       if (colourMode === 'score') {
-        // Internal relevance score (0–100), divergent about the neutral 50:
-        // red = the engine scored it weak, green = strong. Never-scored
-        // papers (no recommendation yet) stay recessive.
+        // Internal relevance score on its fixed 0–100 domain. SEQUENTIAL, not
+        // diverging: 20 is not "disliked", it is weakly ranked. Never-scored
+        // papers (no recommendation yet) stay recessive. The ramp lives in
+        // mapNodeStyle — this used to inline its own red/yellow/green mix,
+        // which both duplicated the maths and made Score indistinguishable
+        // from Terrain.
         const s = liveScore(n)
         if (s == null) return MAP_INK.ambientSoft
-        const t = Math.max(-1, Math.min(1, (s - 50) / 50))
-        const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
-        return t < 0
-          ? `rgb(${mix(220, 233, 1 + t)}, ${mix(68, 196, 1 + t)}, ${mix(61, 76, 1 + t)})`
-          : `rgb(${mix(233, 64, t)}, ${mix(196, 160, t)}, ${mix(76, 92, t)})`
+        return `rgb(${scoreRampColor(s).join(',')})`
       }
       return undefined
     },
@@ -512,7 +514,7 @@ export function GraphMapView({
             [
               { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
               { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
-              { value: 'score', label: 'Score', title: 'Engine relevance (latest suggestion score, 0–100) — red weak, green strong; never-scored grey' },
+              { value: 'score', label: 'Score', title: 'Engine relevance (latest suggestion score, 0–100) — pale blue weak, deep blue strong; never-scored grey' },
             ] as const
           ).filter((o) => colourModes.includes(o.value))}
         />
@@ -646,21 +648,23 @@ export function GraphMapView({
             // Absolute, centred on the neutral 50 — the internal score has a
             // fixed 0–100 domain, so the scale never restretches per view.
             <ColourBarLegend
-              gradient={RAMP_GRADIENTS.divergent}
-              min="0"
-              mid="50"
-              max="100"
+              gradient={SCORE_LEGEND.gradient}
+              min={SCORE_LEGEND.min}
+              mid={SCORE_LEGEND.mid}
+              max={SCORE_LEGEND.max}
               mean={scoreStats ? String(Math.round(scoreStats.mean)) : undefined}
             />
           )}
           {showTerrain && terrainStats && (
             // Fixed semantic valence domain: weak populations stay weak and
-            // every map uses a directly comparable colour.
+            // every map uses a directly comparable colour. The endpoints are
+            // DERIVED from the ramp constant — hardcoding "-1"/"1" made the
+            // colourbar claim a domain the ramp had stopped using.
             <ColourBarLegend
-              gradient={RAMP_GRADIENTS.terrain}
-              min="-1"
-              mid="0"
-              max="1"
+              gradient={TERRAIN_LEGEND.gradient}
+              min={TERRAIN_LEGEND.min}
+              mid={TERRAIN_LEGEND.mid}
+              max={TERRAIN_LEGEND.max}
               mean={terrainStats.mean.toFixed(2)}
             />
           )}

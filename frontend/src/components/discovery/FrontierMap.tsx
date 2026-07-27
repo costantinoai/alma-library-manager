@@ -33,7 +33,7 @@ import { useBranchControls } from '@/hooks/useBranchControls'
 import { CorpusMapPaperPopup } from '@/components/map/CorpusMapPaperPopup'
 import type { MapPaperNeighbour } from '@/components/map/MapPaperPopup'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
+import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, TERRAIN_LEGEND, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
 import {
   ColourBarLegend,
   MapDataStatus,
@@ -757,12 +757,15 @@ export function FrontierMap({
               />
             )}
             {showTerrain && terrainStats && (
-              // Fixed semantic valence domain, shared with every map.
+              // Fixed semantic valence domain, shared with every map — bounds
+              // and gradient both DERIVED from the ramp, so this bar cannot
+              // drift from the Map page's (it said -1..1 while the ramp used
+              // ±0.5, until the descriptor was centralised).
               <ColourBarLegend
-                gradient={RAMP_GRADIENTS.terrain}
-                min="-1"
-                mid="0"
-                max="1"
+                gradient={TERRAIN_LEGEND.gradient}
+                min={TERRAIN_LEGEND.min}
+                mid={TERRAIN_LEGEND.mid}
+                max={TERRAIN_LEGEND.max}
                 mean={terrainStats.mean.toFixed(2)}
               />
             )}

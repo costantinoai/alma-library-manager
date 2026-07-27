@@ -256,44 +256,120 @@ export function summarizeValues(values: number[]): { min: number; max: number; m
   return { min, max, mean: sum / vs.length }
 }
 
-/** Terrain ramp — the ONE owner of the preference-field colours (splat and
- *  legend both read THIS). Valence has a semantic domain of [-1, +1], so the
- *  scale is fixed across every map. A weak +0.03 must remain weak rather than
- *  becoming the green endpoint merely because it is the largest value in an
- *  author population (user catch, 2026-07-26). */
-export const TERRAIN_SCALE_ABS_MAX = 1
-export const TERRAIN_YELLOW_BAND = 0.12
+type Stop = readonly [number, readonly [number, number, number]]
 
-const TERRAIN_STOPS = {
-  deepNeg: [165, 0, 38] as const, // -1 — strongest against
-  neg: [220, 68, 61] as const, // edge of the yellow band, negative side
-  mid: [233, 196, 76] as const, // 0 — neutral yellow
-  pos: [64, 160, 92] as const, // edge of the yellow band, positive side
-  deepPos: [0, 104, 55] as const, // +1 — strongest for
+/** Interpolate a stop table at `x`. THE one ramp implementation.
+ *
+ *  Every colour ramp on the map goes through this. Score used to carry a
+ *  hand-rolled red/yellow/green mix inlined in `GraphMapView`, which both
+ *  duplicated the maths and made Score look identical to Terrain — two
+ *  different questions wearing the same colours. */
+function interpolateStops(stops: ReadonlyArray<Stop>, x: number): [number, number, number] {
+  const lo = stops[0][0]
+  const hi = stops[stops.length - 1][0]
+  const v = Math.max(lo, Math.min(hi, x))
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i]
+    const [t1, c1] = stops[i + 1]
+    if (v <= t1 || i === stops.length - 2) {
+      const k = t1 === t0 ? 0 : (v - t0) / (t1 - t0)
+      return [
+        Math.round(c0[0] + (c1[0] - c0[0]) * k),
+        Math.round(c0[1] + (c1[1] - c0[1]) * k),
+        Math.round(c0[2] + (c1[2] - c0[2]) * k),
+      ]
+    }
+  }
+  const last = stops[stops.length - 1][1]
+  return [last[0], last[1], last[2]]
 }
 
-/** Terrain colour for a semantic valence in [-1, +1]. */
+/** CSS gradient GENERATED from a stop table, so a bar can never disagree with
+ *  the pixels it labels. Positions are derived from each stop's own value. */
+function gradientFromStops(stops: ReadonlyArray<Stop>): string {
+  const lo = stops[0][0]
+  const hi = stops[stops.length - 1][0]
+  const span = hi - lo || 1
+  const parts = stops.map(
+    ([t, c]) => `rgb(${c.join(',')}) ${Math.round(((t - lo) / span) * 100)}%`,
+  )
+  return `linear-gradient(to right, ${parts.join(', ')})`
+}
+
+/** Terrain scale — FIXED, never data-derived, so two maps stay comparable and
+ *  a weak +0.03 cannot become the green endpoint merely because it is the
+ *  largest value in an author population (user catch, 2026-07-26).
+ *
+ *  ±0.5 rather than ±1 because that is where the valence contract lives:
+ *  `signal_valence` puts a saved paper at +0.35 and caps engine evidence at
+ *  ±0.5, so ±1 needs an explicit 1★/5★ rating. Measured on the real field,
+ *  96.9% of points sit inside ±0.5 and the median is 0.16 — on a ±1 domain the
+ *  map used only the middle sliver of the ramp and read as washed-out cream.
+ *  Beyond ±0.5 values clamp, which is the honest reading of "as strong as this
+ *  scale can say". */
+export const TERRAIN_SCALE_ABS_MAX = 0.5
+
+/** ColorBrewer **RdYlGn** at natural spacing — the standard diverging ramp.
+ *
+ *  Stops are in NORMALISED units (−1 … +1), i.e. valence divided by
+ *  `TERRAIN_SCALE_ABS_MAX`. Previously yellow was squeezed into ±0.12 of this
+ *  range, so anything outside a sliver ran to saturated red or green and a map
+ *  of mostly-small values read as two angry blocks. */
+const TERRAIN_STOPS: ReadonlyArray<Stop> = [
+  [-1.0, [215, 25, 28]],
+  [-0.5, [253, 174, 97]],
+  [0.0, [255, 255, 191]],
+  [0.5, [166, 217, 106]],
+  [1.0, [26, 150, 65]],
+]
+
+/** Terrain colour for a NORMALISED valence in [-1, +1]. */
 export function terrainColor(t: number): [number, number, number] {
-  const x = Math.max(-1, Math.min(1, t))
-  const mix = (a: readonly number[], b: readonly number[], k: number): [number, number, number] => [
-    Math.round(a[0] + (b[0] - a[0]) * k),
-    Math.round(a[1] + (b[1] - a[1]) * k),
-    Math.round(a[2] + (b[2] - a[2]) * k),
-  ]
-  const band = TERRAIN_YELLOW_BAND
-  if (x < -band) return mix(TERRAIN_STOPS.deepNeg, TERRAIN_STOPS.neg, (x + 1) / (1 - band))
-  if (x < 0) return mix(TERRAIN_STOPS.neg, TERRAIN_STOPS.mid, (x + band) / band)
-  if (x < band) return mix(TERRAIN_STOPS.mid, TERRAIN_STOPS.pos, x / band)
-  return mix(TERRAIN_STOPS.pos, TERRAIN_STOPS.deepPos, (x - band) / (1 - band))
+  return interpolateStops(TERRAIN_STOPS, t)
 }
 
-const terrainStopPct = (t: number) => `${Math.round(((t + 1) / 2) * 100)}%`
+/** Engine relevance score — a 0–100 magnitude, so a SEQUENTIAL ramp.
+ *
+ *  Deliberately not the terrain ramp. Terrain answers "do you like it" and is
+ *  diverging about a meaningful zero; score answers "how strongly did the
+ *  engine rank it" and has no negative half — 20 is not "disliked", it is
+ *  "weakly ranked". Sharing red/yellow/green made the two read as the same
+ *  measurement. Single-hue blue also keeps it clear of the year ramp (viridis).
+ *  Low scores stay pale and recessive; high scores darken and draw the eye. */
+const SCORE_STOPS: ReadonlyArray<Stop> = [
+  [0, [198, 219, 239]],
+  [50, [66, 146, 198]],
+  [100, [8, 48, 107]],
+]
 
-/** CSS gradients matching the canvas ramps exactly — the legend bar must be
- *  the same ramp the dots use. The terrain gradient pins the yellow band to
- *  the same narrow ±TERRAIN_YELLOW_BAND the canvas uses. */
+/** Colour for an internal relevance score on its fixed 0–100 domain. */
+export function scoreRampColor(score: number): [number, number, number] {
+  return interpolateStops(SCORE_STOPS, score)
+}
+
+/** Everything a colourbar needs, DERIVED from the ramp it describes.
+ *
+ *  The legend used to hardcode "-1"/"0"/"1" beside a gradient built somewhere
+ *  else; narrowing the terrain domain left the bar labelling a range the ramp
+ *  no longer used. Bounds and gradient now come from one place, so changing a
+ *  scale updates its bar automatically. */
+export const TERRAIN_LEGEND = {
+  gradient: gradientFromStops(TERRAIN_STOPS),
+  min: `−${TERRAIN_SCALE_ABS_MAX}`,
+  mid: '0',
+  max: `+${TERRAIN_SCALE_ABS_MAX}`,
+} as const
+
+export const SCORE_LEGEND = {
+  gradient: gradientFromStops(SCORE_STOPS),
+  min: String(SCORE_STOPS[0][0]),
+  mid: String(SCORE_STOPS[Math.floor(SCORE_STOPS.length / 2)][0]),
+  max: String(SCORE_STOPS[SCORE_STOPS.length - 1][0]),
+} as const
+
+/** CSS gradients matching the canvas ramps exactly. */
 export const RAMP_GRADIENTS = {
-  divergent: 'linear-gradient(to right, rgb(220,68,61), rgb(233,196,76), rgb(64,160,92))',
-  terrain: `linear-gradient(to right, rgb(${TERRAIN_STOPS.deepNeg.join(',')}) 0%, rgb(${TERRAIN_STOPS.neg.join(',')}) ${terrainStopPct(-TERRAIN_YELLOW_BAND)}, rgb(${TERRAIN_STOPS.mid.join(',')}) 50%, rgb(${TERRAIN_STOPS.pos.join(',')}) ${terrainStopPct(TERRAIN_YELLOW_BAND)}, rgb(${TERRAIN_STOPS.deepPos.join(',')}) 100%)`,
+  terrain: TERRAIN_LEGEND.gradient,
+  score: SCORE_LEGEND.gradient,
   year: 'linear-gradient(to right, #440154, #3B528B, #21918C, #5EC962, #FDE725)',
 } as const
