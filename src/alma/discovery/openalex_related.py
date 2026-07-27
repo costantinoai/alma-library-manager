@@ -23,6 +23,74 @@ from alma.openalex.http import get_client
 
 logger = logging.getLogger(__name__)
 
+# Boolean operators OpenAlex recognises. They MUST be uppercase; a lowercase
+# "or" is matched as a literal token.
+_OPENALEX_BOOLEAN_OPERATORS = ("AND", "OR", "NOT")
+
+# Characters that terminate a phrase for OpenAlex's Elasticsearch-backed query
+# parser. A term containing one of these cannot be safely quoted and joined, so
+# it is dropped rather than silently corrupting the whole query.
+_OPENALEX_QUERY_UNSAFE = ('"', "(", ")", "[", "]", "{", "}", "\\", "/", "~", "^")
+
+
+def build_openalex_query(terms: list[str], *, operator: str = "OR") -> str:
+    """Join `terms` into a boolean OpenAlex `search=` expression.
+
+    OpenAlex parses the `search` parameter with Elasticsearch's query-string
+    syntax, in which **adjacent bare words are combined with an implicit AND**
+    and boolean operators must be uppercase. So the historical
+    ``" OR ".join(topics)`` did not mean what it looks like: given
+    ``["working memory", "visual cortex"]`` it produced
+
+        working memory OR visual cortex
+
+    which parses as ``working AND (memory OR visual) AND cortex`` — a
+    conjunction of four unrelated tokens, not the union of two phrases. Every
+    lane that searched on multi-word topics was therefore issuing a far
+    narrower and semantically different query than intended.
+
+    Quoting each multi-word term restores the intent::
+
+        "working memory" OR "visual cortex"
+
+    Single words are left unquoted (quoting them would disable stemming, which
+    OpenAlex applies and which we want). Terms containing query-syntax
+    metacharacters are dropped — they cannot be quoted safely and one bad term
+    corrupts the entire expression.
+
+    Args:
+        terms: Raw topic / keyword strings, in priority order.
+        operator: Boolean joiner, ``"OR"`` (union, the retrieval default) or
+            ``"AND"`` (intersection).
+
+    Returns:
+        A query string ready for ``params["search"]``, or ``""`` when no term
+        survived cleaning.
+    """
+    op = str(operator or "OR").strip().upper()
+    if op not in _OPENALEX_BOOLEAN_OPERATORS:
+        raise ValueError(f"operator must be one of {_OPENALEX_BOOLEAN_OPERATORS}, got {operator!r}")
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in terms or []:
+        term = " ".join(str(raw or "").split())  # collapse internal whitespace
+        if not term:
+            continue
+        if any(ch in term for ch in _OPENALEX_QUERY_UNSAFE):
+            logger.debug("Dropping OpenAlex query term with unsafe syntax: %r", term)
+            continue
+        # An uppercase bare operator would be read as an operator, not a term.
+        if term.upper() in _OPENALEX_BOOLEAN_OPERATORS:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(f'"{term}"' if " " in term else term)
+
+    return f" {op} ".join(cleaned)
+
 
 def _normalize_id(doi_or_openalex_id: str) -> str:
     """Normalize a DOI or OpenAlex ID into a form suitable for the Works endpoint.
@@ -92,6 +160,14 @@ def _work_to_result(work: dict, score: float) -> dict | None:
         "keywords": normalized.get("keywords") or [],
         "institutions": normalized.get("institutions") or [],
         "referenced_works": normalized.get("referenced_works"),
+        "referenced_works_count": normalized.get("referenced_works_count"),
+        "fwci": normalized.get("fwci"),
+        "cited_by_percentile": normalized.get("cited_by_percentile") or {},
+        "open_access": normalized.get("open_access") or {},
+        "is_retracted": bool(normalized.get("is_retracted")),
+        "language": normalized.get("language"),
+        "type": normalized.get("type"),
+        "counts_by_year": normalized.get("counts_by_year") or [],
     }
 
 
@@ -329,8 +405,133 @@ def search_works_by_topics(
     if not topics:
         return []
 
-    query = " OR ".join(topics[:10])  # cap at 10 terms
+    query = build_openalex_query(topics[:10], operator="OR")  # cap at 10 terms
+    if not query:
+        return []
     return search_works(query=query, limit=limit, from_year=from_year)
+
+
+def search_works_by_author_id(
+    openalex_author_id: str,
+    limit: int = 20,
+    from_year: int | None = None,
+    topic_hint: str = "",
+) -> list[dict]:
+    """Fetch an author's works via the ``author.id`` FILTER, not free text.
+
+    The taste-author lane used to put the author's display name into
+    ``search=``, which searches title, abstract and fulltext — **not** author
+    names. It therefore returned papers that happen to *mention* the name (a
+    citation context, an eponym) and missed the author's actual output.
+
+    ``filter=authorships.author.id:A123`` is the correct projection and is a
+    single list call regardless of how many works the author has.
+
+    Args:
+        openalex_author_id: OpenAlex author id (``A123…``, bare or URL).
+        limit: Maximum works to return.
+        from_year: Inclusive lower bound on publication year.
+        topic_hint: Optional free-text narrowing applied *alongside* the author
+            filter, so the lane can ask for "this author, on this topic".
+
+    Returns:
+        Normalized candidate dicts; empty on any failure.
+    """
+    author_id = str(openalex_author_id or "").strip().rstrip("/").split("/")[-1]
+    if not author_id:
+        return []
+
+    filters = [f"authorships.author.id:{author_id}"]
+    if from_year:
+        filters.append(f"from_publication_date:{from_year}-01-01")
+
+    params: dict[str, object] = {
+        "filter": ",".join(filters),
+        "per-page": min(max(1, limit), 100),
+        "select": _WORKS_SELECT_FIELDS,
+        # Relevance is meaningless without a search term; recency is the useful
+        # ordering for "what has this author published lately".
+        "sort": "publication_date:desc",
+    }
+    hint = build_openalex_query([topic_hint], operator="OR") if topic_hint else ""
+    if hint:
+        params["search"] = hint
+        params["sort"] = "relevance_score:desc"
+
+    return _list_works(params, limit=limit, context=f"author.id:{author_id}")
+
+
+def search_works_by_venue(
+    venue_name: str,
+    limit: int = 20,
+    from_year: int | None = None,
+    topic_hint: str = "",
+) -> list[dict]:
+    """Fetch works from a venue via the SOURCE filter, not free text.
+
+    Same defect as the author lane: a journal name in ``search=`` matches the
+    text of papers that cite or discuss the journal, not papers published in
+    it. ``primary_location.source.display_name.search`` filters on the venue
+    field itself.
+
+    Args:
+        venue_name: Journal / source display name.
+        limit: Maximum works to return.
+        from_year: Inclusive lower bound on publication year.
+        topic_hint: Optional free-text narrowing applied alongside the filter.
+
+    Returns:
+        Normalized candidate dicts; empty on any failure.
+    """
+    venue = " ".join(str(venue_name or "").split())
+    if not venue or any(ch in venue for ch in (",", "|", ":")):
+        # Those three are OpenAlex filter-syntax separators; a venue containing
+        # one cannot be expressed in a filter value without escaping support.
+        return []
+
+    filters = [f"primary_location.source.display_name.search:{venue}"]
+    if from_year:
+        filters.append(f"from_publication_date:{from_year}-01-01")
+
+    params: dict[str, object] = {
+        "filter": ",".join(filters),
+        "per-page": min(max(1, limit), 100),
+        "select": _WORKS_SELECT_FIELDS,
+        "sort": "publication_date:desc",
+    }
+    hint = build_openalex_query([topic_hint], operator="OR") if topic_hint else ""
+    if hint:
+        params["search"] = hint
+        params["sort"] = "relevance_score:desc"
+
+    return _list_works(params, limit=limit, context=f"venue:{venue}")
+
+
+def _list_works(params: dict, *, limit: int, context: str) -> list[dict]:
+    """Run one OpenAlex ``/works`` list call and normalize the results.
+
+    Shared by the filter-based lanes (author / venue) so they cannot drift on
+    field projection, rank scoring, or error handling.
+    """
+    try:
+        resp = get_client().get("/works", params=params, timeout=30)
+        if resp.status_code != 200:
+            logger.debug("OpenAlex %s list returned HTTP %d", context, resp.status_code)
+            return []
+        works = (resp.json() or {}).get("results") or []
+    except Exception as exc:
+        logger.warning("OpenAlex %s list failed: %s", context, exc)
+        return []
+
+    out: list[dict] = []
+    total = max(len(works), 1)
+    for idx, work in enumerate(works):
+        candidate = _work_to_result(work, rank_score(idx, total))
+        if candidate:
+            out.append(candidate)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def search_works(

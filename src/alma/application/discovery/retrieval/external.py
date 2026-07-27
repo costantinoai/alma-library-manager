@@ -39,8 +39,9 @@ from ..seed_profile import (
     _top_negative_terms,
     _top_preferred_authors,
     _top_profile_terms,
+    resolve_author_openalex_ids,
 )
-from ._common import _candidate_key
+from ._common import FAMILY_TASTE, _candidate_key, attach_hits
 
 logger = logging.getLogger(__name__)
 
@@ -429,31 +430,50 @@ def _retrieve_external_channel(
                 }
             )
 
-    if taste_authors_enabled:
+    # Taste-author / taste-venue lanes: FILTER lanes, not free-text lanes.
+    #
+    # These two used to push the author's name and the journal's name into
+    # OpenAlex `search=`, which covers title/abstract/fulltext and indexes
+    # NEITHER field. The lane therefore retrieved papers that merely mention
+    # the person or the journal and missed their actual output. They are now
+    # routed through `search_works_by_author_id` /`search_works_by_venue`,
+    # which filter on the real fields.
+    #
+    # An author with no resolvable OpenAlex id falls back to the multi-source
+    # text path, because Crossref (`query.bibliographic`) and arXiv (`all:`)
+    # DO index author names — only OpenAlex does not.
+    filter_lane_specs: list[dict[str, Any]] = []
+    if taste_authors_enabled and preferred_authors:
         author_budget = max(2, int(round(taste_budget_total * 0.28)))
+        author_ids = resolve_author_openalex_ids(db, [name for name, _s in preferred_authors])
         for author, strength in preferred_authors:
-            author_query = author if not topic_hint else f"{author} {topic_hint}"
-            lane_specs.append(
-                {
-                    "lane_type": "taste_author",
-                    "query": author_query,
-                    "source_key": author,
-                    "strength": _clamp(0.54 + (float(strength) * 0.32), 0.42, 1.0),
-                    "budget": author_budget,
-                    "from_year": current_year - 4,
-                    "mode": "core",
-                }
-            )
+            openalex_id = author_ids.get(" ".join(str(author).lower().split()), "")
+            spec = {
+                "lane_type": "taste_author",
+                "query": author if not topic_hint else f"{author} {topic_hint}",
+                "source_key": author,
+                "strength": _clamp(0.54 + (float(strength) * 0.32), 0.42, 1.0),
+                "budget": author_budget,
+                "from_year": current_year - 4,
+                "mode": "core",
+            }
+            if openalex_id:
+                spec["openalex_author_id"] = openalex_id
+                spec["topic_hint"] = topic_hint
+                filter_lane_specs.append(spec)
+            else:
+                lane_specs.append(spec)
 
     if taste_venues_enabled:
         venue_budget = max(1, int(round(taste_budget_total * 0.16)))
         for venue, strength in preferred_venues:
-            venue_query = venue if not topic_hint else f"{venue} {topic_hint}"
-            lane_specs.append(
+            filter_lane_specs.append(
                 {
                     "lane_type": "taste_venue",
-                    "query": venue_query,
+                    "query": venue,
                     "source_key": venue,
+                    "venue_name": venue,
+                    "topic_hint": topic_hint,
                     "strength": _clamp(0.5 + (float(strength) * 0.3), 0.38, 0.94),
                     "budget": venue_budget,
                     "from_year": current_year - 5,
@@ -490,6 +510,33 @@ def _retrieve_external_channel(
         mode = str(lane.get("mode") or "core")
         cache_key = (str(lane.get("lane_type") or "taste"), query, per_query, from_year)
         _submit_source_search(cache_key, query, per_query, from_year, mode=mode)
+
+    # Filter lanes (taste_author by author.id, taste_venue by source name) go
+    # straight to OpenAlex rather than through the 5-source text fan-out: the
+    # filter IS the query, so there is nothing for Crossref/arXiv/bioRxiv to
+    # match on. One list call each, submitted on the same shared executor so
+    # they overlap with everything else.
+    filter_futures: dict[int, Future[list[dict]]] = {}
+    for idx, lane in enumerate(filter_lane_specs):
+        per_query = max(1, int(lane.get("budget") or 1))
+        from_year = int(lane.get("from_year") or current_year - 4)
+        hint = str(lane.get("topic_hint") or "")
+        if lane.get("openalex_author_id"):
+            filter_futures[idx] = lane_executor.submit(
+                openalex_related.search_works_by_author_id,
+                str(lane["openalex_author_id"]),
+                limit=per_query,
+                from_year=from_year,
+                topic_hint=hint,
+            )
+        elif lane.get("venue_name"):
+            filter_futures[idx] = lane_executor.submit(
+                openalex_related.search_works_by_venue,
+                str(lane["venue_name"]),
+                limit=per_query,
+                from_year=from_year,
+                topic_hint=hint,
+            )
 
     # S2 recommend lane — resolve seeds from DB, then submit the network call
     # as a Future so it overlaps with the other lanes.  The consume block
@@ -642,6 +689,14 @@ def _retrieve_external_channel(
             for query in core_queries:
                 cache_key = ("core", query, core_per_query, from_year_core)
                 core_results = _resolve_lane(query_cache[cache_key])
+                attach_hits(
+                    core_results,
+                    family=FAMILY_TASTE,
+                    retriever_id="taste:branch_core",
+                    query_key=query,
+                    branch_id=branch_id,
+                    branch_mode="core",
+                )
                 lane_runs.append(
                     {
                         "lane_type": "branch_core",
@@ -677,6 +732,14 @@ def _retrieve_external_channel(
             for query in explore_queries:
                 cache_key = ("explore", query, explore_per_query, from_year_explore)
                 explore_results = _resolve_lane(query_cache[cache_key])
+                attach_hits(
+                    explore_results,
+                    family=FAMILY_TASTE,
+                    retriever_id="taste:branch_explore",
+                    query_key=query,
+                    branch_id=branch_id,
+                    branch_mode="explore",
+                )
                 lane_runs.append(
                     {
                         "lane_type": "branch_explore",
@@ -736,6 +799,13 @@ def _retrieve_external_channel(
         )
         lane_strength = float(lane.get("strength") or 0.5)
         lane_type = str(lane.get("lane_type") or "taste_topic")
+        attach_hits(
+            lane_results,
+            family=FAMILY_TASTE,
+            retriever_id=f"taste:{lane_type.removeprefix('taste_')}",
+            query_key=query,
+            branch_mode=str(lane.get("mode") or ""),
+        )
         for idx, item in enumerate(lane_results):
             rank_factor = _clamp(1.0 - (idx / max(1, per_query * 1.8)), 0.12, 1.0)
             base = float(item.get("score", 0.22) or 0.22)
@@ -748,6 +818,62 @@ def _retrieve_external_channel(
                     "source_key": source_key,
                     "taste_strength": round(lane_strength, 4),
                     "branch_mode": str(item.get("branch_mode") or ""),
+                }
+            )
+
+    # --- Consume pass: filter lanes (taste_author by id / taste_venue by source).
+    for idx, lane in enumerate(filter_lane_specs):
+        future = filter_futures.get(idx)
+        if future is None:
+            continue
+        lane_type = str(lane.get("lane_type") or "taste")
+        source_key = str(lane.get("source_key") or lane.get("query") or "")
+        started = perf_counter()
+        try:
+            lane_results = future.result(timeout=source_search.DEFAULT_LANE_DEADLINE_S) or []
+            lane_error = None
+        except Exception as exc:
+            # A contract failure here is a real defect (a bad filter value, a
+            # revoked id), not a transient — surface it in `lane_runs` instead
+            # of degrading silently to an empty lane.
+            logger.warning("%s filter lane failed for %r: %s", lane_type, source_key, exc)
+            lane_results, lane_error = [], str(exc)
+        duration_ms = int(round((perf_counter() - started) * 1000))
+
+        retriever = "taste:author_id" if lane.get("openalex_author_id") else "taste:venue"
+        attach_hits(
+            lane_results,
+            family=FAMILY_TASTE,
+            retriever_id=retriever,
+            source_api="openalex",
+            query_key=source_key,
+        )
+        lane_runs.append(
+            {
+                "lane_type": lane_type,
+                "query": str(lane.get("query") or source_key),
+                "source_key": source_key,
+                "from_year": int(lane.get("from_year") or current_year - 4),
+                "result_count": len(lane_results),
+                "duration_ms": duration_ms,
+                "retrieval_mode": "filter",
+                **({"error": lane_error} if lane_error else {}),
+            }
+        )
+        lane_strength = float(lane.get("strength") or 0.5)
+        per_query = max(1, int(lane.get("budget") or 1))
+        for idx_item, item in enumerate(lane_results):
+            rank_factor = _clamp(1.0 - (idx_item / max(1, per_query * 1.8)), 0.12, 1.0)
+            base = float(item.get("score", 0.22) or 0.22)
+            score = _clamp((base * 0.62) + (rank_factor * 0.18) + (lane_strength * 0.20), 0.02, 1.0)
+            out.append(
+                {
+                    **item,
+                    "score": round(score, 4),
+                    "source_type": lane_type,
+                    "source_key": source_key,
+                    "source_api": "openalex",
+                    "taste_strength": round(lane_strength, 4),
                 }
             )
 
@@ -767,6 +893,14 @@ def _retrieve_external_channel(
         # per-author lane_runs entries below.
         batch_ms = int(followed_author_holder.get("ms") or 0)
         for author_key, recs in recs_by_author.items():
+            attach_hits(
+                recs,
+                family=FAMILY_TASTE,
+                retriever_id="taste:followed_author",
+                source_api="openalex",
+                seed_key=author_key,
+                branch_mode="followed_author",
+            )
             for item in recs:
                 base = float(item.get("score", 0.3) or 0.3)
                 score = _clamp(base, 0.05, 1.0)
@@ -805,6 +939,14 @@ def _retrieve_external_channel(
             except Exception as exc:
                 s2_holder.setdefault("error", str(exc))
                 recommended = []
+        attach_hits(
+            recommended,
+            family=FAMILY_TASTE,
+            retriever_id="taste:s2_recommend",
+            source_api="semantic_scholar",
+            query_key=f"pos={len(s2_positive_seed_ids)}/neg={len(s2_negative_seed_ids)}",
+            branch_mode="s2_recommend",
+        )
         for idx, item in enumerate(recommended):
             rank_factor = _clamp(
                 1.0 - (idx / max(1, s2_recommend_budget * 1.4)), 0.2, 1.0
@@ -850,8 +992,18 @@ def _retrieve_external_channel(
     merged: dict[str, dict] = {}
     for item in out:
         key = _candidate_key(item)
-        if key not in merged or float(item.get("score", 0.0) or 0.0) > float(merged[key].get("score", 0.0) or 0.0):
+        existing = merged.get(key)
+        if existing is None:
             merged[key] = item
+        elif float(item.get("score", 0.0) or 0.0) > float(existing.get("score", 0.0) or 0.0):
+            item.setdefault("retrieval_hits", []).extend(
+                existing.get("retrieval_hits") or []
+            )
+            merged[key] = item
+        else:
+            existing.setdefault("retrieval_hits", []).extend(
+                item.get("retrieval_hits") or []
+            )
 
     ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     summary = {

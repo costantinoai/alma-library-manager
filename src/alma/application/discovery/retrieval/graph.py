@@ -20,8 +20,10 @@ from alma.openalex.client import (
 
 from ._common import (
     _GRAPH_FALLBACK_DEADLINE_S,
+    FAMILY_CITATION,
     _candidate_key,
     _drain_futures_within_deadline,
+    attach_hits,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,6 +199,16 @@ def _retrieve_graph_channel(
             if len(out) >= limit:
                 break
         graph_summary["local_reference_candidates"] = len(out)
+        # Local coupling evidence: these are ordered by corpus-wide overlap,
+        # so rank is meaningful and the fusion layer can use it.
+        attach_hits(
+            out,
+            family=FAMILY_CITATION,
+            retriever_id="graph:local_reference",
+            source_api="openalex",
+            relation="reference",
+            query_key="local_references",
+        )
         return out
 
     _backfill_local_references()
@@ -255,6 +267,7 @@ def _retrieve_graph_channel(
             except Exception as exc:
                 logger.debug("graph OA fallback (%s) failed for %s: %s", rel, identifier, exc)
                 items = []
+            scored_items: list[dict] = []
             for idx, item in enumerate(items):
                 candidate = dict(item)
                 candidate["source_type"] = rel
@@ -263,10 +276,31 @@ def _retrieve_graph_channel(
                 base = float(candidate.get("score", 0.25) or 0.25)
                 rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.6)), 0.12, 1.0)
                 candidate["score"] = round(_clamp((base * weight) + (rank_factor * (1.0 - weight)), 0.05, 1.0), 4)
+                scored_items.append(candidate)
+            # One hit per (seed, relation) run — the rank is within THIS
+            # seed's result list, which is what makes it comparable.
+            attach_hits(
+                scored_items,
+                family=FAMILY_CITATION,
+                retriever_id=f"graph:{rel.removeprefix('graph_')}",
+                source_api="openalex",
+                seed_key=identifier,
+                relation=rel.removeprefix("graph_"),
+            )
+            for candidate in scored_items:
                 key = _candidate_key(candidate)
                 existing = merged.get(key)
                 if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
+                    if existing is not None:
+                        candidate.setdefault("retrieval_hits", []).extend(
+                            existing.get("retrieval_hits") or []
+                        )
                     merged[key] = candidate
+                elif existing is not None:
+                    # Loser on score, but its evidence still counts.
+                    existing.setdefault("retrieval_hits", []).extend(
+                        candidate.get("retrieval_hits") or []
+                    )
                 if len(merged) >= fallback_budget:
                     break
 
@@ -292,6 +326,7 @@ def _retrieve_graph_channel(
                 logger.debug("graph S2 related fetch failed for %s: %s", doi, exc)
                 items = []
             graph_summary["semantic_related_candidates"] = int(graph_summary.get("semantic_related_candidates") or 0) + len(items)
+            scored_items = []
             for idx, item in enumerate(items):
                 candidate = dict(item)
                 candidate["source_type"] = "graph_semantic_related"
@@ -300,10 +335,28 @@ def _retrieve_graph_channel(
                 base = float(candidate.get("score", 0.25) or 0.25)
                 rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.5)), 0.12, 1.0)
                 candidate["score"] = round(_clamp((base * 0.52) + (rank_factor * 0.48), 0.05, 1.0), 4)
+                scored_items.append(candidate)
+            attach_hits(
+                scored_items,
+                family=FAMILY_CITATION,
+                retriever_id="graph:s2_related",
+                source_api="semantic_scholar",
+                seed_key=doi,
+                relation="related",
+            )
+            for candidate in scored_items:
                 key = _candidate_key(candidate)
                 existing = merged.get(key)
                 if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
+                    if existing is not None:
+                        candidate.setdefault("retrieval_hits", []).extend(
+                            existing.get("retrieval_hits") or []
+                        )
                     merged[key] = candidate
+                elif existing is not None:
+                    existing.setdefault("retrieval_hits", []).extend(
+                        candidate.get("retrieval_hits") or []
+                    )
 
     ranked = sorted(merged.values(), key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
     graph_summary["fallback_candidates"] = max(0, len(ranked) - len(local_candidates))

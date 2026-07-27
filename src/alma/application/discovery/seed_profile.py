@@ -434,6 +434,64 @@ def _scoped_top_authors(
     return ranked[: max(1, limit)]
 
 
+def resolve_author_openalex_ids(
+    db: sqlite3.Connection, names: list[str]
+) -> dict[str, str]:
+    """Map author display names to their OpenAlex author ids.
+
+    The taste-author lane needs an id, not a name: OpenAlex's ``search``
+    parameter covers title / abstract / fulltext and does **not** index author
+    names, so querying a name as free text returns papers that merely *mention*
+    the person. ``filter=authorships.author.id:A123`` is the correct
+    projection, and this resolves the names we already rank into the ids that
+    filter needs.
+
+    Matching is case-insensitive on the collapsed display name. When one name
+    maps to several ids (a not-yet-merged duplicate identity) the id appearing
+    on the most papers wins — the same "most evidence" rule the author rail
+    uses.
+
+    Args:
+        db: Open connection.
+        names: Display names, typically from :func:`_top_preferred_authors`.
+
+    Returns:
+        ``{lowercased display name: openalex_id}``. Names with no id are absent
+        rather than mapped to an empty string, so callers must handle a miss
+        explicitly instead of silently issuing a nonsense query.
+    """
+    wanted = {" ".join(str(n or "").lower().split()) for n in names or []}
+    wanted.discard("")
+    if not wanted:
+        return {}
+
+    placeholders = ",".join("?" for _ in wanted)
+    try:
+        rows = db.execute(
+            f"""
+            SELECT LOWER(TRIM(pa.display_name)) AS name,
+                   pa.openalex_id              AS openalex_id,
+                   COUNT(DISTINCT pa.paper_id) AS n
+            FROM publication_authors pa
+            WHERE COALESCE(TRIM(pa.openalex_id), '') != ''
+              AND LOWER(TRIM(pa.display_name)) IN ({placeholders})
+            GROUP BY 1, 2
+            ORDER BY n DESC
+            """,
+            list(wanted),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    out: dict[str, str] = {}
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        openalex_id = str(row["openalex_id"] or "").strip()
+        if name and openalex_id and name not in out:  # ORDER BY n DESC → best first
+            out[name] = openalex_id
+    return out
+
+
 def _top_preferred_authors(
     db: sqlite3.Connection,
     *,
