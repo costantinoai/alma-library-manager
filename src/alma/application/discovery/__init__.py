@@ -15,6 +15,7 @@ from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
+from alma.core.db_write import write_section
 from alma.core.paper_groups import resolve_paper_root_id
 from alma.core.settings_helpers import setting_float
 from alma.core.sql_helpers import standalone_paper_sql
@@ -1513,8 +1514,76 @@ def refresh_lens_recommendations(
         data=retrieval_summary["filters"],
     )
     phase_started = perf_counter()
-    # Atomic swap: delete old un-actioned recommendations and insert new ones together.
-    # This prevents data loss if the operation crashes during scoring above.
+    # Atomic swap: delete old un-actioned recommendations and insert new ones
+    # together, through the SHARED WRITER GATE.
+    #
+    # It used to run ungated on the runner's own connection, with the caller
+    # doing a bare `conn.commit()`. Gated writers (title resolution, metadata
+    # rehydration, the Activity ledger) therefore could not queue against it —
+    # they collided at the SQLite level and fell back to `busy_timeout`. A
+    # refresh that takes 31 s alone took 195 s with maintenance running, and the
+    # Activity writer logged "another connection is holding the SQLite write
+    # lock outside the gate" while dropping rows (measured 2026-07-27).
+    #
+    # Everything slow already happened: retrieval, scoring and enrichment are
+    # above this line, so this window is short, bounded, and holds no network
+    # I/O — which is what makes it eligible for the gate at all.
+    with write_section(db, label=f"lens refresh swap: {lens_id}"):
+        _persist_refresh(
+            db,
+            lens_id=lens_id,
+            suggestion_set_id=suggestion_set_id,
+            now=now,
+            lens=lens,
+            trigger_source=trigger_source,
+            rec_rows=rec_rows,
+            ranked=ranked,
+            retrieval_summary=retrieval_summary,
+            timings_ms=timings_ms,
+            overall_start=overall_start,
+        )
+    inserted = len(rec_rows)
+    _log(
+        "done",
+        f"Lens '{lens_name}': refresh complete with {inserted} retained recommendations",
+        data={
+            "inserted": inserted,
+            "timings_ms": timings_ms,
+            "channels": retrieval_summary["channels"],
+        },
+    )
+    return {
+        "lens_id": lens_id,
+        "suggestion_set_id": suggestion_set_id,
+        "context_type": lens["context_type"],
+        "channels": retrieval_summary["channels"],
+        "weights": channel_weights,
+        "retrieval_summary": retrieval_summary,
+        "inserted": inserted,
+    }
+
+
+def _persist_refresh(
+    db: sqlite3.Connection,
+    *,
+    lens_id: str,
+    suggestion_set_id: str,
+    now: str,
+    lens: dict,
+    trigger_source: str,
+    rec_rows: list,
+    ranked: list,
+    retrieval_summary: dict,
+    timings_ms: dict,
+    overall_start: float,
+) -> None:
+    """The refresh's ONE write window. Caller owns the gate; this owns the SQL.
+
+    Extracted so the transaction boundary is a single visible `with` rather
+    than sixty lines the reader has to hold in their head to know what is
+    inside it.
+    """
+    phase_started = perf_counter()
     db.execute("DELETE FROM recommendations WHERE lens_id = ? AND user_action IS NULL", (lens_id,))
     db.execute(
         """
@@ -1582,22 +1651,3 @@ def refresh_lens_recommendations(
         "UPDATE discovery_lenses SET last_refreshed_at = ? WHERE id = ?",
         (now, lens_id),
     )
-    inserted = len(rec_rows)
-    _log(
-        "done",
-        f"Lens '{lens_name}': refresh complete with {inserted} retained recommendations",
-        data={
-            "inserted": inserted,
-            "timings_ms": timings_ms,
-            "channels": retrieval_summary["channels"],
-        },
-    )
-    return {
-        "lens_id": lens_id,
-        "suggestion_set_id": suggestion_set_id,
-        "context_type": lens["context_type"],
-        "channels": retrieval_summary["channels"],
-        "weights": channel_weights,
-        "retrieval_summary": retrieval_summary,
-        "inserted": inserted,
-    }
