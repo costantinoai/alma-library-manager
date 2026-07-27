@@ -559,14 +559,50 @@ def list_author_publications(
     offset: int = 0,
 ) -> list[dict] | None:
     author = db.execute(
-        "SELECT id, name, openalex_id FROM authors WHERE id = ?",
+        "SELECT id, name, openalex_id FROM authors WHERE lower(id) = lower(?)",
         (author_id,),
     ).fetchone()
-    if not author:
-        return None
-
-    author_name = str((author["name"] if isinstance(author, sqlite3.Row) else author[1]) or "").strip()
-    openalex_id = str((author["openalex_id"] if isinstance(author, sqlite3.Row) else author[2]) or "").strip()
+    if author:
+        author_name = str(
+            (author["name"] if isinstance(author, sqlite3.Row) else author[1]) or ""
+        ).strip()
+        openalex_id = str(
+            (author["openalex_id"] if isinstance(author, sqlite3.Row) else author[2]) or ""
+        ).strip()
+    else:
+        # A CORPUS author: someone who appears on your papers but whom you have
+        # never followed or curated, so there is no `authors` row. That is the
+        # overwhelming majority of the people on the author map — measured
+        # 2026-07-28 on dev, 17,777 of 17,870 (99.5%). Returning None here made
+        # the map's own dots unopenable: clicking almost any author and asking
+        # for their publications answered 404, which the panel renders as
+        # "Failed to load publications" (user report 2026-07-28).
+        #
+        # The identity the caller passed IS an OpenAlex id — that is what the
+        # map's node ids are — and `publication_authors` already knows this
+        # person's papers, so resolve the display name from there and let the
+        # SAME clause below do the work. Nothing else in this function changes.
+        openalex_id = str(author_id or "").strip()
+        author_name = ""
+        if openalex_id and _table_exists(db, "publication_authors"):
+            row = db.execute(
+                """
+                SELECT display_name, COUNT(*) AS papers
+                FROM publication_authors
+                WHERE lower(trim(openalex_id)) = lower(trim(?))
+                  AND COALESCE(TRIM(display_name), '') <> ''
+                GROUP BY lower(trim(display_name))
+                ORDER BY papers DESC, display_name ASC
+                LIMIT 1
+                """,
+                (openalex_id,),
+            ).fetchone()
+            if row is None:
+                # Not a curated author AND not on any paper — genuinely unknown.
+                return None
+            author_name = str(row["display_name"] or "").strip()
+        else:
+            return None
 
     clause, params = _author_paper_clause(
         db,
