@@ -855,6 +855,21 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     )
     group_integrity = group_integrity or {}
     group_defects = sum(max(0, int(value or 0)) for value in group_integrity.values())
+    # Same "rank severity on the fixable remainder" rule the per-field gaps use
+    # below: an orphan component whose parent is not in the corpus is TERMINAL —
+    # `reconcile_paper_groups` purges its state and leaves it orphaned, because
+    # there is nothing to link it to. Counting those against severity pinned the
+    # dimension at `warning` forever while the repair op reported 0 pending, so
+    # Health showed a permanent card whose Run button could never move it.
+    from alma.core.components import count_linkable_orphan_components
+
+    linkable_orphans, _ = _safe_assess(
+        "linkable_orphan_components", lambda: count_linkable_orphan_components(conn)
+    )
+    group_terminal = max(
+        0, int(group_integrity.get("orphan_components") or 0) - int(linkable_orphans or 0)
+    )
+    group_fixable = max(0, group_defects - group_terminal)
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
     # identity.unresolved now counts the population title_resolution ACTUALLY
@@ -924,13 +939,19 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     if group_integrity_ok and group_defects:  # on assessor failure: skip (already loud in the log), don't claim 0
         # Integrity tier: a single dangling pointer silently hides a paper, so any
         # occurrence warns (≥2% of the corpus escalates to critical).
-        group_sev, _, group_reason = _assess_gap(group_defects, papers_total, impact="integrity")
+        group_sev, _, group_reason = _assess_gap(group_fixable, papers_total, impact="integrity")
+        if group_terminal:
+            group_reason = (
+                f"{group_reason} {group_terminal} of {group_defects} defects are orphan "
+                "components with no parent in the corpus — terminal, no repair can clear them."
+            )
         dims.append(
             _dimension(
                 key="identity.paper_group_integrity",
                 entity="identity",
                 label="Paper group integrity",
                 count=group_defects,
+                exhausted=group_terminal or None,
                 total=papers_total,
                 severity=group_sev,
                 severity_reason=group_reason,

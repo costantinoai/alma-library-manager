@@ -187,18 +187,38 @@ def resolve_orphan_component_parent(
 
 
 def count_linkable_orphan_components(conn: sqlite3.Connection) -> int:
-    """Orphan components whose parent paper IS in the corpus — the actionable subset."""
+    """Orphan components whose parent paper IS in the corpus — the actionable subset.
+
+    Membership uses ``is_component_row``, the SAME predicate that raises the
+    ``orphan_components`` defect in ``paper_group_defect_map``. It must not be a
+    narrower SQL copy: this used to select ``component_type <> ''`` only, so a row
+    typed a component by ``work_type`` alone (``component_type`` still NULL, e.g.
+    a dataset awaiting its first backfill) was flagged as a defect but excluded
+    from the linkable count — reported terminal while ``backfill_components``
+    could in fact link it.
+    """
+    from alma.core.paper_groups import COMPONENT_WORK_TYPES, is_component_row
+
+    # SQL only PRUNES; `is_component_row` still decides. The prefilter is the two
+    # ways a row can possibly be a component (a stamped `component_type`, or a
+    # component work_type), so this stays a small read on a health hot path
+    # instead of pulling every parentless paper in the corpus.
+    placeholders = ",".join("?" for _ in COMPONENT_WORK_TYPES)
     try:
         rows = conn.execute(
-            "SELECT doi, work_type FROM papers "
-            "WHERE COALESCE(TRIM(component_type), '') <> '' AND parent_paper_id IS NULL"
+            "SELECT doi, work_type, preprint_source, component_type FROM papers "
+            "WHERE parent_paper_id IS NULL AND ("
+            "COALESCE(TRIM(component_type), '') <> '' "
+            f"OR LOWER(TRIM(COALESCE(work_type, ''))) IN ({placeholders}))",
+            sorted(COMPONENT_WORK_TYPES),
         ).fetchall()
     except sqlite3.OperationalError:
         return 0
     return sum(
         1
         for row in rows
-        if resolve_orphan_component_parent(conn, doi=row["doi"], work_type=row["work_type"])
+        if is_component_row(row)
+        and resolve_orphan_component_parent(conn, doi=row["doi"], work_type=row["work_type"])
     )
 
 

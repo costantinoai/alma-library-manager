@@ -30,7 +30,7 @@ PREPRINT_DOI_PREFIXES: dict[str, str] = {
 }
 
 _PREPRINT_WORK_TYPES = frozenset({"preprint", "posted-content", "posted_content"})
-_COMPONENT_WORK_TYPES = frozenset(
+COMPONENT_WORK_TYPES = frozenset(
     {"dataset", "peer-review", "supplementary-materials", "paratext"}
 )
 
@@ -113,7 +113,7 @@ def is_component_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
         work_type=_value(row, "work_type"),
     ):
         return False
-    return str(_value(row, "work_type") or "").strip().lower() in _COMPONENT_WORK_TYPES
+    return str(_value(row, "work_type") or "").strip().lower() in COMPONENT_WORK_TYPES
 
 
 def _root_rank(row: Mapping[str, Any] | sqlite3.Row) -> int:
@@ -551,7 +551,27 @@ def absorb_paper_group(
     preprint keeper; a component can never win.  The caller owns the surrounding
     transaction/write gate.
     """
-    if not loser_id or not keeper_id or loser_id == keeper_id:
+    if not loser_id or not keeper_id:
+        return {"skipped": True, "reason": "same_id"}
+    if loser_id == keeper_id:
+        # A row that is its own canonical/parent. Skipping here left `self_links`
+        # permanently unrepairable — `_normalize_existing_groups` calls us with
+        # (pid, pid) for exactly this row and `continue`d on the skip, so one
+        # self-link pinned `self_links` + `cycles` + `chains` forever. Root
+        # resolution is meaningless on a self-pointer; clear it and it is a
+        # standalone paper again.
+        cleared = conn.execute(
+            "UPDATE papers SET "
+            "canonical_paper_id = CASE WHEN canonical_paper_id = id THEN NULL "
+            "ELSE canonical_paper_id END, "
+            "parent_paper_id = CASE WHEN parent_paper_id = id THEN NULL "
+            "ELSE parent_paper_id END, "
+            "updated_at = ? "
+            "WHERE id = ? AND (canonical_paper_id = id OR parent_paper_id = id)",
+            (utcnow().isoformat(), loser_id),
+        ).rowcount
+        if cleared:
+            return {"skipped": False, "reason": "self_link_cleared", "self_links_cleared": 1}
         return {"skipped": True, "reason": "same_id"}
     group_ids = collect_paper_group_ids(conn, loser_id, keeper_id)
     rows = _paper_rows(conn, group_ids)

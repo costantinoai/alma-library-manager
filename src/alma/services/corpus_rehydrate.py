@@ -2396,7 +2396,7 @@ def _apply_crossref_candidate(
         if parent_paper_id == paper_id:  # never self-link
             parent_paper_id = None
 
-    return fill_only_update_paper(
+    filled = fill_only_update_paper(
         conn,
         paper_id,
         fill_fields={
@@ -2410,6 +2410,33 @@ def _apply_crossref_candidate(
         fill_null_fields={"year": year, "parent_paper_id": parent_paper_id},
         max_int_fields={"cited_by_count": cited_by_count},
     )
+    # Settle the group like every other writer that touches these two columns.
+    # Without this, a row Crossref newly classified as a component kept its
+    # vectors, clusters, feed rows, enrichment status and preference rows —
+    # regenerating `subordinate_sidecars` (and `orphan_components` when the
+    # relation parent isn't in the corpus) on every scheduler rehydrate pass,
+    # between reconcile runs. Feed, the importer, the OpenAlex upsert and Library
+    # all settle; this was the one ingestion path that did not.
+    if str(component_type or "").strip():
+        from alma.core.paper_groups import settle_new_paper_group
+
+        # Read back what actually landed: both columns are fill-only/fill-null, so
+        # a row that already carried a component_type or a parent keeps its own —
+        # settling on the CANDIDATE values would absorb it into the wrong parent.
+        settled = conn.execute(
+            "SELECT doi, component_type, parent_paper_id FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()
+        if settled is not None and str(settled["component_type"] or "").strip():
+            settle_new_paper_group(
+                conn,
+                paper_id,
+                component_type=str(settled["component_type"]),
+                parent_paper_id=str(settled["parent_paper_id"] or "").strip() or None,
+                doi=str(settled["doi"] or "").strip() or None,
+                reason="crossref_component_fill",
+            )
+    return filled
 
 
 def _write_ledger(
