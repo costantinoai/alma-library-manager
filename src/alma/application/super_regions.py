@@ -352,11 +352,16 @@ def compute_rings(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[int
     return rings
 
 
+# The Activity operation_key this view's rebuild runs under. Named here because
+# the layout pass has to EXCLUDE it from `graph_build_in_flight` — it enqueues
+# this build itself and would otherwise defer every map view on its own job.
+OPERATION_KEY = "materialize.graph.super_regions"
+
 mv.register(
     mv.View(
         key=VIEW_KEY,
         fingerprint_sql=_FINGERPRINT_SQL,
         build_fn=build_super_regions,
-        operation_key="materialize.graph.super_regions",
+        operation_key=OPERATION_KEY,
     )
 )

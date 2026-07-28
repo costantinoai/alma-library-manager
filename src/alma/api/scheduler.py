@@ -2456,7 +2456,9 @@ def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
         logger.warning("super_regions freshness check failed: %s", exc)
 
 
-def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None:
+def _graph_layout_pass(
+    *, job_id: str, operation_key: str, message: str, user_initiated: bool = False
+) -> None:
     """Place new vectors, then rebuild whichever graph views are stale.
 
     Shared by the startup warm-up and the periodic maintenance tick, so
@@ -2474,6 +2476,20 @@ def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None
 
     Idle-gated, with the escalation in `_URGENT_STALE_REASONS`. At most one
     layout fit runs at a time process-wide (`graph_build_in_flight`).
+
+    ``user_initiated`` — the user CLICKED "Rebuild map layouts". The background
+    idle gate does not apply to that run, and it must never end silently:
+
+    - The idle gate asks "may background work start?", and both
+      `admit_maintenance` and `admit_maintenance_continue` require `app_idle`.
+      The click itself is a user request, so it makes the app non-idle — a
+      human-triggered run could NEVER pass, returned before the `running`
+      status write, and the harness stamped it `completed` in 0.16 s with no
+      Activity line at all (prod, 2026-07-28). A deliberate click is not
+      background work; it does not consult the background admission policy.
+    - The "nothing to do" early return exists so a restart warm-up stays out of
+      Activity. For a click, "already fresh" is the ANSWER and has to be said
+      out loud, or the button reads as broken for the second time.
     """
     from alma.api.deps import open_db_connection
 
@@ -2495,39 +2511,54 @@ def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None
         # same pass, so "Signal Lab has no substrate" would silently authorise
         # a full map refit the user never asked for.
         if not _super_regions_built(conn):
-            sr_ok, sr_reason = may_background_continue(
-                conn, exclude_operation_key=operation_key
+            sr_ok, sr_reason = (
+                (True, "user")
+                if user_initiated
+                else may_background_continue(conn, exclude_operation_key=operation_key)
             )
             if sr_ok:
                 _ensure_super_regions_fresh(conn)
             else:
                 logger.debug("super_regions first build deferred: %s", sr_reason)
-        gate = may_background_continue if urgent else may_background_run
-        ok, reason = gate(conn, exclude_operation_key=operation_key)
-        if not ok:
-            logger.debug("graph layout pass %s skipped: %s", job_id, reason)
-            return
+        if not user_initiated:
+            gate = may_background_continue if urgent else may_background_run
+            ok, reason = gate(conn, exclude_operation_key=operation_key)
+            if not ok:
+                logger.debug("graph layout pass %s skipped: %s", job_id, reason)
+                return
 
         from alma.application.discovery.lens_crud import upsert_setting
         from alma.application.graph_process import graph_build_in_flight, run_graph_process
         from alma.application.graph_substrate import place_missing_papers
         from alma.core.db_write import write_section
 
+        def _mark_running() -> None:
+            set_job_status(
+                job_id,
+                status="running",
+                trigger_source="user" if user_initiated else "scheduler",
+                started_at=utcnow().isoformat(),
+                operation_key=operation_key,
+                message=message,
+            )
+
         placement = place_missing_papers(conn)
         _ensure_super_regions_fresh(conn)
         if not stale and not (placement.get("placed") or placement.get("outliers")):
-            # Nothing to do. Stay out of Activity entirely — a warm-up on every
-            # restart must not push real operations off the user's list.
+            # Nothing to do. A warm-up on every restart must stay out of Activity
+            # so it can't push real operations off the user's list — but a CLICK
+            # gets an answer, otherwise "already fresh" is indistinguishable from
+            # "the button is broken".
+            if user_initiated:
+                _mark_running()
+                add_job_log(
+                    job_id,
+                    "Every map layout is already current — nothing to rebuild.",
+                    step="uptodate",
+                )
             return
 
-        set_job_status(
-            job_id,
-            status="running",
-            trigger_source="scheduler",
-            started_at=utcnow().isoformat(),
-            operation_key=operation_key,
-            message=message,
-        )
+        _mark_running()
         if placement.get("placed") or placement.get("outliers"):
             add_job_log(
                 job_id, "Placed new vectors on the substrate", step="placement", data=placement
@@ -2535,9 +2566,17 @@ def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None
 
         from alma.api.routes.graphs import _paper_scope_gauge
 
+        from alma.application.super_regions import OPERATION_KEY as _SUPER_REGIONS_OP
+
+        # Exclude the super-regions build THIS pass just enqueued a few lines up:
+        # counting it as "someone else is fitting a layout" made the pass defer
+        # every view on its own job ("placed 720, rebuilt 0 view(s)", prod
+        # 2026-07-28).
+        own_keys = (operation_key, _SUPER_REGIONS_OP)
+
         rebuilt: list[str] = []
         for scope, view_key, stale_reason in stale:
-            busy = graph_build_in_flight(conn, exclude_operation_key=operation_key)
+            busy = graph_build_in_flight(conn, exclude_operation_key=own_keys)
             if busy:
                 add_job_log(
                     job_id,

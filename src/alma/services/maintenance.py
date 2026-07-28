@@ -579,13 +579,19 @@ def _run_graph_layouts(job_id: str, cap: int, target_paper_ids=None, params=None
     Delegates to the SAME pass the scheduler runs (`_graph_layout_pass`), so the
     Health button and the background tick cannot drift into two different ideas
     of "the maps are fresh".
+
+    The trigger source travels with the call — the same `get_job_trigger_source`
+    check the embedding chain uses. A `"user"` run skips the BACKGROUND idle
+    gate, which a click can never satisfy (the click is what makes the app
+    non-idle), and which silently no-op'd this button on prod.
     """
-    from alma.api.scheduler import _graph_layout_pass
+    from alma.api.scheduler import _graph_layout_pass, get_job_trigger_source
 
     _graph_layout_pass(
         job_id=job_id,
         operation_key="graphs.rebuild_layouts",
         message="Rebuilding map layouts and the Signal Lab substrate",
+        user_initiated=get_job_trigger_source(job_id) == "user",
     )
     with _maintenance_conn() as conn:
         return {"pending_after": _count_graph_layouts(conn)}

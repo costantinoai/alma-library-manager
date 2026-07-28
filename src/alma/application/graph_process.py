@@ -30,7 +30,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,9 @@ GRAPH_BUILD_OPERATION_PREFIXES = (
 )
 
 
-def graph_build_in_flight(conn: Any, *, exclude_operation_key: str | None = None) -> str | None:
+def graph_build_in_flight(
+    conn: Any, *, exclude_operation_key: str | Iterable[str] | None = None
+) -> str | None:
     """The operation_key of a graph layout build that is running right now.
 
     Layout fits are the heaviest local work ALMa does. Automatic triggers (a
@@ -69,8 +71,19 @@ def graph_build_in_flight(conn: Any, *, exclude_operation_key: str | None = None
     waste, and it was reachable whenever the orphan sweep freed a dedup key.
     Explicit user rebuilds keep their own operation_key dedup and are not gated
     here — a deliberate click should not silently do nothing.
+
+    ``exclude_operation_key`` accepts SEVERAL keys, not just one, because a
+    caller can be blocked by a build it started ITSELF: the layout pass enqueues
+    ``materialize.graph.super_regions`` and then, one call later, saw that very
+    job here and deferred every view — "placed 720, rebuilt 0 view(s)" on prod
+    (2026-07-28). Excluding only its own key could never express that.
     """
-    exclude = str(exclude_operation_key or "")
+    if exclude_operation_key is None:
+        excluded: set[str] = set()
+    elif isinstance(exclude_operation_key, str):
+        excluded = {exclude_operation_key}
+    else:
+        excluded = {str(key) for key in exclude_operation_key if key}
     try:
         rows = conn.execute(
             "SELECT operation_key FROM operation_status "
@@ -80,7 +93,7 @@ def graph_build_in_flight(conn: Any, *, exclude_operation_key: str | None = None
         return None
     for row in rows:
         key = str(row[0] or "")
-        if not key or key == exclude:
+        if not key or key in excluded:
             continue
         if key.startswith(GRAPH_BUILD_OPERATION_PREFIXES):
             return key

@@ -66,7 +66,7 @@ import { PageTour, MAP_TOUR } from '@/components/onboarding'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useHashRoute } from '@/lib/hashRoute'
-import { useToast } from '@/hooks/useToast'
+import { errorToast, useToast } from '@/hooks/useToast'
 
 interface ClusterMeta {
   id: number
@@ -163,7 +163,27 @@ export function MapPage() {
     mutationFn: () => api.post<{ status?: string }>(`/graphs/rebuild?scope=${scope}`),
     onSuccess: (r) => {
       void invalidateQueries(queryClient, ['graph'])
-      toast({ title: r?.status === 'queued' ? `Layout rebuild queued (${scope})` : `Layout rebuilt (${scope})` })
+      // Truthful UI: `already_running` means this click started nothing. It used
+      // to fall through to "Layout rebuilt", a success message for a no-op.
+      if (r?.status === 'already_running') {
+        toast({
+          title: `A layout rebuild is already running (${scope})`,
+          description: 'This click started nothing — watch Activity for the run in progress.',
+        })
+        return
+      }
+      toast({
+        title: r?.status === 'queued' ? `Layout rebuild queued (${scope})` : `Layout rebuilt (${scope})`,
+        description: 'Track it in Activity.',
+      })
+    },
+    // Without this any 4xx/5xx/503 was completely invisible — the button simply
+    // did nothing and said nothing.
+    onError: (err: unknown) => {
+      errorToast(
+        `Layout rebuild failed (${scope})`,
+        err instanceof Error ? err.message : 'See Activity and the server log.',
+      )
     },
   })
   const relabelMutation = useMutation({
