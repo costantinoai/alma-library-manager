@@ -260,12 +260,32 @@ def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, para
 
 
 def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Corpus-wide group reconciliation, one write transaction PER PHASE.
+
+    The whole pass used to run inside a single `write_section`, which pinned the
+    only SQLite writer for the pass's full duration (8 minutes on a ~11k-paper
+    corpus) — every other write in the process queued behind the gate and
+    cross-process writers took the busy_timeout → HTTP 503. Scoping the writer to
+    each phase lets the gate drain between them; the phases are independently
+    idempotent, so a partial pass is a valid state and the next run resumes it.
+    """
+    from alma.api.scheduler import add_job_log
     from alma.core.db_write import write_section
     from alma.services.paper_group_reconcile import reconcile_paper_groups
 
     with _maintenance_conn() as conn:
-        with write_section(conn, label="papers.reconcile_groups"):
-            return reconcile_paper_groups(conn, limit=cap)
+        return reconcile_paper_groups(
+            conn,
+            limit=cap,
+            section=lambda phase: write_section(conn, label=f"papers.reconcile_groups:{phase}"),
+            # The pass is long and used to log nothing between start and finish.
+            on_phase=lambda phase, counts: add_job_log(
+                job_id,
+                f"Group reconcile phase '{phase}' done",
+                step=f"reconcile_{phase}",
+                data=dict(counts),
+            ),
+        )
 
 
 def _run_collapse_duplicate_identity(job_id: str, cap: int, target_paper_ids=None, params=None):
@@ -2817,8 +2837,17 @@ def run_onboarding_convergence(
     conn = open_db_connection()
     steps: list[dict[str, Any]] = []
     stalled: set[str] = set()
-    last_pending: dict[str, int] = {}
     stop_reason = "converged"
+
+    def _pending_now(task: MaintenanceTask, payload: dict[str, Any] | None = None) -> int:
+        """This task's live pending count (reads the health payload when not given)."""
+        if payload is None:
+            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        try:
+            return int(task_pending_count(conn, task, payload) or 0)
+        except Exception:
+            return 0
+
     try:
         set_job_status(
             job_id, status="running", processed=0, total=0,
@@ -2838,6 +2867,32 @@ def run_onboarding_convergence(
             if stop_reason == "cancelled":
                 break
 
+            # 1b) Did the step we just ran move its OWN counter? Measured per
+            #     step (before vs after its run) rather than by comparing two
+            #     iterations: another op finishing in between could nudge the
+            #     count down and clear a no-progress op for a SECOND full run.
+            #     That is how the 8-minute group reconcile — which repairs
+            #     nothing on this corpus — ran twice in one onboarding.
+            if steps:
+                last = steps[-1]
+                last_task = REGISTRY.get(str(last["key"]))
+                if last_task is not None and "pending_after" not in last:
+                    after = _pending_now(last_task)
+                    last["pending_after"] = after
+                    if after >= int(last["pending_before"]):
+                        stalled.add(str(last["key"]))
+                        add_job_log(
+                            job_id,
+                            f"Onboarding chain: {last_task.label} repaired nothing "
+                            f"({after} still pending) — skipping",
+                            step="converge_stalled",
+                            data={
+                                "key": last["key"],
+                                "pending_before": last["pending_before"],
+                                "pending_after": after,
+                            },
+                        )
+
             # 2) First READY op in dependency order that hasn't stalled.
             operations = (list_operations(conn) or {}).get("operations") or []
             nxt = next(
@@ -2855,25 +2910,9 @@ def run_onboarding_convergence(
                 stalled.add(key)
                 continue
             payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-            try:
-                pending = int(task_pending_count(conn, task, payload) or 0)
-            except Exception:
-                pending = 0
+            pending = _pending_now(task, payload)
             if pending <= 0:
                 continue  # count moved since the ops read — re-evaluate
-            # No-progress guard: this op already ran and its count didn't
-            # shrink (e.g. provider quota floor) — mark stalled, move on to
-            # the rest of the chain instead of stopping everything.
-            if key in last_pending and pending >= last_pending[key]:
-                stalled.add(key)
-                add_job_log(
-                    job_id,
-                    f"Onboarding chain: {task.label} stalled at {pending} pending — skipping",
-                    step="converge_stalled",
-                    data={"key": key, "pending": pending},
-                )
-                continue
-            last_pending[key] = pending
 
             session_limit = max(1, min(pending, _RESUME_SESSION_CAP))
             step_job = _schedule_task(

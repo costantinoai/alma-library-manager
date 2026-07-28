@@ -166,6 +166,42 @@ def resolve_component(
     return component_type, parent_paper_id
 
 
+def resolve_orphan_component_parent(
+    conn: sqlite3.Connection, *, doi: str | None, work_type: str | None
+) -> str | None:
+    """The parent ``papers.id`` for an ALREADY-classified but unlinked component.
+
+    ``None`` means this orphan is not linkable right now — its parent paper is not
+    in the corpus (or the derived parent is itself a component). That is a terminal
+    state, not pending work: a relation-linked component (a dataset, no parent in
+    its own DOI) links on its own Crossref hydration pass instead.
+
+    One rule, two callers: `backfill_components` LINKS with it and
+    `count_linkable_orphan_components` COUNTS with it. They used to disagree — the
+    count included every orphan component, so 76 permanently unlinkable rows kept
+    the reconcile operation "ready" forever and it rescheduled itself on every
+    maintenance cycle, repairing nothing each time (found 2026-07-28).
+    """
+    _, parent_paper_id = resolve_component(conn, doi=doi, work_type=work_type)
+    return parent_paper_id
+
+
+def count_linkable_orphan_components(conn: sqlite3.Connection) -> int:
+    """Orphan components whose parent paper IS in the corpus — the actionable subset."""
+    try:
+        rows = conn.execute(
+            "SELECT doi, work_type FROM papers "
+            "WHERE COALESCE(TRIM(component_type), '') <> '' AND parent_paper_id IS NULL"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    return sum(
+        1
+        for row in rows
+        if resolve_orphan_component_parent(conn, doi=row["doi"], work_type=row["work_type"])
+    )
+
+
 def link_orphan_components(
     conn: sqlite3.Connection, *, parent_paper_id: str, parent_doi: str | None
 ) -> int:
@@ -248,13 +284,13 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             # Already classified but unlinked — a suffix-orphan whose parent may
             # have entered the corpus since. Re-derive the parent from its own
             # DOI and link if present (relation-orphans link on their rehydrate).
-            _, parent_doi = classify_component(row["doi"], row["work_type"])
-            if parent_doi:
-                parent_paper_id = resolve_existing_paper_id(conn, doi=parent_doi)
-                if parent_paper_id:
-                    sets.append("parent_paper_id = ?")
-                    params.append(parent_paper_id)
-                    linked += 1
+            parent_paper_id = resolve_orphan_component_parent(
+                conn, doi=row["doi"], work_type=row["work_type"]
+            )
+            if parent_paper_id:
+                sets.append("parent_paper_id = ?")
+                params.append(parent_paper_id)
+                linked += 1
 
         title = row["title"]
         if title:

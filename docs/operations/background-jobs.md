@@ -194,7 +194,11 @@ construction, not by bookkeeping.
   boundary: it runs only when **no other operation is active** and the app has been
   **idle for 3 minutes** (an in-memory activity clock — no write on a GET), and a
   running sweep **pauses the moment the user acts**, leaving its work queued
-  (retryable) for the idle healer to resume. Background provider calls also
+  (retryable) for the idle healer to resume. The clock ignores two routes that are
+  polled by machines, not people: `GET /activity` (app-wide, every 12 s) and
+  `GET /health` (the container `HEALTHCHECK`, every 30 s) — counting the latter
+  made `app_is_idle()` permanently false inside Docker, so no background sweep ever
+  ran there. Background provider calls also
   **reserve 200 API calls for the user** (`http_sources.provider_budget_ok` over
   OpenAlex's live `X-RateLimit-Remaining`); a sweep that would cross the floor stops
   gracefully and the Health page reports the remaining credits + the last

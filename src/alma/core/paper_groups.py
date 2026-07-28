@@ -826,17 +826,80 @@ def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+class PreprintTitleIndex:
+    """Every preprint row in the corpus, bucketed by normalized title key.
+
+    Exists so a corpus-wide pass can ask "which preprints match this published
+    paper?" thousands of times without re-scanning `papers` each time. Building it
+    once is a single table scan; each lookup is then a dict hit.
+
+    Why it matters: `promote_matching_preprints` used to run its own full scan per
+    call, so the corpus reconciliation loop over ~9k published rows performed ~9k ×
+    ~11k title normalizations — 8 MINUTES, and (because the reconcile runner holds a
+    write transaction) 8 minutes with the single SQLite writer pinned. Every other
+    write in the process queued behind it and cross-process writers took the
+    `busy_timeout` → HTTP 503. Found 2026-07-28.
+
+    The index is mutated as merges happen (`forget`), so a preprint already absorbed
+    into one parent is not offered to the next.
+    """
+
+    __slots__ = ("_by_title",)
+
+    def __init__(self, by_title: dict[str, list[Any]]) -> None:
+        self._by_title = by_title
+
+    def candidates(self, title_key: str) -> list[Any]:
+        """Preprint rows sharing *title_key* (empty list when none)."""
+        return self._by_title.get(title_key, [])
+
+    def forget(self, preprint_id: str) -> None:
+        """Drop an absorbed preprint so a later published row cannot re-match it."""
+        target = str(preprint_id)
+        for rows in self._by_title.values():
+            for index, row in enumerate(rows):
+                if str(_value(row, "id")) == target:
+                    del rows[index]
+                    return
+
+
+def build_preprint_title_index(conn: sqlite3.Connection) -> PreprintTitleIndex:
+    """Scan `papers` ONCE and bucket every preprint row by normalized title key."""
+    rows = conn.execute(
+        """
+        SELECT id, title, year, doi, work_type, preprint_source, component_type
+        FROM papers
+        WHERE COALESCE(TRIM(component_type), '') = ''
+        """
+    ).fetchall()
+    by_title: dict[str, list[Any]] = {}
+    for row in rows:
+        if not is_preprint_row(row):
+            continue
+        title_key = normalize_title_key(str(row["title"] or ""))
+        if not title_key:
+            continue
+        by_title.setdefault(title_key, []).append(row)
+    return PreprintTitleIndex(by_title)
+
+
 def promote_matching_preprints(
     conn: sqlite3.Connection,
     published_paper_id: str,
     *,
     year_tolerance: int = 2,
+    preprint_index: PreprintTitleIndex | None = None,
 ) -> dict[str, int]:
     """Promote a newly-arrived published row over exact-title preprint twins.
 
     This is the cheap ingest-time path.  Corpus reconciliation adds semantic
     candidate detection; the foreground write only uses the high-precision
     normalized-title + year rule and persisted/DOI preprint evidence.
+
+    ``preprint_index`` lets a corpus-wide caller supply a prebuilt
+    `PreprintTitleIndex` instead of paying a table scan per call; when omitted one
+    is built for this call (the single-paper ingest path). The MATCH RULE itself is
+    spelled once either way, here.
     """
     published = conn.execute(
         "SELECT id, title, year, doi, work_type, preprint_source, component_type "
@@ -848,21 +911,11 @@ def promote_matching_preprints(
     title_key = normalize_title_key(str(published["title"] or ""))
     if not title_key:
         return {"candidates": 0, "merged": 0, "reparented": 0}
+    index = preprint_index if preprint_index is not None else build_preprint_title_index(conn)
     year = published["year"]
-    candidates = conn.execute(
-        """
-        SELECT id, title, year, doi, work_type, preprint_source, component_type
-        FROM papers
-        WHERE id != ?
-          AND COALESCE(TRIM(component_type), '') = ''
-        """,
-        (published_paper_id,),
-    ).fetchall()
     matches: list[str] = []
-    for row in candidates:
-        if not is_preprint_row(row):
-            continue
-        if normalize_title_key(str(row["title"] or "")) != title_key:
+    for row in index.candidates(title_key):
+        if str(row["id"]) == str(published_paper_id):
             continue
         if year is not None and row["year"] is not None:
             if abs(int(year) - int(row["year"])) > max(0, int(year_tolerance)):
@@ -876,6 +929,7 @@ def promote_matching_preprints(
             published_paper_id,
             reason="journal_publication_promotion",
         )
+        index.forget(preprint_id)
         if not result.get("skipped"):
             merged += 1
             reparented += int(result.get("reparented") or 0)

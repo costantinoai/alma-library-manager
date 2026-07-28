@@ -8,24 +8,52 @@ no-write-on-GET rule. In-memory is sufficient — idle-gating is a runtime conce
 after a restart we start "active" (a grace window) so background work never slams a user
 who just opened the app.
 
-What counts as user activity: any request EXCEPT the endpoints the frontend polls on a
-timer regardless of user presence. The critical one is `GET /activity` — `useOperationToasts`
-polls it app-wide every 12 s; counting it would keep the app permanently "active" and
-starve background work entirely.
+What counts as user activity: any request EXCEPT the endpoints polled on a timer
+regardless of user presence. Two of them:
+
+- `GET /activity` — `useOperationToasts` polls it app-wide every 12 s.
+- `GET /health` — the container's own `HEALTHCHECK` curls it every 30 s, and nothing
+  about that is a user. Counting it pinned the app "active" FOREVER in Docker (30 s
+  heartbeat < the 180 s idle threshold), so every background drain started, logged
+  "app not idle yet" and was cancelled — corpus enrichment never ran in prod at all
+  (found 2026-07-28).
+
+Paths are matched AFTER stripping the API version prefix (`/api/v1/...`), because the
+routers mount under it and a bare-path allow-list silently matched nothing. That is
+what let the `/activity` entry rot into dead code: `is_user_activity_path` was asked
+about `/api/v1/activity`, which does not start with `/activity`, so only the frontend's
+`X-Alma-Poll` header was keeping the poll out of the clock. Normalizing here means the
+allow-list cannot be disarmed by a mount-prefix change.
 """
 
 from __future__ import annotations
 
+import re
 import time
 
 # 3 minutes of app-idle before a background sweep may run (user-confirmed, task 37 A).
 IDLE_THRESHOLD_SECONDS: float = 180.0
 
-# Paths the frontend polls on a timer independent of user interaction → NOT activity.
-# Kept deliberately MINIMAL and conservative: under-ignoring only makes background work
-# defer more (safe); the one entry that MUST be here is the app-wide /activity poll, or
-# `app_is_idle` could never become true.
-_POLL_PATH_PREFIXES: tuple[str, ...] = ("/activity",)
+# Timer-polled routes → NOT activity. Matched EXACTLY (never as a prefix), because
+# under both of these sit genuinely user-facing routes: `/activity/{id}/cancel` is a
+# button the user pressed, and the Health PAGE lives under `/health/...`.
+#
+#   /activity — `useOperationToasts` polls it app-wide every 12 s.
+#   /health   — the container HEALTHCHECK curls it every 30 s.
+#
+# Kept deliberately MINIMAL: under-ignoring only makes background work defer more
+# (safe), while over-ignoring lets a sweep start while the user is working.
+_POLL_PATH_EXACT: frozenset[str] = frozenset({"/activity", "/health"})
+
+# The version prefix every router mounts under (`app.include_router(..., prefix="/api/v1")`).
+# Stripped before matching so the allow-list above is written in ROUTE terms, and a
+# future `/api/v2` needs no edit here.
+_API_PREFIX_RE = re.compile(r"^/api/v\d+(?=/)")
+
+
+def _strip_api_prefix(path: str) -> str:
+    """`/api/v1/activity` → `/activity`; anything else unchanged."""
+    return _API_PREFIX_RE.sub("", str(path or ""))
 
 # Start IDLE (last activity "long ago"): a fresh process has seen no user request
 # yet, so background work may run until a real request marks the app active. A user
@@ -36,9 +64,12 @@ _last_activity_monotonic: float = time.monotonic() - 86_400.0
 
 
 def is_user_activity_path(path: str) -> bool:
-    """True when *path* is a user-initiated request (not a background status poll)."""
-    p = str(path or "")
-    return not any(p.startswith(prefix) for prefix in _POLL_PATH_PREFIXES)
+    """True when *path* is a user-initiated request (not a timer/health poll).
+
+    Accepts either form — `/api/v1/activity` or `/activity` — so it is correct
+    whether called with a raw request path or an already-normalized route.
+    """
+    return (_strip_api_prefix(path).rstrip("/") or "/") not in _POLL_PATH_EXACT
 
 
 def touch_user_activity() -> None:

@@ -6,22 +6,28 @@ dedup model: components are linked/purged, preprint twins collapse into the
 journal paper when present, existing chains are flattened, and orphan child
 state is stripped.
 
-Caller owns the write transaction. Do not commit here.
+Caller owns the write transaction. Do not commit here — either wrap the whole call
+in one write unit, or pass ``section=`` to scope a write unit to each PHASE (what
+the background maintenance runner does, so an 8-minute pass no longer holds the
+single SQLite writer end to end).
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from alma.application.preprint_dedup import (
     find_preprint_twin_candidates,
     merge_preprint_into_canonical,
 )
-from alma.core.components import backfill_components
+from alma.core.components import backfill_components, count_linkable_orphan_components
 from alma.core.paper_groups import (
     PaperGroupIntegrityError,
     absorb_paper_group,
+    build_preprint_title_index,
     collect_paper_group_ids,
     is_component_row,
     is_preprint_row,
@@ -36,23 +42,26 @@ def _integrity_defect_total(counts: dict[str, int]) -> int:
 
 
 def _count_component_candidates(conn: sqlite3.Connection) -> int:
+    """Rows the backfill would newly CLASSIFY as components.
+
+    Deliberately excludes already-classified orphans: those are the
+    ``orphan_components`` integrity defect and are counted there (via the linkable
+    subset), so counting them here too double-billed every orphan.
+    """
     from alma.core.components import classify_component
 
     try:
         rows = conn.execute(
             """
-            SELECT doi, work_type, component_type, parent_paper_id
+            SELECT doi, work_type
             FROM papers
+            WHERE component_type IS NULL
             """
         ).fetchall()
     except sqlite3.OperationalError:
         return 0
     pending = 0
     for row in rows:
-        if str(row["component_type"] or "").strip():
-            if not str(row["parent_paper_id"] or "").strip():
-                pending += 1
-            continue
         component_type, parent_doi = classify_component(row["doi"], row["work_type"])
         if component_type or parent_doi:
             pending += 1
@@ -60,11 +69,20 @@ def _count_component_candidates(conn: sqlite3.Connection) -> int:
 
 
 def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
-    """Approximate pending work for the manual group reconciliation operation."""
+    """Pending work for the group reconciliation operation — REPAIRABLE defects only.
+
+    A count that includes defects this pass cannot fix never reaches zero, so the
+    operation stays `readiness='ready'` forever and every maintenance cycle
+    reschedules a run that repairs nothing. `orphan_components` is exactly that
+    case: an orphan whose parent paper is absent from the corpus is terminal, so
+    only the LINKABLE subset counts (`count_linkable_orphan_components`).
+    """
     try:
-        integrity = relationship_integrity_counts(conn)
+        integrity = dict(relationship_integrity_counts(conn))
     except sqlite3.OperationalError:
         integrity = {}
+    if integrity.get("orphan_components"):
+        integrity["orphan_components"] = count_linkable_orphan_components(conn)
     try:
         preprint_twins = len(find_preprint_twin_candidates(conn, scope="corpus"))
     except Exception:
@@ -181,6 +199,12 @@ def _normalize_existing_groups(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def _promote_available_journals(conn: sqlite3.Connection) -> dict[str, int]:
+    """Let every standalone published paper absorb its preprint twins.
+
+    The preprint index is built ONCE and handed to every call: this loop runs over
+    the whole published corpus, and letting `promote_matching_preprints` do its own
+    scan per row made the phase quadratic (see `PreprintTitleIndex`).
+    """
     candidates = conn.execute(
         """
         SELECT id, doi, work_type, preprint_source, component_type
@@ -189,12 +213,13 @@ def _promote_available_journals(conn: sqlite3.Connection) -> dict[str, int]:
           AND COALESCE(NULLIF(TRIM(parent_paper_id), ''), '') = ''
         """
     ).fetchall()
+    preprint_index = build_preprint_title_index(conn)
     scanned = merged = reparented = 0
     for row in candidates:
         if is_component_row(row) or is_preprint_row(row):
             continue
         scanned += 1
-        result = promote_matching_preprints(conn, str(row["id"]))
+        result = promote_matching_preprints(conn, str(row["id"]), preprint_index=preprint_index)
         merged += int(result.get("merged") or 0)
         reparented += int(result.get("reparented") or 0)
     return {
@@ -238,17 +263,39 @@ def reconcile_paper_groups(
     conn: sqlite3.Connection,
     *,
     limit: int | None = None,
+    section: Callable[[str], AbstractContextManager[Any]] | None = None,
+    on_phase: Callable[[str, dict[str, int]], None] | None = None,
 ) -> dict[str, Any]:
-    """Run an idempotent corpus-wide paper group reconciliation pass."""
+    """Run an idempotent corpus-wide paper group reconciliation pass.
+
+    ``section`` is an optional per-phase write scope, given the phase name. A caller
+    that already owns an enclosing write transaction (the importer, the Settings
+    route) omits it and gets the historical single-transaction behaviour; the
+    background maintenance runner passes `write_section` so the writer gate is
+    RELEASED between phases instead of being held for the whole pass. Write units
+    never nest, so exactly one of the two owns the transaction.
+
+    ``on_phase(name, counts)`` reports each phase as it finishes — this pass is long
+    and used to log nothing at all between "started" and "completed".
+    """
+    scope = section if section is not None else (lambda _name: nullcontext())
+
+    def run(name: str, phase: Callable[[], dict[str, int]]) -> dict[str, int]:
+        with scope(name):
+            counts = phase()
+        if on_phase is not None:
+            on_phase(name, counts)
+        return counts
+
     before = relationship_integrity_counts(conn)
-    dangling = _repair_dangling_relationships(conn)
-    components = backfill_components(conn)
-    normalized = _normalize_existing_groups(conn)
-    twins = _merge_preprint_twins(conn, limit=limit)
-    promoted = _promote_available_journals(conn)
+    dangling = run("dangling", lambda: _repair_dangling_relationships(conn))
+    components = run("components", lambda: backfill_components(conn))
+    normalized = run("normalize", lambda: _normalize_existing_groups(conn))
+    twins = run("preprint_twins", lambda: _merge_preprint_twins(conn, limit=limit))
+    promoted = run("journal_promotion", lambda: _promote_available_journals(conn))
     # A final normalize pass catches groups formed by the twin/promotion phases
     # and ensures every child points directly at the chosen root.
-    final_normalized = _normalize_existing_groups(conn)
+    final_normalized = run("normalize_final", lambda: _normalize_existing_groups(conn))
     after = relationship_integrity_counts(conn)
     return {
         "before": before,
