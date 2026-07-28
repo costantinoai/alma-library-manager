@@ -2481,17 +2481,27 @@ def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None
     try:
         stale = _graph_view_staleness(conn)
         urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
+
         # `graph:super_regions` is Signal Lab's ENTIRE substrate: without it
         # `policy._build_context` returns None, every game reports "not
         # available", and Home silently drops the section — with a full corpus
         # sitting right there. It is not a graph view, so it is not in `stale`
         # (that list drives the layout rebuild loop) and could never escalate
         # past the ordinary idle gate. On prod that gate never opened at all
-        # (see the `/health` heartbeat fix), so the view stayed unbuilt and
-        # Signal Lab was silently off. Never-built counts as urgent here for
-        # the same reason "there is no map to serve" does.
+        # (see the `/health` heartbeat fix), so it stayed unbuilt for months.
+        #
+        # It gets its OWN permissive gate rather than raising `urgent`: doing
+        # the latter also promotes every routinely-stale layout view in the
+        # same pass, so "Signal Lab has no substrate" would silently authorise
+        # a full map refit the user never asked for.
         if not _super_regions_built(conn):
-            urgent = True
+            sr_ok, sr_reason = may_background_continue(
+                conn, exclude_operation_key=operation_key
+            )
+            if sr_ok:
+                _ensure_super_regions_fresh(conn)
+            else:
+                logger.debug("super_regions first build deferred: %s", sr_reason)
         gate = may_background_continue if urgent else may_background_run
         ok, reason = gate(conn, exclude_operation_key=operation_key)
         if not ok:

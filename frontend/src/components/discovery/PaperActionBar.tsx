@@ -79,55 +79,63 @@ interface PaperActionBarProps {
  * weight of the pills above it rather than the heavier retired `-50/-100`
  * tint pair.
  */
+// Pressed = FILLED. The active wash used to sit at the same 10% the HOVER
+// state uses, so a saved paper and a hovered one looked identical and the
+// card never showed its own state (user report 2026-07-28). Active now
+// carries roughly double the wash plus an inset ring, which is the same
+// "raised knob" logic the switch/slider thumbs use: the control has to look
+// physically depressed, not merely tinted.
+const ACTIVE_RING = 'ring-1 ring-inset shadow-paper-inset'
+
 const toneClasses: Record<Tone, { icon: string; hover: string; active: string }> = {
   neutral: {
     icon: 'text-slate-500',
     hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
-    active: 'border-transparent bg-control-track text-alma-900',
+    active: `border-transparent bg-alma-800/[0.14] text-alma-900 font-semibold ring-alma-800/25 ${ACTIVE_RING}`,
   },
   // Queue — deferred. Reading list is pre-commit limbo: neither a library
   // save nor a signal, so it carries no valence colour at all.
   queue: {
     icon: 'text-slate-500',
     hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
-    active: 'border-transparent bg-control-track text-alma-900',
+    active: `border-transparent bg-alma-800/[0.14] text-alma-900 font-semibold ring-alma-800/25 ${ACTIVE_RING}`,
   },
   // Save — the primary affirmative: this paper joins the library. Accent
   // (folio) is the app's single interactive identity.
   add: {
     icon: 'text-alma-folio',
     hover: 'hover:bg-accent-soft hover:text-alma-folio',
-    active: 'border-transparent bg-accent-soft text-alma-folio',
+    active: `border-transparent bg-alma-folio/20 text-alma-folio font-semibold ring-alma-folio/35 ${ACTIVE_RING}`,
   },
   // Add to collection — the same commit family; the folder icon separates it.
   collection: {
     icon: 'text-alma-folio',
     hover: 'hover:bg-accent-soft hover:text-alma-folio',
-    active: 'border-transparent bg-accent-soft text-alma-folio',
+    active: `border-transparent bg-alma-folio/20 text-alma-folio font-semibold ring-alma-folio/35 ${ACTIVE_RING}`,
   },
   like: {
     icon: 'text-success-600',
     hover: 'hover:bg-success-700/10 hover:text-success-800',
-    active: 'border-transparent bg-success-700/10 text-success-800',
+    active: `border-transparent bg-success-700/22 text-success-800 font-semibold ring-success-700/35 ${ACTIVE_RING}`,
   },
   // Love — same valence as Like, one step stronger. The filled heart carries
   // the difference; a second hue would have to lie about the direction.
   love: {
     icon: 'text-success-600',
     hover: 'hover:bg-success-700/10 hover:text-success-800',
-    active: 'border-transparent bg-success-700/15 text-success-800',
+    active: `border-transparent bg-success-700/30 text-success-800 font-semibold ring-success-700/45 ${ACTIVE_RING}`,
   },
   // Dismiss / Skip — negative.
   dismiss: {
     icon: 'text-slate-500',
     hover: 'hover:bg-critical-700/10 hover:text-critical-700',
-    active: 'border-transparent bg-critical-700/10 text-critical-700',
+    active: `border-transparent bg-critical-700/22 text-critical-700 font-semibold ring-critical-700/35 ${ACTIVE_RING}`,
   },
   // Dislike — negative, same as Skip. The thumb icon says which one.
   dislike: {
     icon: 'text-slate-500',
     hover: 'hover:bg-critical-700/10 hover:text-critical-700',
-    active: 'border-transparent bg-critical-700/10 text-critical-700',
+    active: `border-transparent bg-critical-700/22 text-critical-700 font-semibold ring-critical-700/35 ${ACTIVE_RING}`,
   },
 }
 

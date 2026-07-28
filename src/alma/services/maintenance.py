@@ -551,6 +551,46 @@ def _run_reference_graph(job_id: str, cap: int, target_paper_ids=None, params=No
     return result
 
 
+def _count_graph_layouts(conn: sqlite3.Connection, params=None) -> int:
+    """Materialized layout views that are missing or stale — the repair pool.
+
+    Counts the four paper/author layout views plus ``graph:super_regions``.
+    Super-regions is included because it is Signal Lab's ENTIRE substrate:
+    without it every game reports "not available" and Home drops the section,
+    with a full corpus sitting right there. It had no health surface at all, so
+    a prod instance ran for months with Signal Lab silently switched off and
+    nothing anywhere saying why (2026-07-28).
+    """
+    from alma.api.scheduler import _graph_view_staleness, _super_regions_built
+
+    pending = 0
+    try:
+        pending += len(_graph_view_staleness(conn))
+        if not _super_regions_built(conn):
+            pending += 1
+    except Exception:  # noqa: BLE001 — a diagnostic must never raise
+        return 0
+    return pending
+
+
+def _run_graph_layouts(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Rebuild whichever map layouts are missing or stale, super-regions first.
+
+    Delegates to the SAME pass the scheduler runs (`_graph_layout_pass`), so the
+    Health button and the background tick cannot drift into two different ideas
+    of "the maps are fresh".
+    """
+    from alma.api.scheduler import _graph_layout_pass
+
+    _graph_layout_pass(
+        job_id=job_id,
+        operation_key="graphs.rebuild_layouts",
+        message="Rebuilding map layouts and the Signal Lab substrate",
+    )
+    with _maintenance_conn() as conn:
+        return {"pending_after": _count_graph_layouts(conn)}
+
+
 def _run_cluster_labels(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Cluster-label refresh (step 10, derived): regenerate TF-IDF labels for the
     library paper-map clusters and invalidate the cache so the next render is
@@ -1428,6 +1468,37 @@ REGISTRY: dict[str, MaintenanceTask] = {
             default_auto_daily_cap=250,
             auto_chunk_size=100,
             sources=(SOURCE_OPENALEX,),
+        ),
+        MaintenanceTask(
+            key="graph_layouts",
+            label="Rebuild map layouts",
+            description=(
+                "Rebuild the paper/author map layouts and the super-region substrate "
+                "when they are missing or have drifted from the embedding set. "
+                "Signal Lab needs the super-regions view — without it every game "
+                "reports 'not available' no matter how large the corpus is."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="graphs.rebuild_layouts",
+            job_id_prefix="maint_graph_layouts",
+            cost=COST_COMPUTE,
+            runner=_run_graph_layouts,
+            count_fn=_count_graph_layouts,
+            stage=MaintenanceStage.DERIVED,
+            # After embeddings (80) — a layout is fitted ON the embedding set —
+            # and before cluster labels (92), which label the clusters this
+            # produces.
+            order=88,
+            unit=MaintenanceUnit.OPERATION,
+            target_kind=TargetKind.NONE,
+            supports_targets=False,
+            prerequisites=("embedding",),
+            default_manual_limit=1,
+            max_manual_limit=1,
+            default_auto_daily_cap=1,
+            max_auto_daily_cap=1,
+            local_compute=True,
         ),
         MaintenanceTask(
             key="cluster_labels",
