@@ -189,8 +189,7 @@ def get_queue(
     if len(specs) < 10:
         return {
             "available": False,
-            "reason": "The corpus map hasn't been built yet, or no region has "
-            "enough judgeable papers.",
+            "reason": lab_policy.queue_unavailable_reason(db),
         }
 
     all_ids = list(dict.fromkeys(pid for spec in specs for pid in spec["shown"]))

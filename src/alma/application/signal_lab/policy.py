@@ -900,6 +900,44 @@ def _build_matched_pair_queue(
     return out
 
 
+def queue_unavailable_reason(conn: sqlite3.Connection) -> str:
+    """WHY no deck could be built — one cause per message.
+
+    The route used to answer every empty queue with "the corpus map hasn't been
+    built yet, or no region has enough judgeable papers". Two unrelated causes
+    behind one sentence, and on a real instance BOTH clauses were false: the
+    maps were built and the corpus held 11k papers, but `graph:super_regions`
+    had never been built, so every game reported "not available" while the
+    message pointed at the two things that were fine (2026-07-28).
+
+    A diagnostic that names the wrong cause is worse than no diagnostic — it
+    sends you to verify what already works.
+    """
+    from alma.application import materialized_views as mv
+    from alma.application import super_regions as sr
+
+    if mv.stored_meta(conn, sr.VIEW_KEY) is None:
+        return (
+            "The super-region substrate hasn't been built yet. "
+            "Health -> Rebuild map layouts builds it."
+        )
+    stored = mv.get_stored(conn, sr.VIEW_KEY)
+    if stored is None or not (stored["payload"].get("regions") or []):
+        return (
+            "The super-region substrate is empty — it needs papers with "
+            "embeddings. Health -> AI compute missing fills those in."
+        )
+    if _build_context(conn) is None:
+        return (
+            "No region has enough papers with embeddings yet. "
+            "Health -> AI compute missing fills those in."
+        )
+    return (
+        "Every region has been judged recently — new rounds appear as the "
+        "corpus grows or as your ratings change."
+    )
+
+
 def build_queue_for(
     conn: sqlite3.Connection,
     *,
