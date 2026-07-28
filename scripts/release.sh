@@ -105,7 +105,11 @@ else
   say "backend suite (this takes ~20 min)…"
   .venv/bin/python -m pytest tests -q -m "not network" || fail "backend suite red"
   say "frontend typecheck + tests…"
-  (cd frontend && npx tsc --noEmit && npx vitest run) || fail "frontend red"
+  # `npm run typecheck`, NOT bare `npx tsc --noEmit`: tsconfig.json is a
+  # references-only project ("files": []), so the bare form type-checks NOTHING
+  # and exits 0. This gate was vacuous until 2026-07-28 — see CLAUDE.md
+  # "Verification Before Done".
+  (cd frontend && npm run typecheck && npx vitest run) || fail "frontend red"
 fi
 
 # ---------------------------------------------------------------------------
