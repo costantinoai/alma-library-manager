@@ -2434,6 +2434,11 @@ def _super_regions_built(conn: sqlite3.Connection) -> bool:
 
         return mv.stored_meta(conn, super_regions.VIEW_KEY) is not None
     except Exception:  # noqa: BLE001 — advisory; never sink the pass
+        # Still returns "built" so a broken probe can't trigger an endless
+        # rebuild loop — but it is LOGGED with the traceback. It used to
+        # swallow silently, so a missing substrate and an unreadable one were
+        # the same answer: healthy.
+        logger.exception("super_regions built-probe failed; assuming built")
         return True
 
 

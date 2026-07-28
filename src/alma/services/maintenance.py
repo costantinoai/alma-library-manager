@@ -569,6 +569,9 @@ def _count_graph_layouts(conn: sqlite3.Connection, params=None) -> int:
         if not _super_regions_built(conn):
             pending += 1
     except Exception:  # noqa: BLE001 — a diagnostic must never raise
+        # Returning 0 means "nothing to repair", which is a CLAIM, not an
+        # absence of one. It must at least be loud in the log with a traceback.
+        logger.exception("graph layout pending count failed; reporting 0")
         return 0
     return pending
 

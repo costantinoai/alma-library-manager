@@ -425,7 +425,9 @@ def rebuild(
     """
     view = get_view(view_key)
     fp = _compute_fingerprint(conn, view)
-    return _run_build(conn, view, fingerprint=fp, build_fn=build_fn)
+    # Persisting IS the job here — a rebuild that couldn't store its payload has
+    # not rebuilt anything, and must not report that it did.
+    return _run_build(conn, view, fingerprint=fp, build_fn=build_fn, require_persist=True)
 
 
 def enqueue_rebuild(view_key: str) -> str | None:
@@ -760,11 +762,21 @@ def _run_build(
     *,
     fingerprint: str,
     build_fn: Callable[[sqlite3.Connection], dict] | None = None,
+    require_persist: bool = False,
 ) -> dict:
     """Run the build function and persist its result.
 
-    Build failures bubble up to the caller. Persistence failures are
-    logged but never mask a successful build.
+    Build failures bubble up to the caller.
+
+    ``require_persist`` decides what a PERSISTENCE failure means, because the
+    two callers want opposite things:
+
+    - **Serve-on-miss** (``False``): the payload was computed and is about to be
+      returned, so a failed cache write must never break the response.
+    - **Rebuild** (``True``): persisting IS the job. Swallowing here meant a
+      rebuild whose write failed still reported success — the job logged
+      "Rebuilt 1 view(s)" while the stored map was unchanged, indistinguishable
+      from a real rebuild in Activity and in the logs.
     """
     started = perf_counter()
     payload = (build_fn or view.build_fn)(conn)
@@ -784,8 +796,10 @@ def _run_build(
             build_error=None,
             rebuild_job_id=None,
         )
-    except Exception:  # noqa: BLE001 — cache write should never break the response
+    except Exception:  # noqa: BLE001 — see `require_persist`
         logger.exception("materialized_views: failed to persist payload for %s", view.key)
+        if require_persist:
+            raise
     return payload
 
 

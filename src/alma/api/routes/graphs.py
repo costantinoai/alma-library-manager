@@ -1932,6 +1932,8 @@ def _rebuild_graphs_impl(
         return bool(job_id and is_cancellation_requested(job_id))
 
     rebuilt: list[str] = []
+    failed: list[str] = []
+    errors: list[str] = []
     phases = ["clear_cache", "paper_map", "author_network"]
     total_phases = len(phases)
 
@@ -1988,10 +1990,20 @@ def _rebuild_graphs_impl(
         )
         rebuilt.append(scope.view_key("paper_map"))
     except Exception as e:
-        logger.warning("Failed to rebuild paper_map: %s", e)
+        # exc_info: a rebuild failure used to leave only a one-line message, and
+        # the job still reported `completed`, so a failed build was
+        # indistinguishable from a successful one in Activity AND in the log.
+        logger.warning("Failed to rebuild paper_map: %s", e, exc_info=True)
+        failed.append(scope.view_key("paper_map"))
+        errors.append(f"{type(e).__name__}: {e}")
         if job_id:
             add_job_log(
-                job_id, f"Failed rebuilding paper_map: {e}", level="ERROR", step="paper_map"
+                job_id,
+                f"Failed rebuilding paper_map ({type(e).__name__}): {e}. "
+                "This view is fitted on the embedding set — if vector coverage "
+                "is low, run Health → AI Compute Missing first, then re-run.",
+                level="ERROR",
+                step="paper_map",
             )
 
     if _cancelled():
@@ -2008,24 +2020,56 @@ def _rebuild_graphs_impl(
         mv.rebuild(conn, scope.view_key("author_network"))
         rebuilt.append(scope.view_key("author_network"))
     except Exception as e:
-        logger.warning("Failed to rebuild author_network: %s", e)
+        logger.warning("Failed to rebuild author_network: %s", e, exc_info=True)
+        failed.append(scope.view_key("author_network"))
+        errors.append(f"{type(e).__name__}: {e}")
         if job_id:
             add_job_log(
                 job_id,
-                f"Failed rebuilding author_network: {e}",
+                f"Failed rebuilding author_network ({type(e).__name__}): {e}. "
+                "This view is built from the author graph — if authors are "
+                "unhydrated, run Health → author hydration first, then re-run.",
                 level="ERROR",
                 step="author_network",
             )
 
+    # Report failures in the SUMMARY, not only in a log line nobody opens. The
+    # job's own result is what Activity shows, and "Rebuilt 0 view(s)" with no
+    # further word read as a successful no-op.
+    #
+    # A failure message names three things — WHICH view, WHY it failed, and WHAT
+    # to do next — because the reader of an Activity row has none of the context
+    # the traceback has, and "Failed rebuilding paper_map" alone leaves them with
+    # nowhere to go.
+    ok_msg = f"Rebuilt {len(rebuilt)} {scope.label()} graph view(s)"
+    if failed:
+        message = (
+            f"{ok_msg}; {len(failed)} FAILED ({', '.join(failed)}): {errors[0]}. "
+            "A layout needs embeddings to fit on — check Health → vector coverage "
+            "first, then re-run this rebuild. If coverage is fine, the full "
+            "traceback is in the server log under 'Failed to rebuild'."
+        )
+    else:
+        message = ok_msg
     summary = {
         "rebuilt": rebuilt,
         "count": len(rebuilt),
-        "message": f"Rebuilt {len(rebuilt)} {scope.label()} graph view(s)",
+        "failed": failed,
+        "errors": errors,
+        "message": message,
     }
     if job_id:
         add_job_log(
-            job_id, f"Graph rebuild completed: {len(rebuilt)} rebuilt", step="done", data=summary
+            job_id,
+            message,
+            level="ERROR" if failed else "INFO",
+            step="done",
+            data=summary,
         )
+    if failed and not rebuilt:
+        # Nothing was rebuilt and something broke: that is a failed job, not a
+        # completed one. Anything partial stays `completed` with `failed` named.
+        raise RuntimeError(message)
     return summary
 
 
