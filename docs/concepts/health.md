@@ -115,6 +115,12 @@ dimensions. Each **RepairCard** shows:
 - A **cost** tag — *local* (your database), *network* (OpenAlex / Crossref /
   Semantic Scholar), or *compute* (local SPECTER2).
 
+The persistent **System status** band also carries the application-wide
+**External network access** switch beside the API budget. It saves immediately:
+turning it off blocks outbound APIs and integrations while leaving local work
+available. An `ALMA_DISABLE_NETWORK=1` operations override forces the displayed
+state off and disables the switch until the override is removed.
+
 ### ETAs
 
 Every **network** operation shows an **ETA** — how long it will take at the

@@ -1,7 +1,7 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { WifiOff } from 'lucide-react'
-import { api } from '@/api/client'
+import { getNetworkPolicy } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { PageThemeProvider } from '@/components/ui/page-theme'
@@ -47,10 +47,7 @@ export function AppShell({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const networkPolicyQuery = useQuery({
     queryKey: ['network-policy'],
-    queryFn: () =>
-      api.get<{ enabled: boolean; settings_enabled: boolean; forced_off_by_env: boolean }>(
-        '/settings/network-policy',
-      ),
+    queryFn: getNetworkPolicy,
     staleTime: 30_000,
     retry: 1,
   })

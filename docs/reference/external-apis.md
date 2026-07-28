@@ -12,13 +12,13 @@ sideways.
 
 ## Global network control
 
-**Settings → Connections → External APIs → External network access** is the
-single application switch for outbound scholarly APIs, Slack, email, Google
-Scholar, and hosted AI. Turning it off leaves local Library, maps, and local
-search usable, shows a persistent warning, and stops requests at the shared
-transport before any socket is opened. `ALMA_DISABLE_NETWORK=1` is the
-operations hard override: it can force access off but cannot force a user's
-stored off choice on.
+The same application-wide **External network access** switch is available in
+**Health → System status** and **Settings → Connections → External APIs**. It
+controls outbound scholarly APIs, Slack, email, Google Scholar, and hosted AI.
+Turning it off leaves local Library, maps, and local search usable, shows a
+persistent warning, and stops requests at the shared transport before any
+socket is opened. `ALMA_DISABLE_NETWORK=1` is the operations hard override: it
+can force access off but cannot force a user's stored off choice on.
 
 Find & Add remains graceful when OpenAlex's paid search pool is drained:
 paper search omits only the OpenAlex lane and continues Semantic Scholar,

@@ -51,6 +51,11 @@ from alma.config import (
     update_settings as config_update_settings,
 )
 from alma.core.http_sources import get_source_http_client
+from alma.core.network_policy import (
+    NETWORK_ACCESS_SETTING,
+    NetworkPolicyStatus,
+    network_policy_status,
+)
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
     SECRET_OPENALEX_API_KEY,
@@ -259,6 +264,24 @@ class SettingsModel(BaseModel):
         return v
 
 
+class NetworkPolicyUpdate(BaseModel):
+    """Scoped update used by operational control surfaces such as Health."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class NetworkPolicyResponse(BaseModel):
+    enabled: bool
+    settings_enabled: bool
+    forced_off_by_env: bool
+
+
+def _network_policy_response(status_value: NetworkPolicyStatus) -> NetworkPolicyResponse:
+    return NetworkPolicyResponse(**status_value.to_wire())
+
+
 def _read_settings() -> dict:
     """Read settings using centralized config module."""
     settings = get_all_settings()
@@ -329,13 +352,20 @@ def get_settings():
     )
 
 
-@router.get("/network-policy")
-def get_network_policy():
+@router.get("/network-policy", response_model=NetworkPolicyResponse)
+def get_network_policy() -> NetworkPolicyResponse:
     """Effective outbound state, including the operations hard override."""
 
-    from alma.core.network_policy import network_policy_status
+    return _network_policy_response(network_policy_status())
 
-    return network_policy_status().to_wire()
+
+@router.put("/network-policy", response_model=NetworkPolicyResponse)
+def update_network_policy(payload: NetworkPolicyUpdate) -> NetworkPolicyResponse:
+    """Persist only the global outbound switch; never rewrite other settings."""
+
+    config_update_settings({NETWORK_ACCESS_SETTING: payload.enabled})
+    logger.info("External network access setting updated: enabled=%s", payload.enabled)
+    return _network_policy_response(network_policy_status())
 
 
 @router.get("/export")

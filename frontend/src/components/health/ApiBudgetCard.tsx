@@ -12,15 +12,27 @@ import { AlertTriangle } from 'lucide-react'
 import type { HealthOperationsResponse } from '@/api/client'
 import { MetricTile } from '@/components/shared/MetricTile'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Switch } from '@/components/ui/switch'
 
 type Tone = 'neutral' | 'info' | 'warning' | 'critical'
 
-export function ApiBudgetCard({ budget }: { budget: HealthOperationsResponse['api_budget'] }) {
+interface ApiBudgetCardProps {
+  budget: HealthOperationsResponse['api_budget']
+  networkChangePending?: boolean
+  onNetworkChange?: (enabled: boolean) => void
+}
+
+export function ApiBudgetCard({
+  budget,
+  networkChangePending = false,
+  onNetworkChange,
+}: ApiBudgetCardProps) {
   if (!budget) return null
   const remaining = budget.openalex_credits_remaining
   const reserve = budget.reserved_user_calls
   const abort = budget.last_credit_abort
   const pause = budget.last_pause
+  const policy = budget.network_policy
 
   // Tone tracks headroom: critical at/below the reserve, warning within 2× of it.
   const tone: Tone =
@@ -44,12 +56,33 @@ export function ApiBudgetCard({ budget }: { budget: HealthOperationsResponse['ap
             : `${reserve.toLocaleString()} reserved for your manual operations`
         }
       />
-      {budget.network_policy?.enabled === false ? (
+      {policy ? (
+        <div className="flex items-center justify-between gap-4 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-800">External network access</p>
+            <p className="text-xs text-slate-500">
+              {policy.forced_off_by_env
+                ? 'Off by operations override'
+                : policy.enabled
+                  ? 'On — external APIs and integrations may connect'
+                  : 'Off — all outbound transports are blocked'}
+            </p>
+          </div>
+          <Switch
+            checked={policy.enabled}
+            disabled={networkChangePending || policy.forced_off_by_env || !onNetworkChange}
+            onCheckedChange={onNetworkChange}
+            aria-label="Allow external network access from Health"
+          />
+        </div>
+      ) : null}
+      {policy?.enabled === false ? (
         <Alert variant="warning">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            External network access is off. API, integration, and hosted-AI operations are blocked
-            until enabled in Settings → Connections.
+            {policy.forced_off_by_env
+              ? 'External network access is disabled by an operations override. Remove the ALMA_DISABLE_NETWORK override to use this switch.'
+              : 'External network access is off. API, integration, and hosted-AI operations are blocked until enabled with the switch above.'}
           </AlertDescription>
         </Alert>
       ) : null}

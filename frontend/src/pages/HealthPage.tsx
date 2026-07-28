@@ -31,6 +31,7 @@ import {
   refreshHealthSnapshots,
   runMaintenanceOperation,
   resumeMaintenanceTask,
+  setNetworkPolicy,
   setMaintenanceConfig,
   type HealthDimension,
   type MaintenanceOperation,
@@ -96,6 +97,27 @@ export function HealthPage() {
     queryFn: getHealthOperations,
     staleTime: 30_000,
     retry: 1,
+  })
+  const networkPolicyMutation = useMutation({
+    mutationFn: setNetworkPolicy,
+    onSuccess: async (policy) => {
+      queryClient.setQueryData(['network-policy'], policy)
+      await invalidateQueries(
+        queryClient,
+        ['network-policy'],
+        ['settings'],
+        OPERATIONS_KEY,
+      )
+      toast({
+        title: policy.enabled
+          ? 'External network access enabled'
+          : 'External network access disabled',
+        description: policy.enabled
+          ? 'Network repair operations and integrations may connect again.'
+          : 'Outbound API, integration, and hosted-AI calls are now blocked.',
+      })
+    },
+    onError: (err) => errorToast('Could not update network access', String(err)),
   })
 
   // Poll the launched step's Activity status until it reaches a terminal state.
@@ -461,7 +483,11 @@ export function HealthPage() {
           </div>
           {/* External-API budget + last credit-limit abort (task 37 B/C). */}
           <div className="mt-3">
-            <ApiBudgetCard budget={operationsQuery.data?.api_budget} />
+            <ApiBudgetCard
+              budget={operationsQuery.data?.api_budget}
+              networkChangePending={networkPolicyMutation.isPending}
+              onNetworkChange={(enabled) => networkPolicyMutation.mutate(enabled)}
+            />
           </div>
         </div>
       </section>

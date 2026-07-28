@@ -475,11 +475,7 @@ export interface HealthOperationsResponse {
   api_budget?: {
     openalex_credits_remaining: number | null
     reserved_user_calls: number
-    network_policy?: {
-      enabled: boolean
-      settings_enabled: boolean
-      forced_off_by_env: boolean
-    }
+    network_policy?: NetworkPolicyStatus
     last_credit_abort: {
       job_id: string
       operation_key: string | null
@@ -934,6 +930,20 @@ export interface Settings {
   id_resolution_orcid_enabled?: boolean
   id_resolution_scholar_scrape_auto_enabled?: boolean
   id_resolution_scholar_scrape_manual_enabled?: boolean
+}
+
+export interface NetworkPolicyStatus {
+  enabled: boolean
+  settings_enabled: boolean
+  forced_off_by_env: boolean
+}
+
+export function getNetworkPolicy(): Promise<NetworkPolicyStatus> {
+  return api.get<NetworkPolicyStatus>('/settings/network-policy')
+}
+
+export function setNetworkPolicy(enabled: boolean): Promise<NetworkPolicyStatus> {
+  return api.put<NetworkPolicyStatus>('/settings/network-policy', { enabled })
 }
 
 export interface OpenAlexUsage {
