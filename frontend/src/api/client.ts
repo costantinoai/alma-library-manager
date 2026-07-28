@@ -1775,7 +1775,12 @@ export interface ScoreFamily {
   value: number
   weight: number
   points: number
+  /** False when this family could not be measured for this paper. */
   available: boolean
+  /** True when `value` is the corpus prior rather than an observation. */
+  imputed?: boolean
+  /** What this family scores on a typical paper. */
+  prior_mean?: number
   atoms: ScoreAtom[]
 }
 

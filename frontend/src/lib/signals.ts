@@ -55,8 +55,11 @@ export function contributingFamilies(
   explanation: ScoreExplanation | null | undefined,
 ): ScoreFamily[] {
   if (!explanation) return []
+  // Imputed families are kept: they carry real points under fixed weights, so
+  // hiding them would break the "rows add up to the score" contract. They are
+  // labelled `estimated` instead.
   return explanation.families
-    .filter((family) => family.available && family.points > 0)
+    .filter((family) => family.points > 0)
     .sort((a, b) => b.points - a.points)
 }
 

@@ -79,6 +79,10 @@ class FamilySpec:
     #: Fraction of that setting's value this family takes (``text_similarity``
     #: drives both semantic and lexical).
     weight_share: float = 1.0
+    #: What this family scores on a typical paper, measured over the corpus.
+    #: Used to IMPUTE the family when it could not be measured, so an unknown
+    #: neither rewards nor punishes the paper — see `repaired_prior_score`.
+    prior_mean: float = 0.5
     atoms: tuple[Atom, ...] = field(default_factory=tuple)
 
     @property
@@ -97,6 +101,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Embedding similarity to what you already keep.",
         weight_setting="weights.text_similarity",
         weight_default=0.20,
+        prior_mean=0.509,
         weight_share=0.70,
         atoms=(
             Atom("semantic_similarity_centroid_raw", "Library centroid", 1.0, "max", "positive"),
@@ -111,6 +116,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Overlap with the topics your rated papers cluster on.",
         weight_setting="weights.topic_score",
         weight_default=0.20,
+        prior_mean=0.740,
         atoms=(Atom("topic_score", "Topic overlap", 1.0),),
     ),
     FamilySpec(
@@ -119,6 +125,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="How strongly the search channels surfaced it, and how many agreed.",
         weight_setting="weights.source_relevance",
         weight_default=0.15,
+        prior_mean=0.642,
         atoms=(
             Atom("retrieval_rrf_semantic", "Vector channel rank", 0.75, "max", "rrf"),
             Atom("retrieval_rrf_lexical", "Lexical channel rank", 0.75, "max", "rrf"),
@@ -133,6 +140,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Authors you follow or repeatedly save.",
         weight_setting="weights.author_affinity",
         weight_default=0.15,
+        prior_mean=0.618,
         atoms=(Atom("author_affinity", "Author affinity", 1.0),),
     ),
     FamilySpec(
@@ -141,6 +149,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Terminology overlap — the words, not the meaning.",
         weight_setting="weights.text_similarity",
         weight_default=0.20,
+        prior_mean=0.265,
         weight_share=0.30,
         atoms=(
             Atom("lexical_similarity_word_raw", "Word overlap", 0.45),
@@ -155,6 +164,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="How recently it was published.",
         weight_setting="weights.recency_boost",
         weight_default=0.10,
+        prior_mean=0.468,
         atoms=(Atom("recency_boost", "Publication recency", 1.0),),
     ),
     FamilySpec(
@@ -163,6 +173,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Citation weight, and citation-graph proximity to your library.",
         weight_setting="weights.citation_quality",
         weight_default=0.05,
+        prior_mean=0.276,
         atoms=(
             Atom("citation_quality", "Citation count", 0.50),
             Atom("fwci", "Field-weighted impact", 0.10, scale=3.0),
@@ -178,6 +189,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Your explicit verdicts on similar papers.",
         weight_setting="weights.feedback_adj",
         weight_default=0.10,
+        prior_mean=0.957,
         atoms=(Atom("feedback_adj", "Feedback adjustment", 1.0),),
     ),
     FamilySpec(
@@ -186,6 +198,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="The taste profile accumulated from Signal Lab and your history.",
         weight_setting="weights.preference_affinity",
         weight_default=0.10,
+        prior_mean=0.618,
         atoms=(Atom("preference_affinity", "Preference affinity", 1.0),),
     ),
     FamilySpec(
@@ -194,6 +207,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         description="Journals and conferences you read.",
         weight_setting="weights.journal_affinity",
         weight_default=0.05,
+        prior_mean=0.548,
         atoms=(Atom("journal_affinity", "Venue affinity", 1.0),),
     ),
 )
@@ -280,32 +294,44 @@ def repaired_prior_score(
     *,
     weights: dict[str, float] | None = None,
 ) -> tuple[float, dict]:
-    """Score the available families once and return the closed explanation.
+    """Score every family once and return the closed explanation.
 
-    Returns ``(score, explanation)`` where the explanation's family points,
+    **Weights are FIXED — never rescaled per paper.** A score is a ranking key,
+    so its only job is to compare papers against each other, and a denominator
+    that changes per paper destroys exactly that. Two papers scoring 69 must
+    mean the same thing.
+
+    Renormalising over "available" families (shipped briefly in v0.22.0) broke
+    that, and it broke it in a biased direction: the families that go missing
+    are the ones papers score BADLY on (measured corpus means: citation 0.28,
+    lexical 0.27, semantic 0.51 — against feedback 0.96, topic 0.74). Dropping
+    a weak family and handing its weight to the strong ones is a free upgrade,
+    so a paper rose by having less evidence. Prod showed it: Feed rows (3
+    families missing) averaged 68.1 against Discovery's 62.0 with all ten.
+
+    A family that could not be measured is IMPUTED at its corpus prior mean
+    (``FamilySpec.prior_mean``) instead. Unknown then costs nothing and buys
+    nothing, and the denominator stays constant, so scores remain comparable
+    across papers and across surfaces. Zero-filling would be the opposite
+    error — it ranks by hydration completeness, which is the trap that got
+    ``usefulness_boost`` deleted.
+
+    Returns ``(score, explanation)``; the explanation's family points,
     adjustment points and clipping term sum exactly to the score.
     """
 
     configured = weights or _resolve_prior_weights(None)
-
-    readings = {
-        spec.key: _family_reading(snapshot, spec) for spec in FAMILY_SPECS
-    }
-    # Renormalise over the families this paper actually has evidence for, so a
-    # thin-metadata candidate is scored on what is known about it rather than
-    # being silently penalised for the columns nobody filled in.
-    active_total = sum(
-        max(0.0, configured.get(key, 0.0))
-        for key, (_value, available, _atoms) in readings.items()
-        if available
-    )
+    readings = {spec.key: _family_reading(snapshot, spec) for spec in FAMILY_SPECS}
 
     families: list[dict] = []
     points_total = 0.0
     for spec in FAMILY_SPECS:
-        value, available, atoms = readings[spec.key]
-        raw_weight = max(0.0, configured.get(spec.key, 0.0))
-        weight = (raw_weight / active_total) if (available and active_total > 0) else 0.0
+        measured_value, available, atoms = readings[spec.key]
+        # Imputed when unmeasured. `value` is what the score actually used, so
+        # the arithmetic on screen always reconciles; `available` tells the UI
+        # to label it as an estimate rather than an observation.
+        value = measured_value if available else spec.prior_mean
+        weight = max(0.0, configured.get(spec.key, 0.0))
         points = 100.0 * weight * value
         points_total += points
         families.append(
@@ -317,6 +343,8 @@ def repaired_prior_score(
                 "weight": round(weight, 6),
                 "points": round(points, 6),
                 "available": available,
+                "imputed": not available,
+                "prior_mean": round(spec.prior_mean, 6),
                 "atoms": atoms,
             }
         )

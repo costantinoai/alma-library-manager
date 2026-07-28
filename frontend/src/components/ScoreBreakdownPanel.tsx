@@ -143,6 +143,17 @@ function FamilyRow({
         <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', color)} aria-hidden />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="truncate text-xs font-medium text-slate-700">{family.label}</span>
+          {family.imputed && (
+            <StatusBadge
+              tone="neutral"
+              size="sm"
+              title={`Not measured for this paper, so it was scored at the corpus average (${Math.round(
+                (family.prior_mean ?? 0) * 100,
+              )}%). Unknown neither helps nor hurts.`}
+            >
+              estimated
+            </StatusBadge>
+          )}
           {degraded && (
             <StatusBadge tone="warning" size="sm">
               keyword
@@ -294,10 +305,11 @@ export function ScoreBreakdownPanel({
 
       {unmeasured.length > 0 && (
         <p className="px-1.5 text-[11px] leading-relaxed text-slate-500">
-          <span className="font-medium text-slate-600">Not measured:</span>{' '}
-          {unmeasured.map((family) => family.label).join(', ')}. These carry no weight for
-          this paper — the rest were rescaled to make up the whole, so a missing journal or
-          citation count never counts against it.
+          <span className="font-medium text-slate-600">Estimated:</span>{' '}
+          {unmeasured.map((family) => family.label).join(', ')} could not be measured for
+          this paper, so each was scored at its corpus average. Not knowing something
+          neither helps nor hurts, and every paper is scored on the same ten families —
+          so this score is directly comparable with any other.
         </p>
       )}
     </SubPanel>

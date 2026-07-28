@@ -613,13 +613,22 @@ def _score_search_result(
         "authors": item.get("authors") or "",
         "abstract": item.get("abstract") or "",
         "year": item.get("year"),
+        "publication_date": item.get("publication_date"),
         "journal": item.get("journal") or "",
-        "cited_by_count": item.get("cited_by_count") or 0,
+        "cited_by_count": item.get("cited_by_count"),
+        "influential_citation_count": item.get("influential_citation_count"),
         "topics": item.get("topics") or [],
         "score": source_relevance,
         "source_type": "manual_search",
         "source_key": source_key,
     }
+    # How many distinct source APIs returned this hit — the multi-source
+    # agreement the merge layer already computed, handed to the ranker's
+    # retrieval family instead of being kept for display only.
+    sources = item.get("sources") or item.get("source_apis") or []
+    if sources:
+        candidate["cross_family_evidence_count"] = len(sources)
+        candidate["retrieval_hit_count"] = len(sources)
     try:
         from alma.application.discovery.ranker import rank_candidate
         from alma.discovery.scoring import measure_candidate

@@ -1463,7 +1463,14 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
         feed_rows = db.execute(
             """SELECT fi.id AS feed_item_id, fi.author_id, fi.monitor_type, fi.monitor_id, fi.monitor_label,
                       p.id, p.title, p.authors, p.year, p.journal,
-                      p.abstract, p.doi, p.url, p.cited_by_count
+                      p.abstract, p.doi, p.url, p.publication_date,
+                      p.cited_by_count, p.influential_citation_count,
+                      -- How many DISTINCT monitors surfaced this paper. Feed's
+                      -- analogue of Discovery's cross-channel agreement: two
+                      -- monitors independently matching one paper is the same
+                      -- kind of evidence as two retrieval channels doing so.
+                      (SELECT COUNT(DISTINCT sib.author_id) FROM feed_items sib
+                        WHERE sib.paper_id = fi.paper_id) AS monitor_match_count
                FROM feed_items fi
                LEFT JOIN papers p ON p.id = fi.paper_id
                WHERE fi.signal_value = 0 AND fi.status = 'new'
@@ -1485,6 +1492,32 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
         followed_ids = {r["author_id"] for r in fa_rows}
     except Exception:
         pass
+
+    # ── Candidate embeddings ──
+    # Scoring needs the candidate's OWN vector, not just the library centroids:
+    # `measure_candidate` reports `candidate_embedding_ready=False` without it,
+    # which made the whole semantic family unmeasurable for every Feed paper.
+    # One batched read, same source Discovery uses.
+    candidate_embeddings: dict = {}
+    try:
+        from alma.core.vector_blob import decode_vector
+        from alma.discovery import similarity as sim_module_emb
+
+        active_model = sim_module_emb.get_active_embedding_model(db)
+        paper_ids = [str(fr["id"]) for fr in feed_rows if fr["id"]]
+        for start in range(0, len(paper_ids), 400):
+            chunk = paper_ids[start:start + 400]
+            placeholders = ",".join("?" * len(chunk))
+            for row in db.execute(
+                f"SELECT paper_id, embedding FROM publication_embeddings "
+                f"WHERE model = ? AND paper_id IN ({placeholders})",
+                [active_model, *chunk],
+            ):
+                vector = decode_vector(row["embedding"])
+                if vector is not None:
+                    candidate_embeddings[str(row["paper_id"])] = vector
+    except Exception as exc:
+        logger.debug("Feed candidate-embedding preload failed: %s", exc)
 
     # ── Phase 1: score (CPU-bound, NO writes, gate NOT held) ──
     # measure_candidate uses the centroids/texts built above; there is no
@@ -1527,6 +1560,11 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 candidate["source_type"] = "query_monitor"
                 candidate["source_key"] = str(fr["monitor_label"] or fr["monitor_id"] or author_id)
 
+            # Agreement across monitors is real evidence, so hand it to the
+            # ranker's retrieval family under the same key Discovery uses.
+            monitor_matches = int(fr["monitor_match_count"] or 1)
+            candidate["cross_family_evidence_count"] = monitor_matches
+            candidate["retrieval_hit_count"] = monitor_matches
             candidate["score_breakdown"] = measure_candidate(
                 candidate,
                 preference_profile,
@@ -1536,6 +1574,7 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 negative_texts,
                 conn=db,
                 settings=settings,
+                candidate_embedding=candidate_embeddings.get(str(fr["id"])),
                 lab_ctx=lab_ctx,
             )
             score, breakdown = rank_candidate(

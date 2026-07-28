@@ -123,11 +123,18 @@ def build_feature_snapshot(
         elif name == "recency_boost":
             availability = bool(candidate.get("publication_date") or candidate.get("year"))
         elif name == "citation_quality":
-            availability = bool(
-                (candidate.get("field_availability") or {}).get("cited_by_count")
-                or (candidate.get("field_availability") or {}).get(
-                    "influential_citation_count"
-                )
+            # "Do we HAVE a citation count", not "did the retrieval merge layer
+            # record observing one". `field_availability` is written in exactly
+            # one place (`retrieval/merge.py`), so keying on it alone marked
+            # citation unavailable for every Feed and Online Search paper —
+            # including ones carrying a perfectly good `cited_by_count` from
+            # their own ingest (2026-07-28).
+            observed = candidate.get("field_availability") or {}
+            availability = (
+                bool(observed.get("cited_by_count"))
+                or bool(observed.get("influential_citation_count"))
+                or candidate.get("cited_by_count") is not None
+                or candidate.get("influential_citation_count") is not None
             )
         reward[name] = _feature(
             detail.get("value"),

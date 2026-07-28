@@ -51,11 +51,21 @@ $$
 
 Two properties follow, and both are load-bearing:
 
-* **Availability-aware renormalisation.** A family with nothing measured is
-  *dropped*, and the rest are rescaled to make up the whole. A paper with no
-  journal is scored on what is known about it rather than being charged for a
-  blank column — and, equally, it no longer collects a free neutral 0.5 of the
-  venue weight, which is what the previous code did.
+* **Weights are FIXED — never rescaled per paper.** A score is a ranking key;
+  its only job is comparing papers, so a denominator that changes per paper
+  destroys exactly that. A family that could not be measured is **imputed at
+  its corpus prior mean** (`FamilySpec.prior_mean`), so not knowing something
+  neither helps nor hurts, and two papers scoring 69 mean the same thing.
+
+  v0.22.0 briefly renormalised over the measured families instead. That broke
+  comparability, and with a bias: the families that go missing are the ones
+  papers score badly on (corpus means: citation 0.28, lexical 0.27, semantic
+  0.51, against feedback 0.96 and topic 0.74), so dropping a weak family and
+  handing its weight to the strong ones was a free upgrade — a paper rose by
+  having less evidence. Prod showed Feed rows (three families missing)
+  averaging 68.1 against Discovery's 62.0 with all ten. Zero-filling is the
+  opposite error: it ranks by hydration completeness, which is the trap that
+  got `usefulness_boost` deleted.
 * **Closure.** The published explanation's family points, adjustments and
   clipping term sum to the final score exactly. The UI renders that sum, so the
   bars and the number can never be different quantities again. Guarded by

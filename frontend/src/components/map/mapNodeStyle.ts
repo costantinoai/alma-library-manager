@@ -74,7 +74,7 @@ export const MAP_NODE_STYLES: Record<MapNodeKind, MapNodeStyle> = {
     opacity: 1.0,
     radius: 3.5,
     defaultColor: MAP_INK.library,
-    legend: 'In your library — filled',
+    legend: 'In your library — solid',
   },
   suggestion: {
     filled: false,
@@ -94,10 +94,15 @@ export const MAP_NODE_STYLES: Record<MapNodeKind, MapNodeStyle> = {
   },
   corpus: {
     filled: true,
-    opacity: 0.55,
-    radius: 3,
+    // Membership is the FIRST thing to read on a corpus map, and 0.55 next to
+    // 1.0 did not carry it — under the Clusters / Year / Score colour modes the
+    // hue is overwritten per node, so alpha and a 0.5px radius were the only
+    // channels left and neither separated at a glance (user report 2026-07-28).
+    // 0.32 keeps corpus papers legible as context while making "mine" obvious.
+    opacity: 0.32,
+    radius: 2.8,
     defaultColor: MAP_INK.ambient,
-    legend: 'Tracked corpus paper',
+    legend: 'Tracked, not in your library — translucent',
   },
   author_library: {
     filled: true,
