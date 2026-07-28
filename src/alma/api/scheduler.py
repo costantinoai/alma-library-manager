@@ -2414,6 +2414,7 @@ def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, s
                 stale.append((scope, view_key, "age_overdue"))
             elif age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
                 stale.append((scope, view_key, "age_floor"))
+
     return stale
 
 
@@ -2423,6 +2424,17 @@ def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, s
 # age window. Both escalate to the weaker gate (yield to the USER, not to every
 # background sibling), so a busy machine still converges.
 _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
+
+
+def _super_regions_built(conn: sqlite3.Connection) -> bool:
+    """Has Signal Lab's substrate ever been built? Cheap, pure read."""
+    try:
+        from alma.application import materialized_views as mv
+        from alma.application import super_regions
+
+        return mv.stored_meta(conn, super_regions.VIEW_KEY) is not None
+    except Exception:  # noqa: BLE001 — advisory; never sink the pass
+        return True
 
 
 def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
@@ -2469,6 +2481,17 @@ def _graph_layout_pass(*, job_id: str, operation_key: str, message: str) -> None
     try:
         stale = _graph_view_staleness(conn)
         urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
+        # `graph:super_regions` is Signal Lab's ENTIRE substrate: without it
+        # `policy._build_context` returns None, every game reports "not
+        # available", and Home silently drops the section — with a full corpus
+        # sitting right there. It is not a graph view, so it is not in `stale`
+        # (that list drives the layout rebuild loop) and could never escalate
+        # past the ordinary idle gate. On prod that gate never opened at all
+        # (see the `/health` heartbeat fix), so the view stayed unbuilt and
+        # Signal Lab was silently off. Never-built counts as urgent here for
+        # the same reason "there is no map to serve" does.
+        if not _super_regions_built(conn):
+            urgent = True
         gate = may_background_continue if urgent else may_background_run
         ok, reason = gate(conn, exclude_operation_key=operation_key)
         if not ok:
