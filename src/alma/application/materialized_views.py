@@ -313,15 +313,21 @@ def get(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     )
 
 
-def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
+def get_stored(
+    conn: sqlite3.Connection,
+    view_key: str,
+    *,
+    include_rebuilding: bool = True,
+) -> dict[str, Any] | None:
     """Serve the stored payload WITHOUT computing a fingerprint or enqueuing.
 
     Task 50 M1: graph views moved freshness ownership from the GET path to the
     scheduled graph-layout maintenance job (drift is measured there, on the
     embedding set — see ``routes/graphs.py``). A GET is therefore a pure row
     read: return the stored envelope if a decodable row exists, else ``None``
-    (the route answers 202 and enqueues the first build). ``rebuilding`` still
-    reflects a live in-flight job so the UI can show "Refreshing…".
+    (the route answers 202 and enqueues the first build). ``rebuilding``
+    normally reflects a live in-flight job; latency-critical stored-only
+    surfaces may disable that durable Activity scan and overlay a local signal.
     """
     view = get_view(view_key)
     row = _read_row(conn, view_key)
@@ -335,7 +341,7 @@ def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None
         fingerprint=str(row.get("fingerprint") or ""),
         computed_at=str(row.get("computed_at") or ""),
         stale=False,
-        rebuilding=_has_active_job(view),
+        rebuilding=_has_active_job(view) if include_rebuilding else False,
         compute_ms=int(row.get("compute_ms") or 0),
     )
 

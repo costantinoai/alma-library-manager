@@ -1351,9 +1351,8 @@ def _build_operational_snapshot(
     try:
         from alma.services.health import HEALTH_CORPUS_VIEW_KEY
 
-        _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get(
-            "totals"
-        ) or {}
+        _stored_health = mv.get_stored(db, HEALTH_CORPUS_VIEW_KEY) or {}
+        _health_totals = ((_stored_health.get("payload") or {}).get("totals")) or {}
         coverage_ready = bool(_health_totals.get("embeddings_ready"))
     except Exception:
         pass
@@ -1987,10 +1986,12 @@ def get_corpus_health(
     user: dict = Depends(get_current_user),
 ):
     try:
-        envelope = mv.get(db, health_service.HEALTH_CORPUS_VIEW_KEY)
-        authors_envelope = mv.get(db, health_service.HEALTH_AUTHORS_VIEW_KEY)
+        from alma.services.health_snapshots import stored_envelope
+
+        envelope = stored_envelope(db, health_service.HEALTH_CORPUS_VIEW_KEY)
+        authors_envelope = stored_envelope(db, health_service.HEALTH_AUTHORS_VIEW_KEY)
     except Exception as exc:
-        raise_internal("Failed to compute corpus health", exc)
+        raise_internal("Failed to read corpus health snapshot", exc)
     payload = envelope.get("payload") or {}
     authors_payload = authors_envelope.get("payload") or {}
 
@@ -2009,6 +2010,12 @@ def get_corpus_health(
     # totals nest under `authors` so the honest issue-vs-unique counts (H-10) are
     # observable without conflating them with paper counts.
     totals = {
+        "papers_total": 0,
+        "with_openalex_id": 0,
+        "without_openalex_id": 0,
+        "eligible_now": 0,
+        "embedding_coverage_pct": 0,
+        "embeddings_ready": False,
         **(payload.get("totals") or {}),
         "dimensions_by_severity": by_severity,
         "authors": authors_payload.get("totals") or {},
@@ -2032,7 +2039,7 @@ def get_corpus_health(
         "rebuilding": bool(authors_envelope.get("rebuilding", False)),
     }
     _generated = [v for v in (corpus_view["generated_at"], authors_view["generated_at"]) if v]
-    oldest_generated = min(_generated) if _generated else payload.get("generated_at")
+    oldest_generated = min(_generated) if _generated else None
 
     return {
         **payload,

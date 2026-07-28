@@ -116,6 +116,16 @@ async def lifespan(app: FastAPI):
 
     init_db_schema()
 
+    # Health endpoints are stored reads only. Build their dependency chain
+    # during startup so even the first request receives a complete snapshot;
+    # the scheduler then owns periodic and debounced refreshes.
+    try:
+        from alma.services.health_snapshots import rebuild_all as rebuild_health_snapshots
+
+        rebuild_health_snapshots()
+    except Exception as e:
+        logger.warning("Initial Health snapshot build skipped: %s", e)
+
     logger.info(
         "Integration plugins: %s",
         ", ".join(get_plugin_registry().ids()),
@@ -262,6 +272,21 @@ async def log_requests(request: Request, call_next):
 
     # Process request
     response = await call_next(request)
+
+    # Health assessment is precomputed, never rebuilt by a GET. Successful
+    # mutations debounce one background refresh through the shared coordinator;
+    # terminal Activity jobs trigger the same coordinator in scheduler.py.
+    if response.status_code < 400:
+        try:
+            from alma.services.health_snapshots import (
+                mutation_may_change_health,
+                request_refresh,
+            )
+
+            if mutation_may_change_health(request.method, request.url.path):
+                request_refresh(delay_seconds=2)
+        except Exception:
+            logger.debug("Health snapshot mutation refresh unavailable", exc_info=True)
 
     # Log request details
     process_time = time.time() - start_time

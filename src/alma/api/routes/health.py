@@ -82,7 +82,22 @@ def get_operations(
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    return maintenance.list_operations(db)
+    from alma.services.health_snapshots import stored_operations
+
+    return stored_operations(db)
+
+
+@router.post(
+    "/refresh",
+    summary="Refresh all durable Health snapshots",
+    description="Queues corpus, author, and operation-plan assessment in the background.",
+)
+def refresh_health(
+    _user: dict = Depends(get_current_user),
+):
+    from alma.services.health_snapshots import schedule_manual_refresh
+
+    return schedule_manual_refresh()
 
 
 class GovernanceSettings(BaseModel):
@@ -298,10 +313,10 @@ def set_operation_config(
 
 
 def _health_payload(db: sqlite3.Connection) -> dict:
-    from alma.application import materialized_views as mv
     from alma.services import health as health_service
+    from alma.services.health_snapshots import stored_payload
 
-    return (mv.get(db, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+    return stored_payload(db, health_service.HEALTH_CORPUS_VIEW_KEY)
 
 
 @router.get(

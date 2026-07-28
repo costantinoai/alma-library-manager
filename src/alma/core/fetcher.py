@@ -78,6 +78,9 @@ def get_scholarly_client():
     avoid concurrent access issues.
     """
 
+    from alma.core.network_policy import require_network_access
+
+    require_network_access("google_scholar")
     client = getattr(thread_local, "scholarly", None)
     if client is None:
         client = scholarly.__class__()
@@ -94,6 +97,9 @@ def reset_scholarly_session() -> None:
     threads.
     """
 
+    from alma.core.network_policy import require_network_access
+
+    require_network_access("google_scholar")
     thread_local.scholarly = scholarly.__class__()
 
 

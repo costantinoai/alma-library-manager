@@ -21,7 +21,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Eye, History, Loader2, Play } from 'lucide-react'
+import { AlertTriangle, Eye, History, Loader2, Play } from 'lucide-react'
 
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
@@ -137,6 +137,8 @@ export function RepairCard({
   const estimate = dirty ? estimateQuery.data : undefined
   const pending = estimate ? estimate.candidates_pending : op.candidates_pending
   const eta = estimate ? estimate.eta : op.eta
+  const quota = estimate ? estimate.quota : op.quota
+  const runBlocked = quota?.sufficient === false
 
   const runRequest = (extra?: Partial<MaintenanceRunRequest>): MaintenanceRunRequest => ({
     max_items: manualLimit,
@@ -209,6 +211,18 @@ export function RepairCard({
           Prerequisite still pending:{' '}
           {op.blocked_by.map((item) => `${item.label} (${item.pending})`).join(', ')} — you can run this
           now, but results may be incomplete until it finishes.
+        </p>
+      ) : null}
+
+      {runBlocked ? (
+        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>{quota?.reason ?? 'Provider quota cannot cover this run.'}</span>
+        </p>
+      ) : quota ? (
+        <p className="text-xs text-slate-500">
+          Planned cost: {quota.required.toLocaleString()} {quota.provider === 'openalex' ? 'OpenAlex credits' : quota.unit}
+          {quota.available != null ? ` · ${quota.available.toLocaleString()} available` : ' · available quota not measured yet'}
         </p>
       ) : null}
 
@@ -370,6 +384,7 @@ export function RepairCard({
             variant="outline"
             icon={<Play className="h-4 w-4" />}
             pending={running}
+            disabled={runBlocked}
             className="border-control-edge text-alma-700 hover:bg-control-quiet"
             // 42.2: a pending prerequisite is a WARNING (banner above), not a hard
             // block — one stuck upstream op (e.g. a throttled title_resolution)

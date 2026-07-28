@@ -498,13 +498,24 @@ class OpenAlexClient:
         if cached is not None:
             return cached
 
+        from alma.core.network_policy import require_network_access
+
+        require_network_access("openalex")
+
+        cost_class = classify_request(urlsplit(url).path, params)
+        from alma.core.provider_quota import require_provider_quota
+
+        require_provider_quota(
+            "openalex",
+            required=_CLASS_COST_CREDITS.get(cost_class, 1),
+        )
+
         # Track call in operation stats
         if self._op_stats:
             self._op_stats.calls_total += 1
 
         # Count one upstream call per logical request (cache hits returned
         # above; retries below don't re-count) under its pricing class.
-        cost_class = classify_request(urlsplit(url).path, params)
         with self._stats_lock:
             self._class_counts[cost_class] = self._class_counts.get(cost_class, 0) + 1
 

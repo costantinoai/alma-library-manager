@@ -299,7 +299,7 @@ export interface HealthAuthorTotals {
 
 /** GET /insights/health — flattened MV envelope (payload fields + SWR flags). */
 export interface HealthSnapshot {
-  generated_at: string
+  generated_at: string | null
   totals: {
     papers_total: number
     with_openalex_id: number
@@ -354,6 +354,20 @@ export interface MaintenanceEta {
   basis: string
 }
 
+export interface ProviderQuotaForecast {
+  provider: string
+  unit: string
+  requests: number
+  required: number
+  remaining: number | null
+  reserve: number
+  available: number | null
+  sufficient: boolean
+  known: boolean
+  network_enabled: boolean
+  reason: string | null
+}
+
 /** A run-time control a maintenance op exposes (e.g. scope select / dry-run). */
 export interface MaintenanceParamSpec {
   options?: string[]
@@ -381,13 +395,14 @@ export interface MaintenanceOperation {
   unlocks: string[]
   optional: boolean
   manual_gate: boolean
-  readiness: 'healthy' | 'blocked' | 'manual_review' | 'optional' | 'ready'
+  readiness: 'healthy' | 'blocked' | 'blocked_external' | 'manual_review' | 'optional' | 'ready'
   recommended: boolean
   repairs: string[]
   operation_key: string
   candidates_pending: number
   /** ETA to drain the backlog at the API's rate (null for local / nothing pending). */
   eta: MaintenanceEta | null
+  quota: ProviderQuotaForecast | null
   /** Run-time controls the card should render (scope select / dry-run preview). */
   params_spec: MaintenanceParamsSpec | null
   /** Effective API batch size (items/request), or null when the batch is fixed. */
@@ -424,6 +439,7 @@ export interface MaintenancePlan {
   unit: string
   dependencies: Array<{ key: string; label: string; pending: number; required: boolean }>
   expected_requests: Record<string, number>
+  quota: ProviderQuotaForecast | null
   plan_fingerprint: string
   confirmation_token: string | null
 }
@@ -447,7 +463,7 @@ export interface MaintenanceRunRequest {
 }
 
 export interface HealthOperationsResponse {
-  generated_at: string
+  generated_at: string | null
   recommended_next: { key: string; label: string; readiness: string; reason: string } | null
   // Backend-owned ordered stage groups (Checkpoint G): the UI renders these
   // verbatim with their labels — no hard-coded task-key grouping/order.
@@ -459,6 +475,11 @@ export interface HealthOperationsResponse {
   api_budget?: {
     openalex_credits_remaining: number | null
     reserved_user_calls: number
+    network_policy?: {
+      enabled: boolean
+      settings_enabled: boolean
+      forced_off_by_env: boolean
+    }
     last_credit_abort: {
       job_id: string
       operation_key: string | null
@@ -494,6 +515,10 @@ export function getHealthSnapshot(): Promise<HealthSnapshot> {
 
 export function getHealthOperations(): Promise<HealthOperationsResponse> {
   return api.get<HealthOperationsResponse>('/health/operations')
+}
+
+export function refreshHealthSnapshots(): Promise<JobEnvelope> {
+  return api.post<JobEnvelope>('/health/refresh')
 }
 
 /** One paper flagged by a health dimension (drilldown row). */
@@ -897,6 +922,7 @@ export interface Stats {
 
 export interface Settings {
   backend: 'scholar' | 'openalex'
+  network_access_enabled: boolean
   openalex_email?: string
   openalex_api_key?: string
   semantic_scholar_api_key?: string
@@ -3631,6 +3657,7 @@ export interface ImportPreflight {
     semantic_scholar_title_search: number
     semantic_scholar_vector_batch_candidates: number
   }
+  quota: ProviderQuotaForecast
   eta: {
     openalex: MaintenanceEta | null
     title_resolution: MaintenanceEta | null

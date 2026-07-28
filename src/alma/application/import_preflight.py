@@ -159,6 +159,12 @@ def summarize_records(
     openalex_requests = math.ceil(with_doi / 50) + title_search_needed if valid else 0
     s2_vector_candidates = with_doi
     openalex_authed, s2_authed = detect_auth()
+    from alma.core.provider_quota import forecast_openalex_quota
+
+    quota = forecast_openalex_quota(
+        list_requests=math.ceil(with_doi / 50) if valid else 0,
+        search_requests=title_search_needed if valid else 0,
+    )
 
     return {
         "source": source,
@@ -193,6 +199,7 @@ def summarize_records(
             "semantic_scholar_title_search": title_search_needed,
             "semantic_scholar_vector_batch_candidates": s2_vector_candidates,
         },
+        "quota": quota.to_wire(),
         "eta": {
             "openalex": estimate_eta(
                 "corpus_metadata",

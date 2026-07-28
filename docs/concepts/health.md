@@ -15,6 +15,10 @@ something is fixable, Settings points you here.
 
 A **persistent band** at the top — the vitals ribbon, the system-status chips,
 and the API budget — answers "is everything OK?" without making you pick a tab.
+The page reads durable snapshots prepared at startup, after relevant mutations
+and completed jobs, and every five minutes. Opening Health never runs the
+corpus-wide assessment; **Re-assess** queues that work in Activity and replaces
+the stored snapshot when it finishes.
 Two tabs below carry the work, most actionable first:
 
 | Tab | What's in it |
@@ -182,8 +186,12 @@ once you're idle again. Background sweeps that call an external provider also
 **reserve 200 API calls for your manual work** — they stop before consuming
 OpenAlex's daily quota past that floor and report it on the page (the **OpenAlex API
 budget** tile shows the live remaining count, and a notice when the last background
-run stopped to protect your reserve). Your own manual operations are never paused
-and may use the full remaining quota. Both knobs — the idle-wait and the reserve —
+run stopped to protect your reserve). Each external repair card forecasts its
+bounded request/credit cost before launch. When known remaining quota cannot
+cover that plan, the card explains the shortfall and disables **Run now**;
+automatic repair skips the same plan. Your own manual operations are never paused
+and may use the full remaining quota, but cannot exceed the provider's hard pool.
+Both knobs — the idle-wait and the reserve —
 are adjustable in **Settings → Data & system → Background operations**. The healer is
 **off by default end to end**;
 `ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch (see

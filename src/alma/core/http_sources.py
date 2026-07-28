@@ -494,6 +494,9 @@ class SourceHttpClient:
         lane deadline) pass a small value so a 429/5xx fails fast instead
         of burning the policy's full background-job backoff chain.
         """
+        from alma.core.network_policy import require_network_access
+
+        require_network_access(self._policy.name)
         url = self._prepare_url(path_or_url)
         request_params = self._apply_auth_params(params)
         request_headers = self._apply_auth_headers(headers)

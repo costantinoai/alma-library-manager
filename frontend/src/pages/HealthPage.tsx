@@ -28,6 +28,7 @@ import {
   getHealthOperations,
   getHealthSnapshot,
   getJobStatus,
+  refreshHealthSnapshots,
   runMaintenanceOperation,
   resumeMaintenanceTask,
   setMaintenanceConfig,
@@ -137,6 +138,7 @@ export function HealthPage() {
       // daily quota is exhausted. Surface the backend's clear message instead of
       // the generic "nothing to run".
       const capSkipped = result.status === 'skipped_daily_cap'
+      const networkBlocked = result.status === 'blocked_external'
       if (variables.sequence) {
         // Enqueue succeeded, but a background FAILURE is not this mutation's
         // onError — so we can't trust "started" as "will finish". If nothing was
@@ -144,7 +146,7 @@ export function HealthPage() {
         // hand off to the job watcher, which advances only on COMPLETED.
         if (!launched) {
           stopSequence(
-            capSkipped && result.message
+            (capSkipped || networkBlocked) && result.message
               ? result.message
               : 'The recommended step had nothing eligible to run — auto-advance stopped.',
           )
@@ -158,7 +160,12 @@ export function HealthPage() {
         }
         return
       }
-      if (capSkipped) {
+      if (networkBlocked) {
+        toast({
+          title: 'External network access is off',
+          description: result.message ?? 'Enable network access in Settings → Connections.',
+        })
+      } else if (capSkipped) {
         toast({
           title: 'Daily API limit reached',
           description:
@@ -211,9 +218,26 @@ export function HealthPage() {
     onError: (err) => errorToast('Could not resume automation', String(err)),
   })
 
-  // ['insights-diag'] included: the System status band below reads the eight
-  // diagnostics-section queries — an explicit Refresh must refresh it too.
-  const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY, ['insights-diag'])
+  // Explicit reassessment is Activity-backed: the POST only enqueues, then the
+  // UI waits for the durable terminal result before reading the new snapshots.
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const queued = await refreshHealthSnapshots()
+      if (!queued.job_id) throw new Error('Health refresh did not return a job id')
+      for (;;) {
+        const status = await getJobStatus(queued.job_id)
+        if (status.status === 'completed') return status
+        if (status.status === 'failed' || status.status === 'cancelled') {
+          throw new Error(status.error || status.message || `Health refresh ${status.status}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    },
+    onSuccess: async () => {
+      await invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY, ['insights-diag'])
+    },
+    onError: (err) => errorToast('Could not refresh Health', String(err)),
+  })
   const runningKey = runMutation.isPending ? (runMutation.variables?.key ?? null) : null
   // H-11: the op whose auto-config write is in flight (shows a "Saving…" hint so
   // the post-save snap to server truth doesn't look like a glitch).
@@ -351,7 +375,11 @@ export function HealthPage() {
           snapshot ? (
             <MetaLine
               items={[
-                <span>Last assessed {formatRelativeShort(snapshot.generated_at)}</span>,
+                <span>
+                  {snapshot.generated_at
+                    ? `Last assessed ${formatRelativeShort(snapshot.generated_at)}`
+                    : 'Assessment pending'}
+                </span>,
                 freshnessNote(snapshot),
               ]}
             />
@@ -361,11 +389,15 @@ export function HealthPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={refresh}
-            disabled={snapshotQuery.isFetching || operationsQuery.isFetching}
+            onClick={() => refreshMutation.mutate()}
+            disabled={
+              refreshMutation.isPending || snapshotQuery.isFetching || operationsQuery.isFetching
+            }
           >
-            <RefreshCw className="h-4 w-4" />
-            Re-assess
+            <RefreshCw
+              className={`h-4 w-4 ${refreshMutation.isPending ? 'animate-spin' : ''}`}
+            />
+            {refreshMutation.isPending ? 'Assessing…' : 'Re-assess'}
           </Button>
         }
         guide={{

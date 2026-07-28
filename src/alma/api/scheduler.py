@@ -1171,6 +1171,14 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+def get_running_scheduler() -> BackgroundScheduler | None:
+    """Return the existing live scheduler without creating one."""
+
+    if _scheduler is None or not _scheduler.running:
+        return None
+    return _scheduler
+
+
 _USER_CANCEL_REAP_MESSAGE = "Operation cancelled"
 _USER_CANCEL_REAP_ERROR = (
     "You asked to stop this operation and its worker did not survive to write "
@@ -1372,6 +1380,28 @@ def setup_scheduler() -> None:
         logger.warning("Orphan job reap skipped: %s", exc)
 
     sched = get_scheduler()
+
+    # -- Durable Health snapshots -----------------------------------------
+    # Health routes are pure stored reads. Startup warms the three dependent
+    # snapshots before serving; keep a periodic floor in case a process died
+    # between a mutation and its debounced rebuild.
+    from alma.services.health_snapshots import rebuild_all as rebuild_health_snapshots
+
+    sched.add_job(
+        rebuild_health_snapshots,
+        trigger=IntervalTrigger(minutes=5),
+        id="health_snapshot_periodic",
+        name="Refresh Health snapshots",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    with _job_lock:
+        _job_meta["health_snapshot_periodic"] = {
+            "action": "refresh_health_snapshots",
+            "name": "Refresh Health snapshots",
+            "description": "Precomputes Health diagnostics and repair plans every 5 min",
+        }
 
     # -- Orphan reap sweep (interval) ---------------------------------------
     # The startup reap above only sees rows that were ALREADY 300 s stale when
@@ -2570,7 +2600,6 @@ def _graph_layout_pass(
             )
 
         from alma.api.routes.graphs import _paper_scope_gauge
-
         from alma.application.super_regions import OPERATION_KEY as _SUPER_REGIONS_OP
 
         # Exclude the super-regions build THIS pass just enqueued a few lines up:
@@ -3084,6 +3113,20 @@ def find_active_job(operation_key: str) -> dict | None:
     return {"job_id": job_id, **st}
 
 
+def has_active_job_in_memory(operation_key: str) -> bool:
+    """Cheap process-local activity check for read-latency metadata."""
+
+    if not operation_key:
+        return False
+    with _job_lock:
+        return any(
+            st.get("operation_key") == operation_key
+            and st.get("status") in _ACTIVE_STATUSES
+            and not _is_stale_active_status(st)
+            for st in _job_status.values()
+        )
+
+
 def is_cancellation_requested(job_id: str) -> bool:
     """Return True if cancellation has been requested for a job."""
     st = get_job_status(job_id) or {}
@@ -3253,6 +3296,20 @@ def set_job_status(job_id: str, **kwargs) -> None:
             level="ERROR" if status_val == "failed" else "INFO",
             step="status",
         )
+    # A completed/failed/cancelled background operation may have changed corpus
+    # health after the HTTP enqueue request's earlier debounce. Reassess once at
+    # the terminal boundary. Manual Health refresh excludes itself.
+    if (
+        status_changed
+        and str(persisted.get("status") or "").lower() in _TERMINAL_STATUSES
+        and persisted.get("operation_key") != "materialize.health.snapshots"
+    ):
+        try:
+            from alma.services.health_snapshots import request_refresh
+
+            request_refresh(delay_seconds=2)
+        except Exception:
+            logger.debug("Health snapshot terminal refresh unavailable", exc_info=True)
 
 
 def list_all_job_statuses(

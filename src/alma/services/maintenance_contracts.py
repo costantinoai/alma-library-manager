@@ -145,6 +145,7 @@ class MaintenanceRunPlan:
     # for local-compute / nothing-pending tasks. This is the single source the
     # ``/estimate`` endpoint returns — no secondary recomputation downstream.
     eta: dict[str, Any] | None = None
+    quota: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -170,6 +171,7 @@ class MaintenanceRunPlan:
             "plan_fingerprint": self.fingerprint,
             "confirmation_token": self.confirmation_token,
             "eta": self.eta,
+            "quota": self.quota,
         }
 
 
@@ -295,4 +297,3 @@ class MaintenanceTask:
                 f"auto_daily_cap must be between 1 and {self.max_auto_daily_cap} for {self.key}"
             )
         return chosen
-

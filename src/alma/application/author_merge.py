@@ -917,6 +917,10 @@ def discover_aliases_via_orcid(
             }
         rows = (resp.json() or {}).get("results") or []
     except Exception as exc:
+        from alma.core.network_policy import ExternalAccessError
+
+        if isinstance(exc, ExternalAccessError):
+            raise
         logger.warning(
             "discover_aliases_via_orcid failed for %s: %s", primary_oid_norm, exc,
         )
@@ -1416,6 +1420,10 @@ def scan_duplicate_candidates(
                 target["openalex_id"], mailto=mailto,
             )
         except Exception as exc:  # pragma: no cover — best-effort
+            from alma.core.network_policy import ExternalAccessError
+
+            if isinstance(exc, ExternalAccessError):
+                raise
             # A network/lookup FAILURE is the only case we leave unstamped, so the
             # author is retried next run (don't `continue` past the stamp for the
             # success cases below).

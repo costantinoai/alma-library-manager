@@ -1,4 +1,9 @@
 import { useState, useEffect, type ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { WifiOff } from 'lucide-react'
+import { api } from '@/api/client'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { PageThemeProvider } from '@/components/ui/page-theme'
 import { PAGE_THEMES } from '@/lib/palette'
 import { Sidebar, type Page } from './Sidebar'
@@ -40,6 +45,15 @@ export function AppShell({
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readInitialCollapsed())
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const networkPolicyQuery = useQuery({
+    queryKey: ['network-policy'],
+    queryFn: () =>
+      api.get<{ enabled: boolean; settings_enabled: boolean; forced_off_by_env: boolean }>(
+        '/settings/network-policy',
+      ),
+    staleTime: 30_000,
+    retry: 1,
+  })
 
   // Persist sidebar collapse preference. localStorage write is cheap
   // and synchronous; doing it on every change keeps the next reload
@@ -113,6 +127,28 @@ export function AppShell({
           isRefreshing={isRefreshing}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
+        {networkPolicyQuery.data?.enabled === false ? (
+          <div className="px-4 pt-4 lg:px-6">
+            <Alert variant="warning" className="pr-36">
+              <WifiOff className="h-4 w-4" />
+              <AlertDescription>
+                External network access is off
+                {networkPolicyQuery.data.forced_off_by_env ? ' by an operations override' : ''}.
+                Local Library, maps, and search still work; API, Slack, email, and hosted-AI calls
+                are blocked.
+              </AlertDescription>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="absolute right-3 top-2.5"
+                onClick={() => onNavigate('settings')}
+              >
+                Open Settings
+              </Button>
+            </Alert>
+          </div>
+        ) : null}
 
         {/* One assignment for the whole app: the routed page decides the
             identity hue, and every piece of structural chrome under `main`

@@ -112,6 +112,7 @@ export function SettingsPage() {
 
   const [formData, setFormData] = useState<Settings>({
     backend: 'openalex',
+    network_access_enabled: true,
     openalex_email: '',
     openalex_api_key: '',
     semantic_scholar_api_key: '',
@@ -135,7 +136,7 @@ export function SettingsPage() {
   const saveMutation = useMutation({
     mutationFn: (data: Settings) => api.put<Settings>('/settings', data),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['settings'], ['openalex-usage'], ['openalex-status'], ['semantic-scholar-status'])
+      await invalidateQueries(queryClient, ['settings'], ['network-policy'], ['openalex-usage'], ['openalex-status'], ['semantic-scholar-status'])
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
     },

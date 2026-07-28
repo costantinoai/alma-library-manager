@@ -165,6 +165,11 @@ def resolve_source_policy(
 ) -> dict[str, bool]:
     """Resolve source enable flags; API identity never supplies rank weight."""
 
+    from alma.core.network_policy import network_access_enabled
+
+    if not network_access_enabled():
+        return {source: False for source in SOURCE_KEYS}
+
     cfg = settings or {}
     enabled: dict[str, bool] = {}
     for source in SOURCE_KEYS:
@@ -192,7 +197,19 @@ def _build_source_calls(
     s2_publication_types = _split_csv_setting(settings, "sources.semantic_scholar.publication_types")
     s2_open_access_pdf = _setting_bool(settings or {}, "sources.semantic_scholar.open_access_pdf", False)
     source_calls = []
-    if enabled["openalex"]:
+    from alma.core.provider_quota import provider_can_start
+    from alma.openalex.http import SEARCH_COST_CREDITS
+
+    openalex_available = enabled["openalex"] and provider_can_start(
+        "openalex",
+        required=SEARCH_COST_CREDITS,
+    )
+    if enabled["openalex"] and not openalex_available:
+        logger.info(
+            "Skipping OpenAlex search lane: daily quota cannot cover one search; "
+            "continuing fallback sources"
+        )
+    if openalex_available:
         source_calls.append(
             ("openalex", lambda: openalex_related.search_works_hybrid(query, limit=per_source_limit, from_year=from_year))
         )

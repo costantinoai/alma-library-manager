@@ -2007,6 +2007,21 @@ def plan_task(
         batch_size=validated.request_batch_size,
     )
     expected_requests = {str(eta["source"]): int(eta["requests"])} if eta else {}
+    from alma.core.provider_quota import forecast_operation_quota
+    from alma.services.background_settings import get_reserved_api_calls
+
+    reserve = (
+        0
+        if validated.trigger == MaintenanceTrigger.USER
+        else get_reserved_api_calls(conn)
+    )
+    quota_forecast = forecast_operation_quota(
+        task_key=task.key,
+        sources=task.sources,
+        selected=selected,
+        expected_requests=expected_requests,
+        reserve=reserve,
+    )
     fingerprint_payload = {
         "task_key": task.key,
         "spec": validated.model_dump(mode="json", exclude={"confirmation_token", "plan_fingerprint"}),
@@ -2031,6 +2046,7 @@ def plan_task(
         # endpoint can return it directly instead of recomputing a whole-backlog
         # ETA that ignores max_items.
         eta=eta,
+        quota=quota_forecast.to_wire() if quota_forecast else None,
     )
 
 
@@ -2067,6 +2083,23 @@ def _task_budget(
     pending = max(0, int(pending))
     selected = pending if limit is None else min(pending, max(0, int(limit)))
     openalex_authed, s2_authed = detect_auth()
+    eta = estimate_eta(
+        task.eta_key or task.key,
+        selected,
+        openalex_authed=openalex_authed,
+        s2_authed=s2_authed,
+        batch_size=batch,
+    )
+    expected_requests = {str(eta["source"]): int(eta["requests"])} if eta else {}
+    from alma.core.provider_quota import forecast_operation_quota
+
+    quota_forecast = forecast_operation_quota(
+        task_key=task.key,
+        sources=task.sources,
+        selected=selected,
+        expected_requests=expected_requests,
+        reserve=0,
+    )
     return {
         "params": effective,
         "target_paper_ids": target_ids,
@@ -2075,13 +2108,8 @@ def _task_budget(
         "run_limit": int(limit) if limit is not None else None,
         "selected_items": int(selected),
         "batch_size": batch,
-        "eta": estimate_eta(
-            task.eta_key or task.key,
-            selected,
-            openalex_authed=openalex_authed,
-            s2_authed=s2_authed,
-            batch_size=batch,
-        ),
+        "eta": eta,
+        "quota": quota_forecast.to_wire() if quota_forecast else None,
     }
 
 
@@ -2156,7 +2184,12 @@ def describe_task(
     conn: sqlite3.Connection, task: MaintenanceTask, health_payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Full operations-status record for one task (the GET payload shape)."""
-    budget = _task_budget(conn, task, health_payload=health_payload)
+    budget = _task_budget(
+        conn,
+        task,
+        health_payload=health_payload,
+        limit=get_task_manual_limit(conn, task),
+    )
     dependencies = []
     for key in task.prerequisites:
         dependency = REGISTRY[key]
@@ -2208,6 +2241,7 @@ def describe_task(
         # each poll (shrinks as work completes); the /estimate endpoint recomputes
         # it live when the user changes scope or batch size.
         "eta": budget["eta"],
+        "quota": budget["quota"],
         "auto_enabled": get_task_auto_enabled(conn, task),
         "default_auto_enabled": task.default_auto_enabled,
         # Set when the user manually stopped a background run: automation skips
@@ -2252,6 +2286,7 @@ def estimate_task(
         "candidates_pending": budget["candidates_pending"],
         "request_batch_size": budget["batch_size"],
         "eta": budget["eta"],
+        "quota": budget["quota"],
     }
 
 
@@ -2310,20 +2345,31 @@ def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
         last_abort = None
         last_pause = None
 
+    from alma.core.network_policy import network_policy_status
+
     return {
         "openalex_credits_remaining": provider_remaining_credits("openalex"),
         "reserved_user_calls": get_reserved_api_calls(conn),
+        "network_policy": network_policy_status().to_wire(),
         "last_credit_abort": last_abort,
         "last_pause": last_pause,
     }
 
 
-def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Backend-owned order, stage grouping, readiness, and operation state."""
-    payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-    operations = [describe_task(conn, task, payload) for task in REGISTRY.values()]
+def finalize_operation_plan(
+    operations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Apply current quota/readiness and select one safe recommended action."""
+
+    from alma.core.provider_quota import refresh_quota_forecast
+
     recommended: dict[str, Any] | None = None
     for operation in operations:
+        refreshed = refresh_quota_forecast(
+            operation.get("quota"),
+            network_required=bool(operation.get("sources")),
+        )
+        operation["quota"] = refreshed.to_wire() if refreshed else None
         blocked_by = [
             row
             for row in operation["dependencies"]
@@ -2341,6 +2387,10 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
             operation["readiness"] = "optional"
         else:
             operation["readiness"] = "ready"
+        quota = operation.get("quota") or {}
+        quota_blocked = not quota.get("sufficient", True)
+        if pending > 0 and quota_blocked:
+            operation["readiness"] = "blocked_external"
         operation["recommended"] = False
         # Recommended-next must be SAFE: it drives the one-click "Run recommended
         # sequence", so destructive/manual-gate ops and optional heavy producers
@@ -2352,6 +2402,7 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
             and not operation["optional"]
             and not operation["manual_gate"]
             and not operation["destructive"]
+            and not quota_blocked
         ):
             operation["recommended"] = True
             recommended = {
@@ -2360,6 +2411,20 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
                 "readiness": operation["readiness"],
                 "reason": "First actionable operation in dependency order",
             }
+    return recommended
+
+
+def list_operations(
+    conn: sqlite3.Connection,
+    *,
+    health_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Backend-owned order, stage grouping, readiness, and operation state."""
+    payload = health_payload
+    if payload is None:
+        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+    operations = [describe_task(conn, task, payload) for task in REGISTRY.values()]
+    recommended = finalize_operation_plan(operations)
 
     stages: list[dict[str, Any]] = []
     for task in REGISTRY.values():
@@ -2501,67 +2566,13 @@ class MaintenanceLaunch:
     message: str | None = None
 
 
-def _provider_daily_cap_block(
-    task: MaintenanceTask, *, trigger_source: str
-) -> str | None:
-    """Clear, informative message when a network task can't run because the
-    OpenAlex daily API quota is exhausted — else ``None`` (free to run).
+def _provider_daily_cap_block(plan: MaintenanceRunPlan) -> str | None:
+    """Return shared plan's network/quota reason when launch is unsafe."""
 
-    OpenAlex is the only source that exposes a finite daily pool (its live
-    ``X-RateLimit-Remaining`` header); Semantic Scholar / Crossref are paced by
-    per-second politeness + the idle gate and have no daily cap to hit here, so
-    tasks that don't touch OpenAlex are never blocked by this guard.
-
-    A MANUAL (``user``) run may spend the pool down to the provider's hard zero;
-    a BACKGROUND / ``scheduler`` run must leave the user reserve intact
-    (``provider_budget_ok``) so an idle sweep can't consume the quota the user
-    needs for their own actions.
-    """
-    if task.cost != COST_NETWORK or SOURCE_OPENALEX not in task.sources:
+    quota = plan.quota or {}
+    if quota.get("sufficient", True):
         return None
-    from alma.core.http_sources import (
-        RESERVED_USER_CALLS,
-        provider_budget_ok,
-        provider_remaining_credits,
-    )
-
-    remaining = provider_remaining_credits("openalex")
-    if remaining is None:
-        # Quota unknown (e.g. no OpenAlex call made yet this process) — don't
-        # pre-emptively block; the run itself will discover the real ceiling.
-        return None
-
-    from alma.api.scheduler import is_user_facing_trigger
-
-    is_user = is_user_facing_trigger(trigger_source)
-    if is_user:
-        if remaining > 0:
-            return None
-        return (
-            f"Skipped — OpenAlex's daily API limit is reached (0 calls left). "
-            f"“{task.label}” needs OpenAlex, so it can't run right now; it will "
-            "work again after the quota resets (around 00:00 UTC)."
-        )
-    # Cost-class awareness: a paid-search task must leave headroom for its
-    # per-run search budget ON TOP of the user reserve — one search costs 10×
-    # a list call, so search-heavy background runs drain the pool fastest.
-    # (Lazy import: maintenance ↔ title_resolution would cycle at module load.)
-    from alma.services.title_resolution import OPENALEX_FALLBACK_PER_RUN_BUDGET
-
-    search_heavy_extra = {
-        "title_resolution": OPENALEX_FALLBACK_PER_RUN_BUDGET,
-        # corpus_metadata's Phase 0 runs the same title-resolution pipeline.
-        "corpus_metadata": OPENALEX_FALLBACK_PER_RUN_BUDGET,
-    }
-    reserve = RESERVED_USER_CALLS + search_heavy_extra.get(task.key, 0)
-    if provider_budget_ok("openalex", reserve=reserve):
-        return None
-    return (
-        f"Skipped “{task.label}” — OpenAlex daily API budget is low "
-        f"({remaining} calls left; holding {reserve} in reserve for "
-        "your manual actions). It resumes automatically after the quota resets "
-        "(around 00:00 UTC)."
-    )
+    return str(quota.get("reason") or "External provider quota cannot cover this run.")
 
 
 def run_task_now(
@@ -2617,11 +2628,16 @@ def run_task_now(
 
     # Don't schedule a network op that will only churn against an exhausted daily
     # quota — stop up front with a clear message the UI can show.
-    cap_message = _provider_daily_cap_block(task, trigger_source="user")
+    cap_message = _provider_daily_cap_block(plan)
     if cap_message:
         logger.info("maintenance run blocked by daily cap: %s", cap_message)
+        blocked_status = (
+            "blocked_external"
+            if plan.quota and not plan.quota.get("network_enabled", True)
+            else "skipped_daily_cap"
+        )
         return MaintenanceLaunch(
-            status="skipped_daily_cap", job_id=None, plan=plan, message=cap_message
+            status=blocked_status, job_id=None, plan=plan, message=cap_message
         )
 
     effective = {
@@ -2781,7 +2797,17 @@ def maintenance_repair_periodic() -> None:
                 continue
             # Don't queue a network op with no external-API budget left — skip it
             # this tick with a clear log (another enabled task may still qualify).
-            cap_message = _provider_daily_cap_block(task, trigger_source="scheduler")
+            planned_batch = min(remaining, task.auto_chunk_size, HEALER_PER_TICK_LIMIT)
+            auto_plan = plan_task(
+                conn,
+                task,
+                MaintenanceRunSpec(
+                    trigger=MaintenanceTrigger.SCHEDULER,
+                    max_items=max(1, planned_batch),
+                ),
+                health_payload=payload,
+            )
+            cap_message = _provider_daily_cap_block(auto_plan)
             if cap_message:
                 logger.info("idle maintenance: %s", cap_message)
                 continue

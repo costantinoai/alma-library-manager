@@ -199,10 +199,12 @@ construction, not by bookkeeping.
   `GET /health` (the container `HEALTHCHECK`, every 30 s) — counting the latter
   made `app_is_idle()` permanently false inside Docker, so no background sweep ever
   ran there. Background provider calls also
-  **reserve 200 API calls for the user** (`http_sources.provider_budget_ok` over
-  OpenAlex's live `X-RateLimit-Remaining`); a sweep that would cross the floor stops
-  gracefully and the Health page reports the remaining credits + the last
-  credit-limit abort. Manual user operations never pause and use the full quota.
+  **reserve 200 OpenAlex credits for the user**. The shared quota planner prices
+  list/filter calls at one credit and paid searches at ten, then rejects an
+  automatic plan before launch when its full bounded cost would cross that
+  floor. Health reports the planned cost, remaining credits, and the last
+  credit-limit abort. Manual user operations never pause and use the full quota,
+  but the same preflight prevents a plan that exceeds the provider's hard pool.
 * **Per-job nested fan-out budget.** `ALMA_SCHEDULER_WORKERS` bounds how many
   jobs run at once; `JobPolicy.fanout_budget` bounds how *wide* each one fans
   out. A job that internally spawns a `ThreadPoolExecutor` (discovery retrieval

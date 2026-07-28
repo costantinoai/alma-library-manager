@@ -10,6 +10,23 @@ own quotas, identifier shapes, and quirks. This page documents what
 ALMa fetches, how it batches, and what to expect when a source goes
 sideways.
 
+## Global network control
+
+**Settings → Connections → External APIs → External network access** is the
+single application switch for outbound scholarly APIs, Slack, email, Google
+Scholar, and hosted AI. Turning it off leaves local Library, maps, and local
+search usable, shows a persistent warning, and stops requests at the shared
+transport before any socket is opened. `ALMA_DISABLE_NETWORK=1` is the
+operations hard override: it can force access off but cannot force a user's
+stored off choice on.
+
+Find & Add remains graceful when OpenAlex's paid search pool is drained:
+paper search omits only the OpenAlex lane and continues Semantic Scholar,
+Crossref, arXiv, bioRxiv, and Europe PMC; author search falls back to matching
+local OpenAlex-linked identities. Import review and Health repair cards use the
+same credit forecast and disable work that the known remaining pool cannot
+cover.
+
 ## OpenAlex (primary)
 
 [OpenAlex](https://docs.openalex.org/) is ALMa's primary source for

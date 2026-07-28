@@ -204,6 +204,10 @@ class SettingsModel(BaseModel):
     backend: str = Field(
         "openalex", pattern="^(scholar|openalex)$", description="Publication backend"
     )
+    network_access_enabled: bool = Field(
+        True,
+        description="Allow outbound requests to external APIs and integration transports",
+    )
     openalex_email: str | None = Field(
         None, description="Optional contact email sent with OpenAlex requests"
     )
@@ -304,6 +308,7 @@ def get_settings():
 
     return SettingsModel(
         backend=raw.get("backend", "openalex"),
+        network_access_enabled=bool(raw.get("network_access_enabled", True)),
         openalex_email=raw.get("openalex_email"),
         fetch_full_history=bool(raw.get("fetch_full_history", False)),
         from_year=raw.get("from_year"),
@@ -322,6 +327,15 @@ def get_settings():
             raw.get("id_resolution_scholar_scrape_manual_enabled", False)
         ),
     )
+
+
+@router.get("/network-policy")
+def get_network_policy():
+    """Effective outbound state, including the operations hard override."""
+
+    from alma.core.network_policy import network_policy_status
+
+    return network_policy_status().to_wire()
 
 
 @router.get("/export")

@@ -200,6 +200,46 @@ def search_authors_online(
     if not raw:
         return []
 
+    # Author search has no identity-compatible remote fallback yet (the Follow
+    # contract needs OpenAlex ids). Keep the focused workflow useful under a
+    # drained pool or network kill switch by returning matching local identities
+    # instead of throwing a transport/quota error.
+    from alma.core.provider_quota import provider_can_start
+    from alma.openalex.http import SEARCH_COST_CREDITS
+
+    if not provider_can_start("openalex", required=SEARCH_COST_CREDITS):
+        rows = db.execute(
+            """
+            SELECT id, name, openalex_id, orcid, affiliation, citedby, h_index,
+                   works_count, author_type
+            FROM authors
+            WHERE status = 'active'
+              AND NULLIF(TRIM(openalex_id), '') IS NOT NULL
+              AND LOWER(name) LIKE LOWER(?)
+            ORDER BY COALESCE(citedby, 0) DESC, COALESCE(works_count, 0) DESC
+            LIMIT ?
+            """,
+            (f"%{raw}%", max(1, min(int(limit or 10), 25))),
+        ).fetchall()
+        return [
+            {
+                "openalex_id": str(row["openalex_id"]).strip(),
+                "name": str(row["name"] or "").strip(),
+                "orcid": str(row["orcid"] or "").strip() or None,
+                "institution": str(row["affiliation"] or "").strip() or None,
+                "works_count": int(row["works_count"] or 0),
+                "cited_by_count": int(row["citedby"] or 0),
+                "h_index": int(row["h_index"] or 0),
+                "i10_index": 0,
+                "top_topics": [],
+                "already_followed": str(row["author_type"] or "") == "followed",
+                "existing_author_id": str(row["id"] or ""),
+                "existing_author_type": str(row["author_type"] or "") or None,
+                "top_cited_titles": [],
+            }
+            for row in rows
+        ]
+
     client = get_client()
     per_page = max(1, min(int(limit or 10), 25))
     resp = client.get(
@@ -301,6 +341,10 @@ def fetch_top_cited_titles_by_author(
     """
     ids = [i for i in dict.fromkeys(openalex_ids or []) if i]
     if not ids:
+        return {}
+    from alma.core.provider_quota import provider_can_start
+
+    if not provider_can_start("openalex", required=len(ids)):
         return {}
     client = get_client()
     n = max(1, per_author)

@@ -126,6 +126,9 @@ class EmailNotifier:
     # ---- SMTP plumbing ---------------------------------------------------
     def _connect(self):
         """Open an SMTP connection (implicit-TLS on 465, STARTTLS otherwise)."""
+        from alma.core.network_policy import require_network_access
+
+        require_network_access("email")
         if self._port == 465:
             ctx = ssl.create_default_context()
             return smtplib.SMTP_SSL(self._host, self._port, timeout=self._timeout, context=ctx)

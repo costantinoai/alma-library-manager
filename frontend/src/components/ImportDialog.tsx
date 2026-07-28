@@ -283,7 +283,10 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Actions */}
       <DialogFooter>
-        <Button onClick={handleImport} disabled={loading || preflightLoading}>
+        <Button
+          onClick={handleImport}
+          disabled={loading || preflightLoading || preflight?.quota.sufficient === false}
+        >
           {loading || preflightLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -548,7 +551,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
       {/* Import button */}
       {collections !== null && (
         <DialogFooter>
-          <Button onClick={handleImport} disabled={loading || preflightLoading}>
+          <Button
+            onClick={handleImport}
+            disabled={loading || preflightLoading || preflight?.quota.sufficient === false}
+          >
             {loading || preflightLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -704,7 +710,10 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
       {result && <ImportResultDisplay result={result} />}
 
       <DialogFooter>
-        <Button onClick={handleImport} disabled={loading || preflightLoading}>
+        <Button
+          onClick={handleImport}
+          disabled={loading || preflightLoading || preflight?.quota.sufficient === false}
+        >
           {loading || preflightLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -768,6 +777,18 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
         {' '}{sourceCalls.semantic_scholar_vector_batch_candidates} S2 vector candidate{sourceCalls.semantic_scholar_vector_batch_candidates === 1 ? '' : 's'}.
         {etaLabels.length ? ` ${etaLabels.join(' · ')}.` : ''}
       </p>
+      {preflight.quota.sufficient ? (
+        <p className="mt-2 text-xs text-slate-600">
+          OpenAlex cost: {preflight.quota.required.toLocaleString()} credits
+          {preflight.quota.available != null
+            ? ` · ${preflight.quota.available.toLocaleString()} available`
+            : ' · available quota not measured yet'}.
+        </p>
+      ) : (
+        <p className="mt-2 text-xs font-medium text-critical-700">
+          {preflight.quota.reason ?? 'Available provider quota cannot cover this import.'}
+        </p>
+      )}
       {preflight.parse_errors > 0 && (
         <p className="mt-2 text-xs text-critical-700">
           {preflight.parse_errors} malformed entr{preflight.parse_errors === 1 ? 'y was' : 'ies were'} skipped in this forecast.

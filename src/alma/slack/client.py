@@ -73,6 +73,9 @@ class SlackNotifier:
         Raises:
             RuntimeError: If no token was provided.
         """
+        from alma.core.network_policy import require_network_access
+
+        require_network_access("slack")
         if self._client is not None:
             return self._client
 

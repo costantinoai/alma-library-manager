@@ -1,9 +1,10 @@
 import { Globe } from 'lucide-react'
 
 import { type Settings } from '@/api/client'
-import { SettingsCard, SettingsSections } from '@/components/settings/primitives'
+import { SettingsCard, SettingsSections, ToggleRow } from '@/components/settings/primitives'
 import { OpenAlexSection } from '@/components/settings/OpenAlexSection'
 import { SemanticScholarSection } from '@/components/settings/SemanticScholarSection'
+import { Switch } from '@/components/ui/switch'
 
 interface ExternalApisCardProps {
   formData: Settings
@@ -37,6 +38,23 @@ export function ExternalApisCard({
       title="External APIs"
       description="Upstream metadata sources ALMa queries. OpenAlex is the active backend's primary source; Semantic Scholar adds SPECTER2 vectors and paper/author recommendations."
     >
+      <ToggleRow
+        title="External network access"
+        description={
+          formData.network_access_enabled
+            ? 'On — ALMa may contact configured publication APIs and integration transports.'
+            : 'Off — outbound API, Slack, email, and hosted-AI calls are blocked at their transports.'
+        }
+        control={
+          <Switch
+            checked={formData.network_access_enabled}
+            onCheckedChange={(checked) =>
+              onFormDataChange((prev) => ({ ...prev, network_access_enabled: checked }))
+            }
+            aria-label="Allow external network access"
+          />
+        }
+      />
       <SettingsSections>
         <OpenAlexSection
           formData={formData}

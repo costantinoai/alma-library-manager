@@ -46,9 +46,12 @@ _PROJECT_ROOT_MARKERS = ("settings.json", "pyproject.toml", "docker-compose.yml"
 DEFAULT_SETTINGS: dict[str, Any] = {
     # Forward-only settings schema. Startup runs the matching migrator and
     # validator before any plugin can be consumed.
-    "settings_schema_version": 1,
+    "settings_schema_version": 2,
     "plugins.slack.enabled": False,
     "plugins.email.enabled": False,
+    # One enforced switch for every outbound transport. Environment may force
+    # this off with ALMA_DISABLE_NETWORK=1, but cannot force it on.
+    "network_access_enabled": True,
     # NOTE: `database` is deliberately NOT defaulted here. The DB location
     # is a computed path (DB_PATH env → explicit settings value →
     # get_data_dir()/scholar.db), so a fresh install resolves to the
@@ -467,9 +470,9 @@ def delete_settings_keys(keys: list[str]) -> None:
 def migrate_settings_schema() -> None:
     """Upgrade settings.json to the current forward-only schema.
 
-    Version 1 introduces explicit external-integration activation. Existing
-    configured transports stay active; unconfigured transports stay inactive.
-    No runtime caller infers activation from credentials after this migration.
+    Version 1 introduces explicit external-integration activation. Version 2
+    adds global outbound-network policy. Existing installs migrate enabled so
+    upgrading does not silently change connectivity.
     """
     raw = get_all_settings()
     try:
@@ -511,6 +514,14 @@ def migrate_settings_schema() -> None:
                 "plugin_email_enabled",
             ]
         )
+        version = 1
+    if version == 1:
+        update_settings(
+            {
+                "settings_schema_version": 2,
+                "network_access_enabled": True,
+            }
+        )
 
 
 def validate_settings_schema() -> None:
@@ -526,6 +537,8 @@ def validate_settings_schema() -> None:
         key = f"plugins.{plugin_id}.enabled"
         if not isinstance(raw.get(key), bool):
             raise RuntimeError(f"settings.json key {key!r} must be boolean")
+    if not isinstance(raw.get("network_access_enabled"), bool):
+        raise RuntimeError("settings.json key 'network_access_enabled' must be boolean")
 
 
 def get_backend() -> str:

@@ -44,6 +44,15 @@ export function ApiBudgetCard({ budget }: { budget: HealthOperationsResponse['ap
             : `${reserve.toLocaleString()} reserved for your manual operations`
         }
       />
+      {budget.network_policy?.enabled === false ? (
+        <Alert variant="warning">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            External network access is off. API, integration, and hosted-AI operations are blocked
+            until enabled in Settings → Connections.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {abort ? (
         <Alert variant="warning">
           <AlertTriangle className="h-4 w-4" />

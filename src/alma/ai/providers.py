@@ -191,6 +191,9 @@ class OpenAIProvider:
 
         Respects the configured API call delay between requests.
         """
+        from alma.core.network_policy import require_network_access
+
+        require_network_access("openai")
         api_key = self._resolve_api_key()
         if not api_key:
             raise RuntimeError("OpenAI API key is not configured")
