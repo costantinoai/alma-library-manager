@@ -22,7 +22,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
-import { formatPercent } from '@/lib/format'
+import { ScoreBreakdownPanel } from '@/components/ScoreBreakdownPanel'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -118,23 +118,10 @@ export function SimilarResultsDialog({
                         </button>
                       )}
                       {isExpanded && item.score_breakdown && (
-                        <div className="mt-2 rounded-md bg-surface-2 p-3 text-xs text-slate-600 space-y-1">
-                          {Object.entries(item.score_breakdown)
-                            .filter(([k]) => !['final_score', 'source_type', 'source_key'].includes(k))
-                            .map(([key, detail]) => {
-                              const d = detail as { value?: number; weight?: number; weighted?: number; description?: string }
-                              if (typeof d !== 'object' || d === null || d.weighted === undefined) return null
-                              return (
-                                <div key={key} className="flex justify-between">
-                                  <span className="capitalize">{key.replace(/_/g, ' ')}</span>
-                                  <span className="font-mono">
-                                    {formatPercent(d.weighted, 1)}
-                                    {d.description && <span className="text-slate-400 ml-1">({d.description})</span>}
-                                  </span>
-                                </div>
-                              )
-                            })}
-                        </div>
+                        <ScoreBreakdownPanel
+                          breakdown={item.score_breakdown}
+                          className="mt-2"
+                        />
                       )}
                     </div>
                     <div className="flex shrink-0 flex-col gap-1">

@@ -169,5 +169,6 @@ nav:
       - Testing: development/testing.md
       - Contributing: development/contributing.md
   - Releases:
+      - v0.22.0: releases/v0.22.0.md
       - v0.21.1: releases/v0.21.1.md
       - v0.21.0: releases/v0.21.0.md

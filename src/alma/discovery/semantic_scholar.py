@@ -1128,7 +1128,7 @@ def recommend_from_seeds(
     total = max(len(papers), 1)
     for idx, paper in enumerate(papers):
         # Rank-based descending score (same convention as search_papers);
-        # downstream scorer re-ranks on the 10-signal formula anyway.
+        # downstream ranker re-ranks on the family prior anyway.
         score = rank_score(idx, total)
         candidate = s2_to_candidate(paper, score=score)
         if candidate:

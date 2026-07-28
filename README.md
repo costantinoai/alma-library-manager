@@ -7,40 +7,79 @@ library of the papers you save, and uses SPECTER2 embeddings to surface
 related work you haven't seen yet. Nothing about your reading list
 leaves the box you put it on.
 
-> **Early preview.** The three core jobs — Library, Discovery, and Feed
-> — work end-to-end. A polished first-run onboarding is in progress.
-> Public testing welcome. See the
+> **Early preview.** Every surface works end-to-end, and first launch
+> walks you through setup with a guided tour. Expect rough edges at the
+> margins; public testing welcome. See the
 > [latest release](https://github.com/costantinoai/alma-library-manager/releases/latest)
 > for the current version.
 
 **Full documentation:** <https://costantinoai.github.io/alma-library-manager/>
 
-## The five views
+## The surfaces
 
-- **Feed** — a chronological inbox of new publications from the authors
-  and topics you follow.
+ALMa is organised the way the work is: **Explore** what is new, **Manage**
+what you keep, **Control** how it runs.
+
+**Explore**
+
+- **Home** — the daily brief. What arrived since midnight, what is waiting
+  in your Inbox and reading list, and a few Signal Lab rounds to tune the
+  ranker while you drink your coffee.
+- **Feed** — a chronological inbox of new publications from the authors,
+  topics, venues and queries you monitor.
+- **Discovery** — papers related to your library that the Feed never saw,
+  ranked by one auditable scorer. Every suggestion can show you exactly
+  what made its score.
+- **Map** — the whole corpus laid out by meaning. Lasso a region to see
+  what lives there and adopt it as a direction.
+
+**Manage**
+
+- **Authors** — the researchers you track, their identities merged and
+  deduplicated, plus suggested authors whose work overlaps with yours.
 - **Library** — every paper you've saved, with notes, ratings, tags,
-  collections, and a reading list.
-- **Authors** — the researchers you track, plus suggested authors whose
-  work overlaps with what you read.
-- **Discovery** — papers related to your library that haven't shown up
-  in the Feed yet, ranked by topical and citation similarity.
-- **Insights** — charts and a clustered map of your library: how it's
-  spread across years, topics, and journals, and which papers cluster
-  together by content.
+  collections and a reading list; **Analytics** inside it charts how the
+  library is spread across years, topics and journals.
+- **Alerts** — scheduled digests of what matched while you were away.
+
+**Control**
+
+- **Health** — what the background jobs are doing, what is missing, and
+  one-click repairs for the gaps.
+- **Settings** — connections, ranking weights, AI provider, scheduling.
 
 <p align="center">
-  <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
+  <img src="docs/screenshots/desktop-home.png" alt="Home" width="49%">
   <img src="docs/screenshots/desktop-discovery.png" alt="Discovery" width="49%">
 </p>
 <p align="center">
-  <img src="docs/screenshots/desktop-insights.png" alt="Insights" width="49%">
-  <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
+  <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
+  <img src="docs/screenshots/desktop-map.png" alt="Map" width="49%">
 </p>
 <p align="center">
+  <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
   <img src="docs/screenshots/desktop-authors.png" alt="Authors" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/desktop-health.png" alt="Health" width="49%">
   <img src="docs/screenshots/desktop-settings.png" alt="Settings" width="49%">
 </p>
+
+## How ranking works
+
+One ranker scores every paper, on every page, so a score means the same
+thing wherever you see it. It weighs ten independent **families** —
+semantic similarity, topic overlap, retrieval agreement, authors,
+terminology, recency, citation structure, your explicit feedback, your
+learned preferences, and venue — and a family with nothing to measure is
+dropped rather than counted as zero, so a paper with thin metadata is
+judged on what is actually known about it.
+
+Every suggestion carries a full breakdown: click **Why** on any paper and
+the rows you see add up, exactly, to the score beside them — each one
+expandable to the raw measurements underneath. You can retune the weights
+in **Settings → Discovery**. See
+[scoring formulas](docs/reference/scoring.md) for the arithmetic.
 
 ## Why ALMa
 
@@ -104,7 +143,8 @@ image; your data lives in named volumes, so nothing is lost.
 
 ## First use
 
-ALMa is empty on first launch. Three steps make it useful:
+ALMa is empty on first launch and opens a guided tour that walks you
+through the same three steps:
 
 1. **Add your OpenAlex API key.** OpenAlex requires a free key (no
    signup beyond an email; ~30s at
@@ -120,7 +160,7 @@ ALMa is empty on first launch. Three steps make it useful:
 3. **Wait one refresh.** Once the backfills finish, the **Feed** surfaces
    new papers and **Discovery** recommends related work. Save, like, or
    dismiss as you go — every action teaches the ranker what you care
-   about.
+   about, and **Home** shows you what arrived while you were away.
 
 Optional: import a BibTeX file or Zotero library from **Library →
 Imports** for much better Discovery seed material from day one.

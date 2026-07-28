@@ -1,14 +1,15 @@
 ---
 title: Scoring formulas
-description: The weighted Discovery signals, in numbers.
+description: The ten ranking families, in numbers.
 ---
 
 # Scoring formulas
 
 A Discovery candidate is a paper proposed by one of the
 [retrieval families](./discovery-pipeline.md#1-retrieval-four-evidence-families).
-The scorer combines several signals into a single number used for ranking. This
-page documents the arithmetic of each signal.
+One ranker turns it into a number, on every surface that shows a paper score.
+This page documents that arithmetic: the families, their weights, and the atoms
+each family is built from.
 
 > **Read [Discovery pipeline](./discovery-pipeline.md) first** for the
 > architecture this sits inside: how lanes retrieve, how their ranks are fused
@@ -16,35 +17,119 @@ page documents the arithmetic of each signal.
 > why the ranker is a prior-centred linear model rather than a bigger one, how
 > exploration keeps the feedback loop honest, and where Signal Lab enters.
 
-## The hybrid scorer
+## One ranker, ten families
 
-For each candidate $c$ in lens $L$:
+Every paper score in ALMa — Discovery, Feed, Online Search — is produced by
+`alma.application.discovery.ranker`, in two steps that are always taken
+together:
+
+1. **Measure.** `alma.discovery.scoring.measure_candidate` observes everything
+   observable about a candidate and returns a breakdown. It deliberately
+   returns **no score**: it decides nothing about importance.
+2. **Rank.** `ranker.rank_candidate` (single) or `ranker.apply_repaired_prior`
+   (bulk) turns that measurement into a number.
+
+Keeping them apart is the point. Until 2026-07-28 the scorer *also* combined
+its own measurements into a composite — nine weights, a consensus bonus, a
+citation-fabric bonus, a Signal Lab bonus and a 30-point dismissal penalty —
+and the ranker then discarded that number and replaced it. The composite was
+dead on Discovery and live on Feed and Online Search, so the same paper scored
+differently depending on which page you opened, and the UI drew the discarded
+decomposition beside the surviving score. The combination stage is gone.
+
+### The score
+
+For candidate $c$, over the families $F$ that were **measured** for it:
 
 $$
-\text{score}(c, L) = \sum_{i} w_i \cdot s_i(c, L)
+\text{score}(c) = 100 \cdot \mathrm{clip}_{[0,1]}\!\left(
+  \sum_{f \in F} \hat{w}_f \cdot v_f(c)  -  0.45 \cdot \mathbb{1}[\text{retracted}]
+\right),
+\qquad
+\hat{w}_f = \frac{w_f}{\sum_{g \in F} w_g}
 $$
 
-where $w_i$ is the weight from
-[Discovery settings](../reference/configuration.md#where-each-settings-card-stores-its-values)
-and $s_i$ is one of the signal functions below.
+Two properties follow, and both are load-bearing:
 
-**Nine signals carry weight**: `source_relevance`, `topic_score`,
-`text_similarity`, `author_affinity`, `journal_affinity`, `recency_boost`,
-`citation_quality`, `feedback_adj`, `preference_affinity`.
+* **Availability-aware renormalisation.** A family with nothing measured is
+  *dropped*, and the rest are rescaled to make up the whole. A paper with no
+  journal is scored on what is known about it rather than being charged for a
+  blank column — and, equally, it no longer collects a free neutral 0.5 of the
+  venue weight, which is what the previous code did.
+* **Closure.** The published explanation's family points, adjustments and
+  clipping term sum to the final score exactly. The UI renders that sum, so the
+  bars and the number can never be different quantities again. Guarded by
+  `tests/test_score_explanation_closure.py`.
 
-`usefulness_boost` is still computed and logged, but is **diagnostic only and
-carries no weight**. It was
-`0.45·novelty + 0.25·recency + 0.20·citation_quality + 0.10·metadata_quality` —
-a composite of features already present as independent inputs to the same linear
-model, so it double-counted recency and citation quality and made the fit
-collinear by construction. Its atomic ingredients remain available as features.
+### The families
 
-Weights are a **prior**, not a fit. They are the centre that the shadow
+`ranker.FAMILY_SPECS` is the single source of truth: it declares each family's
+atoms, their sub-weights and their combinator, and **both** the value and its
+explanation are derived from it. There is no second table to keep in sync, and
+the UI cannot describe a formula the scorer is not running.
+
+| Family | Default weight | Built from |
+|---|---|---|
+| `semantic` | 0.14 | max(library centroid, closest exemplar, support set) − 0.5 · similarity to passed-on papers |
+| `topic` | 0.20 | `topic_score` |
+| `retrieval` | 0.15 | 0.75 · max(RRF over the four channels) + 0.25 · (channels that agreed / 4) |
+| `author` | 0.15 | `author_affinity` |
+| `lexical` | 0.06 | 0.45 word + 0.35 char n-gram + 0.20 key term − 0.5 · overlap with passed-on papers |
+| `recency` | 0.10 | `recency_boost` |
+| `citation` | 0.05 | 0.50 `citation_quality` + 0.10 (`fwci`/3) + 0.20 max(coupling, co-citation) + 0.20 max(PPR library, PPR loved) |
+| `feedback` | 0.10 | `feedback_adj` |
+| `preference` | 0.10 | `preference_affinity` |
+| `venue` | 0.05 | `journal_affinity` |
+
+Weights come from `discovery_settings.weights.*` (Settings → Discovery). One
+slider, `weights.text_similarity`, drives two families — `semantic` takes 70%
+of it and `lexical` 30% — which is why the defaults above are 0.14 / 0.06 for a
+slider set to 0.20. Weights are normalised to sum to 1 before scoring.
+
+**Three combinators**, declared per atom:
+
+* `sum` — adds `weight × value`.
+* `max` — competes inside a group; the group pays its weight **once**, to the
+  winner. This is how correlated views of the same evidence avoid being
+  double-paid: three similarity views of one embedding, two graph views of one
+  citation neighbourhood, four retrieval channels ranking the same paper.
+* `penalty` — subtracts, and never makes a family "available" on its own.
+
+**Negative preference** enters through the `penalty` atoms
+(`semantic_similarity_negative_raw`, `lexical_similarity_negative_penalty`) —
+inside the families, bounded by them. The old free-standing 30-point dismissal
+cluster penalty is retired.
+
+**Multi-source agreement** enters as the `retrieval_family_count` atom. The old
+free-standing consensus bonus is retired for papers. (The *author suggestion*
+rail keeps its own consensus bonus and dismissal penalty — a separate,
+independent implementation documented in the second half of this page.)
+
+### Recommendation mode
+
+`recommendation_mode` (`balanced` / `explore` / `exploit`) multiplies family
+weights before normalisation, so the modes are zero-sum:
+
+| Mode | Multipliers |
+|---|---|
+| `explore` | recency ×1.5; citation, author, venue ×0.5 |
+| `exploit` | author, venue, preference ×1.5; recency ×0.5 |
+
+It also widens or narrows branch spread at seed time
+(`seed_profile._resolve_branch_temperature`).
+
+### The prior is a prior
+
+These weights are a **prior**, not a fit. They are the centre that the shadow
 prior-centred ridge model shrinks toward; see
 [the ranker ladder](./discovery-pipeline.md#4-ranking) for what has to be true
 before a fitted model is promoted over them.
 
-## Signals
+## Signal atoms
+
+The functions below are what `measure_candidate` computes. They are the atoms
+the families above are assembled from — each one a measurement, with no opinion
+about its own importance.
 
 ### `source_relevance`
 
@@ -230,96 +315,11 @@ seen once or twice, so $c \approx 0.05$–$0.15$, and the signal was pinned with
 
 Range: 0…1. Requires `preference_profiles` to have entries; no embeddings needed.
 
-### Two more weights
+### `source_relevance` boost per channel
 
-The `discovery_settings.weights` object has a couple more knobs that
-the UI exposes:
-
-* **`source_relevance` boost per channel** — per-channel multipliers
-  used by the retrieval phase before the global scorer.
-* **`usefulness_boost`** — **diagnostic only.** It is still measured and shown
-  in the score breakdown, but carries `weight: 0.0` and contributes nothing to
-  the score; the breakdown marks it `diagnostic_only` and the UI labels the row
-  so an empty bar cannot be mistaken for "measured zero". Its two atoms
-  (`novelty`, `metadata_quality`) remain logged as reward features.
-
-## Multi-source consensus bonus
-
-After the 10-signal weighted score is computed, candidates that were
-independently surfaced by more than one retrieval source get a
-band-relative bonus on top. This mirrors the author-suggestion
-consensus pattern and rewards multi-source agreement as a confidence
-signal — a paper found by SPECTER2 vector search *and* OpenAlex
-related-works *and* S2 recommendations is much stronger evidence than
-any one of those alone.
-
-Buckets are assembled in `_merge_channel_candidates`:
-
-* Each non-external retrieval channel (`lexical`, `vector`, `graph`)
-  contributes one bucket per channel name, e.g. `channel:lexical`.
-* The `external` channel contributes one bucket per **distinct
-  `source_api`**: a paper surfaced by both the OpenAlex lane *and*
-  the Semantic Scholar lane inside `external` counts as 2
-  confirmations, not 1. Buckets look like `external:openalex`,
-  `external:semantic_scholar`.
-
-The bonus formula matches the author rail:
-
-$$
-\text{bonus}(c) = 0.12 \times 100 \times \sqrt{N - 1}
-$$
-
-where $N$ is `consensus_count = len(consensus_buckets)` (only applied
-when $N > 1$). With the current calibration:
-
-| `consensus_count` | Bonus |
-|---:|---:|
-| 1 | 0 |
-| 2 | +12 |
-| 3 | ≈ +17 |
-| 4 | ≈ +21 |
-| 5 | +24 |
-
-The bonus is added to the weighted score and clamped at 100, so a
-saturated single-channel signal can't be doubled, but a moderately
-scored candidate confirmed by 3+ independent sources reliably climbs
-the rail. Pre-bonus value is preserved as
-`weighted_score_pre_consensus` in the breakdown for provenance.
-
-## Negative paper-signal cluster penalty
-
-After consensus, paper Discovery applies a dedicated penalty that
-mirrors the author-suggestion rail's `_dismissal_overlap_penalty`.
-`feedback_adj` already pulls in projected negative preference, but it is
-bounded to ±0.6 and weighted at 0.10 — so direct Dislikes/Removals can
-move a candidate by at most ~10 points on the 100-band score. That
-ceiling is intentionally low for *projected* feedback (one disliked
-paper shouldn't dominate similarity); but for the *cluster* of things
-the user has explicitly rejected, the rail wants to pull harder. The
-cluster pass is that harder pull.
-
-For each candidate the scorer reads the negative side of
-`ProjectedPaperSignals.{topic, venue, author, author_name, keyword,
-tag}` and accumulates score-point penalties:
-
-| Axis | Per-hit penalty | Rationale |
-|---|---:|---|
-| Topic | 4.0 × magnitude × topic_strength | Strongest cluster evidence |
-| Venue | 3.0 × magnitude | Next-strongest — venue matches a research community |
-| Author (OpenAlex id) | 2.0 × magnitude | Identity-level signal |
-| Author name | 1.5 × magnitude | Fallback when no id |
-| Keyword / tag | 1.0 × magnitude (each) | Noisier; lower per-hit weight |
-
-Total is capped at **30 points** so a candidate is never zeroed by
-penalty alone — the user can still Dislike or Remove explicitly. Applied
-*after* the consensus bonus (so multi-source agreement can't fully
-rescue a candidate matching a rejected cluster) and the result is
-clamped at 0.
-
-The breakdown retains the compatibility field names `score_pre_dismissal`,
-`dismissal_penalty`, and `dismissal_penalty_parts` (the per-axis
-decomposition). A clean run with no negative preference evidence returns
-`dismissal_penalty=0.0` and `dismissal_penalty_parts={}`.
+`discovery_settings.weights` also carries per-channel multipliers used by the
+retrieval phase, before ranking. They shape which candidates exist, not what
+they score.
 
 ## Outcome calibration
 
@@ -381,79 +381,63 @@ provenance. As with paper Discovery, a fresh DB returns no
 multipliers → 1.0 → no behavior change until follow / reject events
 accumulate.
 
-## Defaults
+## Tuning
 
-The default weights err on the side of "balanced". Every signal is
-weighted, the weights are read from `discovery_settings.weights.*`,
-and the ranker normalizes them to sum to 1.0 before computing the
-final 0–100 score. Source of truth:
-`src/alma/discovery/scoring.py` (`weights = {...}` near the top of
-`score_candidate`):
+Three knobs change the balance:
 
-| Signal | Raw weight | Normalized share | What it captures |
-|---|---|---|---|
-| `topic_score` | 0.20 | ~17% | Overlap with your top library topics (log-prevalence weighted). |
-| `text_similarity` | 0.20 | ~17% | Semantic SPECTER2 cosine **blended with** lexical TF-IDF + char n-grams + scholarly term overlap. The semantic / lexical sub-weights are dynamic per candidate and reported as `text_similarity_semantic_weight` + `text_similarity_lexical_weight` in the breakdown. |
-| `source_relevance` | 0.15 | ~13% | How strong the retrieval signal was that surfaced the candidate (high for related-works, lower for broad topic search). |
-| `author_affinity` | 0.15 | ~13% | Has the candidate's author appeared in your library or follow list? Log-prevalence weighted so a single dominant author can't crowd the long tail. |
-| `recency_boost` | 0.10 | ~9% | Newer papers get a bump (linear decay over `recency_window_years`, default 10). Reads `year`, falls back to `publication_date[:4]`. |
-| `feedback_adj` | 0.10 | ~9% | Liked / disliked papers and their projected graph neighbours. |
-| `preference_affinity` | 0.10 | ~9% | Confidence-weighted mean of your recorded affinity for this candidate's topics, authors and source. 0.500 = no matching evidence. |
-| `usefulness_boost` | **0.00** | 0% | **Diagnostic only** — measured and shown, contributes nothing. Marked `diagnostic_only` in the breakdown. |
-| `journal_affinity` | 0.05 | ~4% | Does the candidate's venue appear often in your library (log-prevalence). |
-| `citation_quality` | 0.05 | ~4% | `log(effective_citations + 1) / log(1000)` where `effective_citations = max(cited_by_count, 2 * influential_citation_count)`. |
+* **Per-family weights** — Settings → Discovery. Lowering
+  `weights.text_similarity` to 0.10 caps the semantic + lexical families at
+  ~10% of the normalised budget between them.
+* **Recommendation mode** — see above.
+* **Per-lens overrides** — each lens carries its own `weights.*`, merged over
+  the global defaults at refresh time.
 
-So a perfect SPECTER2 cosine of 1.00 contributes at most ~17% of the
-final score (≈17 points on the 0–100 scale), tied with topic_score.
-SPECTER2 dominates `text_similarity` only insofar as the dynamic
-blend favours semantic over lexical for that candidate — and even
-then it's bounded by the 17% bucket. Three knobs change this
-balance:
-
-* **Per-signal weights**: edit `weights.text_similarity` in
-  `discovery_settings` (Settings → Discovery weights). Lowering it to
-  e.g. 0.10 caps SPECTER2's contribution at ~9% of the final score.
-* **Recommendation mode**: `recommendation_mode` reads `balanced` /
-  `explore` / `exploit`. Explore multiplies `recency_boost` by 1.5×
-  and halves `author_affinity`, `journal_affinity`, `citation_quality`
-  before normalization; exploit does the opposite. The shift
-  re-normalizes against the same 1.0 budget, so all signals still
-  participate proportionally.
-* **Per-lens overrides**: each lens carries its own
-  `weights.*` overrides. They're merged on top of the global
-  defaults at refresh time.
-
-The `recommendations` table caches the last batch so you don't lose
-results when re-tuning — only the next refresh applies the new
-weights.
+The `recommendations` table caches the last batch, so re-tuning does not lose
+results — only the next refresh applies new weights.
 
 ## Score breakdown
 
-`GET /api/v1/discovery/recommendations/{id}/explain` returns the
-per-signal contribution for one recommendation:
+The stored `score_breakdown` carries the closed decomposition under
+`explanation`, and `GET /api/v1/discovery/recommendations/{id}/explain` returns
+it verbatim:
 
 ```json
 {
-  "id": "rec-abc",
-  "paper_id": "p-xyz",
-  "score": 0.71,
-  "score_breakdown": {
-    "source_relevance": 0.95,
-    "text_similarity": 0.62,
-    "author_affinity": 0.40,
-    "journal_affinity": 0.10,
-    "recency_boost": 0.80,
-    "citation_quality": 0.55,
-    "feedback_adj": 0.0,
-    "preference_affinity": 0.71
-  },
-  "weights_used": { "...": 0 },
-  "channel": "openalex_related"
+  "explanation": {
+    "ranker_version": "discovery-v4-family-prior",
+    "final_score": 61.4,
+    "families": [
+      {
+        "key": "semantic",
+        "label": "Semantic",
+        "description": "Embedding similarity to what you already keep.",
+        "value": 0.76,
+        "weight": 0.127,
+        "points": 9.67,
+        "available": true,
+        "atoms": [
+          {"key": "semantic_similarity_centroid_raw", "label": "Library centroid",
+           "value": 0.81, "weight": 1.0, "role": "max", "group": "positive",
+           "available": true}
+        ]
+      }
+    ],
+    "adjustments": [{"key": "retraction", "label": "Retracted", "points": 0.0,
+                     "available": false}],
+    "clipped": 0.0
+  }
 }
 ```
 
-The UI's "why this paper?" hover surfaces this breakdown so you can
-see which signals pushed each recommendation up.
+`Σ families.points + Σ adjustments.points + clipped === final_score`. The
+paper card's **Why** panel renders exactly these rows, each expandable to its
+atoms, and nothing else — so what you read is what ranked the paper.
+
+Alongside `explanation`, the breakdown carries the raw measurements
+(`semantic_similarity_*`, `lexical_similarity_*`, `coupling_strength`, …) and
+retrieval provenance (`matched_query`, `consensus_count`, `provenance.*`).
+Those are diagnostics and retrieval evidence — they explain why the paper
+*surfaced*, not what it *scored*.
 
 ---
 

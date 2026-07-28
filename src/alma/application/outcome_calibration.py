@@ -10,7 +10,7 @@ to move the prior. Old events fall outside the window and stop counting.
 
 The output is a `{source_key: multiplier}` map in `[lo, hi]` (default
 `[0.5, 1.5]`) intended to multiply `source_relevance` before the
-10-signal scorer runs. The cap stops a single bad week from killing a
+family ranker runs. The cap stops a single bad week from killing a
 source; the floor stops a hot week from making one source dominate.
 """
 

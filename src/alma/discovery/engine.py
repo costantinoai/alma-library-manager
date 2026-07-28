@@ -49,7 +49,7 @@ from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.discovery.scoring import (
     compute_preference_profile,
-    score_candidate,
+    measure_candidate,
 )
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
@@ -146,8 +146,15 @@ def score_discovery_candidate(
     conn: sqlite3.Connection,
     settings: dict[str, str] | None = None,
 ) -> tuple[float, dict[str, Any]]:
-    """Score one discovery candidate via scoring.py."""
-    return score_candidate(
+    """Measure then rank one discovery candidate, through the one ranker.
+
+    The legacy engine takes the same two steps as the lens pipeline
+    (``measure_candidate`` → ``rank_candidate``) so a paper it scores is
+    directly comparable with one Discovery scored.
+    """
+    from alma.application.discovery.ranker import rank_candidate
+
+    candidate["score_breakdown"] = measure_candidate(
         candidate,
         preference_profile,
         positive_centroid,
@@ -156,6 +163,11 @@ def score_discovery_candidate(
         negative_texts,
         conn,
         settings,
+    )
+    return rank_candidate(
+        candidate,
+        timestamp=utcnow().isoformat(),
+        scoring_settings=settings,
     )
 
 

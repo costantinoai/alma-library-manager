@@ -79,6 +79,7 @@ import {
   type VenueSearchResult,
 } from '@/api/client'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { topFamilies } from '@/lib/signals'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
 import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react'
@@ -1075,54 +1076,36 @@ export function OnlineSearchTab({
  * the optional "Personal fit" sort, not the default order. Hidden when
  * no breakdown is available (older cached candidates pre-T4).
  */
-const SIGNAL_LABELS: Record<string, string> = {
-  text_similarity: 'Text',
-  topic_score: 'Topics',
-  author_affinity: 'Authors',
-  journal_affinity: 'Journal',
-  recency_boost: 'Recent',
-  citation_quality: 'Cited',
-  feedback_adj: 'Signal',
-  preference_affinity: 'Preference',
-  usefulness_boost: 'Useful',
-  source_relevance: 'Rank',
-}
-
 interface WhyChipsProps {
   score?: number
   breakdown?: ScoreBreakdown | null
 }
 
 function WhyChips({ score, breakdown }: WhyChipsProps) {
-  if (!breakdown) return null
-  const entries = Object.entries(breakdown).flatMap(([key, raw]) => {
-    const label = SIGNAL_LABELS[key]
-    if (!label || !raw || typeof raw !== 'object') return []
-    const detail = raw as { value?: number; weighted?: number }
-    const weighted = typeof detail.weighted === 'number' ? detail.weighted : 0
-    const value = typeof detail.value === 'number' ? detail.value : 0
-    if (Math.abs(weighted) < 0.005) return []
-    return [{ key, label, value, weighted }]
-  })
-  if (entries.length === 0) return null
-  entries.sort((a, b) => Math.abs(b.weighted) - Math.abs(a.weighted))
-  const top = entries.slice(0, 3)
+  // Reads the same closed decomposition the full panel renders, so the chips
+  // can only ever name families that actually moved this score. The previous
+  // local label map was a fifth copy of the vocabulary and had already drifted
+  // ("Topics" here, "Topic Match" on the card, "Topic Overlap" in the panel).
+  const families = topFamilies(breakdown, 3)
+  if (families.length === 0) return null
   return (
     <div className="flex flex-wrap items-center gap-1.5 pl-1 text-[10px] text-slate-500">
-      <span className="font-medium uppercase tracking-[0.08em] text-slate-400">Why</span>
+      <span className="font-medium uppercase tracking-[0.08em] text-slate-500">Why</span>
       {typeof score === 'number' && score > 0 && (
-        <StatusBadge tone="neutral" size="sm" title="Personal-fit score (0–100)">
+        <StatusBadge tone="neutral" size="sm" title="Personal-fit score (0-100)">
           Fit {Math.round(score)}
         </StatusBadge>
       )}
-      {top.map((entry) => (
+      {families.map((family) => (
         <StatusBadge
-          key={entry.key}
-          tone={entry.weighted < 0 ? 'warning' : 'neutral'}
+          key={family.key}
+          tone="neutral"
           size="sm"
-          title={`${entry.label}: ${entry.value.toFixed(2)} · weighted ${entry.weighted.toFixed(2)}`}
+          title={`${family.description} Contributed ${family.points.toFixed(1)} of ${Math.round(
+            score ?? 0,
+          )} points.`}
         >
-          {entry.label} {entry.value.toFixed(2)}
+          {family.label} {family.points.toFixed(1)}
         </StatusBadge>
       ))}
     </div>

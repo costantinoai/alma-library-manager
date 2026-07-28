@@ -1,16 +1,19 @@
-"""Discovery candidate scoring loop.
+"""Discovery candidate MEASUREMENT loop.
 
-The per-candidate scoring pass lifted out of ``refresh_lens_recommendations``
+The per-candidate measurement pass lifted out of ``refresh_lens_recommendations``
 (D-9) into a standalone, testable function. For each merged candidate it:
 
   * passes family-balanced retrieval relevance without source-identity feedback,
-  * runs the core signal scorer (mutating the candidate in place
-    with ``score`` + ``score_breakdown`` + truthful provenance), and
-  * accumulates the scoring-profile aggregates the orchestrator logs and uses
-    to drive diversity selection.
+  * runs :func:`alma.discovery.scoring.measure_candidate` (mutating the
+    candidate in place with ``score_breakdown`` + truthful provenance), and
+  * accumulates the measurement aggregates the orchestrator logs.
 
-Pure computation: ``score_candidate`` only *reads* the DB for signal lookups, so
-this loop performs no writes. The read-only inputs are bundled in
+This loop deliberately produces NO score. ``refresh_lens_recommendations`` ranks
+afterwards via ``ranker.apply_repaired_prior``, the one owner of every weight —
+so nothing here can grow into a second, competing formula.
+
+Pure computation: ``measure_candidate`` only *reads* the DB for signal lookups,
+so this loop performs no writes. The read-only inputs are bundled in
 ``ScoringContext`` (instead of ~19 loose params) and the accumulators are
 returned as ``ScoringAggregates``; candidate dicts are still mutated in place,
 which the caller relies on for the subsequent ranking + persistence.
@@ -23,14 +26,12 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from alma.discovery.scoring import score_candidate
+from alma.discovery.scoring import measure_candidate
 
-# The independent signal families scored per candidate, in canonical order.
-# ``usefulness_boost`` is retained as a diagnostic atomic decomposition in the
-# scorer, but is intentionally not a model input: it deterministically repeats
-# recency/citation/similarity and metadata completeness.
-# single source of truth; the orchestrator imports this for its post-loop
-# averaging so the two can never drift.
+# The nine measured signals, in canonical order. These are MEASUREMENTS, not
+# score components — the ranker's ten families (``ranker.FAMILY_SPECS``) decide
+# what any of them is worth. Single source of truth; the orchestrator imports
+# this for its post-loop averaging so the two can never drift.
 SIGNAL_NAMES = (
     "source_relevance",
     "topic_score",
@@ -73,7 +74,6 @@ class ScoringAggregates:
     """Per-refresh scoring-profile accumulators returned by the loop."""
 
     signal_value_sums: dict
-    signal_weighted_sums: dict
     text_mode_counts: dict
     topic_mode_counts: dict
     raw_semantic_scores: list
@@ -83,7 +83,6 @@ class ScoringAggregates:
     raw_lexical_word_scores: list
     raw_lexical_char_scores: list
     raw_lexical_term_scores: list
-    final_scores: list
     embedding_ready_count: int
     compressed_similarity_count: int
     low_similarity_count: int
@@ -117,7 +116,6 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
     signal_names = SIGNAL_NAMES
 
     signal_value_sums = {name: 0.0 for name in signal_names}
-    signal_weighted_sums = {name: 0.0 for name in signal_names}
     text_mode_counts: dict[str, int] = {}
     topic_mode_counts: dict[str, int] = {}
     raw_semantic_scores: list[float] = []
@@ -127,7 +125,6 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
     raw_lexical_word_scores: list[float] = []
     raw_lexical_char_scores: list[float] = []
     raw_lexical_term_scores: list[float] = []
-    final_scores: list[float] = []
     embedding_ready_count = 0
     compressed_similarity_count = 0
     low_similarity_count = 0
@@ -159,7 +156,7 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
                 -cocitation_count / 3.0
             )
         candidate["citation_fabric_available"] = bool(citation_fabric)
-        final_score, breakdown = score_candidate(
+        breakdown = measure_candidate(
             candidate, profile,
             positive_centroid, negative_centroid,
             positive_texts, negative_texts,
@@ -176,7 +173,6 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             citation_fabric=citation_fabric,
             lab_ctx=ctx.lab_ctx,
         )
-        candidate["score"] = final_score
         # Fold retrieval provenance ("why this paper surfaced") into the
         # persisted breakdown so the UI can explain more than the branch
         # label: the actual query string that found it, and the core /
@@ -192,6 +188,16 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             breakdown["branch_explore_topics"] = branch_explore
         breakdown["ppr_library_raw"] = float(candidate.get("ppr_library") or 0.0)
         breakdown["ppr_loved_raw"] = float(candidate.get("ppr_loved") or 0.0)
+        # How many independent retrieval families surfaced this paper. Kept as
+        # provenance for the "found by N sources" chip; the ranker reads the
+        # same fact as the `retrieval` family's `retrieval_family_count` atom,
+        # so agreement is stated once and scored once.
+        breakdown["consensus_count"] = int(
+            candidate.get("cross_family_evidence_count") or 0
+        )
+        breakdown["consensus_buckets"] = [
+            str(bucket) for bucket in (candidate.get("consensus_buckets") or []) if bucket
+        ]
         # T4: promote the "truthful provenance" numbers into a clean
         # sub-dict the UI can consume without inspecting the full 60+
         # raw-diagnostic keys. Every number here already exists
@@ -214,10 +220,11 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
                     shared_authors.append(name)
                     if len(shared_authors) >= 5:
                         break
+        # Provenance carries EVIDENCE ("why this surfaced"), never a score:
+        # the score does not exist yet at this point in the pipeline, and a
+        # copy made here would be a pre-ranking number the UI would render
+        # beside the real one.
         breakdown["provenance"] = {
-            # Normalized 0..1 for the frontend. Legacy rows that
-            # persisted 0..100 still coerce cleanly on read.
-            "score_pct": round(float(final_score or 0.0) / 100.0, 4),
             "specter_cosine": round(specter_cosine, 4) if specter_cosine else None,
             "lexical_similarity": round(lexical_similarity_raw, 4) if lexical_similarity_raw else None,
             "negative_hit": round(negative_hit_raw, 4) if negative_hit_raw >= 0.35 else None,
@@ -226,7 +233,6 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
         }
 
         candidate["score_breakdown"] = breakdown
-        final_scores.append(float(final_score or 0.0))
         if breakdown.get("candidate_embedding_ready"):
             embedding_ready_count += 1
         text_mode = str(breakdown.get("text_similarity_mode") or "none")
@@ -274,11 +280,9 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             if not isinstance(signal_detail, dict):
                 continue
             signal_value_sums[signal_name] += float(signal_detail.get("value") or 0.0)
-            signal_weighted_sums[signal_name] += float(signal_detail.get("weighted") or 0.0)
 
     return ScoringAggregates(
         signal_value_sums=signal_value_sums,
-        signal_weighted_sums=signal_weighted_sums,
         text_mode_counts=text_mode_counts,
         topic_mode_counts=topic_mode_counts,
         raw_semantic_scores=raw_semantic_scores,
@@ -288,7 +292,6 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
         raw_lexical_word_scores=raw_lexical_word_scores,
         raw_lexical_char_scores=raw_lexical_char_scores,
         raw_lexical_term_scores=raw_lexical_term_scores,
-        final_scores=final_scores,
         embedding_ready_count=embedding_ready_count,
         compressed_similarity_count=compressed_similarity_count,
         low_similarity_count=low_similarity_count,

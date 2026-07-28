@@ -1752,18 +1752,70 @@ export interface FeedMonitor {
 
 // ── Discovery types ──
 
-export interface ScoreSignalDetail {
+/** One measured input to a ranking family.
+ *
+ *  `role` mirrors the backend combinator: `sum` adds its weighted value,
+ *  `max` competes inside `group` (only the winner is paid), `penalty`
+ *  subtracts. `available: false` means NOT MEASURED — never "measured zero". */
+export interface ScoreAtom {
+  key: string
+  label: string
   value: number
   weight: number
-  weighted: number
-  description?: string
-  /** Measured and shown, but weight 0 — it contributes nothing to the score.
-   *  A signal demoted to diagnostic renders an empty bar, which is
-   *  indistinguishable from "measured 0" unless the panel says which it is. */
-  diagnostic_only?: boolean
+  role: 'sum' | 'max' | 'penalty'
+  group: string | null
+  available: boolean
+}
+
+/** One ranking family: `points` is its exact contribution to the final score. */
+export interface ScoreFamily {
+  key: string
+  label: string
+  description: string
+  value: number
+  weight: number
+  points: number
+  available: boolean
+  atoms: ScoreAtom[]
+}
+
+/** A bounded post-family adjustment (retraction), in score points. */
+export interface ScoreAdjustment {
+  key: string
+  label: string
+  description: string
+  points: number
+  available: boolean
+}
+
+/** The complete, closed decomposition of a paper's score.
+ *
+ *  Invariant guaranteed by the backend (`ranker.repaired_prior_score`):
+ *
+ *      Σ families.points + Σ adjustments.points + clipped === final_score
+ *
+ *  Everything that moves the score is here, and nothing that does not. */
+export interface ScoreExplanation {
+  ranker_version: string
+  final_score: number
+  families: ScoreFamily[]
+  adjustments: ScoreAdjustment[]
+  /** Correction applied when the raw total left the 0..100 band. */
+  clipped: number
+}
+
+/** One measured signal. A measurement only — what it is WORTH is decided by
+ *  the ranking families in `ScoreBreakdown.explanation`, never here. */
+export interface ScoreSignalDetail {
+  value: number
 }
 
 export interface ScoreBreakdown {
+  /** The score decomposition. Present on everything ranked by the current
+   *  ranker; absent only on rows persisted by an older one. */
+  explanation?: ScoreExplanation
+  final_score?: number
+  ranker_version?: string
   source_relevance?: ScoreSignalDetail
   topic_score?: ScoreSignalDetail
   text_similarity?: ScoreSignalDetail
@@ -1773,14 +1825,28 @@ export interface ScoreBreakdown {
   citation_quality?: ScoreSignalDetail
   feedback_adj?: ScoreSignalDetail
   preference_affinity?: ScoreSignalDetail
-  usefulness_boost?: ScoreSignalDetail
-  final_score?: number
   source_type?: string
   source_key?: string
   text_similarity_mode?: 'none' | 'semantic' | 'lexical' | 'hybrid'
   semantic_similarity_raw?: number
   lexical_similarity_raw?: number
   topic_match_mode?: 'none' | 'semantic' | 'keyword'
+  /** Retrieval evidence — why the paper surfaced, not what it scored. */
+  provenance?: {
+    specter_cosine?: number | null
+    lexical_similarity?: number | null
+    negative_hit?: number | null
+    shared_authors_count?: number | null
+    shared_authors_sample?: string | null
+  }
+  matched_query?: string
+  branch_core_topics?: string[]
+  branch_explore_topics?: string[]
+  coupling_count?: number
+  coupling_partner_title?: string
+  cocitation_count?: number
+  cocitation_partner_title?: string
+  projected_feedback_raw?: number
 }
 
 export interface RecommendationExplain {

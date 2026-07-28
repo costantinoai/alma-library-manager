@@ -1,34 +1,212 @@
-"""Auditable multivariate rankers for Discovery.
+"""The one ranker for every paper score in ALMa.
 
-Production uses a repaired family-level hand prior.  The ridge implementation
-is a shadow challenger until enough immutable v3 observations exist.
+Discovery, Feed and Online Search all rank through :func:`rank_candidate`, so a
+paper cannot score differently depending on which page you opened.  Production
+uses a repaired family-level hand prior; the ridge implementation is a shadow
+challenger until enough immutable v3 observations exist.
+
+The score is built in exactly three moves, and :func:`repaired_prior_score`
+emits all three so the UI can show *only* and *all* of what produced it:
+
+1. every family's value is derived from its atoms (:data:`FAMILY_SPECS`),
+2. available families are weighted and renormalised to sum 1,
+3. bounded adjustments (retraction) are subtracted and the result is clipped.
+
+Invariant, asserted by ``tests/test_score_explanation_closure.py``::
+
+    sum(family points) + sum(adjustment points) + clipped == final_score
+
+``FAMILY_SPECS`` is the single source of truth for what a family is made of.
+Both the value and its explanation are derived from it, so the UI can never
+describe a formula the scorer is not running.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .features import build_feature_snapshot, flatten_reward_features
+from .features import build_feature_snapshot
 
-RANKER_VERSION = "discovery-v3-family-prior"
+RANKER_VERSION = "discovery-v4-family-prior"
 SHADOW_VERSION = "discovery-v3-prior-centered-ridge-shadow"
 SHADOW_MIN_OBSERVATIONS = 80
 SHADOW_MIN_PER_CLASS = 20
 
-# Families sum to one.  Each composite is built from atomic snapshot values;
-# the old usefulness composite and source/lane calibration are excluded.
-_PRIOR_WEIGHTS = {
-    "retrieval": 0.13,
-    "semantic": 0.20,
-    "lexical": 0.08,
-    "topic": 0.14,
-    "author": 0.10,
-    "venue": 0.05,
-    "recency": 0.08,
-    "citation": 0.08,
-    "feedback": 0.08,
-    "preference": 0.06,
+# Bounded post-family penalty. Retraction is a verified lifecycle fact, not
+# missingness, so it sits outside the families where no signal can hide it.
+_RETRACTION_PENALTY = 0.45
+
+
+@dataclass(frozen=True)
+class Atom:
+    """One measured input to a family, and how it enters that family's value.
+
+    ``role`` decides the combinator:
+
+    * ``sum``     — adds ``weight * value``.
+    * ``max``     — competes inside ``group``; the group adds
+      ``weight * max(member values)`` once.  Used where two views of the same
+      evidence would otherwise be double-paid (three similarity views of one
+      embedding, two graph views of one citation neighbourhood).
+    * ``penalty`` — subtracts ``weight * value``, and never makes a family
+      "available" on its own.
+
+    ``scale`` divides the raw value before clipping, for atoms that are not
+    already in [0, 1] (``fwci`` runs 0..~3+).
+    """
+
+    key: str
+    label: str
+    weight: float
+    role: str = "sum"
+    group: str = ""
+    scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class FamilySpec:
+    """A ranking family: one weighted question about a paper."""
+
+    key: str
+    label: str
+    description: str
+    #: The settings key whose slider drives this family's weight.
+    weight_setting: str
+    #: That setting's default, used when it is absent from the settings map.
+    #: Mirrors ``alma.discovery.defaults.DISCOVERY_SETTINGS_DEFAULTS``.
+    weight_default: float
+    #: Fraction of that setting's value this family takes (``text_similarity``
+    #: drives both semantic and lexical).
+    weight_share: float = 1.0
+    atoms: tuple[Atom, ...] = field(default_factory=tuple)
+
+    @property
+    def default_weight(self) -> float:
+        """This family's share of its slider at the shipped defaults."""
+
+        return self.weight_default * self.weight_share
+
+
+# The ten families, in default-weight order. Every number that reaches a score
+# is declared here — there is no second place to look.
+FAMILY_SPECS: tuple[FamilySpec, ...] = (
+    FamilySpec(
+        key="semantic",
+        label="Semantic",
+        description="Embedding similarity to what you already keep.",
+        weight_setting="weights.text_similarity",
+        weight_default=0.20,
+        weight_share=0.70,
+        atoms=(
+            Atom("semantic_similarity_centroid_raw", "Library centroid", 1.0, "max", "positive"),
+            Atom("semantic_similarity_exemplar_raw", "Closest exemplar", 1.0, "max", "positive"),
+            Atom("semantic_similarity_support_raw", "Support set", 1.0, "max", "positive"),
+            Atom("semantic_similarity_negative_raw", "Similarity to passed-on papers", 0.5, "penalty"),
+        ),
+    ),
+    FamilySpec(
+        key="topic",
+        label="Topic",
+        description="Overlap with the topics your rated papers cluster on.",
+        weight_setting="weights.topic_score",
+        weight_default=0.20,
+        atoms=(Atom("topic_score", "Topic overlap", 1.0),),
+    ),
+    FamilySpec(
+        key="retrieval",
+        label="Retrieval",
+        description="How strongly the search channels surfaced it, and how many agreed.",
+        weight_setting="weights.source_relevance",
+        weight_default=0.15,
+        atoms=(
+            Atom("retrieval_rrf_semantic", "Vector channel rank", 0.75, "max", "rrf"),
+            Atom("retrieval_rrf_lexical", "Lexical channel rank", 0.75, "max", "rrf"),
+            Atom("retrieval_rrf_citation", "Citation channel rank", 0.75, "max", "rrf"),
+            Atom("retrieval_rrf_taste", "Taste channel rank", 0.75, "max", "rrf"),
+            Atom("retrieval_family_count", "Channels that agreed", 0.25, "sum", scale=4.0),
+        ),
+    ),
+    FamilySpec(
+        key="author",
+        label="Author",
+        description="Authors you follow or repeatedly save.",
+        weight_setting="weights.author_affinity",
+        weight_default=0.15,
+        atoms=(Atom("author_affinity", "Author affinity", 1.0),),
+    ),
+    FamilySpec(
+        key="lexical",
+        label="Lexical",
+        description="Terminology overlap — the words, not the meaning.",
+        weight_setting="weights.text_similarity",
+        weight_default=0.20,
+        weight_share=0.30,
+        atoms=(
+            Atom("lexical_similarity_word_raw", "Word overlap", 0.45),
+            Atom("lexical_similarity_char_raw", "Character n-grams", 0.35),
+            Atom("lexical_similarity_term_raw", "Key terms", 0.20),
+            Atom("lexical_similarity_negative_penalty", "Overlap with passed-on papers", 0.5, "penalty"),
+        ),
+    ),
+    FamilySpec(
+        key="recency",
+        label="Recency",
+        description="How recently it was published.",
+        weight_setting="weights.recency_boost",
+        weight_default=0.10,
+        atoms=(Atom("recency_boost", "Publication recency", 1.0),),
+    ),
+    FamilySpec(
+        key="citation",
+        label="Citation",
+        description="Citation weight, and citation-graph proximity to your library.",
+        weight_setting="weights.citation_quality",
+        weight_default=0.05,
+        atoms=(
+            Atom("citation_quality", "Citation count", 0.50),
+            Atom("fwci", "Field-weighted impact", 0.10, scale=3.0),
+            Atom("coupling_strength", "Shared references with your library", 0.20, "max", "graph"),
+            Atom("cocitation_strength", "Cited alongside your library", 0.20, "max", "graph"),
+            Atom("ppr_library_raw", "Graph proximity to library", 0.20, "max", "ppr"),
+            Atom("ppr_loved_raw", "Graph proximity to loved papers", 0.20, "max", "ppr"),
+        ),
+    ),
+    FamilySpec(
+        key="feedback",
+        label="Feedback",
+        description="Your explicit verdicts on similar papers.",
+        weight_setting="weights.feedback_adj",
+        weight_default=0.10,
+        atoms=(Atom("feedback_adj", "Feedback adjustment", 1.0),),
+    ),
+    FamilySpec(
+        key="preference",
+        label="Preference",
+        description="The taste profile accumulated from Signal Lab and your history.",
+        weight_setting="weights.preference_affinity",
+        weight_default=0.10,
+        atoms=(Atom("preference_affinity", "Preference affinity", 1.0),),
+    ),
+    FamilySpec(
+        key="venue",
+        label="Venue",
+        description="Journals and conferences you read.",
+        weight_setting="weights.journal_affinity",
+        weight_default=0.05,
+        atoms=(Atom("journal_affinity", "Venue affinity", 1.0),),
+    ),
+)
+
+_SPEC_BY_KEY = {spec.key: spec for spec in FAMILY_SPECS}
+
+# Explore / exploit reweighting. Ported from the retired composite stage so the
+# Settings control keeps reweighting the ranking it claims to reweight. Applied
+# to family weights BEFORE renormalisation, so the modes stay zero-sum.
+_MODE_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "explore": {"recency": 1.5, "citation": 0.5, "author": 0.5, "venue": 0.5},
+    "exploit": {"author": 1.5, "venue": 1.5, "preference": 1.5, "recency": 0.5},
+    "balanced": {},
 }
 
 
@@ -36,75 +214,64 @@ def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
 
 
-def _value(features: dict[str, float], name: str) -> float:
-    return float(features.get(name, 0.0) or 0.0)
+def _atom_reading(snapshot: dict, atom: Atom) -> tuple[float, bool]:
+    """Return ``(clipped value, available)`` for one atom of a family."""
 
-
-def _snapshot_value(
-    snapshot: dict,
-    name: str,
-    *,
-    neutral: float = 0.0,
-) -> float:
-    detail = snapshot.get(name) or {}
+    detail = snapshot.get(atom.key) or {}
     if not isinstance(detail, dict) or not detail.get("availability"):
-        return neutral
-    return float(detail.get("value") or 0.0)
+        return 0.0, False
+    return _clip(float(detail.get("value") or 0.0) / atom.scale), True
+
+
+def _family_reading(snapshot: dict, spec: FamilySpec) -> tuple[float, bool, list[dict]]:
+    """Derive one family's value, availability and per-atom explanation.
+
+    A family is *available* when at least one of its non-penalty atoms was
+    measured. An unavailable family is dropped from the score entirely (see
+    :func:`repaired_prior_score`) rather than being credited a neutral value —
+    a paper with no journal must not collect half the venue weight for free.
+    """
+
+    atoms: list[dict] = []
+    total = 0.0
+    available = False
+    # `max` atoms compete within their group; the group pays its weight once.
+    max_groups: dict[str, tuple[float, float]] = {}
+
+    for atom in spec.atoms:
+        value, atom_available = _atom_reading(snapshot, atom)
+        if atom_available and atom.role != "penalty":
+            available = True
+        atoms.append(
+            {
+                "key": atom.key,
+                "label": atom.label,
+                "value": round(value, 6),
+                "weight": round(atom.weight, 6),
+                "role": atom.role,
+                "group": atom.group or None,
+                "available": atom_available,
+            }
+        )
+        if atom.role == "max":
+            best_weight, best_value = max_groups.get(atom.group, (atom.weight, 0.0))
+            max_groups[atom.group] = (best_weight, max(best_value, value))
+        elif atom.role == "penalty":
+            total -= atom.weight * value
+        else:
+            total += atom.weight * value
+
+    for group_weight, group_value in max_groups.values():
+        total += group_weight * group_value
+
+    return _clip(total), available, atoms
 
 
 def prior_family_values(snapshot: dict) -> dict[str, float]:
-    """Project wide immutable atoms into ten non-duplicated model families."""
-
-    f = flatten_reward_features(snapshot)
-
-    def measured(name: str, neutral: float = 0.5) -> float:
-        return _snapshot_value(snapshot, name, neutral=neutral)
+    """Project atoms into the ten families. Kept for the shadow ranker's input."""
 
     return {
-        "retrieval": max(
-            _value(f, "retrieval_rrf_lexical"),
-            _value(f, "retrieval_rrf_semantic"),
-            _value(f, "retrieval_rrf_citation"),
-            _value(f, "retrieval_rrf_taste"),
-        )
-        * 0.75
-        + _clip(_value(f, "retrieval_family_count") / 4.0) * 0.25,
-        "semantic": _clip(
-            max(
-                measured("semantic_similarity_centroid_raw"),
-                measured("semantic_similarity_exemplar_raw"),
-                measured("semantic_similarity_support_raw"),
-            )
-            - 0.5 * measured("semantic_similarity_negative_raw", 0.0)
-        ),
-        "lexical": _clip(
-            0.45 * measured("lexical_similarity_word_raw")
-            + 0.35 * measured("lexical_similarity_char_raw")
-            + 0.20 * measured("lexical_similarity_term_raw")
-            - 0.5 * measured("lexical_similarity_negative_penalty", 0.0)
-        ),
-        "topic": _clip(measured("topic_score")),
-        "author": _clip(measured("author_affinity")),
-        "venue": _clip(measured("journal_affinity")),
-        "recency": _clip(measured("recency_boost")),
-        # Coupling and co-citation remain atomic in the snapshot.  The prior
-        # uses maxima, not sums, to avoid double-paying correlated graph views.
-        "citation": _clip(
-            0.50 * measured("citation_quality")
-            + 0.10 * _clip(measured("fwci") / 3.0)
-            + 0.20
-            * max(
-                measured("coupling_strength"),
-                measured("cocitation_strength"),
-            )
-            + 0.20
-            * max(
-                measured("ppr_library_raw"),
-                measured("ppr_loved_raw"),
-            )
-        ),
-        "feedback": _clip(measured("feedback_adj")),
-        "preference": _clip(measured("preference_affinity")),
+        spec.key: _family_reading(snapshot, spec)[0] for spec in FAMILY_SPECS
     }
 
 
@@ -112,25 +279,93 @@ def repaired_prior_score(
     snapshot: dict,
     *,
     weights: dict[str, float] | None = None,
-) -> tuple[float, dict[str, float]]:
-    """Score independent signal families once and return exact contributions."""
+) -> tuple[float, dict]:
+    """Score the available families once and return the closed explanation.
 
-    family_values = prior_family_values(snapshot)
-    # Retraction is a verified lifecycle fact, not missingness. Keep it as a
-    # bounded post-family penalty so no other signal can hide it.
-    retraction_penalty = 0.45 * _snapshot_value(
-        snapshot, "is_retracted", neutral=0.0
-    )
-    active_weights = weights or _PRIOR_WEIGHTS
-    contributions = {
-        family: active_weights[family] * value
-        for family, value in family_values.items()
+    Returns ``(score, explanation)`` where the explanation's family points,
+    adjustment points and clipping term sum exactly to the score.
+    """
+
+    configured = weights or _resolve_prior_weights(None)
+
+    readings = {
+        spec.key: _family_reading(snapshot, spec) for spec in FAMILY_SPECS
     }
-    score = _clip(sum(contributions.values()) - retraction_penalty)
-    return round(100.0 * score, 6), {
-        family: round(100.0 * contribution, 6)
-        for family, contribution in contributions.items()
-    } | {"retraction_penalty": round(-100.0 * retraction_penalty, 6)}
+    # Renormalise over the families this paper actually has evidence for, so a
+    # thin-metadata candidate is scored on what is known about it rather than
+    # being silently penalised for the columns nobody filled in.
+    active_total = sum(
+        max(0.0, configured.get(key, 0.0))
+        for key, (_value, available, _atoms) in readings.items()
+        if available
+    )
+
+    families: list[dict] = []
+    points_total = 0.0
+    for spec in FAMILY_SPECS:
+        value, available, atoms = readings[spec.key]
+        raw_weight = max(0.0, configured.get(spec.key, 0.0))
+        weight = (raw_weight / active_total) if (available and active_total > 0) else 0.0
+        points = 100.0 * weight * value
+        points_total += points
+        families.append(
+            {
+                "key": spec.key,
+                "label": spec.label,
+                "description": spec.description,
+                "value": round(value, 6),
+                "weight": round(weight, 6),
+                "points": round(points, 6),
+                "available": available,
+                "atoms": atoms,
+            }
+        )
+
+    retraction_value, retraction_available = _atom_reading(
+        snapshot, Atom("is_retracted", "Retracted", 1.0)
+    )
+    retraction_points = -100.0 * _RETRACTION_PENALTY * retraction_value
+    adjustments = [
+        {
+            "key": "retraction",
+            "label": "Retracted",
+            "description": "A retracted paper is capped down regardless of every other signal.",
+            "points": round(retraction_points, 6),
+            "available": retraction_available,
+        }
+    ]
+
+    raw_total = points_total + retraction_points
+    score = _clip(raw_total, 0.0, 100.0)
+    explanation = {
+        "ranker_version": RANKER_VERSION,
+        "final_score": round(score, 6),
+        "families": families,
+        "adjustments": adjustments,
+        # Closes the invariant when the raw total left the 0..100 band.
+        "clipped": round(score - raw_total, 6),
+    }
+    return round(score, 6), explanation
+
+
+def rank_candidate(
+    candidate: dict,
+    *,
+    timestamp: str,
+    scoring_settings: dict[str, str] | None = None,
+) -> tuple[float, dict]:
+    """Rank ONE candidate. The single entry point for Feed and Online Search.
+
+    Discovery ranks in bulk through :func:`apply_repaired_prior`; both land on
+    the same families, weights and explanation, which is what keeps a paper's
+    score identical on every surface that shows it.
+    """
+
+    ranked = {"_": candidate}
+    apply_repaired_prior(
+        ranked, timestamp=timestamp, scoring_settings=scoring_settings
+    )
+    return float(candidate["score"]), candidate["score_breakdown"]
 
 
 def apply_repaired_prior(
@@ -141,18 +376,14 @@ def apply_repaired_prior(
     shadow_model: PriorCenteredLogisticRidge | None = None,
     shadow_training_size: int = 0,
 ) -> None:
-    """Attach immutable features and replace legacy composite scores in place."""
+    """Attach immutable features and write the ranking score in place."""
 
     active_weights = _resolve_prior_weights(scoring_settings)
     for candidate in candidates.values():
         reward, exposure = build_feature_snapshot(candidate, timestamp=timestamp)
-        score, contributions = repaired_prior_score(
-            reward,
-            weights=active_weights,
-        )
+        score, explanation = repaired_prior_score(reward, weights=active_weights)
         candidate["reward_features"] = reward
         candidate["exposure_features"] = exposure
-        candidate["base_signal_score"] = candidate.get("score")
         candidate["score"] = score
         candidate["prior_score"] = score
         candidate["shadow_score"] = (
@@ -168,8 +399,7 @@ def apply_repaired_prior(
         )
         breakdown = candidate.get("score_breakdown") or {}
         breakdown["ranker_version"] = RANKER_VERSION
-        breakdown["family_contributions"] = contributions
-        breakdown["base_signal_score"] = candidate.get("base_signal_score")
+        breakdown["explanation"] = explanation
         breakdown["shadow_ranker_version"] = (
             SHADOW_VERSION if shadow_model is not None else None
         )
@@ -182,29 +412,28 @@ def apply_repaired_prior(
 def _resolve_prior_weights(
     settings: dict[str, str] | None,
 ) -> dict[str, float]:
-    """Map user-visible signal controls onto non-duplicated ranker families."""
+    """Map the user-visible weight sliders + mode onto family weights.
 
-    if not settings:
-        return dict(_PRIOR_WEIGHTS)
+    Each family declares which setting drives it and what share of it it takes
+    (``FamilySpec.weight_setting`` / ``weight_share``), so adding a family is a
+    one-line change here-adjacent instead of a second mapping to keep in sync.
+    """
 
-    def configured(key: str, default: float) -> float:
+    settings = settings or {}
+
+    def configured(spec: FamilySpec) -> float:
         try:
-            return max(0.0, float(settings.get(key, default)))
+            raw = float(settings.get(spec.weight_setting, spec.weight_default))
         except (TypeError, ValueError):
-            return default
+            raw = spec.weight_default
+        return max(0.0, raw) * spec.weight_share
 
-    text = configured("weights.text_similarity", 0.20)
+    mode = str(settings.get("recommendation_mode", "balanced") or "balanced").strip().lower()
+    multipliers = _MODE_MULTIPLIERS.get(mode, {})
+
     raw = {
-        "retrieval": configured("weights.source_relevance", 0.15),
-        "semantic": text * 0.70,
-        "lexical": text * 0.30,
-        "topic": configured("weights.topic_score", 0.20),
-        "author": configured("weights.author_affinity", 0.15),
-        "venue": configured("weights.journal_affinity", 0.05),
-        "recency": configured("weights.recency_boost", 0.10),
-        "citation": configured("weights.citation_quality", 0.05),
-        "feedback": configured("weights.feedback_adj", 0.10),
-        "preference": configured("weights.preference_affinity", 0.10),
+        spec.key: configured(spec) * multipliers.get(spec.key, 1.0)
+        for spec in FAMILY_SPECS
     }
     total = sum(raw.values())
     if total <= 0.0:

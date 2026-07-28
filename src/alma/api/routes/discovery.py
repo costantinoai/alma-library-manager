@@ -144,20 +144,6 @@ def _upsert_setting(db: sqlite3.Connection, key: str, value: str) -> None:
     discovery_app.upsert_setting(db, key, value)
 
 
-# Human-readable descriptions for each scoring signal
-_SIGNAL_DESCRIPTIONS: dict[str, str] = {
-    "source_relevance": "Position in retrieval results (1st = highest)",
-    "topic_score": "Topic overlap with your rated papers",
-    "text_similarity": "Semantic similarity to your top-rated papers",
-    "author_affinity": "Author overlap with papers you follow",
-    "journal_affinity": "Published in a journal you read",
-    "recency_boost": "Publication recency (newer = higher)",
-    "citation_quality": "Citation count quality indicator",
-    "feedback_adj": "Adjusted based on your past feedback",
-    "preference_affinity": "Affinity learned from your accumulated feedback profile",
-}
-
-
 class ManualSearchRequest(BaseModel):
     query: str = Field(
         ...,
@@ -194,40 +180,16 @@ def _parse_breakdown(raw: str | None) -> dict | None:
 
 
 def _build_explain_breakdown(raw: str | None) -> dict[str, Any] | None:
-    """Parse the stored JSON score breakdown and return it as-is.
+    """Parse the stored JSON score breakdown and return it verbatim.
 
-    Different ranker versions emit different signal taxonomies — v1
-    emits the 10-signal layout, v2 emits ``{lexical, vector}`` — and
-    various raw-diagnostic fields (``final_score``, ``text_similarity_mode``,
-    ``semantic_similarity_raw``, …) can appear alongside the signals. The
-    previous typed-model filter silently dropped every v2 key, so this
-    helper now passes through the stored shape verbatim and only adds a
-    ``description`` onto ``{value, weight, weighted}``-shaped signal
-    entries whose name we recognise.
-
-    Non-signal fields (scalars like ``final_score`` and mode-selection
-    strings) are returned untouched so a generic UI can still display
-    them if desired.
+    The breakdown is self-describing: ``explanation.families`` carries each
+    family's label and description straight from ``ranker.FAMILY_SPECS``, so
+    this route no longer keeps a parallel copy of the vocabulary that could
+    drift from the scorer. Everything else in the payload (raw atoms, mode
+    strings, retrieval provenance) is diagnostic and passed through untouched.
     """
-    data = _parse_breakdown(raw)
-    if not data:
-        return None
 
-    out: dict[str, Any] = {}
-    for name, value in data.items():
-        if (
-            isinstance(value, dict)
-            and "value" in value
-            and "weight" in value
-            and "weighted" in value
-        ):
-            enriched = dict(value)
-            if name in _SIGNAL_DESCRIPTIONS and "description" not in enriched:
-                enriched["description"] = _SIGNAL_DESCRIPTIONS[name]
-            out[name] = enriched
-        else:
-            out[name] = value
-    return out
+    return _parse_breakdown(raw)
 
 
 # ===================================================================

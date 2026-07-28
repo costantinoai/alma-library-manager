@@ -622,7 +622,7 @@ def refresh_lens_recommendations(
 
     _log(
         "scoring",
-        f"Lens '{lens_name}': scoring {len(merged)} candidates with 10-signal hybrid ranker",
+        f"Lens '{lens_name}': measuring {len(merged)} candidates for the family ranker",
         data={
             "candidate_count": len(merged),
             "signals": 10,
@@ -633,7 +633,7 @@ def refresh_lens_recommendations(
         },
     )
 
-    # --- Apply 10-signal scoring to replace simple channel-weighted scores ---
+    # --- Measure every candidate, then rank with the one family prior ---
     # Library fingerprint: used to cache artifacts that only change when library changes
     import numpy as np
     positive_ids = [str(p.get("id") or "") for p in positive_pubs if p.get("id")]
@@ -1052,7 +1052,7 @@ def refresh_lens_recommendations(
         )
     timings_ms["preference_profile_preload"] = int(round((perf_counter() - phase_started) * 1000))
 
-    # Score each candidate with the full 10-signal system. The per-candidate
+    # Measure each candidate; ranking follows in apply_repaired_prior. The per-candidate
     # pass is extracted into scoring_loop.score_candidates (D-9): it mutates
     # each candidate in place (score + breakdown + provenance) and returns the
     # scoring-profile aggregates consumed below. Read-only inputs are bundled in
@@ -1108,7 +1108,6 @@ def refresh_lens_recommendations(
             candidate["embedding_model_compatible"] = True
     timings_ms["scoring"] = int(round((perf_counter() - phase_started) * 1000))
     signal_value_sums = _scoring_aggregates.signal_value_sums
-    signal_weighted_sums = _scoring_aggregates.signal_weighted_sums
     text_mode_counts = _scoring_aggregates.text_mode_counts
     topic_mode_counts = _scoring_aggregates.topic_mode_counts
     raw_semantic_scores = _scoring_aggregates.raw_semantic_scores
@@ -1126,14 +1125,26 @@ def refresh_lens_recommendations(
         name: round(signal_value_sums[name] / max(1, len(merged)), 4)
         for name in signal_names
     }
-    avg_signal_weighted = {
-        name: round(signal_weighted_sums[name] / max(1, len(merged)), 4)
-        for name in signal_names
+    # The average points each RANKER FAMILY contributed. Read from the
+    # explanation the ranker just wrote, so "top drivers" names the things that
+    # actually moved the ranking rather than a parallel weighting of its own.
+    family_point_sums: dict[str, float] = {}
+    for candidate in merged.values():
+        explanation = (candidate.get("score_breakdown") or {}).get("explanation") or {}
+        for family in explanation.get("families") or []:
+            key = str(family.get("key") or "")
+            if key:
+                family_point_sums[key] = family_point_sums.get(key, 0.0) + float(
+                    family.get("points") or 0.0
+                )
+    avg_family_points = {
+        name: round(total / max(1, len(merged)), 4)
+        for name, total in family_point_sums.items()
     }
     top_driver_names = [
         name
         for name, _value in sorted(
-            avg_signal_weighted.items(),
+            avg_family_points.items(),
             key=lambda item: item[1],
             reverse=True,
         )[:3]
@@ -1150,7 +1161,7 @@ def refresh_lens_recommendations(
                 "max": round(max(final_scores), 3) if final_scores else 0.0,
             },
             "avg_signal_values": avg_signal_values,
-            "avg_signal_weighted": avg_signal_weighted,
+            "avg_family_points": avg_family_points,
             "text_similarity_modes": text_mode_counts,
             "topic_match_modes": topic_mode_counts,
             "candidate_embeddings_used": embedding_ready_count,

@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, HelpCircle, Loader2, Plus, Compass } from 'lucide-react'
+import { ChevronDown, ExternalLink, Loader2, Plus, Compass } from 'lucide-react'
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { ScoreMeter } from '@/components/shared/ScoreMeter'
-import { Meter } from '@/components/ui/meter'
 
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,13 +13,10 @@ import { PaperHoverCard } from './PaperHoverCard'
 import { PaperActionBar, type PaperReaction } from '@/components/discovery/PaperActionBar'
 import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
-import { addPaperToCollections, trackInteraction, type ScoreBreakdown, type ScoreSignalDetail } from '@/api/client'
-import { EyebrowLabel } from '@/components/ui/eyebrow-label'
-import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
+import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/api/client'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
-import { formatPercent, formatPaperDate } from '@/lib/format'
-import { byWeightedDesc } from '@/lib/sort'
-import { PAPER_SIGNAL_META, scoreSignalEntries } from '@/lib/signals'
+import { formatPaperDate } from '@/lib/format'
+import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 
 export interface PaperCardPaper {
   id: string
@@ -60,8 +56,6 @@ export interface PaperCardPaper {
  *   when the reader is zoomed in on a single work).
  */
 export type PaperCardSize = 'compact' | 'default' | 'detailed'
-
-export type ScoreSignal = ScoreSignalDetail
 
 interface PaperCardProps {
   paper: PaperCardPaper
@@ -188,134 +182,6 @@ function parseAuthorNames(value?: string | null): string[] {
     unique.push(part)
   }
   return unique
-}
-
-// ── Signal labels & colors ──
-
-/** Merge a signal key's label/description with its centralized dot color. */
-function signalMeta(key: string): { label: string; color: string; description?: string } {
-  const base = PAPER_SIGNAL_META[key]
-  const color = SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR
-  return base ? { ...base, color } : { label: key.replace(/_/g, ' '), color }
-}
-
-
-// ── Score breakdown teaser (HoverCard preview) ──
-//
-// Lightweight summary shown when the user hovers the "Why" chip. Surfaces
-// only the top-3 contributing signals plus the (optional) provenance
-// explanation, so the card can preview intent without forcing a full click
-// into the expanded panel. Clicking the chip still toggles the in-card
-// ScoreBreakdownPanel for the deep view.
-function ScoreBreakdownTeaser({
-  breakdown,
-  explanation,
-}: {
-  breakdown?: ScoreBreakdown | null
-  explanation?: string | null
-}) {
-  const signals = scoreSignalEntries(breakdown)
-    .map(([key, signal]) => ({
-      key,
-      meta: signalMeta(key),
-      signal,
-    }))
-    .filter(({ signal }) => signal.weighted > 0.001)
-    .sort(byWeightedDesc((s) => s.signal.weighted))
-    .slice(0, 3)
-
-  const hasSignals = signals.length > 0
-
-  if (!hasSignals && !explanation) {
-    return <p className="text-xs text-slate-400">No signal data for this recommendation.</p>
-  }
-
-  return (
-    <div className="space-y-2">
-      <EyebrowLabel tone="muted">Why this paper</EyebrowLabel>
-      {explanation && (
-        <p className="text-xs italic leading-relaxed text-slate-600">{explanation}</p>
-      )}
-      {hasSignals && (
-        <ul className="space-y-1.5">
-          {signals.map(({ key, meta, signal }) => (
-            <li key={key} className="flex items-center justify-between gap-3 text-xs">
-              <span className="flex items-center gap-1.5 text-slate-700">
-                <span className={cn('inline-block h-2 w-2 rounded-full', meta.color)} aria-hidden />
-                {meta.label}
-              </span>
-              <span className="tabular-nums text-slate-500">{signal.weighted.toFixed(1)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="border-t border-slate-100 pt-1.5 text-[11px] text-slate-400">
-        Click for full breakdown
-      </p>
-    </div>
-  )
-}
-
-// ── Score breakdown panel ──
-
-function ScoreBreakdownPanel({
-  breakdown,
-  explanation,
-}: {
-  breakdown?: ScoreBreakdown | null
-  explanation?: string | null
-}) {
-  // Sort signals by weighted value (highest first), filter out zero
-  const signals = scoreSignalEntries(breakdown)
-    .map(([key, signal]) => ({
-      key,
-      meta: signalMeta(key),
-      signal,
-    }))
-    .filter(({ signal }) => signal.weighted > 0.001)
-    .sort(byWeightedDesc((s) => s.signal.weighted))
-
-  if (signals.length === 0) {
-    if (explanation) {
-      return <p className="py-2 text-xs italic text-slate-500">{explanation}</p>
-    }
-    return <p className="py-2 text-xs text-slate-400">No signal data available for this recommendation.</p>
-  }
-
-  const maxWeighted = Math.max(...signals.map((s) => s.signal.weighted), 0.01)
-
-  return (
-    <div className="space-y-2">
-      {explanation && (
-        <p className="text-xs italic text-slate-500 pb-1 border-b border-slate-100">{explanation}</p>
-      )}
-      {signals.map(({ key, meta, signal }) => {
-        const barPct = Math.round((signal.weighted / maxWeighted) * 100)
-        return (
-          <div key={key} className="group">
-            <div className="mb-0.5 flex items-center justify-between">
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600">
-                {meta.label}
-                <span title={meta.description} className="cursor-help"><HelpCircle className="h-3 w-3 text-slate-300 hover:text-slate-500" /></span>
-              </span>
-              <span className="tabular-nums text-[11px] text-slate-400">
-                {signal.weighted.toFixed(1)}
-                <span className="ml-1 text-slate-300">
-                  ({formatPercent(signal.value, 0)} &times; {signal.weight.toFixed(2)}w)
-                </span>
-              </span>
-            </div>
-            <Meter
-              value={barPct}
-              fillClassName={cn(meta.color, 'opacity-85')}
-              size="sm"
-              decorative
-            />
-          </div>
-        )
-      })}
-    </div>
-  )
 }
 
 // ── Main card ──

@@ -100,8 +100,16 @@ def build_feature_snapshot(
                 if str(hit.get("family") or "") == family
             ),
         )
+    # Availability is "did a multi-channel retrieval run at all", not "did it
+    # find something". Feed and Online Search reach the ranker without any
+    # channel fusion; marking this measured-at-zero there would charge them the
+    # whole retrieval weight for a question that was never asked.
     reward["retrieval_family_count"] = _feature(
         candidate.get("cross_family_evidence_count"),
+        available=(
+            candidate.get("cross_family_evidence_count") is not None
+            or candidate.get("retrieval_hit_count") is not None
+        ),
         evidence_count=candidate.get("retrieval_hit_count") or 0,
     )
 
@@ -262,12 +270,3 @@ def build_feature_snapshot(
     }
     return reward, exposure
 
-
-def flatten_reward_features(snapshot: dict) -> dict[str, float]:
-    """Flatten snapshot values; unavailable inputs stay prior-neutral at zero."""
-
-    return {
-        name: _number(detail.get("value"))
-        for name, detail in snapshot.items()
-        if isinstance(detail, dict)
-    }

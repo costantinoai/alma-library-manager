@@ -2,58 +2,9 @@ import { ExternalLink } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { ScoreMeter } from '@/components/shared/ScoreMeter'
-import { byWeightedDesc } from '@/lib/sort'
-import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
-import { PAPER_SIGNAL_META, scoreSignalEntries } from '@/lib/signals'
+import { ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 import type { ScoreBreakdown } from '@/api/client'
 import type { PaperCardPaper } from './PaperCard'
-
-function TopSignals({
-  breakdown,
-  explanation,
-}: {
-  breakdown?: ScoreBreakdown | null
-  explanation?: string | null
-}) {
-  const signals = scoreSignalEntries(breakdown)
-    .map(([key, signal]) => ({
-      key,
-      meta: {
-        label: PAPER_SIGNAL_META[key]?.label ?? key.replace(/_/g, ' '),
-        color: SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR,
-      },
-      signal,
-    }))
-    .filter(({ signal }) => signal.weighted > 0.001)
-    .sort(byWeightedDesc((s) => s.signal.weighted))
-    .slice(0, 3)
-
-  if (signals.length === 0 && !explanation) return null
-
-  return (
-    <div className="rounded-md border border-slate-100 bg-surface-2/70 p-2 space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-        Why this paper
-      </p>
-      {explanation && (
-        <p className="text-xs italic leading-relaxed text-slate-600">{explanation}</p>
-      )}
-      {signals.length > 0 && (
-        <ul className="space-y-1">
-          {signals.map(({ key, meta, signal }) => (
-            <li key={key} className="flex items-center justify-between gap-3 text-xs">
-              <span className="flex items-center gap-1.5 text-slate-700">
-                <span className={`inline-block h-2 w-2 rounded-full ${meta.color}`} aria-hidden />
-                {meta.label}
-              </span>
-              <span className="tabular-nums text-slate-500">{signal.weighted.toFixed(1)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
 
 export interface PaperHoverCardProps {
   paper: PaperCardPaper
@@ -124,7 +75,7 @@ export function PaperHoverCard({
             {score != null && <ScoreMeter score={score} />}
           </div>
 
-          <TopSignals breakdown={scoreBreakdown} explanation={explanation} />
+          <ScoreBreakdownTeaser breakdown={scoreBreakdown} explanation={explanation} />
 
           <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 text-[11px]">
             <span className="text-slate-400">Click card for full details</span>

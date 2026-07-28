@@ -574,17 +574,22 @@ class RecommendationExplainResponse(BaseModel):
     """Detailed explanation of a recommendation's score.
 
     ``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed
-    Pydantic envelope. Different ranker versions emit different signal
-    taxonomies — the legacy 10-signal layout
-    (``source_relevance``, ``topic_score``, ``text_similarity``, …,
-    ``usefulness_boost``), the v2 retrieval-channel layout
-    (``lexical``, ``vector``), and various raw-diagnostic fields — and a
-    hardcoded Pydantic model silently dropped every v2 key via
-    ``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live
-    DB. The route returns the stored breakdown exactly as scoring wrote
-    it, annotated with descriptions for known signal names; the frontend
-    iterates keys generically and renders the ones it recognises (see
-    ``components/shared/PaperCard.tsx::SIGNAL_META``).
+    Pydantic envelope, and the route returns the stored value verbatim.
+    Rows persisted by older rankers carry older taxonomies, and a hardcoded
+    model silently dropped their keys via ``extra='ignore'``, rendering
+    48 / 201 rows as all-nulls on the live DB.
+
+    The part clients should read is ``breakdown["explanation"]``: the closed
+    decomposition of the score written by
+    ``alma.application.discovery.ranker``, where
+
+        Σ families[].points + Σ adjustments[].points + clipped == final_score
+
+    Each family carries its own ``label`` and ``description`` (from
+    ``ranker.FAMILY_SPECS``) plus the ``atoms`` it was built from, so the
+    payload is self-describing and no client keeps a parallel copy of the
+    vocabulary. Everything alongside it — raw similarity values, retrieval
+    provenance, mode strings — is diagnostic.
     """
 
     id: str

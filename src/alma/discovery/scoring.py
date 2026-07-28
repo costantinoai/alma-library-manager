@@ -1,10 +1,12 @@
-"""Standalone scoring functions for discovery candidates.
+"""Measurement functions for discovery candidates.
 
-Extracted from DiscoveryEngine for reuse by both the lens system and
-the legacy engine.  All functions are stateless — they take a DB connection
-and settings dict rather than depending on class state.
+This module MEASURES; it does not rank. :func:`measure_candidate` returns a
+breakdown of every atom it can observe about a candidate and no score at all —
+every weight that reaches a score lives in
+:mod:`alma.application.discovery.ranker`, which is the one owner of importance.
+Callers turn a measurement into a score with ``ranker.rank_candidate``.
 
-9 independent signal families:
+Nine measured signals:
   1. source_relevance  — retrieval confidence from the channel that found the paper
   2. topic_score       — overlap between paper topics and user preference profile
   3. text_similarity   — semantic (embedding) or lexical (TF-IDF) text match
@@ -15,8 +17,12 @@ and settings dict rather than depending on class state.
   8. feedback_adj      — adjustment from explicit paper preference history
   9. preference_affinity — Signal Lab swipe/game feedback
 
-``usefulness_boost`` remains diagnostic only.  It is not weighted because it
-duplicates recency/citation/similarity and would reward metadata completeness.
+plus the finer-grained atoms the ranker's families are actually built from
+(the three semantic similarity views, the three lexical views, citation-fabric
+coupling / co-citation strengths, Signal Lab terms).
+
+All functions are stateless — they take a DB connection and settings dict
+rather than depending on class state.
 """
 
 from __future__ import annotations
@@ -39,9 +45,6 @@ from alma.core.scoring_math import (
     clamp as _clamp,
 )
 from alma.core.scoring_math import (
-    consensus_bonus as _shared_consensus_bonus,
-)
-from alma.core.scoring_math import (
     log_prevalence_weights,
 )
 from alma.core.sql_helpers import standalone_paper_sql
@@ -53,50 +56,11 @@ from alma.services.feedback_substrate import get_preference_affinity_signal
 logger = logging.getLogger(__name__)
 
 
-# Multi-source consensus bonus. Math + diminishing-returns shape live in
-# `alma.core.scoring_math.consensus_bonus`; we keep the calibration
-# constants here so the band ceiling and bonus fraction are visible at
-# the call site.
-_MAX_DISCOVERY_SCORE = 100.0
-_CONSENSUS_BONUS_FRACTION = 0.12
-
-# Sentinel for `score_candidate(topic_provider=...)`: distinguishes "caller
+# Sentinel for `measure_candidate(topic_provider=...)`: distinguishes "caller
 # did not pass a provider → resolve lazily" from "caller explicitly passed
 # None → no provider available". Lets the hot loop hoist the subprocess-backed
 # `get_active_provider` out of the per-candidate path.
 _PROVIDER_UNSET = object()
-
-# Dismissal cluster penalty — paper-side mirror of the author rail's
-# `_dismissal_overlap_penalty` (see `alma.application.authors`).
-# Pulled out as a separate post-consensus pass (not folded into
-# `feedback_adj`) so direct user dismissals can hit harder than the
-# bounded ±0.6 projected adjustment allows. Magnitudes here are in
-# *score points* (0–100 band), not normalized weights.
-#
-# Per-axis ceilings reflect the same rank-of-evidence the author rail
-# uses: topic > venue > institution > author identity > keyword/tag.
-# Caller-supplied projected magnitudes are already in [-1, +1]; we
-# multiply by these per-hit ceilings and sum, then cap at 30 points
-# so a candidate can never be permanently zero'd by penalty alone —
-# the user can still dismiss them explicitly.
-_DISMISSAL_TOPIC_PENALTY_PER_HIT = 4.0
-_DISMISSAL_VENUE_PENALTY_PER_HIT = 3.0
-_DISMISSAL_AUTHOR_PENALTY_PER_HIT = 2.0
-_DISMISSAL_AUTHOR_NAME_PENALTY_PER_HIT = 1.5
-_DISMISSAL_KEYWORD_PENALTY_PER_HIT = 1.0
-_DISMISSAL_PENALTY_CAP = 30.0
-
-
-
-
-def _consensus_bonus(consensus_count: int) -> float:
-    """Band-relative bonus for N>1 independent retrieval-source confirmations."""
-    return _shared_consensus_bonus(
-        consensus_count,
-        fraction=_CONSENSUS_BONUS_FRACTION,
-        max_score=_MAX_DISCOVERY_SCORE,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Author name parsing (shared with engine.py)
@@ -555,7 +519,7 @@ def _incorporate_feedback(
     saved or liked. Explicit negative preference flows through the canonical
     structured projection (ratings + feedback events); a visibility-only
     dismiss must never become a global negative centroid. The positive
-    centroid feeds `score_candidate`'s `feedback_adj` via cosine similarity.
+    centroid feeds `measure_candidate`'s `feedback_adj` via cosine similarity.
     Structured signal (authors / topics / venues / keywords / tags) flows
     through `signal_projection` instead — see
     `load_projected_paper_signals`. The legacy
@@ -594,10 +558,10 @@ def _incorporate_feedback(
 
 
 # ---------------------------------------------------------------------------
-# 10-signal candidate scoring
+# Candidate measurement
 # ---------------------------------------------------------------------------
 
-def score_candidate(
+def measure_candidate(
     candidate: dict,
     preference_profile: dict,
     positive_centroid,
@@ -618,8 +582,13 @@ def score_candidate(
     topic_provider: Any = _PROVIDER_UNSET,
     citation_fabric: dict[str, Any] | None = None,
     lab_ctx: dict[str, Any] | None = None,
-) -> tuple[float, dict[str, Any]]:
-    """Score a candidate paper using 10 weighted signals (+ bounded bonuses).
+) -> dict[str, Any]:
+    """Measure every observable signal for a candidate paper.
+
+    Deliberately returns NO score. Ranking is
+    :func:`alma.application.discovery.ranker.rank_candidate`'s job, and keeping
+    the two apart is what stops a second, competing formula from growing here:
+    a caller that wants a number has to go through the ranker to get one.
 
     ``topic_provider`` lets a hot-loop caller (the lens-refresh scoring
     loop) pass the embedding provider it already resolved once, so we
@@ -628,7 +597,8 @@ def score_candidate(
     lazily, preserving the legacy behaviour for ad-hoc / test callers.
 
     Returns:
-        Tuple of (score_0_to_100, breakdown_dict).
+        The breakdown dict: nine ``{"value": …}`` signal entries plus the
+        raw atoms and provenance the ranker and the UI read.
     """
     if settings is None:
         settings = load_settings(conn)
@@ -856,7 +826,7 @@ def score_candidate(
             # forthcoming paper with next year's `publication_year`)
             # must not produce recency > 1.0 — that would let a single
             # signal silently overshoot its weight bucket and bias the
-            # 10-signal weighted sum.
+            # the family ranker.
             recency = 1.0 - ((current_year - year_value) / max(1, recency_window))
             recency = min(1.0, max(0.0, recency))
         except (TypeError, ValueError):
@@ -952,31 +922,6 @@ def score_candidate(
         logger.debug("Preference affinity signal failed: %s", exc)
     pref_affinity = (pref_affinity_raw + 1.0) / 2.0  # Shift [-1,1] → [0,1]
 
-    # -- 10. Usefulness boost --
-    # Discovery should not only reward resemblance. It should also reward
-    # candidates that are timely, credible, and not too redundant with what
-    # the user already has.
-    novelty = max(
-        0.0,
-        1.0 - min(1.0, (text_similarity * 0.55) + (author_score * 0.25) + (journal_score * 0.20)),
-    )
-    metadata_quality = 0.0
-    if str(candidate.get("doi") or "").strip():
-        metadata_quality += 0.5
-    if str(candidate.get("url") or "").strip():
-        metadata_quality += 0.3
-    if str(candidate.get("abstract") or "").strip():
-        metadata_quality += 0.2
-    metadata_quality = min(1.0, metadata_quality)
-    usefulness_boost = _clamp(
-        (novelty * 0.45)
-        + (recency * 0.25)
-        + (citation_quality * 0.20)
-        + (metadata_quality * 0.10),
-        0.0,
-        1.0,
-    )
-
     # -- Citation-fabric channels (task 47 §7): local-only coupling + co-citation
     # strength vs the loved/saved set, precomputed in the orchestrator. Missing
     # (cold start / no local paper) → 0, so the channel simply doesn't fire. --
@@ -984,42 +929,21 @@ def score_candidate(
     coupling_strength = max(0.0, min(1.0, float(cf.get("coupling_strength") or 0.0)))
     cocitation_strength = max(0.0, min(1.0, float(cf.get("cocitation_strength") or 0.0)))
 
-    # -- Weighted combination --
-    weights = {
-        "source_relevance": float(settings.get("weights.source_relevance", "0.15")),
-        "topic_score": float(settings.get("weights.topic_score", "0.20")),
-        "text_similarity": float(settings.get("weights.text_similarity", "0.20")),
-        "author_affinity": float(settings.get("weights.author_affinity", "0.15")),
-        "journal_affinity": float(settings.get("weights.journal_affinity", "0.05")),
-        "recency_boost": float(settings.get("weights.recency_boost", "0.10")),
-        "citation_quality": float(settings.get("weights.citation_quality", "0.05")),
-        "feedback_adj": float(settings.get("weights.feedback_adj", "0.10")),
-        "preference_affinity": float(settings.get("weights.preference_affinity", "0.10")),
-    }
+    # -- Signal Lab per-candidate terms (task 54, D20). `lab_ctx` is loaded once
+    # per scoring pass by the caller (None unless the lab weights are promoted
+    # off 0.0 AND a fitted model exists), so at the default weights this block
+    # adds no breakdown keys — byte-identical to a lab-less build. --
+    if lab_ctx is not None:
+        from alma.application.signal_lab.scoring_terms import compute_lab_adjustments
 
-    # -- Apply recommendation mode adjustments --
-    rec_mode = settings.get("recommendation_mode", "balanced").lower()
-    if rec_mode == "explore":
-        # Explore: boost novelty, reduce familiarity
-        weights["recency_boost"] *= 1.5
-        weights["citation_quality"] *= 0.5
-        weights["author_affinity"] *= 0.5
-        weights["journal_affinity"] *= 0.5
-    elif rec_mode == "exploit":
-        # Exploit: boost familiarity, reduce novelty
-        weights["author_affinity"] *= 1.5
-        weights["journal_affinity"] *= 1.5
-        weights["preference_affinity"] *= 1.5
-        weights["recency_boost"] *= 0.5
-    # balanced: no adjustment
+        lab_offset_raw, lab_utility_raw = compute_lab_adjustments(
+            candidate_embedding, lab_ctx
+        )
 
-    weight_sum = sum(max(0.0, float(w)) for w in weights.values())
-    if weight_sum <= 0:
-        uniform = 1.0 / float(len(weights))
-        weights = {k: uniform for k in weights}
-    else:
-        weights = {k: max(0.0, float(w)) / weight_sum for k, w in weights.items()}
-
+    # -- The nine measured signals. Values only: this function MEASURES, it does
+    # not combine. `alma.application.discovery.ranker` owns every weight that
+    # reaches a score, so there is exactly one place where importance is
+    # decided. --
     values = {
         "source_relevance": source_relevance,
         "topic_score": topic_score,
@@ -1032,97 +956,13 @@ def score_candidate(
         "preference_affinity": pref_affinity,
     }
 
-    final = sum(values[k] * weights[k] for k in weights)
-    weighted_score = max(0.0, min(_MAX_DISCOVERY_SCORE, final * _MAX_DISCOVERY_SCORE))
-
-    # Multi-source consensus bonus. `consensus_buckets` is populated by
-    # `_merge_channel_candidates`; ad-hoc callers (tests, single-channel
-    # scoring) can omit it without penalty. The pre-bonus weighted score
-    # is preserved in the breakdown for provenance.
-    consensus_buckets = candidate.get("consensus_buckets") or []
-    if not isinstance(consensus_buckets, list):
-        consensus_buckets = list(consensus_buckets)
-    consensus_count = (
-        int(candidate.get("consensus_count") or len(consensus_buckets))
-        if consensus_buckets
-        else int(candidate.get("consensus_count") or 0)
-    )
-    consensus_bonus = _consensus_bonus(consensus_count)
-
-    # Citation-fabric bonus (task 47 §7): a bounded ADDITIVE nudge, not a
-    # reweighting — so it never dilutes the 10 core signals for the many
-    # candidates that share no citation structure (their bonus is 0 and their
-    # score is unchanged). Coupling (shared references with the loved/saved set)
-    # and co-citation (cited together with a loved/saved paper) each contribute
-    # up to their configured ceiling, scaled by the precomputed [0,1] strength.
-    coupling_bonus_max = float(settings.get("citation_fabric.coupling_bonus_max", "2.5"))
-    cocitation_bonus_max = float(settings.get("citation_fabric.cocitation_bonus_max", "2.5"))
-    citation_bonus = (
-        coupling_strength * coupling_bonus_max
-        + cocitation_strength * cocitation_bonus_max
-    )
-
-    # Signal Lab bonus (task 54, D20): same bounded-ADDITIVE pattern as the
-    # citation-fabric nudge. `lab_ctx` is loaded once per scoring pass by the
-    # caller (None unless the lab weights are promoted off 0.0 AND a fitted
-    # model exists), so at the default weights this block contributes exactly
-    # 0.0 and adds no breakdown keys — byte-identical to a lab-less build.
-    lab_bonus = 0.0
-    if lab_ctx is not None:
-        from alma.application.signal_lab.scoring_terms import compute_lab_adjustments
-
-        lab_offset_raw, lab_utility_raw = compute_lab_adjustments(
-            candidate_embedding, lab_ctx
-        )
-        lab_bonus = (
-            lab_ctx["w_offset"] * lab_offset_raw
-            + lab_ctx["w_utility"] * lab_utility_raw
-        )
-    score_pre_dismissal = min(
-        _MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus + citation_bonus + lab_bonus
-    )
-
-    # Negative paper-signal cluster penalty — function/breakdown names retain
-    # "dismissal" for compatibility. Applied
-    # AFTER consensus so multi-source agreement can't entirely rescue
-    # a candidate that overlaps with what the user has explicitly
-    # disliked or removed. Cap inside `_dismissal_cluster_penalty` keeps total
-    # ≤ 30 points so a candidate is never zero'd by penalty alone.
-    dismissal_penalty, dismissal_parts = _dismissal_cluster_penalty(
-        candidate,
-        paper_topics,
-        authors_str,
-        preference_profile.get("projected_feedback"),
-    )
-    final_score = max(0.0, score_pre_dismissal - dismissal_penalty)
-
     breakdown: dict[str, Any] = {}
-    for signal in weights:
+    for signal, raw_value in values.items():
         # Force Python float — semantic similarities arrive as numpy
         # float32 from the cosine path and would otherwise propagate
         # into json.dumps at staging time, blowing up lens refresh
         # with "Object of type float32 is not JSON serializable".
-        v = round(float(values[signal]), 4)
-        w = float(weights[signal])
-        breakdown[signal] = {
-            "value": v,
-            "weight": w,
-            "weighted": round(v * w, 4),
-        }
-    breakdown["usefulness_boost"] = {
-        "value": round(float(usefulness_boost), 4),
-        "weight": 0.0,
-        "weighted": 0.0,
-        "diagnostic_only": True,
-    }
-    breakdown["final_score"] = round(float(final_score), 4)
-    breakdown["weighted_score_pre_consensus"] = round(float(weighted_score), 4)
-    breakdown["consensus_buckets"] = list(consensus_buckets)
-    breakdown["consensus_count"] = consensus_count
-    breakdown["consensus_bonus"] = round(consensus_bonus, 4)
-    breakdown["score_pre_dismissal"] = round(float(score_pre_dismissal), 4)
-    breakdown["dismissal_penalty"] = round(float(dismissal_penalty), 4)
-    breakdown["dismissal_penalty_parts"] = dismissal_parts
+        breakdown[signal] = {"value": round(float(raw_value), 4)}
     breakdown["source_type"] = candidate.get("source_type", "")
     breakdown["source_key"] = candidate.get("source_key", "")
     breakdown["text_similarity_mode"] = text_similarity_mode
@@ -1167,18 +1007,16 @@ def score_candidate(
         "followed": 1.0 if followed_author_match else 0.0,
         "evidence_count": len(author_affinity_values),
     }
-    # Citation-fabric provenance (task 47 §7): the two [0,1] strengths, the bonus
-    # they earned, and — when a channel fired — the raw count + the single
-    # best-matching high-signal paper id, so the UI can render an evidence string
+    # Citation-fabric provenance (task 47 §7): the two [0,1] strengths and —
+    # when a channel fired — the raw count + the single best-matching
+    # high-signal paper id, so the UI can render an evidence string
     # ("shares N references with <title>", "cited together with <title> in N
     # papers"). Strengths are always emitted; counts/partners only when non-zero.
     breakdown["coupling_strength"] = round(coupling_strength, 4)
     breakdown["cocitation_strength"] = round(cocitation_strength, 4)
-    breakdown["citation_bonus"] = round(float(citation_bonus), 4)
     if lab_ctx is not None:
         breakdown["lab_region_offset_raw"] = round(float(lab_offset_raw), 4)
         breakdown["lab_utility_raw"] = round(float(lab_utility_raw), 4)
-        breakdown["lab_bonus"] = round(float(lab_bonus), 4)
     if cf.get("coupling_count"):
         breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
         if cf.get("coupling_partner_id"):
@@ -1192,7 +1030,7 @@ def score_candidate(
         if cf.get("cocitation_partner_title"):
             breakdown["cocitation_partner_title"] = str(cf["cocitation_partner_title"])
 
-    return final_score, breakdown
+    return breakdown
 
 
 def _projected_feedback_axes(
@@ -1270,94 +1108,6 @@ def _projected_feedback_axes(
         )
 
     return axes
-
-
-def _dismissal_cluster_penalty(
-    candidate: dict,
-    paper_topics: list[dict],
-    authors_str: str,
-    projected: Any,
-) -> tuple[float, dict[str, float]]:
-    """Penalty in *score points* from candidate's overlap with negative projected signals.
-
-    Mirror of `alma.application.authors._dismissal_overlap_penalty`.
-    The author rail applies a dedicated post-weighted-sum penalty (up
-    to 30% of band) so explicit negative preference can pull harder
-    than the bounded `feedback_adj` signal alone. Same idea here.
-
-    Reads the negative side of `ProjectedPaperSignals.{topic, venue,
-    author, author_name, keyword, tag}` — these are already
-    propagated from dislike / remove / unsave events upstream in
-    `signal_projection`. For each candidate axis (topic of the paper,
-    journal, paper authors, …) we look up the projected magnitude;
-    only the negative-signed contribution adds to the penalty.
-
-    Returns ``(penalty_points, parts)`` where ``parts`` is a per-axis
-    breakdown (``"topic"``, ``"venue"``, ``"author"``,
-    ``"author_name"``, ``"keyword"``) for provenance.
-    """
-    parts: dict[str, float] = {}
-    if not isinstance(projected, ProjectedPaperSignals):
-        return 0.0, parts
-
-    def _neg(value: float) -> float:
-        v = float(value or 0.0)
-        return -v if v < 0.0 else 0.0
-
-    venue_pen = 0.0
-    journal = str(candidate.get("journal") or "").strip().lower()
-    if journal:
-        venue_pen = _DISMISSAL_VENUE_PENALTY_PER_HIT * _neg(projected.venue.get(journal, 0.0))
-    if venue_pen:
-        parts["venue"] = round(venue_pen, 3)
-
-    topic_pen = 0.0
-    for topic in paper_topics or []:
-        term = str(topic.get("term") or topic.get("name") or "").strip().lower()
-        if not term:
-            continue
-        try:
-            # 44.1: shared default only (no floor/clamp — A/B-gated).
-            topic_strength = float(topic.get("score") or topics.DEFAULT_TOPIC_SCORE)
-        except (TypeError, ValueError):
-            topic_strength = topics.DEFAULT_TOPIC_SCORE
-        topic_pen += (
-            _DISMISSAL_TOPIC_PENALTY_PER_HIT
-            * _clamp(topic_strength, 0.1, 1.0)
-            * _neg(projected.topic.get(term, 0.0))
-        )
-    if topic_pen:
-        parts["topic"] = round(topic_pen, 3)
-
-    keyword_pen = 0.0
-    for keyword in _candidate_keywords(candidate):
-        keyword_pen += _DISMISSAL_KEYWORD_PENALTY_PER_HIT * _neg(
-            projected.keyword.get(keyword, 0.0)
-        )
-        keyword_pen += _DISMISSAL_KEYWORD_PENALTY_PER_HIT * _neg(
-            projected.tag.get(keyword, 0.0)
-        )
-    if keyword_pen:
-        parts["keyword"] = round(keyword_pen, 3)
-
-    author_pen = 0.0
-    for author_id in _candidate_author_ids(candidate):
-        author_pen += _DISMISSAL_AUTHOR_PENALTY_PER_HIT * _neg(
-            projected.author.get(author_id, 0.0)
-        )
-    if author_pen:
-        parts["author"] = round(author_pen, 3)
-
-    author_name_pen = 0.0
-    for author_name in parse_author_names(authors_str):
-        author_name_pen += _DISMISSAL_AUTHOR_NAME_PENALTY_PER_HIT * _neg(
-            projected.author_name.get(author_name.strip().lower(), 0.0)
-        )
-    if author_name_pen:
-        parts["author_name"] = round(author_name_pen, 3)
-
-    total = topic_pen + venue_pen + author_pen + author_name_pen + keyword_pen
-    return min(_DISMISSAL_PENALTY_CAP, total), parts
 
 
 def _candidate_author_ids(candidate: dict) -> list[str]:

@@ -31,19 +31,25 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
 
 // ---------------------------------------------------------------------------
-// Label tables — same taxonomy as before, but consumed by the primitives.
+// Label tables — one slider per ranking family, named for the family it drives.
+//
+// Each slider sets a weight in the ONE ranker (`ranker.FAMILY_SPECS`), whose
+// families are what the paper card's score breakdown shows. The names match
+// the panel's rows on purpose: a control should be findable from the thing it
+// changed. `text_similarity` is the one slider that drives two families —
+// stated in its description rather than left for the user to infer.
 // ---------------------------------------------------------------------------
 
 const WEIGHT_LABELS: { key: keyof DiscoveryWeights; label: string; description: string }[] = [
-  { key: 'source_relevance', label: 'Source Relevance', description: 'Position in retrieval results (1st = highest)' },
-  { key: 'topic_score', label: 'Topic Score', description: 'Topic overlap with your rated papers' },
-  { key: 'text_similarity', label: 'Text Similarity', description: 'Semantic similarity to your top-rated papers' },
-  { key: 'author_affinity', label: 'Author Affinity', description: 'Author overlap with papers you follow' },
-  { key: 'journal_affinity', label: 'Journal Affinity', description: 'Published in a journal you read' },
-  { key: 'recency_boost', label: 'Recency Boost', description: 'Publication recency (newer = higher)' },
-  { key: 'citation_quality', label: 'Citation Quality', description: 'Citation count quality indicator' },
-  { key: 'feedback_adj', label: 'Feedback Adjustment', description: 'Adjusted based on your past feedback' },
-  { key: 'preference_affinity', label: 'Preference Affinity', description: 'Affinity learned from your accumulated feedback interactions' },
+  { key: 'text_similarity', label: 'Semantic + Lexical', description: 'Drives two families: embedding similarity to what you keep (70%) and terminology overlap (30%).' },
+  { key: 'topic_score', label: 'Topic', description: 'Overlap with the topics your rated papers cluster on.' },
+  { key: 'source_relevance', label: 'Retrieval', description: 'How strongly the search channels surfaced it, and how many agreed.' },
+  { key: 'author_affinity', label: 'Author', description: 'Authors you follow or repeatedly save.' },
+  { key: 'recency_boost', label: 'Recency', description: 'How recently it was published.' },
+  { key: 'citation_quality', label: 'Citation', description: 'Citation weight, and citation-graph proximity to your library.' },
+  { key: 'feedback_adj', label: 'Feedback', description: 'Your explicit verdicts on similar papers.' },
+  { key: 'preference_affinity', label: 'Preference', description: 'The taste profile accumulated from Signal Lab and your history.' },
+  { key: 'journal_affinity', label: 'Venue', description: 'Journals and conferences you read.' },
 ]
 
 const STRATEGY_LABELS: { key: keyof DiscoveryStrategies; label: string; description: string }[] = [
@@ -70,9 +76,9 @@ const SOURCE_LABELS: Array<{ key: keyof DiscoverySettings['sources']; label: str
 ]
 
 const RECOMMENDATION_MODES: Array<{ value: string; label: string; description: string }> = [
-  { value: 'explore', label: 'Explore', description: 'Increase novelty and recency.' },
-  { value: 'balanced', label: 'Balanced', description: 'Keep familiarity and novelty in balance.' },
-  { value: 'exploit', label: 'Exploit', description: 'Lean harder on proven taste and continuity.' },
+  { value: 'explore', label: 'Explore', description: 'Reweights ranking towards recency and away from author, venue and citation; widens branch spread.' },
+  { value: 'balanced', label: 'Balanced', description: 'Uses your weights as set, with moderate branch spread.' },
+  { value: 'exploit', label: 'Exploit', description: 'Reweights ranking towards author, venue and learned preference, away from recency; narrows branch spread.' },
 ]
 
 // ---------------------------------------------------------------------------

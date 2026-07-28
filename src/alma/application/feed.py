@@ -1370,10 +1370,12 @@ def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
 
 
 def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
-    """Score unscored feed items using the full 10-signal scoring pipeline.
+    """Score unscored feed items through the one ranker.
 
-    Uses the same ``score_candidate()`` function that powers Discovery
-    recommendations, so feed and discovery scores are directly comparable.
+    Measures with ``measure_candidate()`` and ranks with
+    ``ranker.rank_candidate()`` — the same two steps Discovery runs, which is
+    what makes a feed score and a discovery score the same quantity rather
+    than two numbers that merely share a scale.
 
     When ``ctx`` is provided, emits periodic progress updates so the
     Activity row surfaces "Scoring N of M items" while the loop runs
@@ -1384,10 +1386,11 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     import json as _json
 
     try:
+        from alma.application.discovery.ranker import rank_candidate
         from alma.discovery.scoring import (
             compute_centroid_from_ids,
             compute_preference_profile,
-            score_candidate,
+            measure_candidate,
         )
         from alma.discovery.scoring import (
             load_settings as load_scoring_settings,
@@ -1484,10 +1487,13 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
         pass
 
     # ── Phase 1: score (CPU-bound, NO writes, gate NOT held) ──
-    # score_candidate uses the centroids/texts built above; there is no network
-    # or DB write per item, so the (potentially expensive) scoring of several
-    # hundred items must NOT hold the writer lock. Collect (signal, breakdown,
-    # feed_item_id) tuples, then persist them in Phase 2.
+    # measure_candidate uses the centroids/texts built above; there is no
+    # network or DB write per item, so the (potentially expensive) scoring of
+    # several hundred items must NOT hold the writer lock. Collect (signal,
+    # breakdown, feed_item_id) tuples, then persist them in Phase 2.
+    # One timestamp for the whole pass: the ranker stamps its feature snapshot
+    # with it, and a batch scored together should carry one observation time.
+    scored_at = utcnow().isoformat()
     total_rows = len(feed_rows)
     scored_updates: list[tuple[int, str, str]] = []
     for fr in feed_rows:
@@ -1521,7 +1527,7 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 candidate["source_type"] = "query_monitor"
                 candidate["source_key"] = str(fr["monitor_label"] or fr["monitor_id"] or author_id)
 
-            score, breakdown = score_candidate(
+            candidate["score_breakdown"] = measure_candidate(
                 candidate,
                 preference_profile,
                 positive_centroid,
@@ -1531,6 +1537,11 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 conn=db,
                 settings=settings,
                 lab_ctx=lab_ctx,
+            )
+            score, breakdown = rank_candidate(
+                candidate,
+                timestamp=scored_at,
+                scoring_settings=settings,
             )
 
             signal_value = max(0, min(100, int(round(score))))
@@ -1565,7 +1576,7 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 data={"scored": scored, "total": total_rows},
             )
 
-    logger.info("Scored %d feed items via 10-signal pipeline", scored)
+    logger.info("Scored %d feed items via the family ranker", scored)
     return scored
 
 

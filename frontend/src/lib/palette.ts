@@ -225,24 +225,34 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
 }
 
 /**
- * Signal-score component → progress-dot color. Where a component's meaning
- * lines up with a semantic state we reuse that token (topic=success,
- * similarity=info, recency=warning, feedback=critical); the remainder are true
- * categorical hues with no token equivalent.
+ * Ranking family → bar / dot colour. Identity colour, not valence: the hue
+ * answers WHICH family, never how good the paper is (a big red `feedback` bar
+ * is your own strong approval, not a warning). Where a family's meaning lines
+ * up with a semantic state we reuse that token; the rest are true categorical
+ * hues with no token equivalent.
+ *
+ * Keys are the ten `ranker.FAMILY_SPECS` keys — the same strings the backend
+ * puts in `explanation.families[].key`.
  */
-export const SIGNAL_COLORS: Record<string, string> = {
-  source_relevance: 'bg-alma-500',
-  topic_score: 'bg-success-500',
-  text_similarity: 'bg-info-500',
-  author_affinity: 'bg-violet-500',
-  journal_affinity: 'bg-indigo-400',
-  recency_boost: 'bg-warning-500',
-  citation_quality: 'bg-orange-400',
-  feedback_adj: 'bg-critical-500',
-  preference_affinity: 'bg-fuchsia-400',
-  usefulness_boost: 'bg-teal-500',
+export const FAMILY_COLORS: Record<string, string> = {
+  semantic: 'bg-info-500',
+  topic: 'bg-success-500',
+  retrieval: 'bg-alma-500',
+  author: 'bg-violet-500',
+  // Lexical and citation are deliberately DARKER siblings of semantic and
+  // recency rather than neighbouring hues: ten categorical colours exhaust the
+  // legible hue wheel, so the last two pairs separate on value instead. A
+  // sky-400 lexical beside an info-500 semantic, and an orange-400 citation
+  // beside a warning-500 recency, were indistinguishable in the 10px swatches
+  // and in the composition ribbon (2026-07-28).
+  lexical: 'bg-teal-600',
+  recency: 'bg-warning-500',
+  citation: 'bg-amber-700',
+  feedback: 'bg-critical-500',
+  preference: 'bg-fuchsia-400',
+  venue: 'bg-indigo-400',
 }
-/** Unknown signal key → neutral dot. */
+/** Unknown family key → neutral dot. */
 export const SIGNAL_FALLBACK_COLOR = 'bg-slate-400'
 
 /**

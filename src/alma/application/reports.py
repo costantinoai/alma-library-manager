@@ -451,8 +451,11 @@ def signal_impact(conn: sqlite3.Connection) -> dict[str, Any]:
                 continue
             for key in signal_keys:
                 sig = bd.get(key)
-                if isinstance(sig, dict) and "weighted" in sig:
-                    target[key].append(float(sig["weighted"]))
+                # The measured value, not a weighted contribution: weights are
+                # global, so they scale every cohort identically and tell you
+                # nothing about which signal separates liked from dismissed.
+                if isinstance(sig, dict) and "value" in sig:
+                    target[key].append(float(sig["value"]))
                 elif isinstance(sig, (int, float)):
                     target[key].append(float(sig))
     except Exception as e:

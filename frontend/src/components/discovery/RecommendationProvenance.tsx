@@ -27,10 +27,6 @@ export interface ProvenanceSignals {
    *  disliked / removed seed. Rendered as a warning-tone
    *  chip so the user can weigh the hit. */
   negativeHit?: number | null
-  /** Normalised 0..1 final score — distinct from the 0-100 ScoreBar
-   *  at the top of the card. Used only if the card caller wants to
-   *  echo the ranking here too; usually omitted. */
-  scorePct?: number | null
   /** Number of independent retrieval sources that surfaced this
    *  candidate (channels + distinct external source APIs). Renders as
    *  a "Suggested by N sources" chip when N ≥ 2. */

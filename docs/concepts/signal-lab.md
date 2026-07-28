@@ -51,8 +51,7 @@ existing signal can learn this. Topics are the opposite case: SPECTER2 space is
 largely topical, so the utility direction already encodes topic preference and
 `topic_score` estimates the same quantity from hundreds of real Library
 decisions. A third estimator of one quantity is how a model becomes collinear
-with itself — the trap `usefulness_boost` fell into before it was demoted to
-diagnostic.
+with itself — the trap `usefulness_boost` fell into before it was deleted.
 
 Attribution happens at **fit** time, not in the game. A game sees paper ids and
 nothing else, so it cannot know the venues and must not (games are I/O-free by

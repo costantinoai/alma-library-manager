@@ -601,6 +601,13 @@ def _score_search_result(
     lexical_profile=None,
     precomputed_lexical_details: dict | None = None,
 ) -> tuple[float, dict]:
+    """Measure then rank one search hit, through the app's single ranker.
+
+    Online Search ranks against the same library taste as Discovery, so it must
+    produce the same number for the same paper — hence the same two steps
+    (``measure_candidate`` → ``rank_candidate``) rather than a local formula.
+    """
+
     candidate = {
         "title": item.get("title") or "",
         "authors": item.get("authors") or "",
@@ -614,9 +621,10 @@ def _score_search_result(
         "source_key": source_key,
     }
     try:
-        from alma.discovery.scoring import score_candidate
+        from alma.application.discovery.ranker import rank_candidate
+        from alma.discovery.scoring import measure_candidate
 
-        return score_candidate(
+        candidate["score_breakdown"] = measure_candidate(
             candidate,
             preference_profile,
             positive_centroid,
@@ -627,6 +635,11 @@ def _score_search_result(
             settings,
             lexical_profile=lexical_profile,
             precomputed_lexical_details=precomputed_lexical_details,
+        )
+        return rank_candidate(
+            candidate,
+            timestamp=utcnow().isoformat(),
+            scoring_settings=settings,
         )
     except Exception:
         return 0.0, {}

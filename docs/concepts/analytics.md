@@ -23,7 +23,7 @@ editing it.
     they plotted history nobody acted on. Rule of thumb: a chart you read →
     Analytics; something wrong you fix → Health.
 
-![Library Analytics with the Overview / Map / Reports tabs](../screenshots/desktop-insights.png)
+![Library Analytics with the Overview / Map / Reports tabs](../screenshots/desktop-library.png)
 
 ## Tabs
 

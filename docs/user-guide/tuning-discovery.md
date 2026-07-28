@@ -80,33 +80,39 @@ The defaults give roughly:
 
 | Signal | Default share |
 |---|---|
-| `topic_score` | ~17% |
-| `text_similarity` (SPECTER2 + lexical blend) | ~17% |
-| `source_relevance` | ~13% |
-| `author_affinity` | ~13% |
-| `recency_boost` | ~9% |
-| `feedback_adj` | ~9% |
-| `preference_affinity` | ~9% |
-| `usefulness_boost` | ~5% |
-| `journal_affinity` | ~4% |
-| `citation_quality` | ~4% |
+| `topic` | ~18% |
+| `retrieval` | ~14% |
+| `author` | ~14% |
+| `semantic` (SPECTER2 embeddings) | ~13% |
+| `recency` | ~9% |
+| `feedback` | ~9% |
+| `preference` | ~9% |
+| `lexical` (terminology overlap) | ~5% |
+| `citation` | ~5% |
+| `venue` | ~5% |
 
-So a perfect SPECTER2 cosine of 1.00 contributes at most ~17% of the
+So a perfect SPECTER2 cosine of 1.00 contributes at most ~13% of the
 final score — it influences the ranking but does not dominate it.
-The other 83% comes from the eight other signals together. If you
-want SPECTER2 to influence less, lower `weights.text_similarity`;
-if you want it to dominate, raise it. The ranker re-normalizes
-against the budget every refresh.
+One slider, **Semantic + Lexical** (`weights.text_similarity`), drives
+both text families: `semantic` takes 70% of it and `lexical` 30%.
+Lower it to make text matter less, raise it to make it dominate.
+The ranker re-normalizes against the budget every refresh.
+
+Shares are shown for a paper where **everything** is measured. A family
+with nothing to measure — no journal, no citation count, no embedding
+yet — is dropped and the rest are rescaled, so a thin-metadata paper is
+scored on what is actually known about it rather than being charged for
+the blank columns.
 
 Common adjustments:
 
 | Goal | Adjustment |
 |---|---|
-| More recent papers | Raise `recency_boost`. Or switch `recommendation_mode` to `explore`, which auto-multiplies `recency_boost` by 1.5×. |
-| Less old-hit citation bias | Lower `citation_quality`. |
-| Stronger influence from your ratings | Raise `feedback_adj` and `preference_affinity`. |
-| Fewer same-author recommendations | Lower `author_affinity` (the diversity cap already prevents >2/author in the top-K, so usually no further tuning needed). |
-| Less semantic dominance | Lower `weights.text_similarity`. |
+| More recent papers | Raise **Recency**. Or switch mode to **Explore**, which multiplies recency by 1.5× and halves author, venue and citation. |
+| Less old-hit citation bias | Lower **Citation**. |
+| Stronger influence from your ratings | Raise **Feedback** and **Preference**. |
+| Fewer same-author recommendations | Lower **Author** (the diversity cap already prevents >2/author in the top-K, so usually no further tuning needed). |
+| Less semantic dominance | Lower **Semantic + Lexical**. |
 
 The weights are stored in ALMa's `discovery_settings` store and apply
 on the next lens refresh. Each lens can also carry its own override

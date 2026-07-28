@@ -194,8 +194,11 @@ That last one has a concrete case: `usefulness_boost` was
 a composite of features that were *already independent inputs to the same linear
 model*. It double-counted recency and citation quality, made the fit collinear
 by construction, and had the largest marginal effect of any feature (d = −1.84)
-while being absent from every accuracy report. It is now computed and logged
-for diagnostics but **carries no weight**; its atomic ingredients remain.
+while being absent from every accuracy report. It was demoted to weight 0, then
+**deleted outright** (2026-07-28): three of its four atoms were literally the
+same Python locals the model already read, and the fourth, `metadata_quality`,
+measured OUR hydration completeness rather than the paper — weighting it would
+have ranked pipeline artifacts, self-reinforcingly.
 
 ---
 

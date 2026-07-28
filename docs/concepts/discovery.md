@@ -188,42 +188,44 @@ The hybrid scorer combines (default weights configurable):
   co-authors, topics, venue, keywords, and tags.
 * **Preference affinity** — distance from your `preference_profiles`
   centroid.
-* **Usefulness boost** — explicit per-source bonus.
 
-After the 10 weighted signals are summed, two families of **bounded
-bonuses** are added on top (never reweighting the ten, so a candidate
-that lacks them is unaffected):
+The ten families the ranker weighs are assembled from these measurements —
+`semantic` and `lexical` split the text similarity, `citation` folds in the
+citation-fabric strengths below, and `retrieval` folds in multi-source
+agreement. See [scoring formulas](../reference/scoring.md#one-ranker-ten-families).
 
-The **citation-fabric bonuses** reward candidates that share citation
-structure with the papers you've saved or loved:
+The **citation-fabric** signals reward candidates that share citation structure
+with the papers you've saved or loved:
 
 * **Coupling** — the candidate and a saved/loved paper cite the *same
   works* (a shared past / bibliographic coupling).
 * **Co-citation** — some other paper cites the candidate *together
   with* a saved/loved paper (a shared reception).
 
-Both are computed once per refresh as batched set intersections over
-the local `publication_references` table (no network, no per-candidate
-query), squashed to `[0, 1]` by a saturating `n / (n + k)` curve, and
-each adds up to a 2.5-point ceiling scaled by that strength. The
-recommendation card shows the evidence as chips — "Shares N references
-with *<paper>*", "Cited together ×N with *<paper>*" — with the
-best-matching saved paper named on hover. Tunable via
-`citation_fabric.coupling_bonus_max` / `.cocitation_bonus_max`.
+Both are computed once per refresh as batched set intersections over the local
+`publication_references` table (no network, no per-candidate query) and squashed
+to `[0, 1]` by a saturating `n / (n + k)` curve. They enter the score as
+`max`-combined atoms of the **citation family** — two views of one citation
+neighbourhood, paid once — alongside citation count, field-weighted impact and
+personalised-PageRank proximity. The recommendation card shows the evidence as
+chips ("Shares N references with *<paper>*", "Cited together ×N with
+*<paper>*") with the best-matching saved paper named on hover.
 
-The **multi-source consensus bonus** rewards candidates that were
-independently surfaced by more than one retrieval source. Each non-external channel (`lexical`,
-`vector`, `graph`) counts as one source; the `external` channel
-counts each distinct source API (`openalex`, `semantic_scholar`, …)
-separately. With $N$ confirming sources, the bonus is
-$0.12 \times 100 \times \sqrt{N - 1}$ — a diminishing-returns curve
-that gives +12 / +17 / +21 / +24 for 2 / 3 / 4 / 5 sources agreeing,
-clamped at 100. See `docs/reference/scoring.md#multi-source-consensus-bonus`.
+**Multi-source agreement** rewards candidates independently surfaced by more
+than one retrieval family. Each non-external channel (`lexical`, `vector`,
+`graph`) counts as one; the `external` channel counts each distinct source API
+separately. The count enters as the `retrieval_family_count` atom of the
+retrieval family, and is also carried in the breakdown as `consensus_count` /
+`consensus_buckets` so the "found by N sources" chip stays auditable.
 
-Each candidate's `score_breakdown` is exposed in the API so the UI
-can show the signals that pushed a recommendation up or down. The
-breakdown also carries `consensus_buckets`, `consensus_count`, and
-`consensus_bonus` so multi-source agreement is auditable.
+Both of these used to be free-standing additive bonuses bolted on after a
+weighted composite. That composite was discarded by the ranker, so the bonuses
+moved nothing on Discovery; folding them into the families is what made them
+count (2026-07-28).
+
+Each candidate's `score_breakdown` carries `explanation` — the closed
+decomposition of the score, family by family and atom by atom — which is what
+the card's **Why** panel renders.
 
 After consensus, a final **outcome-calibration multiplier** scales
 `source_relevance` per candidate. Three independent axes — the

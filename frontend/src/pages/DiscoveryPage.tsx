@@ -999,7 +999,6 @@ export function DiscoveryPage() {
           sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
           sharedAuthorsSample: readString(provenance?.shared_authors_sample),
           negativeHit: readNumber(provenance?.negative_hit),
-          scorePct: readNumber(provenance?.score_pct),
           consensusCount: readNumber(breakdown?.consensus_count),
           projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
           couplingCount: readNumber(breakdown?.coupling_count),
@@ -1888,9 +1887,11 @@ function DiscoveryCompactTable({
             (paper?.year != null ? `${paper.year}-01-01` : ''),
           publishedLabel: formatPublicationDate(paper),
           journal: paper?.journal ?? '',
-          // Score is normalised in the engine to ~[0, 1]; render as a
-          // 2-decimal label so the column stays narrow + tabular-aligns.
-          scoreLabel: score.toFixed(2),
+          // The ranking score, on the same 0-100 band as the ScoreMeter on
+          // every card. It was rendered here as `toFixed(2)` under a comment
+          // claiming the engine normalises to ~[0,1] — it does not, so the
+          // table and the cards disagreed about what the same number meant.
+          scoreLabel: Math.round(score).toString(),
           scoreValue: score,
           isNew: Boolean(rec.is_new),
         }
