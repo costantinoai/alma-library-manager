@@ -17,6 +17,13 @@ if (!('ResizeObserver' in globalThis)) {
   } as unknown as typeof ResizeObserver
 }
 
+// jsdom does not implement layout or scrolling. Keep components that reveal
+// content by scrolling testable without requiring every test to install its
+// own DOM shim.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {}
+}
+
 afterEach(() => {
   cleanup()
 })
