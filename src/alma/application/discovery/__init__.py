@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import wait
 from datetime import datetime
+from threading import Event, Lock
 from time import perf_counter
 from typing import Any
 
@@ -32,7 +33,6 @@ from alma.discovery.scoring import (
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
-from ..feed import _commit_if_pending
 from .citation_fabric import build_citation_fabric_maps
 from .exploration import build_slate
 
@@ -175,6 +175,12 @@ def _jsonable_numeric(value: Any) -> Any:
 
 logger = logging.getLogger(__name__)
 
+# One lens refresh already fans out into four retrieval lanes plus its shared
+# preference-profile worker. Running several refreshes concurrently multiplies
+# that entire local workload and makes the per-lane deadline measure scheduler /
+# CPU contention rather than pathological work in one lane.
+_LENS_REFRESH_GATE = Lock()
+
 # ---------------------------------------------------------------------------
 # Scoring cache — library-derived artifacts that are stable between refreshes
 # ---------------------------------------------------------------------------
@@ -202,19 +208,26 @@ def _cache_get(db: sqlite3.Connection, cache_key: str, fingerprint: str) -> dict
 def _cache_put(db: sqlite3.Connection, cache_key: str, cache_type: str,
                fingerprint: str, *, value_json: str | None = None,
                value_blob: bytes | None = None) -> None:
-    """Store a cached artifact."""
+    """Store a cached artifact in one short, writer-gated transaction.
+
+    Lens refresh keeps ``db`` open across retrieval, measurement, Activity
+    logging, and the final recommendation swap. A bare cache upsert on that
+    connection leaves Python's implicit transaction open across all of that
+    later work while the process writer gate remains free.
+    """
     try:
-        db.execute(
-            """INSERT INTO scoring_cache (cache_key, cache_type, fingerprint, value_json, value_blob, created_at)
-               VALUES (?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(cache_key) DO UPDATE SET
-                   cache_type = excluded.cache_type,
-                   fingerprint = excluded.fingerprint,
-                   value_json = excluded.value_json,
-                   value_blob = excluded.value_blob,
-                   created_at = excluded.created_at""",
-            (cache_key, cache_type, fingerprint, value_json, value_blob),
-        )
+        with write_section(db, label=f"discovery scoring cache: {cache_key}"):
+            db.execute(
+                """INSERT INTO scoring_cache (cache_key, cache_type, fingerprint, value_json, value_blob, created_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(cache_key) DO UPDATE SET
+                       cache_type = excluded.cache_type,
+                       fingerprint = excluded.fingerprint,
+                       value_json = excluded.value_json,
+                       value_blob = excluded.value_blob,
+                       created_at = excluded.created_at""",
+                (cache_key, cache_type, fingerprint, value_json, value_blob),
+            )
     except Exception as exc:
         logger.debug("Cache write failed for %s: %s", cache_key, exc)
 
@@ -260,6 +273,38 @@ def _derive_recommendation_provenance(candidate: dict, lens_id: str) -> dict[str
 
 
 def refresh_lens_recommendations(
+    db: sqlite3.Connection,
+    lens_id: str,
+    *,
+    trigger_source: str = "user",
+    limit: int = 50,
+    ctx=None,
+) -> dict | None:
+    """Queue concurrent lens refreshes behind one local-retrieval work slot."""
+    waiting_since = perf_counter()
+    with _LENS_REFRESH_GATE:
+        waited_ms = int(round((perf_counter() - waiting_since) * 1000))
+        if waited_ms >= 250:
+            logger.info(
+                "lens refresh %s waited %dms for local retrieval capacity",
+                lens_id,
+                waited_ms,
+            )
+            if ctx is not None:
+                ctx.log_step(
+                    "retrieval_capacity",
+                    f"Lens refresh waited {waited_ms}ms for local retrieval capacity",
+                )
+        return _refresh_lens_recommendations(
+            db,
+            lens_id,
+            trigger_source=trigger_source,
+            limit=limit,
+            ctx=ctx,
+        )
+
+
+def _refresh_lens_recommendations(
     db: sqlite3.Connection,
     lens_id: str,
     *,
@@ -397,6 +442,12 @@ def refresh_lens_recommendations(
         try:
             result = runner()
         except Exception as exc:
+            if lane_abandoned[lane_name].is_set():
+                logger.info(
+                    "lens lane %s failed after it was abandoned; late result ignored",
+                    lane_name,
+                )
+                raise
             try:
                 _set_job_status(
                     subtask_id,
@@ -417,6 +468,13 @@ def refresh_lens_recommendations(
                 logger.debug("subtask failure bookkeeping failed for %s", lane_name, exc_info=True)
             raise
         duration_ms = int(round((perf_counter() - started) * 1000))
+        if lane_abandoned[lane_name].is_set():
+            logger.info(
+                "lens lane %s finished after it was abandoned; late result ignored",
+                lane_name,
+            )
+            timings_ms[f"lane_{lane_name}_ms"] = duration_ms
+            return result
         # `result` may be a list (lexical / vector) or a (list, summary)
         # tuple (graph / external). Count the candidates in either case.
         if isinstance(result, tuple) and result and isinstance(result[0], list):
@@ -466,6 +524,10 @@ def refresh_lens_recommendations(
              preference_profile=_await_preference_profile(),
              positive_pubs=positive_pubs)),
     )
+    # A running Future cannot be cancelled. Once the parent has abandoned a
+    # lane, keep that terminal decision explicit so the late worker cannot
+    # overwrite its failed Activity row as "completed".
+    lane_abandoned = {name: Event() for name, _label, _fn in lane_specs}
 
     def _run_lane_with_conn(lane_name: str, label: str, fn):
         conn = _open_lane_conn()
@@ -539,6 +601,7 @@ def refresh_lens_recommendations(
                 # thinner deck with no explanation (CLAUDE.md → no silent
                 # failures). Note the thread is NOT stopped — a running future
                 # cannot be cancelled — it is abandoned, and says so.
+                lane_abandoned[name].set()
                 _fail_lane_subtask(
                     name,
                     f"exceeded the {lane_deadline_s:.0f}s local-read deadline "
@@ -1416,54 +1479,18 @@ def refresh_lens_recommendations(
     )
     diversity_summary.update(slate_summary)
     phase_started = perf_counter()
-    materialized_slate: list[dict] = []
-    staged_paper_ids: list[str] = []
-    for candidate in slate:
-        paper_id = str(candidate.get("paper_id") or "").strip()
-        if not paper_id:
-            paper_id = library_app.upsert_paper(
-                db,
-                auto_schedule_hydration=False,
-                title=candidate["title"],
-                authors=candidate.get("authors"),
-                abstract=candidate.get("abstract"),
-                year=candidate.get("year"),
-                journal=candidate.get("journal"),
-                url=candidate.get("url"),
-                doi=candidate.get("doi"),
-                openalex_id=candidate.get("openalex_id"),
-                semantic_scholar_id=candidate.get("semantic_scholar_id"),
-                semantic_scholar_corpus_id=candidate.get(
-                    "semantic_scholar_corpus_id"
-                ),
-                cited_by_count=int(candidate.get("cited_by_count") or 0),
-                tldr=(candidate.get("tldr") or None),
-                influential_citation_count=(
-                    int(candidate["influential_citation_count"])
-                    if candidate.get("influential_citation_count") is not None
-                    else None
-                ),
-                status="tracked",
-                added_from="discovery",
-            )
-        paper_id = resolve_paper_root_id(db, paper_id, strict=False)
-        if paper_id in staged_paper_ids:
-            raise RuntimeError(
-                "Two ranked candidate keys resolved to one canonical paper; "
-                "retrieval identity merge must deduplicate before slate selection"
-            )
-        candidate["paper_id"] = paper_id
-        upsert_specter2_embedding(db, paper_id, candidate)
-        staged_paper_ids.append(paper_id)
-        materialized_slate.append(candidate)
+    # Candidate promotion + transported-vector persistence is DML too. It used
+    # to rely on a bare helper-level commit after the loop, leaving this
+    # long-lived refresh connection outside the centralized writer gate.
+    with write_section(db, label=f"lens refresh materialize: {lens_id}"):
+        materialized_slate, staged_paper_ids = _materialize_slate(db, slate)
     slate = materialized_slate
     timings_ms["paper_upsert"] = int(
         round((perf_counter() - phase_started) * 1000)
     )
-    # Publish promoted papers before a target-scoped hydration worker opens its
-    # own connection; scheduling first races SQLite visibility and can make the
-    # worker conclude that every just-selected target is absent.
-    _commit_if_pending(db)
+    # The materialization write section committed promoted papers before this
+    # target-scoped hydration worker opens its own connection. Scheduling first
+    # would race SQLite visibility and make the worker see absent targets.
     if staged_paper_ids:
         try:
             from alma.services.corpus_rehydrate import (
@@ -1572,6 +1599,54 @@ def refresh_lens_recommendations(
         "retrieval_summary": retrieval_summary,
         "inserted": inserted,
     }
+
+
+def _materialize_slate(
+    db: sqlite3.Connection,
+    slate: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Persist selected candidates inside the caller's writer-gated section."""
+    materialized_slate: list[dict] = []
+    staged_paper_ids: list[str] = []
+    for candidate in slate:
+        paper_id = str(candidate.get("paper_id") or "").strip()
+        if not paper_id:
+            paper_id = library_app.upsert_paper(
+                db,
+                auto_schedule_hydration=False,
+                title=candidate["title"],
+                authors=candidate.get("authors"),
+                abstract=candidate.get("abstract"),
+                year=candidate.get("year"),
+                journal=candidate.get("journal"),
+                url=candidate.get("url"),
+                doi=candidate.get("doi"),
+                openalex_id=candidate.get("openalex_id"),
+                semantic_scholar_id=candidate.get("semantic_scholar_id"),
+                semantic_scholar_corpus_id=candidate.get(
+                    "semantic_scholar_corpus_id"
+                ),
+                cited_by_count=int(candidate.get("cited_by_count") or 0),
+                tldr=(candidate.get("tldr") or None),
+                influential_citation_count=(
+                    int(candidate["influential_citation_count"])
+                    if candidate.get("influential_citation_count") is not None
+                    else None
+                ),
+                status="tracked",
+                added_from="discovery",
+            )
+        paper_id = resolve_paper_root_id(db, paper_id, strict=False)
+        if paper_id in staged_paper_ids:
+            raise RuntimeError(
+                "Two ranked candidate keys resolved to one canonical paper; "
+                "retrieval identity merge must deduplicate before slate selection"
+            )
+        candidate["paper_id"] = paper_id
+        upsert_specter2_embedding(db, paper_id, candidate)
+        staged_paper_ids.append(paper_id)
+        materialized_slate.append(candidate)
+    return materialized_slate, staged_paper_ids
 
 
 def _persist_refresh(
