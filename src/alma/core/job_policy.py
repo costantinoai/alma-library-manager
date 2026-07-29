@@ -371,6 +371,7 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
         "services/corpus_rehydrate.py",
         "services/author_hydrate.py",
         "services/embedding_chain.py",
+        "services/health_snapshots.py",
         "services/maintenance.py",
     }
 )
