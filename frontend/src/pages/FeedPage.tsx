@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
@@ -27,7 +27,6 @@ import {
   getFeedStatus,
   getFeedSettings,
   getPaperById,
-  updateFeedSettings,
   listFeedMonitors,
   listFeedInbox,
   markFeedSeen,
@@ -43,7 +42,8 @@ import {
 import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { IdentityChip, JargonHint, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { IdentityChip, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
@@ -53,7 +53,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SkeletonList } from '@/components/shared'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
+import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
@@ -68,6 +68,9 @@ import { cn, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort,
 import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+
+const FeedMonitorTermsCard = lazy(() => import('@/components/settings/FeedMonitorTermsCard').then(m => ({ default: m.FeedMonitorTermsCard })))
+const FeedAutoRefreshCard = lazy(() => import('@/components/settings/FeedAutoRefreshCard').then(m => ({ default: m.FeedAutoRefreshCard })))
 
 type FeedFilter = 'all' | 'new'
 type FeedSort = 'chronological' | 'relevance'
@@ -245,6 +248,18 @@ export function FeedPage() {
   const routeScope = route.params.get('scope')?.trim()
 
   // The full 60-day chronological Feed is the landing view.
+  // Keep the canonical editors mounted after first opening so unsaved edits survive folding.
+  // Their lightweight queries share the page's summary keys; no separate hidden fetch.
+  const [tuneOpen, setTuneOpen] = useState(route.params.get('tune') === 'monitors')
+  const [tuneOpened, setTuneOpened] = useState(tuneOpen)
+  useEffect(() => {
+    if (route.params.get('tune') === 'monitors') {
+      setTuneOpen(true); setTuneOpened(true)
+      document.querySelector('[data-tour="feed-monitors"]')?.scrollIntoView({ block: 'start' })
+    } else if (route.params.has('monitor') || route.params.has('author')) {
+      setTuneOpen(false)
+    }
+  }, [route.params])
   const [filter, setFilter] = useState<FeedFilter>('all')
   // Journal (venue) monitors are noisy → their own surface. 'inbox' hides
   // them from the author/topic/keyword feed; 'journals' shows only them.
@@ -349,7 +364,7 @@ export function FeedPage() {
   }, [feedQuery.data])
 
   const monitorQueryState = useQuery({
-    queryKey: ['feed-monitors'],
+    queryKey: ['feed-monitors', 'settings'],
     queryFn: listFeedMonitors,
     retry: 1,
   })
@@ -372,28 +387,6 @@ export function FeedPage() {
     retry: 1,
     staleTime: 30_000,
   })
-  const autoRefreshMutation = useMutation({
-    mutationFn: (next: boolean) => {
-      const settings = feedSettingsQuery.data
-      if (!settings) throw new Error('settings not loaded')
-      // Enabling with an unset/zero interval would register no job — coerce to a
-      // sane default (6h) so the page toggle always produces a working schedule.
-      const interval =
-        next && settings.refresh_interval_hours <= 0 ? 6 : settings.refresh_interval_hours
-      return updateFeedSettings({ auto_refresh_enabled: next, refresh_interval_hours: interval })
-    },
-    onSuccess: async (saved) => {
-      await invalidateQueries(queryClient, ['feed-settings'])
-      toast({
-        title: saved.auto_refresh_enabled ? 'Auto-refresh on' : 'Auto-refresh off',
-        description: saved.auto_refresh_enabled
-          ? `The feed inbox will refresh in the background every ${saved.refresh_interval_hours}h.`
-          : 'The inbox will only refresh when you click Refresh Inbox.',
-      })
-    },
-    onError: () => errorToast('Could not update auto-refresh'),
-  })
-
   // Scope invalidation narrowly to avoid cascading refetches on unrelated pages.
   // Feed *refresh* only touches feed state; triage *actions* also mutate library state.
   // Background-job completion handlers (useOperationToasts) own insights-diagnostics etc.
@@ -465,7 +458,7 @@ export function FeedPage() {
       if (vars.action === 'dismiss') {
         toast({
           title: 'Dismissed from Feed',
-          description: 'Hidden from your Feed with a small negative signal.',
+          description: 'Hidden from your Feed. Your preference signal is unchanged.',
           action: { label: 'Undo', onClick: () => undoDismissMutation.mutate({ id: vars.id, paperId: vars.paperId }) },
         })
         return
@@ -633,8 +626,8 @@ export function FeedPage() {
     }
     return out
   }, [feedScope, mergeJournals, items, monitors, journalOrderIndex])
-  const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
-  const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
+  const readyMonitors = monitors.filter((monitor) => monitor.enabled && monitor.health === 'ready').length
+  const degradedMonitorList = monitors.filter((monitor) => monitor.enabled && monitor.health === 'degraded')
   const degradedMonitors = degradedMonitorList.length
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id))
 
@@ -659,31 +652,19 @@ export function FeedPage() {
     })
   }
 
-  // Monitor pulse semantics: amber means at least one monitor is degraded and
-  // needs user attention; emerald means the whole surface is healthy.
-  const pulseTone = degradedMonitors > 0 ? 'amber' : 'emerald'
-
   return (
     <div className="space-y-6">
       <PageIntro
         data-tour="feed-hero"
         icon={Inbox}
         lede="Everything new from what you monitor."
-        detail="Authors, journals, and queries you follow — newest first. Triage it here; what you keep and what you pass on both feed Discovery."
+        detail="Authors, journals, and queries you follow — newest first. Save what interests you; Like and Dislike teach Discovery."
         tour={<PageTour pageKey="feed" steps={FEED_TOUR} />}
         meta={
           <MetaLine
             items={[
-              <span className="inline-flex items-center gap-2">
-                <PulseDot tone={pulseTone === 'amber' ? 'warning' : 'success'} />
-                <span>
-                  <span className="font-semibold tabular-nums text-slate-800">
-                    {monitors.length}
-                  </span>
-                  <span className="ml-1 text-slate-500">monitors</span>
-                </span>
-              </span>,
-              <span className="tabular-nums text-success-700">{readyMonitors} ready</span>,
+              <span>{feedQuery.data ? `${total} papers` : 'Loading papers…'}</span>,
+              <span>Last 60 days</span>,
               degradedMonitors > 0 && (
                 /* U-4: surface WHICH monitors are degraded + why, not just a count. */
                 <Tooltip>
@@ -712,17 +693,6 @@ export function FeedPage() {
                   </TooltipContent>
                 </Tooltip>
               ),
-              <button
-                type="button"
-                data-tour="feed-monitors"
-                onClick={() => {
-                  window.location.hash = buildHashRoute('settings')
-                }}
-                className="group inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-alma-700 transition-colors hover:bg-control-quiet hover:text-alma-800"
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                <span className="underline-offset-2 group-hover:underline">Manage in Settings</span>
-              </button>,
             ]}
           />
         }
@@ -745,7 +715,7 @@ export function FeedPage() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="cursor-default text-xs text-slate-500 md:text-right">
-                  {feedStatusQuery.data?.last_refresh_at
+                  {feedStatusQuery.isError ? 'Refresh history unavailable' : !feedStatusQuery.data ? 'Loading refresh history…' : feedStatusQuery.data.last_refresh_at
                     ? `Last refresh ${formatRelativeShort(feedStatusQuery.data.last_refresh_at)}`
                     : 'No refresh on record yet'}
                 </span>
@@ -756,23 +726,7 @@ export function FeedPage() {
                   : 'Run Refresh Inbox to pull the latest papers.'}
               </TooltipContent>
             </Tooltip>
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-500 md:self-end">
-              <Switch
-                checked={!!feedSettingsQuery.data?.auto_refresh_enabled}
-                disabled={!feedSettingsQuery.data || autoRefreshMutation.isPending}
-                onCheckedChange={(next) => autoRefreshMutation.mutate(next)}
-                aria-label="Toggle feed auto-refresh"
-              />
-              <span>
-                {feedSettingsQuery.data?.auto_refresh_enabled
-                  ? `Auto-refresh every ${feedSettingsQuery.data.refresh_interval_hours}h`
-                  : 'Auto-refresh off'}
-              </span>
-              <JargonHint
-                title="Auto-refresh"
-                description="Opt-in background refresh of the feed inbox on a schedule (set the interval in Settings). It runs without blocking the page — new papers appear automatically. Off by default."
-              />
-            </label>
+
           </>
         }
         guide={{
@@ -796,13 +750,48 @@ export function FeedPage() {
           ),
         }}
       >
-        {authorFilter && (
-          <p className="text-xs text-alma-700">Filtered to {filteredAuthorLabel}.</p>
+        {(authorFilter || monitorFilter) && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-alma-700">
+            <span>
+              {authorFilter && `Author: ${filteredAuthorLabel}. `}
+              {monitorFilter && `Monitor: ${monitors.find(m => m.id === monitorFilter)?.label || monitorFilter}. `}
+              {items.length} matches in {feedQuery.data?.items.length ?? 0} loaded papers.
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => {
+              const params = new URLSearchParams(route.params)
+              params.delete('author'); params.delete('monitor')
+              window.location.hash = buildHashRoute('feed', Object.fromEntries(params))
+            }}>Clear source filter</Button>
+          </div>
         )}
       </PageIntro>
 
       {/* U-1: visible while a feed refresh runs in the background. */}
       <RefreshRunningBanner domain="feed" label="Refreshing feed inbox…" />
+
+      {(monitorQueryState.isError || feedSettingsQuery.isError || feedStatusQuery.isError) && (
+        <ErrorState message="Feed source or schedule status is unavailable." actionLabel="Retry" onAction={() => {
+          void monitorQueryState.refetch(); void feedSettingsQuery.refetch(); void feedStatusQuery.refetch()
+        }} />
+      )}
+      <DisclosurePanel
+        data-tour="feed-monitors"
+        title="Tune monitors"
+        description="Choose sources, check delivery details, and set a refresh schedule."
+        icon={Settings2}
+        open={tuneOpen}
+        onOpenChange={(open) => { setTuneOpen(open); if (open) setTuneOpened(true) }}
+        meta={<span className="text-xs text-slate-500">
+          {monitorQueryState.data ? `${readyMonitors} active sources ready` : 'Source status unavailable'}
+          {degradedMonitors > 0 && ` · ${degradedMonitors} degraded`}
+          {feedSettingsQuery.data && (feedSettingsQuery.data.auto_refresh_enabled
+            ? ` · Every ${feedSettingsQuery.data.refresh_interval_hours}h` : ' · Manual refresh')}
+        </span>}
+      >
+        {tuneOpened && <Suspense fallback={<p>Loading monitor controls…</p>}>
+          <div className="space-y-6"><FeedAutoRefreshCard /><FeedMonitorTermsCard /></div>
+        </Suspense>}
+      </DisclosurePanel>
 
       {/* ── Scope tabs ─────────────────────────────────────────────────────
           Journal (venue) monitors are high-volume and can be noisy, so they
@@ -935,7 +924,7 @@ export function FeedPage() {
               )}
             >
               {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              Unsaved only
+              Not saved or queued
             </button>
             <div className="h-5 w-px bg-control-edge" aria-hidden />
           </>
@@ -1266,7 +1255,7 @@ export function FeedPage() {
 
       {/* U-12: page beyond the first 60 (within the 60-day window). Hidden when
           an author filter is active (that view is already the full filtered set). */}
-      {!authorFilter && items.length > 0 && items.length < total && (
+      {(feedQuery.data?.items.length ?? 0) < (feedQuery.data?.total ?? 0) && (
         <div className="mt-4 flex justify-center">
           <Button
             variant="outline"
@@ -1277,7 +1266,7 @@ export function FeedPage() {
             {feedQuery.isFetching ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            Load more · {items.length} of {total}
+            Load more · {feedQuery.data?.items.length} of {feedQuery.data?.total}
           </Button>
         </div>
       )}
@@ -1337,7 +1326,7 @@ function FeedCompactTable({
           paper,
           title: paper?.title || item.paper_id,
           authors: paper?.authors ?? '',
-          publishedSortKey: paper?.publication_date ?? (paper?.year != null ? `${paper.year}-01-01` : ''),
+          publishedSortKey: paper?.publication_date ?? (paper?.year != null ? String(paper.year) : ''),
           publishedLabel: formatPublicationDate(paper),
           journal: paper?.journal ?? '',
           source,

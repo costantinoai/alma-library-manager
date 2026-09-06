@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Info, Loader2, RefreshCw, UploadCloud, Wand2 } from 'lucide-react'
+import { AlertCircle, CheckCircle, Info, Loader2, RefreshCw, Wand2 } from 'lucide-react'
 
 import {
   confirmStagedImport,
@@ -8,9 +8,9 @@ import {
   listUnresolvedImportedPublications,
   resolveImportedPublicationsOpenAlex,
 } from '@/api/client'
-import { ImportDialog } from '@/components/ImportDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Card, CardContent } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
@@ -53,14 +53,24 @@ function resolveStatusBadgeProps(
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
-export function ImportsTab({ openImportOnMount = false }: { openImportOnMount?: boolean }) {
+export function ImportsTab({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const [dialogOpen, setDialogOpen] = useState(openImportOnMount)
+  const [detailsOpen, setDetailsOpen] = useState(initiallyOpen)
+  useEffect(() => { if (initiallyOpen) setDetailsOpen(true) }, [initiallyOpen])
+  // Keep the summary under the existing invalidation root so Activity completion
+  // refreshes it even while the full diagnostic list is folded.
+  const summaryQuery = useQuery({
+    queryKey: ['library-import-unresolved', 'summary'],
+    queryFn: () => listUnresolvedImportedPublications(1),
+    retry: 1,
+    staleTime: 30_000,
+  })
 
   const unresolvedQuery = useQuery({
     queryKey: ['library-import-unresolved'],
     queryFn: () => listUnresolvedImportedPublications(250),
+    enabled: detailsOpen,
     retry: 1,
   })
 
@@ -134,16 +144,18 @@ export function ImportsTab({ openImportOnMount = false }: { openImportOnMount?: 
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-800">Imports</h3>
-          <p className="text-xs text-slate-500">Import from BibTeX or Zotero, then resolve/enrich metadata.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setDialogOpen(true)}>
-            <UploadCloud className="h-4 w-4" />
-            Import Papers
-          </Button>
+      {(summaryQuery.isError || unresolvedQuery.isError) && <ErrorState message="Import status is unavailable." actionLabel="Retry" onAction={() => { void summaryQuery.refetch(); if (detailsOpen) void unresolvedQuery.refetch() }} />}
+      {(resolveMutation.isPending || enrichMutation.isPending || confirmMutation.isPending) && <p role="status">Updating imports…</p>}
+      <DisclosurePanel
+        title="Import details"
+        description="Review staged papers and repair imported metadata."
+        icon={Info}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        meta={<span className="text-xs text-slate-500">{summaryQuery.data ? `${summaryQuery.data.total} imported papers need review or metadata` : 'Import status unavailable'}</span>}
+      >
+      {detailsOpen && <>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
           <Button
             variant="outline"
             onClick={() => resolveMutation.mutate()}
@@ -160,7 +172,6 @@ export function ImportsTab({ openImportOnMount = false }: { openImportOnMount?: 
             {enrichMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Enrich Metadata
           </Button>
-        </div>
       </div>
 
       <Alert variant="info">
@@ -288,13 +299,8 @@ export function ImportsTab({ openImportOnMount = false }: { openImportOnMount?: 
         </CardContent>
       </Card>
 
-      <ImportDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onImportComplete={() => {
-          void invalidateQueries(queryClient, ['library-import-unresolved'], ['papers'], ['library-saved'], ['library-collections'])
-        }}
-      />
+      </>}
+      </DisclosurePanel>
     </div>
   )
 }

@@ -18,8 +18,6 @@ import { PluginsSection } from '@/components/settings/PluginsSection'
 import { SignalLabSettingsCard } from '@/components/settings/SignalLabSettingsCard'
 import { UserProfileCard } from '@/components/settings/UserProfileCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
-import { FeedAutoRefreshCard } from '@/components/settings/FeedAutoRefreshCard'
-import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
 import { DataManagementCard } from '@/components/settings/DataManagementCard'
 import { LibraryManagementCard } from '@/components/settings/LibraryManagementCard'
@@ -344,8 +342,8 @@ export function SettingsPage() {
           {/* -- Intelligence -- */}
           <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. These cards self-save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
-            <Anchor id="feed-monitors"><FeedMonitorTermsCard /></Anchor>
-            <Anchor id="feed-auto-refresh"><FeedAutoRefreshCard /></Anchor>
+            <Anchor id="feed-monitors"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
+            <Anchor id="feed-auto-refresh"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Set the Feed refresh schedule</Button></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
             <Anchor id="signal-lab"><SignalLabSettingsCard /></Anchor>
           </SettingsSection>

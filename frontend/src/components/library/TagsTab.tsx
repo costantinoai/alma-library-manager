@@ -7,7 +7,6 @@ import {
   Loader2,
   Star,
   BookOpen,
-  Info,
   AlertCircle,
   Cpu,
   Sparkles,
@@ -27,6 +26,7 @@ import {
   type Publication,
   type Tag,
 } from '@/api/client'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -49,6 +49,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'
 
 export function TagsTab() {
+  const [tuneOpen, setTuneOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [assignTagId, setAssignTagId] = useState<string | null>(null)
@@ -70,21 +71,23 @@ export function TagsTab() {
   })
 
   const likesQuery = useQuery({
-    queryKey: ['library-saved'],
+    queryKey: ['library-saved', 'tag-picker'],
     queryFn: () => api.get<Publication[]>('/library/saved?limit=300'),
+    enabled: tuneOpen || !!assignTagId,
     retry: 1,
   })
 
   const suggestionsQuery = useQuery({
     queryKey: ['tag-suggestions', suggestionPaperId],
     queryFn: () => getTagSuggestions(suggestionPaperId as string),
-    enabled: Boolean(suggestionPaperId),
+    enabled: tuneOpen && Boolean(suggestionPaperId),
     retry: 1,
   })
 
   const mergeSuggestionsQuery = useQuery({
     queryKey: ['tag-merge-suggestions'],
     queryFn: () => getTagMergeSuggestions(12, 0.8),
+    enabled: tuneOpen,
     retry: 1,
   })
 
@@ -216,16 +219,23 @@ export function TagsTab() {
             <p className="text-sm text-slate-500">
               {tags.length} tag{tags.length !== 1 ? 's' : ''}
             </p>
-            <div className="flex items-center gap-1 rounded-md bg-control-quiet px-2 py-1">
-              <Info className="h-3 w-3 text-alma-500" />
-              <span className="text-xs text-alma-700">Tags boost recommendation scores by 2x</span>
-            </div>
+
           </div>
           <p className="text-xs text-slate-500">
             User-defined or AI-defined keywords for search and signals. They do not need to be official topics, and each paper may have at most 5 tags.
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button onClick={() => { resetForm(); setCreateOpen(true) }}>
+            <Plus className="h-4 w-4" />
+            New Tag
+          </Button>
+        </div>
+      </div>
+
+      {(bulkSuggestMutation.isPending || mergeMutation.isPending) && <p role="status">Updating tags…</p>}
+      {(likesQuery.isError || suggestionsQuery.isError || mergeSuggestionsQuery.isError) && <ErrorState message="Tag suggestions or paper choices could not be loaded." actionLabel="Retry" onAction={() => { if (tuneOpen) { void likesQuery.refetch(); void mergeSuggestionsQuery.refetch(); if (suggestionPaperId) void suggestionsQuery.refetch() } else setTuneOpen(true) }} />}
+      <DisclosurePanel title="Tune tags" description="Generate suggestions and merge duplicate tags." open={tuneOpen} onOpenChange={setTuneOpen}>
           <Button
             variant="outline"
             onClick={() => bulkSuggestMutation.mutate()}
@@ -234,13 +244,6 @@ export function TagsTab() {
             {bulkSuggestMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cpu className="h-4 w-4" />}
             AI Generate Suggestions
           </Button>
-          <Button onClick={() => { resetForm(); setCreateOpen(true) }}>
-            <Plus className="h-4 w-4" />
-            New Tag
-          </Button>
-        </div>
-      </div>
-
       <Card>
         <CardContent className="space-y-3 p-4">
           <div className="flex items-center justify-between gap-2">
@@ -385,6 +388,8 @@ export function TagsTab() {
           )}
         </CardContent>
       </Card>
+
+      </DisclosurePanel>
 
       {/* Content */}
       {tagsQuery.isLoading ? (

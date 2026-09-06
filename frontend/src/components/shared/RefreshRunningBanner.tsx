@@ -30,7 +30,7 @@ export function RefreshRunningBanner({
   domain,
   label,
 }: {
-  domain: 'discovery' | 'feed'
+  domain: 'discovery' | 'feed' | 'import'
   label: string
 }) {
   const { data } = useQuery({
@@ -39,13 +39,13 @@ export function RefreshRunningBanner({
     refetchInterval: 12000,
   })
 
-  const prefix = domain === 'discovery' ? 'discovery.' : 'feed.'
+  const prefix = domain === 'import' ? 'imports.' : `${domain}.`
   const running = (data ?? []).find(
     (op) =>
       (op.operation_key ?? '').startsWith(prefix) &&
       !op.parent_job_id &&
       (op.status === 'running' || op.status === 'queued') &&
-      !isBackgroundTriggerSource(op.trigger_source),
+      (domain !== 'discovery' || !isBackgroundTriggerSource(op.trigger_source)),
   )
   if (!running) return null
 

@@ -3,13 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Save } from 'lucide-react'
 
 import { getFeedSettings, updateFeedSettings, type FeedSettings } from '@/api/client'
-import {
-  AsyncButton,
-  SettingsCard,
-  SettingsNumberField,
-  ToggleRow,
-} from '@/components/settings/primitives'
-import { ConceptCallout } from '@/components/ui/concept-callout'
+import { AsyncButton } from '@/components/settings/primitives'
+import { ErrorState } from '@/components/ui/ErrorState'
+import { PageSection } from '@/components/ui/page-section'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
 
@@ -18,15 +16,7 @@ const DEFAULT_FEED_SETTINGS: FeedSettings = {
   refresh_interval_hours: 6,
 }
 
-/**
- * Feed auto-refresh settings — the detailed control surface for the opt-in
- * background feed refresh (the page-level toggle lives on the Feed page; this
- * card owns the interval and mirrors the same setting).
- *
- * Off by default. When enabled, the backend scheduler refreshes the inbox on
- * the interval without blocking the UI — the run shows in Activity and new
- * items appear automatically.
- */
+/** The one schedule editor, hosted by Feed's Tune monitors disclosure. */
 export function FeedAutoRefreshCard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -73,49 +63,28 @@ export function FeedAutoRefreshCard() {
   })
 
   return (
-    <SettingsCard
-      icon={RefreshCw}
-      title="Feed Auto-Refresh"
-      description="Let ALMa check your monitors for new papers on a schedule instead of refreshing by hand."
-    >
-      <ConceptCallout
-        eyebrow="What is this?"
-        summary="Opt-in background refresh of the feed inbox — off by default, never blocks the page."
-      >
-        When enabled, ALMa fetches new matches from your active monitors every few
-        hours in the background. The run appears in Activity and new items show up in
-        the inbox automatically — you never have to wait on it. Leave it off to keep
-        refreshing manually with the Refresh button on the Feed page.
-      </ConceptCallout>
-
-      <ToggleRow
-        title="Auto-refresh the feed inbox"
-        description="Check active monitors for new papers on the interval below."
-        checked={enabled}
-        disabled={settingsQuery.isLoading}
-        onCheckedChange={setEnabled}
-      />
-
-      <SettingsNumberField
-        label="Refresh Interval (Hours)"
-        description="How often to refresh when auto-refresh is enabled."
-        value={intervalHours}
-        min={0}
-        max={168}
-        onChange={setIntervalHours}
-      />
-
-      <div className="flex justify-end">
-        <AsyncButton
-          type="button"
-          icon={<Save className="h-4 w-4" />}
+    <PageSection id="feed-refresh-schedule" title="Refresh schedule" icon={RefreshCw}>
+      {settingsQuery.isError && <ErrorState message="Feed schedule could not be loaded." actionLabel="Retry" onAction={() => { void settingsQuery.refetch() }} />}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <label className="inline-flex items-center gap-2 text-sm text-alma-800">
+          <Switch checked={enabled} onCheckedChange={setEnabled} disabled={!settingsQuery.data || saveMutation.isPending} />
+          Automatic refresh
+        </label>
+        <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+          Every
+          <Input aria-label="Refresh interval in hours" type="number" className="w-20" min={1} max={168}
+            value={intervalHours} onChange={event => setIntervalHours(Number(event.target.value))}
+            disabled={!settingsQuery.data || saveMutation.isPending} />
+          hours
+        </label>
+        <AsyncButton type="button" size="sm" variant="outline" icon={<Save className="h-3.5 w-3.5" />}
           pending={saveMutation.isPending}
-          disabled={!dirty || settingsQuery.isLoading}
-          onClick={() => saveMutation.mutate()}
-        >
-          Save
-        </AsyncButton>
+          disabled={!dirty || !settingsQuery.data || !Number.isFinite(intervalHours) || intervalHours < 1 || intervalHours > 168}
+          onClick={() => saveMutation.mutate()}>Save schedule</AsyncButton>
+        <span className="text-xs text-slate-500" role="status">
+          {dirty ? 'Unsaved schedule changes' : enabled ? 'Checks run in the background.' : 'Refresh manually whenever you want.'}
+        </span>
       </div>
-    </SettingsCard>
+    </PageSection>
   )
 }

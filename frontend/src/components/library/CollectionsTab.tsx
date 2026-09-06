@@ -13,6 +13,7 @@ import {
   Compass,
 } from 'lucide-react'
 import { api, createLens, type Collection } from '@/api/client'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -46,6 +47,7 @@ interface CollectionsTabProps {
 }
 
 export function CollectionsTab({ initialCollectionId = null }: CollectionsTabProps = {}) {
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -230,7 +232,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm text-slate-500">
             {collections.length} collection{collections.length !== 1 ? 's' : ''}
@@ -275,40 +277,13 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-medium text-alma-800">{coll.name}</h3>
                         <Badge variant="secondary">{coll.item_count} papers</Badge>
-                        {/* Activity is a real valence scale — fresh is good,
-                            stale wants attention — so it rides the shared
-                            semantic tones instead of hand-mixed -100 fills.
-                            Dormant is quiet on purpose: it's a fact, not a
-                            fault. */}
-                        {coll.activity_status === 'fresh' && (
-                          <StatusBadge tone="positive">Fresh</StatusBadge>
-                        )}
-                        {coll.activity_status === 'active' && (
-                          <StatusBadge tone="accent">Active</StatusBadge>
-                        )}
-                        {coll.activity_status === 'stale' && (
-                          <StatusBadge tone="warning">Stale</StatusBadge>
-                        )}
-                        {coll.activity_status === 'dormant' && (
-                          <StatusBadge tone="neutral">Dormant</StatusBadge>
-                        )}
-                        {coll.avg_citations != null && coll.avg_citations > 10 && (
-                          <SignalChip kind="trending" size="default">
-                            ~{Math.round(coll.avg_citations)} cites avg
-                          </SignalChip>
-                        )}
                       </div>
                       {coll.description && (
                         <p className="mt-0.5 text-xs text-slate-500">
                           {coll.description}
                         </p>
                       )}
-                      <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
-                        <span>Created {formatDate(coll.created_at)}</span>
-                        {coll.last_added_at && (
-                          <span>• Updated {formatRelativeTime(coll.last_added_at)}</span>
-                        )}
-                      </div>
+
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <Button
@@ -323,7 +298,12 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                           <ChevronRight className="h-4 w-4 text-slate-500" />
                         )}
                       </Button>
-                      <Button
+                    </div>
+                  </div>
+
+                  {toLensMutation.isPending && toLensMutation.variables?.id === coll.id && <p role="status" className="px-5 text-sm">Creating Discovery lens…</p>}
+                  <DisclosurePanel title={`Manage collection: ${coll.name}`} description="Edit, delete, create a Discovery lens, or inspect collection activity.">
+                    <div className="flex flex-wrap items-center gap-2">                      <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => toLensMutation.mutate(coll)}
@@ -352,8 +332,36 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                       >
                         <Trash2 className="h-4 w-4 text-critical-500" />
                       </Button>
-                    </div>
-                  </div>
+</div>
+                    <div className="flex flex-wrap items-center gap-2">                        {/* Activity is a real valence scale — fresh is good,
+                            stale wants attention — so it rides the shared
+                            semantic tones instead of hand-mixed -100 fills.
+                            Dormant is quiet on purpose: it's a fact, not a
+                            fault. */}
+                        {coll.activity_status === 'fresh' && (
+                          <StatusBadge tone="positive">Fresh</StatusBadge>
+                        )}
+                        {coll.activity_status === 'active' && (
+                          <StatusBadge tone="accent">Active</StatusBadge>
+                        )}
+                        {coll.activity_status === 'stale' && (
+                          <StatusBadge tone="warning">Stale</StatusBadge>
+                        )}
+                        {coll.activity_status === 'dormant' && (
+                          <StatusBadge tone="neutral">Dormant</StatusBadge>
+                        )}
+                        {coll.avg_citations != null && coll.avg_citations > 10 && (
+                          <SignalChip kind="trending" size="default">
+                            ~{Math.round(coll.avg_citations)} cites avg
+                          </SignalChip>
+                        )}
+</div>
+                      <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
+                        <span>Created {formatDate(coll.created_at)}</span>
+                        {coll.last_added_at && (
+                          <span>• Updated {formatRelativeTime(coll.last_added_at)}</span>
+                        )}
+                      </div>                  </DisclosurePanel>
 
                   {/* Expanded items */}
                   {isExpanded && (
@@ -363,9 +371,11 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                           <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
                           <span className="ml-2 text-xs text-slate-500">Loading items...</span>
                         </div>
+                      ) : collectionItemsQuery.isError ? (
+                        <ErrorState message="Collection papers could not be loaded." actionLabel="Retry" onAction={() => { void collectionItemsQuery.refetch() }} />
                       ) : collectionItems.length === 0 ? (
                         <p className="py-4 text-center text-xs text-slate-400">
-                          No papers in this collection yet. Add papers from the Favorites tab.
+                          No papers in this collection yet. Add papers from the Saved tab.
                         </p>
                       ) : (
                         <div className="space-y-2">
@@ -500,7 +510,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
           if (!open) setDeleteId(null)
         }}
         title="Delete Collection"
-        description="Are you sure you want to delete this collection? All items inside will be removed. This action cannot be undone."
+        description="Delete this collection and its filing links? The papers remain in your Library. This action cannot be undone."
         onConfirm={() => deleteId && deleteMutation.mutate(deleteId)}
         isPending={deleteMutation.isPending}
       />
@@ -508,7 +518,9 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
       {/* Per-collection analytics, beside the collections they describe (this
           used to sit a page away in Reports). Generate-on-demand: it's an
           expensive aggregate and most visits here are about editing. */}
-      {collections.length > 0 && <CollectionIntelligenceCard />}
+      {collections.length > 0 && <DisclosurePanel title="Explore collection insights" open={intelligenceOpen} onOpenChange={setIntelligenceOpen}>
+        {intelligenceOpen && <CollectionIntelligenceCard />}
+      </DisclosurePanel>}
     </div>
   )
 }

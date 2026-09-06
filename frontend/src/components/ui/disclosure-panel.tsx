@@ -83,7 +83,6 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
         {...rest}
       >
         <details
-          className="group"
           open={isOpen}
           onToggle={(event) => {
             const next = (event.currentTarget as HTMLDetailsElement).open
@@ -117,11 +116,9 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
                 {meta}
               </div>
             </div>
-            <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">
-              Show
-            </span>
-            <span className="hidden shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">
-              Hide
+            <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+              {/* Local state avoids an open ancestor changing a nested fold's label. */}
+              {isOpen ? 'Hide' : 'Show'}
             </span>
           </summary>
           <div

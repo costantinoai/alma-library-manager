@@ -30,7 +30,10 @@ import {
   type VenueSearchResult,
 } from '@/api/client'
 import { VenueAutocomplete } from '@/components/shared/VenueAutocomplete'
-import { AsyncButton, SettingsCard, SettingsSection } from '@/components/settings/primitives'
+import { AsyncButton } from '@/components/settings/primitives'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { PageSection } from '@/components/ui/page-section'
+import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -165,7 +168,19 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
   const monitoredQuery = monitorQuery(monitor)
 
   return (
-    <div className="rounded-sm border border-[var(--color-border)] p-4">
+    <div data-monitor-id={monitor.id}>
+    <DisclosurePanel
+      title={monitor.label}
+      description={editableDefinition && monitoredQuery !== monitor.label ? monitoredQuery : undefined}
+      meta={<span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <StatusBadge tone={monitorHealthTone(monitor.health)} size="sm">{monitor.health}</StatusBadge>
+        <span>{enabled ? 'Active' : 'Paused'}</span>
+        {dirty && <span className="text-warning-700">Unsaved changes</span>}
+        {busy && <span role="status">Updating…</span>}
+        {(monitor.last_error || monitor.health_reason) && <span className="text-warning-700">{monitor.last_error || monitor.health_reason}</span>}
+        {(saveMutation.isError || refreshMutation.isError || deleteMutation.isError) && <span role="alert" className="text-critical-700">Update failed. Open to retry.</span>}
+      </span>}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -186,6 +201,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
               <Input
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
+                aria-label="Monitor name"
                 placeholder="Display label"
                 disabled={busy}
               />
@@ -193,6 +209,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
           className="min-h-[72px]"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                aria-label="Monitor rule"
                 rows={monitor.monitor_type === 'query' ? 3 : 2}
                 disabled={busy}
                 placeholder={
@@ -238,9 +255,9 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => navigateTo(ownerPage)}
+            onClick={() => ownerPage === 'authors' ? navigateTo('authors') : navigateTo('feed', { monitor: monitor.id })}
           >
-            Open owner
+            {ownerPage === 'authors' ? 'Manage authors' : 'View matches'}
           </AsyncButton>
           <AsyncButton
             type="button"
@@ -283,6 +300,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
       {(monitor.last_error || monitor.health_reason) && (
         <p className="mt-2 text-xs text-warning-700">{monitor.last_error || monitor.health_reason}</p>
       )}
+    </DisclosurePanel>
     </div>
   )
 }
@@ -377,12 +395,10 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
       ref={setNodeRef}
       style={sortableStyle}
       className={cn(
-        'rounded-sm border border-[var(--color-border)] p-4',
+        'flex items-start gap-2',
         isDragging && 'opacity-80 shadow-paper-md',
       )}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-2">
           {draggable && (
             <button
               type="button"
@@ -394,6 +410,18 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
               <GripVertical className="h-4 w-4" />
             </button>
           )}
+      <DisclosurePanel className="min-w-0 flex-1" title={String(config.query || monitor.label)}
+        description={keywords ? `Keywords: ${keywords}` : 'All new papers in this journal'}
+        meta={<span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <StatusBadge tone={monitorHealthTone(monitor.health)} size="sm">{needsResolution ? 'Needs re-linking' : monitor.health}</StatusBadge>
+          <span>{enabled ? 'Active' : 'Paused'}</span>
+          {dirty && <span className="text-warning-700">Unsaved changes</span>}
+          {busy && <span role="status">Updating…</span>}
+          {(saveMutation.isError || refreshMutation.isError || deleteMutation.isError || relinkMutation.isError) && <span role="alert">Update failed. Open to retry.</span>}
+        </span>}
+      >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
           <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
@@ -491,6 +519,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
           </AsyncButton>
         </div>
       </div>
+      </DisclosurePanel>
     </div>
   )
 }
@@ -602,63 +631,28 @@ export function FeedMonitorTermsCard() {
     reorderVenuesMutation.mutate(arrayMove(ids, oldIndex, newIndex))
   }
 
-  const disabledCount = monitors.filter((monitor) => !monitor.enabled).length
-  const degradedCount = monitors.filter((monitor) => monitor.health === 'degraded').length
-
-  const headerStats = (
-    <>
-      <StatusBadge tone="neutral" size="sm">
-        {monitors.length} total
-      </StatusBadge>
-      <StatusBadge tone="neutral" size="sm">
-        {authorMonitors.length} authors
-      </StatusBadge>
-      <StatusBadge tone="neutral" size="sm">
-        {topicMonitors.length} topics
-      </StatusBadge>
-      <StatusBadge tone="neutral" size="sm">
-        {keywordMonitors.length} keywords
-      </StatusBadge>
-      <StatusBadge tone="neutral" size="sm">
-        {venueMonitors.length} journals
-      </StatusBadge>
-      {disabledCount > 0 && (
-        <StatusBadge tone="neutral" size="sm">
-          {disabledCount} paused
-        </StatusBadge>
-      )}
-      {degradedCount > 0 && (
-        <StatusBadge tone="warning" size="sm">
-          {degradedCount} degraded
-        </StatusBadge>
-      )}
-    </>
-  )
-
   return (
-    <SettingsCard
-      icon={Search}
-      title="Feed Monitor Controls"
-      description="Feed stays deterministic only if the monitor layer is explicit and easy to tune. Authors are owned by the Authors page, but you can pause or refresh them here."
-      action={headerStats}
-      roomy
-    >
-      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2/70 p-4">
-        <div className="grid items-start gap-3 lg:grid-cols-[170px_minmax(0,1fr)_auto]">
+    <div className="space-y-6">
+      <PageSection id="feed-add-source" title="Add a source" icon={Plus}
+        description="Follow a keyword rule, a topic, or a journal.">
+      <div className="space-y-3">
+        <div className="grid items-end gap-3 lg:grid-cols-[170px_minmax(0,1fr)_auto]">
+          <div className="space-y-1.5"><Label htmlFor="feed-source-type">Source type</Label>
           <Select
             value={newType}
             onValueChange={(value) => setNewType(value as FeedMonitorCreateType)}
             disabled={createMutation.isPending}
           >
-            <SelectTrigger>
+            <SelectTrigger id="feed-source-type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="query">Keyword Monitor</SelectItem>
-              <SelectItem value="topic">Topic Monitor</SelectItem>
+              <SelectItem value="query">Keyword rule</SelectItem>
+              <SelectItem value="topic">Topic</SelectItem>
               <SelectItem value="venue">Journal</SelectItem>
             </SelectContent>
           </Select>
+          </div>
           {newType === 'venue' ? (
             <div className="space-y-2">
               {selectedVenue ? (
@@ -691,18 +685,24 @@ export function FeedMonitorTermsCard() {
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
+              <div className="space-y-1.5"><Label htmlFor="feed-source-rule">Match papers about</Label>
               <Input
+                id="feed-source-rule"
                 value={newQuery}
                 onChange={(event) => setNewQuery(event.target.value)}
                 placeholder={createMonitorPlaceholder(newType)}
                 disabled={createMutation.isPending}
               />
+              </div>
+              <div className="space-y-1.5"><Label htmlFor="feed-source-name">Name <span className="font-normal text-slate-400">(optional)</span></Label>
               <Input
+                id="feed-source-name"
                 value={newLabel}
                 onChange={(event) => setNewLabel(event.target.value)}
                 placeholder="Display label"
                 disabled={createMutation.isPending}
               />
+              </div>
             </div>
           )}
           <AsyncButton
@@ -718,6 +718,8 @@ export function FeedMonitorTermsCard() {
         <p className="mt-3 text-xs text-slate-500">{createMonitorHelp(newType)}</p>
       </div>
 
+      </PageSection>
+
       {monitorsQuery.isLoading ? (
         <p className="text-sm text-slate-500">Loading Feed monitors...</p>
       ) : monitorsQuery.isError ? (
@@ -728,44 +730,22 @@ export function FeedMonitorTermsCard() {
         <EmptyState title="No Feed monitors yet" description="Add a topic or keyword monitor above." />
       ) : (
         <div className="space-y-5">
-          {authorMonitors.length > 0 && (
-            <SettingsSection
-              defaultOpen={false}
-              title={
-                <span className="flex items-center gap-2">
-                  <UserRound className="h-4 w-4 text-slate-500" />
-                  Author Monitors
-                </span>
-              }
-              trailing={
-                <StatusBadge tone="neutral" size="sm">
-                  {authorMonitors.length}
-                </StatusBadge>
-              }
-            >
-              <div className="space-y-3">
-                {authorMonitors.map((monitor) => (
-                  <MonitorRow key={monitor.id} monitor={monitor} />
-                ))}
-              </div>
-            </SettingsSection>
-          )}
           {topicMonitors.length > 0 && (
-            <MonitorSection icon={<Tag className="h-4 w-4 text-slate-500" />} title="Topic Monitors">
+            <MonitorSection icon={Tag} title="Topics">
               {topicMonitors.map((monitor) => (
                 <MonitorRow key={monitor.id} monitor={monitor} />
               ))}
             </MonitorSection>
           )}
           {keywordMonitors.length > 0 && (
-            <MonitorSection icon={<Search className="h-4 w-4 text-slate-500" />} title="Keyword Monitors">
+            <MonitorSection icon={Search} title="Keyword rules">
               {keywordMonitors.map((monitor) => (
                 <MonitorRow key={monitor.id} monitor={monitor} />
               ))}
             </MonitorSection>
           )}
           {venueMonitors.length > 0 && (
-            <MonitorSection icon={<BookOpen className="h-4 w-4 text-slate-500" />} title="Journals">
+            <MonitorSection icon={BookOpen} title="Journals">
               <DndContext
                 sensors={venueSensors}
                 collisionDetection={closestCenter}
@@ -787,15 +767,22 @@ export function FeedMonitorTermsCard() {
             </MonitorSection>
           )}
           {otherMonitors.length > 0 && (
-            <MonitorSection icon={<Tag className="h-4 w-4 text-slate-500" />} title="Other Monitor Types">
+            <MonitorSection icon={Tag} title="Other sources">
               {otherMonitors.map((monitor) => (
                 <MonitorRow key={monitor.id} monitor={monitor} />
               ))}
             </MonitorSection>
           )}
+          {authorMonitors.length > 0 && (
+            <PageSection id="feed-author-monitors" title="Followed authors" icon={UserRound} count={authorMonitors.length}
+              description="Pause or refresh individual authors. Follow more from the Authors page."
+              collapsible defaultOpen={false}>
+              <div className="space-y-2">{authorMonitors.map(monitor => <MonitorRow key={monitor.id} monitor={monitor} />)}</div>
+            </PageSection>
+          )}
         </div>
       )}
-    </SettingsCard>
+    </div>
   )
 }
 
@@ -804,17 +791,13 @@ function MonitorSection({
   title,
   children,
 }: {
-  icon: React.ReactNode
+  icon: typeof Search
   title: string
   children: React.ReactNode
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        {icon}
-        <h3 className="text-sm font-semibold text-alma-800">{title}</h3>
-      </div>
-      <div className="space-y-3">{children}</div>
-    </section>
+    <PageSection id={`feed-sources-${title.toLowerCase().replace(/ /g, '-')}`} title={title} icon={icon}>
+      <div className="space-y-2">{children}</div>
+    </PageSection>
   )
 }

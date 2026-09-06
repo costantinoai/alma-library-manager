@@ -14,7 +14,10 @@ import {
 
 import { getApiErrorMessage, getLibraryWorkflowSummary, getPaperById, type Publication, updateReadingStatus } from '@/api/client'
 import { errorToast } from '@/hooks/useToast'
-import { PaperCard } from '@/components/shared'
+import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/ErrorState'
+import { ImportDialog } from '@/components/ImportDialog'
+import { PaperCard, RefreshRunningBanner } from '@/components/shared'
 import { PageTour, LIBRARY_TOUR } from '@/components/onboarding'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { MetaLine, PageIntro } from '@/components/ui/page-intro'
@@ -44,15 +47,11 @@ const TABS: TabDefinition[] = [
   { id: 'collections', label: 'Collections', icon: FolderOpen },
   { id: 'tags', label: 'Tags', icon: Tags },
   { id: 'topics', label: 'Topics', icon: Layers },
-  { id: 'imports', label: 'Imports', icon: UploadCloud },
-  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
 ]
 
 /** Which tab buttons the Library page tour points at (`onboarding/tours.ts`). */
 const TAB_TOUR_ANCHOR: Partial<Record<TabId, string>> = {
   saved: 'library-saved',
-  imports: 'library-imports',
-  analytics: 'library-analytics',
 }
 
 const DEFAULT_TAB: TabId = 'saved'
@@ -143,16 +142,21 @@ export function LibraryPage() {
       : routeTab
 
   const [activeTab, setActiveTab] = useState<TabId>(VALID_TABS.has(effectiveTab ?? DEFAULT_TAB) ? (effectiveTab ?? DEFAULT_TAB) : DEFAULT_TAB)
+  const [importOpen, setImportOpen] = useState(routeAction === 'import')
+  const [attentionOpen, setAttentionOpen] = useState(false)
+  const [analyticsOpen, setAnalyticsOpen] = useState(effectiveTab === 'analytics')
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
   useEffect(() => {
     const nextTab = VALID_TABS.has(effectiveTab ?? DEFAULT_TAB) ? (effectiveTab ?? DEFAULT_TAB) : DEFAULT_TAB
     setActiveTab(nextTab)
+    if (nextTab === 'analytics') setAnalyticsOpen(true)
   }, [effectiveTab])
 
   useEffect(() => {
-    if (routeAction !== 'import' || activeTab !== 'imports') return
+    if (routeAction !== 'import') return
+    setImportOpen(true)
     const nextParams = new URLSearchParams(route.params)
     nextParams.delete('action')
     window.history.replaceState(
@@ -216,6 +220,7 @@ export function LibraryPage() {
     onSuccess: async () => {
       await invalidateQueries(queryClient, ['library-workflow-summary'], ['reading-queue'], ['papers'], ['library-saved'])
     },
+    onError: () => errorToast('Reading status update failed'),
   })
 
   const workflow = workflowQuery.data
@@ -232,6 +237,7 @@ export function LibraryPage() {
         icon={BookMarked}
         lede="Everything you've saved."
         detail="Collections group it, reading status tracks what you're working through, and every rating you give teaches Discovery."
+        actions={<Button data-tour="library-imports" onClick={() => setImportOpen(true)}><UploadCloud className="h-4 w-4" />Import Papers</Button>}
         tour={<PageTour pageKey="library" steps={LIBRARY_TOUR} />}
         meta={
           <MetaLine
@@ -280,7 +286,7 @@ export function LibraryPage() {
               <p>
                 <strong>Removing</strong> a paper is a soft transition, never a delete — it stays in
                 the corpus as a negative signal so Discovery stops offering you papers like it.
-                <strong> Needs attention</strong> below lists saved papers with concrete metadata
+                <strong> Review Library metadata</strong> below lists saved papers with concrete metadata
                 gaps, each row saying why and what to do.
               </p>
             </>
@@ -288,28 +294,77 @@ export function LibraryPage() {
         }}
       />
 
+      <RefreshRunningBanner domain="import" label="Import work in progress…" />
+
+      {/* ── Tab bar ──────────────────────────────────────────────────────
+          Segmented-chip strip (matches the Feed control-bar pattern) so
+          the Library and Feed surfaces read as the same product.
+      ─────────────────────────────────────────────────────────────────── */}
+      <div
+        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm bg-control-track p-1"
+        role="tablist"
+        aria-label="Library sections"
+      >
+        {TABS.map((tab) => {
+          const isActive = (activeTab === 'analytics' || activeTab === 'imports' ? 'saved' : activeTab) === tab.id
+          return (
+            <button
+              key={tab.id}
+              role="tab"
+              data-tour={TAB_TOUR_ANCHOR[tab.id]}
+              aria-selected={isActive}
+              onClick={() => {
+                setActiveTab(tab.id)
+                window.location.hash = buildHashRoute('library', { tab: tab.id })
+              }}
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
+                isActive
+                  ? 'bg-surface-4 text-alma-800 shadow-paper-sm'
+                  : 'text-slate-600 hover:bg-control-quiet hover:text-alma-800'
+              }`}
+            >
+              <tab.icon className={`h-4 w-4 ${isActive ? 'text-alma-folio' : 'text-slate-400'}`} />
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {workflowQuery.isError && <ErrorState message="Library summary is unavailable." actionLabel="Retry" onAction={() => { void workflowQuery.refetch() }} />}
+
+      {(activeTab === 'saved' || activeTab === 'imports' || activeTab === 'analytics') && (
+        <SavedTab
+          onOpenDetails={(p) => { setSelectedPaper(p); setDetailOpen(true) }}
+        />
+      )}
+      {activeTab === 'reading' && <ReadingListTab />}
+      {activeTab === 'collections' && <CollectionsTab initialCollectionId={deepLinkCollectionId} />}
+      {activeTab === 'tags' && <TagsTab />}
+      {activeTab === 'topics' && <TopicsTab initialTopic={deepLinkTopic} />}
       {/* Needs Attention — collapsed by default. Each row carries an
           inline reasons strip explaining WHY the paper is flagged + a
           suggested action verb so the user can act without thinking. */}
       <DisclosurePanel
         data-tour="library-workflow"
         icon={AlertCircle}
-        title="Needs attention"
+        title="Review Library metadata"
+        open={attentionOpen}
+        onOpenChange={setAttentionOpen}
         description={
-          needsAttentionCount === 0
+          workflowQuery.isError ? 'Library summary unavailable.' : !workflow ? 'Loading Library summary…' : needsAttentionCount === 0
             ? 'Every saved paper is cleanly identified.'
             : 'Library papers with concrete metadata gaps — each row says why and what to do.'
         }
         meta={
           needsAttentionCount > 0 ? (
-            <StatusBadge tone="warning" size="sm">
+            <StatusBadge tone="warning" size="sm" className="self-start">
               {needsAttentionCount} to fix
             </StatusBadge>
           ) : undefined
         }
         contentClassName="space-y-3 p-3"
       >
-          {(workflow?.needs_attention ?? []).length === 0 ? (
+          {attentionOpen && (workflowQuery.isError ? <p>Library summary unavailable. Use Retry above.</p> : !workflow ? <p>Loading Library summary…</p> : (workflow.needs_attention ?? []).length === 0 ? (
             <p className="text-sm text-slate-400">No metadata gaps right now.</p>
           ) : (
             workflow?.needs_attention.map((paper) => (
@@ -340,58 +395,23 @@ export function LibraryPage() {
                 }
               />
             ))
-          )}
+          ))}
       </DisclosurePanel>
 
-      {/* ── Tab bar ──────────────────────────────────────────────────────
-          Segmented-chip strip (matches the Feed control-bar pattern) so
-          the Library and Feed surfaces read as the same product.
-      ─────────────────────────────────────────────────────────────────── */}
-      <div
-        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm bg-control-track p-1"
-        role="tablist"
-        aria-label="Library sections"
+      <ImportsTab initiallyOpen={activeTab === 'imports'} />
+      <DisclosurePanel
+        title="Explore Library analytics"
+        description="Reading progress, source mix, topics, and collection insights."
+        icon={BarChart3}
+        data-tour="library-analytics"
+        open={analyticsOpen}
+        onOpenChange={setAnalyticsOpen}
       >
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              role="tab"
-              data-tour={TAB_TOUR_ANCHOR[tab.id]}
-              aria-selected={isActive}
-              onClick={() => {
-                setActiveTab(tab.id)
-                window.location.hash = buildHashRoute('library', { tab: tab.id })
-              }}
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-surface-4 text-alma-800 shadow-paper-sm'
-                  : 'text-slate-600 hover:bg-control-quiet hover:text-alma-800'
-              }`}
-            >
-              <tab.icon className={`h-4 w-4 ${isActive ? 'text-alma-folio' : 'text-slate-400'}`} />
-              {tab.label}
-            </button>
-          )
-        })}
-      </div>
-
-      {activeTab === 'saved' && (
-        <SavedTab
-          onOpenDetails={(p) => { setSelectedPaper(p); setDetailOpen(true) }}
-        />
-      )}
-      {activeTab === 'reading' && <ReadingListTab />}
-      {activeTab === 'collections' && <CollectionsTab initialCollectionId={deepLinkCollectionId} />}
-      {activeTab === 'tags' && <TagsTab />}
-      {activeTab === 'topics' && <TopicsTab initialTopic={deepLinkTopic} />}
-      {activeTab === 'imports' && <ImportsTab openImportOnMount={routeAction === 'import'} />}
-      {activeTab === 'analytics' && (
-        <Suspense fallback={<div className="py-12 text-center text-sm text-slate-500">Loading analytics…</div>}>
-          <AnalyticsTab />
-        </Suspense>
-      )}
+        {analyticsOpen && <Suspense fallback={<p>Loading analytics…</p>}><AnalyticsTab /></Suspense>}
+      </DisclosurePanel>
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onImportComplete={() => {
+        void invalidateQueries(queryClient, ['library-import-unresolved'], ['papers'], ['library-saved'], ['library-collections'], ['library-workflow-summary'])
+      }} />
 
       <PaperDetailPanel
         paper={selectedPaper}

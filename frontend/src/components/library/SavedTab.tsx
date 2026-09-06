@@ -31,6 +31,7 @@ import {
   updateSavedPaper,
   updateReadingStatus,
 } from '@/api/client'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
@@ -277,6 +278,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const collectionsQuery = useQuery({
     queryKey: ['library-collections'],
     queryFn: listCollections,
+    enabled: !!addToCollectionKey || bulkCollectionOpen,
     retry: 1,
   })
 
@@ -520,9 +522,9 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       ) : visibleLikes.length === 0 ? (
         <div className="py-16 text-center">
           <Heart className="mx-auto h-12 w-12 text-slate-300" />
-          <p className="mt-4 text-sm font-medium text-slate-500">No saved papers yet</p>
+          <p className="mt-4 text-sm font-medium text-slate-500">{debouncedSearch ? 'No saved papers match your search' : 'No saved papers yet'}</p>
           <p className="mt-1 text-xs text-slate-400">
-            Save papers from Feed, Discovery, or similar-results workflows to build the library.
+            {debouncedSearch ? 'Try another title or author, or clear the search.' : 'Save papers from Feed, Discovery, or similar-results workflows to build the library.'}
           </p>
         </div>
       ) : viewMode === 'compact' ? (
@@ -637,7 +639,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
+        <div className="sticky bottom-3 z-30 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>
@@ -651,19 +653,20 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setBulkCollectionOpen(true)}
+          >
+            <FolderOpen className="h-4 w-4" />
+            Collection
+          </Button>
+          <DisclosurePanel title="Maintain selected papers" contentClassName="flex flex-wrap gap-2 p-3">
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => bulkClearRatingMutation.mutate(Array.from(selectedKeys))}
             disabled={bulkClearRatingMutation.isPending}
           >
             <HeartOff className="h-4 w-4" />
             Clear Rating
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setBulkCollectionOpen(true)}
-          >
-            <FolderOpen className="h-4 w-4" />
-            Collection
           </Button>
           <Button
             size="sm"
@@ -674,7 +677,10 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             <Trash2 className="h-4 w-4" />
             Remove
           </Button>
-          <Button size="sm" variant="ghost" onClick={clearSelection}>
+          </DisclosurePanel>
+          {bulkClearRatingMutation.isPending && <span role="status">Clearing ratings…</span>}
+          {bulkClearRatingMutation.isError && <span role="alert">Could not clear ratings. Try again.</span>}
+          <Button size="sm" variant="ghost" onClick={clearSelection} aria-label="Clear selection">
             <X className="h-4 w-4" />
           </Button>
         </div>
