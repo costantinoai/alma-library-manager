@@ -1205,6 +1205,13 @@ def init_db_schema() -> None:
                     PRIMARY KEY (paper_id, scope)
                 )"""
             )
+            # Core-owned semantic partition (task 67 C2): memberships + state,
+            # no coordinates. The DDL lives with its owner; migration 40 runs
+            # the same statements for existing installs.
+            from alma.application.semantic_partition import DDL as PARTITION_DDL
+
+            for statement in PARTITION_DDL:
+                conn.execute(statement)
 
             # ==============================================================
             # ALERTS: Digest-based system (rules + digests + assignments)

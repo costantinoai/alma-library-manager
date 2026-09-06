@@ -437,12 +437,11 @@ def _load_region_pools(
     rows = conn.execute(
         """
         SELECT DISTINCT pc.paper_id, pc.cluster_id, p.journal
-        FROM publication_clusters pc
+        FROM semantic_partition_members pc
         JOIN papers p ON p.id = pc.paper_id
         JOIN publication_embeddings pe
           ON pe.paper_id = pc.paper_id AND pe.model = ?
-        WHERE pc.scope = 'corpus'
-          AND TRIM(COALESCE(p.title, '')) != ''
+        WHERE TRIM(COALESCE(p.title, '')) != ''
           AND (TRIM(COALESCE(p.abstract, '')) != ''
                OR TRIM(COALESCE(p.tldr, '')) != '')
         ORDER BY pc.paper_id

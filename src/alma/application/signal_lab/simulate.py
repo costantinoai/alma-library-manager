@@ -114,8 +114,7 @@ def world_from_corpus(
         return None
 
     rows = conn.execute(
-        "SELECT paper_id, cluster_id FROM publication_clusters "
-        "WHERE scope = 'corpus' AND cluster_id >= 0"
+        "SELECT paper_id, cluster_id FROM semantic_partition_members WHERE cluster_id >= 0"
     ).fetchall()
     rng = np.random.default_rng(seed)
     pairs = [(str(r[0]), cluster_to_region.get(int(r[1]))) for r in rows]

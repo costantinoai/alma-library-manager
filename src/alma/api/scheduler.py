@@ -1567,6 +1567,26 @@ def setup_scheduler() -> None:
         interval_hours=calibration_hours,
     )
 
+    # -- Semantic partition freshness (interval) -----------------------------
+    # What the Signal Lab learns against must not depend on the map's layout
+    # pass. Registered unconditionally; the runner self-gates on the Lab.
+    partition_hours = _discovery_schedule_interval_hours(
+        "schedule.semantic_partition_interval_hours",
+        6,
+    )
+    _register_interval_job(
+        sched,
+        job_id="semantic_partition_refresh",
+        func=semantic_partition_refresh_periodic,
+        name="Semantic partition freshness",
+        description=(
+            "Assigns new papers a semantic membership and refreshes the regions the "
+            f"Signal Lab samples from, every {partition_hours}h"
+        ),
+        enabled=partition_hours > 0,
+        interval_hours=partition_hours,
+    )
+
     # -- Signal Lab model freshness (interval, task 67 B2) -----------------
     # Registered unconditionally: the runner self-gates on the Lab switch and on
     # there being any rounds at all, so a Lab-less install pays one cheap SELECT
@@ -2333,7 +2353,7 @@ def signal_lab_model_refresh_periodic() -> None:
     changing what is in your Library, recomputing a shown paper's vector or
     correcting its authors all kept the previous model in force indefinitely.
 
-    ``mv.get`` is the whole logic, the same shape as ``_ensure_super_regions_fresh``:
+    ``mv.get`` is the whole logic, the same shape as ``super_regions.ensure_regions_fresh``:
     it runs the (cheap, bounded) fingerprint SQL, serves the stored row when it
     matches, and enqueues a deduped background rebuild when it does not. Unlike
     that one this job is deliberately independent of the map layout pass — under
@@ -2409,6 +2429,62 @@ def scoring_calibration_refresh_periodic() -> None:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
         logger.warning("Scoring calibration freshness check failed: %s", exc)
+
+
+def semantic_partition_refresh_periodic() -> None:
+    """Core freshness owner for what learning reads from the partition (task 67 C2).
+
+    Until now `semantic:regions` was refreshed only by the map's layout pass,
+    so without a map the Signal Lab would learn against stale regions with
+    nothing able to notice. This tick, gated on the Lab being enabled:
+
+    * assigns a bounded batch of vectored-but-unassigned papers a membership
+      (nearest admitted centroid, no coordinates);
+    * runs `mv.get` on `semantic:regions` — one fingerprint SELECT when
+      nothing moved, a deduped background rebuild when the partition did.
+
+    An unbuilt partition is built here (`build_partition`: the corpus's own
+    clustering run, no layout), so a core install with no map ever gets its
+    regions. A full re-partition of a built corpus stays a deliberate event —
+    a layout rebuild publishes one — while growth is absorbed incrementally.
+    """
+    job_id = "periodic_semantic_partition"
+    try:
+        from alma.api.deps import open_db_connection
+        from alma.application import super_regions
+        from alma.application.semantic_partition import (
+            assign_missing_members,
+            build_partition,
+            read_state,
+        )
+        from alma.application.signal_lab import settings as lab_settings
+
+        conn = open_db_connection()
+        try:
+            if not lab_settings.is_enabled(conn):
+                logger.debug("%s skipped: Signal Lab disabled", job_id)
+                return
+            if read_state(conn) is None:
+                built = build_partition(conn)
+                if built is None:
+                    logger.info("%s: corpus too small to partition", job_id)
+                    return
+                logger.info("%s: built partition generation %d", job_id, built.generation)
+            assigned = assign_missing_members(conn)
+            if assigned.get("assigned") or assigned.get("outliers"):
+                logger.info(
+                    "%s: assigned %d paper(s) (%d unclustered)",
+                    job_id,
+                    assigned["assigned"] + assigned["outliers"],
+                    assigned["outliers"],
+                )
+            envelope = super_regions.ensure_regions_fresh(conn) or {}
+            if envelope.get("stale") or envelope.get("rebuilding"):
+                logger.info("Semantic regions inputs changed; rebuild enqueued")
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
+        logger.warning("Semantic partition freshness check failed: %s", exc)
 
 
 def refresh_feed_inbox_periodic() -> None:
@@ -2588,33 +2664,6 @@ def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, s
 _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
-def _super_regions_built(conn: sqlite3.Connection) -> bool:
-    """Has Signal Lab's substrate ever been built? Failed reads must propagate."""
-    from alma.application import materialized_views as mv
-    from alma.application import super_regions
-
-    return mv.stored_meta(conn, super_regions.VIEW_KEY) is not None
-
-
-def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
-    """Freshness owner for ``graph:super_regions`` (task 54).
-
-    Same ownership split as the other graph views: GETs are pure stored
-    reads, so THIS pass keeps the payload current. ``mv.get`` is the whole
-    logic — cheap fingerprint SQL, first-ever build runs synchronously right
-    here (we are already inside a background job), later drift enqueues a
-    deduped background rebuild. The fingerprint tracks the substrate rows
-    only, so idle ticks cost one aggregate SELECT.
-    """
-    try:
-        from alma.application import materialized_views as mv
-        from alma.application import super_regions
-
-        mv.get(conn, super_regions.VIEW_KEY)
-    except Exception as exc:  # noqa: BLE001 — advisory freshness, never sink the pass
-        logger.warning("super_regions freshness check failed: %s", exc)
-
-
 def _graph_layout_pass(
     *, job_id: str, operation_key: str, message: str, user_initiated: bool = False
 ) -> None:
@@ -2657,28 +2706,9 @@ def _graph_layout_pass(
         stale = _graph_view_staleness(conn)
         urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
 
-        # `graph:super_regions` is Signal Lab's ENTIRE substrate: without it
-        # `policy._build_context` returns None, every game reports "not
-        # available", and Home silently drops the section — with a full corpus
-        # sitting right there. It is not a graph view, so it is not in `stale`
-        # (that list drives the layout rebuild loop) and could never escalate
-        # past the ordinary idle gate. On prod that gate never opened at all
-        # (see the `/health` heartbeat fix), so it stayed unbuilt for months.
-        #
-        # It gets its OWN permissive gate rather than raising `urgent`: doing
-        # the latter also promotes every routinely-stale layout view in the
-        # same pass, so "Signal Lab has no substrate" would silently authorise
-        # a full map refit the user never asked for.
-        if not _super_regions_built(conn):
-            sr_ok, sr_reason = (
-                (True, "user")
-                if user_initiated
-                else may_background_continue(conn, exclude_operation_key=operation_key)
-            )
-            if sr_ok:
-                _ensure_super_regions_fresh(conn)
-            else:
-                logger.debug("super_regions first build deferred: %s", sr_reason)
+        # Regions are the core partition owner's to build and keep fresh
+        # (`semantic_partition_refresh_periodic`); this pass only re-checks them
+        # after it places papers, below.
         if not user_initiated:
             gate = may_background_continue if urgent else may_background_run
             ok, reason = gate(conn, exclude_operation_key=operation_key)
@@ -2689,6 +2719,7 @@ def _graph_layout_pass(
         from alma.application.discovery.lens_crud import upsert_setting
         from alma.application.graph_process import graph_build_in_flight, run_graph_process
         from alma.application.graph_substrate import place_missing_papers
+        from alma.application.super_regions import ensure_regions_fresh
         from alma.core.db_write import write_section
 
         def _mark_running() -> None:
@@ -2702,7 +2733,7 @@ def _graph_layout_pass(
             )
 
         placement = place_missing_papers(conn)
-        _ensure_super_regions_fresh(conn)
+        ensure_regions_fresh(conn)
         if not stale and not (placement.get("placed") or placement.get("outliers")):
             # Nothing to do. A warm-up on every restart must stay out of Activity
             # so it can't push real operations off the user's list — but a CLICK

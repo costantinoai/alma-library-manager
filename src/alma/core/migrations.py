@@ -43,6 +43,7 @@ so fresh installs get the new shape directly.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -56,6 +57,7 @@ logger = logging.getLogger("alma.core.migrations")
 # Guarded helpers — ONLY for use inside migrations. General code must never
 # need these: after startup the schema is guaranteed to be current.
 # ============================================================================
+
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
@@ -94,6 +96,7 @@ def _add_columns(
 # (api/deps.py init_db_schema, api/routes/authors.py, application/*,
 # library/*). Original rationale comments preserved where they matter.
 # ============================================================================
+
 
 def _m_0001_papers_columns(conn: sqlite3.Connection) -> None:
     """Bring ``papers`` to the current column set (pre-v1 lazy ALTERs)."""
@@ -139,9 +142,7 @@ def _m_0002_papers_status_relabels(conn: sqlite3.Connection) -> None:
     )
     conn.execute("UPDATE papers SET status = 'tracked' WHERE status = 'disliked'")
     # D2 (2026-04-26): collapse the `queued` reading-state into `reading`.
-    conn.execute(
-        "UPDATE papers SET reading_status = 'reading' WHERE reading_status = 'queued'"
-    )
+    conn.execute("UPDATE papers SET reading_status = 'reading' WHERE reading_status = 'queued'")
 
 
 def _m_0003_papers_identifier_heals(conn: sqlite3.Connection) -> None:
@@ -195,8 +196,7 @@ def _m_0003_papers_identifier_heals(conn: sqlite3.Connection) -> None:
     for col in ("openalex_id", "doi", "semantic_scholar_id"):
         if col in cols:
             conn.execute(
-                f"UPDATE papers SET {col} = NULL "
-                f"WHERE {col} IS NOT NULL AND TRIM({col}) = ''"
+                f"UPDATE papers SET {col} = NULL WHERE {col} IS NOT NULL AND TRIM({col}) = ''"
             )
 
 
@@ -473,9 +473,7 @@ def _m_0014_publication_embeddings_pk(conn: sqlite3.Connection) -> None:
     if pk_cols != ["paper_id"]:
         return
     logger.info("Migrating publication_embeddings PK from (paper_id) to (paper_id, model)")
-    conn.execute(
-        "ALTER TABLE publication_embeddings RENAME TO publication_embeddings_legacy"
-    )
+    conn.execute("ALTER TABLE publication_embeddings RENAME TO publication_embeddings_legacy")
     conn.execute(
         """CREATE TABLE publication_embeddings (
             paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -669,9 +667,7 @@ def _m_0019_follow_state_heal(conn: sqlite3.Connection) -> None:
         """
     ).rowcount
     if demoted:
-        logger.info(
-            "follow-state heal: demoted %d phantom-followed authors", demoted
-        )
+        logger.info("follow-state heal: demoted %d phantom-followed authors", demoted)
     try:
         from alma.application.feed_monitors import sync_author_monitors
 
@@ -696,9 +692,7 @@ def _m_0020_topic_aliases_legacy_shape(conn: sqlite3.Connection) -> None:
         normalize_topic,
     )
 
-    old_rows = conn.execute(
-        "SELECT alias_term, canonical_term FROM topic_aliases"
-    ).fetchall()
+    old_rows = conn.execute("SELECT alias_term, canonical_term FROM topic_aliases").fetchall()
     conn.execute("DROP TABLE topic_aliases")
     conn.execute(
         """CREATE TABLE topic_aliases (
@@ -751,12 +745,8 @@ def _m_0021_publication_clusters_scope(conn: sqlite3.Connection) -> None:
         return
     if "scope" in _table_columns(conn, "publication_clusters"):
         return  # already current shape (fresh DB or re-run)
-    logger.info(
-        "Migrating publication_clusters PK from (paper_id) to (paper_id, scope)"
-    )
-    conn.execute(
-        "ALTER TABLE publication_clusters RENAME TO publication_clusters_legacy"
-    )
+    logger.info("Migrating publication_clusters PK from (paper_id) to (paper_id, scope)")
+    conn.execute("ALTER TABLE publication_clusters RENAME TO publication_clusters_legacy")
     conn.execute(
         """CREATE TABLE publication_clusters (
             paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -807,8 +797,7 @@ def _m_0023_influential_citation_count_heal(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "papers"):
         return
     conn.execute(
-        "UPDATE papers SET influential_citation_count = 0 "
-        "WHERE influential_citation_count IS NULL"
+        "UPDATE papers SET influential_citation_count = 0 WHERE influential_citation_count IS NULL"
     )
 
 
@@ -887,7 +876,7 @@ def _m_0026_merge_candidate_source_and_rejections(conn: sqlite3.Connection) -> N
 
 
 def _m_0027_suggestion_not_duplicate(conn: sqlite3.Connection) -> None:
-    """"Not a duplicate" verdicts for the suggestion rail (2026-06-28).
+    """ "Not a duplicate" verdicts for the suggestion rail (2026-06-28).
 
     When a suggested author is flagged as a possible name-duplicate of someone you
     follow but the user says "no, different person", we record the suggested
@@ -1014,9 +1003,7 @@ def _m_0030_reorder_position(conn: sqlite3.Connection) -> None:
         _add_columns(conn, table, {"position": "INTEGER NOT NULL DEFAULT 0"})
         if not _table_exists(conn, table):
             continue
-        rows = conn.execute(
-            f"SELECT id FROM {table} ORDER BY created_at DESC, id ASC"
-        ).fetchall()
+        rows = conn.execute(f"SELECT id FROM {table} ORDER BY created_at DESC, id ASC").fetchall()
         for idx, row in enumerate(rows):
             conn.execute(f"UPDATE {table} SET position = ? WHERE id = ?", (idx, row[0]))
 
@@ -1101,8 +1088,7 @@ def _m_0033_author_seed_status(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_author_seed_status_status "
-        "ON author_seed_status(status)"
+        "CREATE INDEX IF NOT EXISTS idx_author_seed_status_status ON author_seed_status(status)"
     )
 
 
@@ -1206,9 +1192,7 @@ def _finalize_discovery_observation_schema(conn: sqlite3.Connection) -> None:
 
     legacy_table = "discovery_frontier_legacy_0037"
     if _table_exists(conn, legacy_table):
-        raise RuntimeError(
-            f"Cannot finalize discovery_frontier: {legacy_table} already exists"
-        )
+        raise RuntimeError(f"Cannot finalize discovery_frontier: {legacy_table} already exists")
 
     # Index names are database-global. Drop the draft indexes before creating
     # the same canonical names on the replacement table.
@@ -1432,9 +1416,7 @@ def _m_0038_rename_paper_signal_feedback_weight(conn: sqlite3.Connection) -> Non
             """,
             (row[0],),
         )
-    conn.execute(
-        "DELETE FROM discovery_settings WHERE key = 'paper_signal_weights.signal_lab'"
-    )
+    conn.execute("DELETE FROM discovery_settings WHERE key = 'paper_signal_weights.signal_lab'")
 
 
 def _m_0039_author_works_fetch_ledger(conn: sqlite3.Connection) -> None:
@@ -1460,9 +1442,7 @@ def _m_0039_author_works_fetch_ledger(conn: sqlite3.Connection) -> None:
     """
     tables = {
         str(row[0])
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if not {"authors", "author_centroids", "author_enrichment_status"} <= tables:
         return
@@ -1494,6 +1474,77 @@ def _m_0039_author_works_fetch_ledger(conn: sqlite3.Connection) -> None:
         GROUP BY a.id
         """
     )
+
+
+def _m_0040_semantic_partition(conn: sqlite3.Connection) -> None:
+    """Core-owned semantic partition tables, seeded from the map's layout (2026-09-06).
+
+    Decision D24: learning must work without a map. Until now "which papers
+    group together" lived only in `publication_clusters`, the map's layout
+    table, beside the coordinates — so super-regions and the Signal Lab could
+    not exist without a layout. This creates the membership + state tables
+    (`semantic_partition.DDL`, the same statements the bootstrap runs) and:
+
+    1. copies the corpus-scope layout memberships (cluster, label, explicit
+       outliers) as generation 1 with provenance `legacy_layout_import` — a
+       record of where they came from, never passed off as a fresh fit;
+    2. copies the stored `graph:super_regions` payload to the new
+       `semantic:regions` key with `x`/`y` stripped and an empty fingerprint,
+       so the first build under the new key finds a PREVIOUS payload and
+       carries every region id forward instead of renumbering the Lab's
+       evidence.
+
+    A DB with no layout gets the tables and nothing else: unbuilt is a
+    legitimate state, not an error. Repeat-safe.
+    """
+    from alma.application.semantic_partition import (
+        DDL,
+        MEMBERS_TABLE,
+        PARTITION_VERSION,
+        PROVENANCE_LEGACY,
+        _write_partition,
+        embedding_set_fingerprint,
+        legacy_layout_members,
+        strip_coordinates,
+    )
+
+    for statement in DDL:
+        conn.execute(statement)
+    if conn.execute(f"SELECT COUNT(*) FROM {MEMBERS_TABLE}").fetchone()[0] == 0:
+        members = legacy_layout_members(conn)
+        if members:
+            from alma.discovery.similarity import get_active_embedding_model
+
+            model = get_active_embedding_model(conn)
+            _write_partition(
+                conn,
+                members,
+                generation=1,
+                model=model,
+                input_fingerprint=embedding_set_fingerprint(conn, model),
+                provenance=PROVENANCE_LEGACY,
+                algorithm_version=PARTITION_VERSION,
+            )
+    tables = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+    if "materialized_views" not in tables:
+        return
+    exists = conn.execute(
+        "SELECT 1 FROM materialized_views WHERE view_key = 'semantic:regions'"
+    ).fetchone()
+    old = conn.execute(
+        "SELECT payload, computed_at, compute_ms FROM materialized_views "
+        "WHERE view_key = 'graph:super_regions'"
+    ).fetchone()
+    if exists is None and old is not None and old[0]:
+        payload = strip_coordinates(json.loads(old[0]))
+        conn.execute(
+            "INSERT INTO materialized_views (view_key, fingerprint, payload, computed_at, compute_ms) "
+            "VALUES ('semantic:regions', '', ?, ?, ?)",
+            (json.dumps(payload), old[1], old[2]),
+        )
 
 
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
@@ -1536,6 +1587,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (37, "finalize_discovery_observation_schema", _m_0037_finalize_discovery_observation_schema),
     (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
     (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
+    (40, "semantic_partition", _m_0040_semantic_partition),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -36,6 +36,7 @@ import numpy as np
 
 from alma.application.semantic_partition import (
     CENTROID_SAMPLE_PER_CLUSTER,
+    PARTITION_RESOLUTION,
     PARTITION_SCOPE,
 )
 from alma.application.semantic_partition import (
@@ -67,7 +68,7 @@ SUBSTRATE_SCOPE = PARTITION_SCOPE
 # silently bypasses the precomputed path (the 1.5-vs-1.0 mismatch found in the
 # 2026-07-25 audit; see tasks/lessons.md "Semantic maps"). 1.5 because 1.0
 # merged a coherent single-user corpus into a few mega-clusters.
-SUBSTRATE_CLUSTER_RESOLUTION = 1.5
+SUBSTRATE_CLUSTER_RESOLUTION = PARTITION_RESOLUTION
 
 # Outlier group (I-6): papers HDBSCAN judged to be density noise are retained
 # as a distinct "Unclustered" group rather than force-merged into a cluster.

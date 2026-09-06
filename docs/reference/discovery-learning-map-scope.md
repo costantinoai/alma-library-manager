@@ -10,8 +10,19 @@ Progress (2026-09-06): the super-region build is coordinate-free and the
 retained learning path (Signal Lab policy, scoring terms, fit, simulate,
 summary, eval) reads membership, vectors and the assignment rule from
 `application/semantic_partition.py`, never from the map substrate — guarded by
-`tests/test_semantic_partition_coordinate_free.py`. Tables from Task 67 §14.3,
-the freshness owner and consumer migration remain open.
+`tests/test_semantic_partition_coordinate_free.py`. The §14.3 tables exist
+(`semantic_partition_state`, `semantic_partition_members`; migration 40 seeds
+them from the legacy layout and copies the regions payload to `semantic:regions`
+with identities carried), the layout build publishes generations through the
+core, placement and the core `assign_missing_members` record memberships, and
+`semantic_partition_refresh` owns freshness and builds generation 1 itself
+(`build_partition`: the corpus's own clustering run, no layout; the map route
+imports the eligibility and labelling loaders from the partition). The map's
+full rebuild now calls the same `partition_corpus` run and takes its cluster
+assignments from it — one clustering, the layout only projects. Health's
+suggested-author placement, region readiness/freshness and the embedding hooks
+read the partition and the regions owner. Still open: map-only Health
+dimensions and route/job removal (C5), after preservation (C4).
 
 Status: proposal and source audit, 2026-09-06. Not an edition decision or a claim
 that recommendation quality has been measured. Active implementation plan:

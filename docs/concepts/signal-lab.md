@@ -146,9 +146,12 @@ This follows the core ideas behind
 region/edge goals and multi-outcome games. It is goal-directed active design,
 not a promise that one heuristic wins on every corpus.
 
-The card remains hidden until the stored `graph:super_regions` view exists.
-Graph-layout maintenance builds it, or an explicit graph rebuild can trigger
-the chain.
+The card remains hidden until the stored `semantic:regions` view exists. It is
+built from the core semantic partition (`semantic_partition_members`, seeded
+by the map's layout build and grown by incremental assignment); the
+`semantic_partition_refresh` job keeps it fresh without a map — and builds
+the partition itself when none exists — while a layout rebuild publishes a
+new generation through the core API.
 
 Regions are **coordinate-free** (2026-09-06, decision D24). The build reads
 cluster membership and paper vectors through the core-owned

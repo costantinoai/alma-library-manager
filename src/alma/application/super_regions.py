@@ -4,7 +4,7 @@ Task 54 M0 (design: ``tasks/54_SIGNAL_LAB_LAYER_2026-07-26.md`` §2–3). The
 corpus substrate carries a few hundred fine clusters — far too many to
 calibrate per-region taste against a few hundred human judgments. This module
 aggregates them into ≤ :data:`TARGET_SUPER_REGIONS` **super-regions** and
-publishes the result as the ``graph:super_regions`` materialized view:
+publishes the result as the ``semantic:regions`` materialized view:
 
 * **Payload is partition-derived and coordinate-free** — the cluster→region
   map, region centroids (embedding space), adjacency, labels. No ``x``/``y``:
@@ -14,7 +14,7 @@ publishes the result as the ``graph:super_regions`` materialized view:
   Rings (library distance) and per-paper margins are deliberately NOT here:
   they depend on Library membership / round context and are computed cheaply
   at round time, so a Library save never invalidates this view (defect D-1 in
-  the task 54 audit). The fingerprint tracks ``publication_clusters`` alone.
+  the task 54 audit). The fingerprint tracks the partition tables alone.
 * **Region identity survives re-layouts.** A full re-layout renumbers
   ``publication_clusters.cluster_id``; anything keyed on it silently
   orphans. The build therefore remaps: new region centroids are matched to
@@ -45,14 +45,15 @@ import numpy as np
 from alma.ai.graph_versions import SUPER_REGION_VERSION, with_version
 from alma.application import materialized_views as mv
 from alma.application.semantic_partition import (
-    PARTITION_SCOPE,
+    MEMBERS_TABLE,
     load_cluster_centroid_vectors,
+    partition_fingerprint_sql,
 )
 from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
 
-VIEW_KEY = "graph:super_regions"
+VIEW_KEY = "semantic:regions"
 
 # Calibration target: enough regions to be spatially meaningful, few enough
 # that ~10² judgments give every region a usable posterior (task 53 §update).
@@ -66,17 +67,10 @@ ADJACENCY_KNN = 4
 # genuinely coincide. Below this, the space moved too much — honest new id.
 REMAP_MIN_COSINE = 0.90
 
-# Data half of the fingerprint: the substrate rows this payload is derived
-# from. `updated_at` moves on every placement/re-layout write; COUNT catches
-# deletes. The version literal makes CODE changes rebuild too (I-4 lesson).
-_FINGERPRINT_SQL = with_version(
-    """
-    SELECT COUNT(*), COALESCE(MAX(updated_at), ''), COALESCE(MAX(cluster_id), -1)
-    FROM publication_clusters
-    WHERE scope = 'corpus'
-    """,
-    SUPER_REGION_VERSION,
-)
+# Data half of the fingerprint: the partition generation/revision this payload
+# is derived from — a re-layout that moves only coordinates changes nothing
+# here. The version literal makes CODE changes rebuild too (I-4 lesson).
+_FINGERPRINT_SQL = with_version(partition_fingerprint_sql(), SUPER_REGION_VERSION)
 
 
 def _b64(vec: np.ndarray) -> str:
@@ -96,13 +90,12 @@ def _cluster_masses_and_labels(
     masses: dict[int, int] = {}
     labels: dict[int, str] = {}
     rows = conn.execute(
-        """
+        f"""
         SELECT cluster_id, COALESCE(MAX(label), '') AS label, COUNT(*) AS mass
-        FROM publication_clusters
-        WHERE scope = ? AND cluster_id >= 0
+        FROM {MEMBERS_TABLE}
+        WHERE cluster_id >= 0
         GROUP BY cluster_id
-        """,
-        (PARTITION_SCOPE,),
+        """
     ).fetchall()
     for row in rows:
         cid = int(row["cluster_id"])
@@ -175,8 +168,7 @@ def _carry_identities(
         return {g: g for g in fresh_centroids}, [], 1
 
     old_regions = {
-        int(r["id"]): decode_centroid(r["centroid_b64"])
-        for r in previous.get("regions", [])
+        int(r["id"]): decode_centroid(r["centroid_b64"]) for r in previous.get("regions", [])
     }
     version = int(previous.get("version") or 0) + 1
     if not old_regions:
@@ -292,6 +284,26 @@ def build_super_regions(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def regions_ready(conn: sqlite3.Connection) -> bool:
+    """Has the regions view ever been built? Failed reads must propagate."""
+    return mv.stored_meta(conn, VIEW_KEY) is not None
+
+
+def ensure_regions_fresh(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """THE freshness step for ``semantic:regions`` — one implementation for the
+    core owner job and for the map's layout pass.
+
+    ``mv.get`` is the whole logic: one fingerprint SELECT when nothing moved,
+    a synchronous first build, a deduped background rebuild on drift. Advisory:
+    a failure is logged and never sinks the caller.
+    """
+    try:
+        return mv.get(conn, VIEW_KEY)
+    except Exception as exc:  # noqa: BLE001 — advisory freshness, never sink the pass
+        logger.warning("semantic regions freshness check failed: %s", exc)
+        return None
+
+
 def compute_rings(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[int, int]:
     """ring(region) — BFS distance from the Library's regions. Round-time only.
 
@@ -305,27 +317,20 @@ def compute_rings(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[int
     cluster_to_region = {
         int(k): int(v) for k, v in (payload.get("cluster_to_region") or {}).items()
     }
-    adjacency = {
-        int(k): [int(x) for x in v] for k, v in (payload.get("adjacency") or {}).items()
-    }
+    adjacency = {int(k): [int(x) for x in v] for k, v in (payload.get("adjacency") or {}).items()}
     all_regions = {int(r["id"]) for r in payload.get("regions", [])}
     if not all_regions:
         return {}
 
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT pc.cluster_id
-        FROM publication_clusters pc
+        FROM {MEMBERS_TABLE} pc
         JOIN papers p ON p.id = pc.paper_id
-        WHERE pc.scope = ? AND pc.cluster_id >= 0 AND p.status = 'library'
-        """,
-        (PARTITION_SCOPE,),
+        WHERE pc.cluster_id >= 0 AND p.status = 'library'
+        """
     ).fetchall()
-    seeds = {
-        cluster_to_region[int(r[0])]
-        for r in rows
-        if int(r[0]) in cluster_to_region
-    }
+    seeds = {cluster_to_region[int(r[0])] for r in rows if int(r[0]) in cluster_to_region}
 
     rings: dict[int, int] = {}
     frontier = sorted(seeds)

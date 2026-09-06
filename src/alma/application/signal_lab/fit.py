@@ -180,12 +180,11 @@ _FINGERPRINT_SQL = with_version(
            FROM publication_embeddings pe
            JOIN shown s ON s.paper_id = pe.paper_id) AS shown_vectors,
         (SELECT COALESCE(fingerprint, '') FROM materialized_views
-          WHERE view_key = 'graph:super_regions') AS super_regions,
+          WHERE view_key = 'semantic:regions') AS super_regions,
         (SELECT COALESCE(GROUP_CONCAT(pair, char(10)), '') FROM (
             SELECT pc.paper_id || '=' || pc.cluster_id AS pair
-              FROM publication_clusters pc
+              FROM semantic_partition_members pc
               JOIN shown s ON s.paper_id = pc.paper_id
-             WHERE pc.scope = 'corpus'
              ORDER BY pc.paper_id)) AS shown_clusters,
         (SELECT COALESCE(GROUP_CONCAT(row, char(10)), '') FROM (
             SELECT p.id || '|' || COALESCE(p.authors, '')
@@ -789,8 +788,8 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         try:
             rows = conn.execute(
                 f"""
-                SELECT paper_id, cluster_id FROM publication_clusters
-                WHERE scope = 'corpus' AND paper_id IN ({placeholders})
+                SELECT paper_id, cluster_id FROM semantic_partition_members
+                WHERE paper_id IN ({placeholders})
                 """,
                 shown_ids,
             ).fetchall()

@@ -123,6 +123,12 @@ CLUSTERING_ALGO_VERSION = "2026.07-6"
 #            local; paper-map payloads also carry corpus-navigation metadata.
 LABELLING_VERSION = "2026.07-8"
 
+# Semantic partition (application/semantic_partition.py, task 67 C2): the
+# core-owned membership + state tables and the incremental assignment rule.
+# Stamped as `algorithm_version` on every published generation.
+# 2026.09-1: initial — legacy layout import + nearest-centroid assignment.
+PARTITION_VERSION = "2026.09-1"
+
 # Super-region aggregation (application/super_regions.py, task 54): how the
 # substrate's clusters are agglomerated into the ~32 regions the Signal Lab
 # samples from, the adjacency rule, and the identity-carrying remap. Bump on
@@ -134,7 +140,9 @@ LABELLING_VERSION = "2026.07-8"
 # 2026.09-1: coordinate-free — centroids come from the core semantic partition
 #            (membership + vectors only); the payload no longer carries x/y,
 #            which nothing read. Identities carry through the cosine remap.
-SUPER_REGION_VERSION = "2026.09-1"
+# 2026.09-2: regions read the core partition tables (`semantic:regions` key);
+#            masses, labels and rings come from memberships, never layouts.
+SUPER_REGION_VERSION = "2026.09-2"
 
 # Signal Lab model fit (application/signal_lab/fit.py, task 54): the pure
 # rounds→model recompute — head formulas, shrinkage, holdout metrics, γ gate.

@@ -46,6 +46,12 @@ from alma.application.graph_substrate import (
     SubstrateUnavailableError,
     place_vectors,
 )
+from alma.application.semantic_partition import (
+    load_cluster_term_background as _load_cluster_term_background,
+)
+from alma.application.semantic_partition import (
+    load_scope_embeddings as _load_embeddings,
+)
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
 from alma.core.sql_helpers import standalone_paper_sql
@@ -2656,11 +2662,6 @@ _STABILITY_MAX_NODES = 2000
 # carries the DB path + corpus count/watermark + labelling version, so labels
 # refresh when either the corpus text or the scorer logic changes without adding
 # a database table or a write-on-GET side effect.
-_CLUSTER_TERM_BACKGROUND_CACHE: dict[
-    tuple[str, int, str, int, str], tuple[dict[str, int], int]
-] = {}
-
-
 def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     provider = "none"
     try:
@@ -2710,104 +2711,6 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
         "embeddings_count": emb_count,
         "embedding_coverage_pct": coverage,
     }
-
-
-def _connection_cache_identity(conn: sqlite3.Connection) -> str:
-    try:
-        row = conn.execute("PRAGMA database_list").fetchone()
-        path = str(row["file"] if isinstance(row, sqlite3.Row) else row[2] or "")
-        return path or f"memory:{id(conn)}"
-    except Exception:
-        return f"connection:{id(conn)}"
-
-
-def _load_cluster_term_background(
-    conn: sqlite3.Connection,
-    *,
-    max_features: int = 4000,
-) -> tuple[dict[str, int], int]:
-    """Return corpus-wide paper DF for the same terms the cluster labeller uses.
-
-    The background is always the whole standalone corpus, even for a Library map:
-    cluster TF/prevalence stay scoped to the rendered cluster, while IDF answers
-    "is this phrase distinctive against everything ALMa knows about?"
-    """
-    try:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS n, COALESCE(MAX(COALESCE(p.updated_at, p.created_at, '')), '') AS watermark
-            FROM papers p
-            WHERE {standalone_paper_sql("p")}
-            """
-        ).fetchone()
-        corpus_n = int(row["n"] if isinstance(row, sqlite3.Row) else row[0] or 0)
-        watermark = str(row["watermark"] if isinstance(row, sqlite3.Row) else row[1] or "")
-    except sqlite3.OperationalError:
-        return {}, 0
-    if corpus_n <= 0:
-        return {}, 0
-
-    cache_key = (
-        _connection_cache_identity(conn),
-        corpus_n,
-        watermark,
-        int(max_features),
-        LABELLING_VERSION,
-    )
-    cached = _CLUSTER_TERM_BACKGROUND_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT COALESCE(p.title, '') AS title, COALESCE(p.abstract, '') AS abstract
-            FROM papers p
-            WHERE {standalone_paper_sql("p")}
-              AND (
-                COALESCE(TRIM(p.title), '') <> ''
-                OR COALESCE(TRIM(p.abstract), '') <> ''
-              )
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return {}, 0
-    docs = [
-        f"{row['title'] if isinstance(row, sqlite3.Row) else row[0]}. "
-        f"{row['abstract'] if isinstance(row, sqlite3.Row) else row[1]}".strip()
-        for row in rows
-    ]
-    docs = [doc for doc in docs if doc.strip()]
-    if not docs:
-        return {}, 0
-
-    try:
-        from sklearn.feature_extraction.text import CountVectorizer
-
-        from alma.ai.clustering import _build_label_stop_words
-
-        vectorizer = CountVectorizer(
-            stop_words=_build_label_stop_words(),
-            ngram_range=(1, 2),
-            min_df=1,
-            max_df=1.0,
-            token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
-            lowercase=True,
-            max_features=max_features,
-        )
-        counts = vectorizer.fit_transform(docs)
-    except ValueError:
-        return {}, 0
-
-    binary = counts.copy()
-    binary.data = np.ones_like(binary.data)
-    df = np.asarray(binary.sum(axis=0)).ravel()
-    feature_names = vectorizer.get_feature_names_out()
-    result = ({str(term): int(df[idx]) for idx, term in enumerate(feature_names)}, len(docs))
-    if len(_CLUSTER_TERM_BACKGROUND_CACHE) > 8:
-        _CLUSTER_TERM_BACKGROUND_CACHE.clear()
-    _CLUSTER_TERM_BACKGROUND_CACHE[cache_key] = result
-    return result
 
 
 def _build_text_paper_map(
@@ -3401,80 +3304,6 @@ def _build_word_clouds_for_clusters(
     }
 
 
-def _load_embeddings(
-    conn: sqlite3.Connection,
-    *,
-    scope: str = "library",
-) -> dict[str, list[float]]:
-    """Load embeddings produced by the active model.
-
-    Vectors produced by a previously-configured model are filtered out
-    at the SQL layer so every returned vector shares the same
-    dimensionality.
-
-    When scope == "library" (default), only embeddings for papers the
-    user has saved to the Library are returned. scope == "corpus" returns
-    every embedding regardless of paper status.
-    """
-    from alma.discovery.similarity import get_active_embedding_model
-
-    active_model = get_active_embedding_model(conn)
-    try:
-        # A subordinate row (dedup twin / part-of component) is never a graph
-        # node — it must not be a point, cluster member, centroid input, or edge
-        # endpoint. Both scopes join papers and apply the shared standalone gate;
-        # the corpus query in particular MUST join (it used to read
-        # publication_embeddings directly, so a leftover component vector leaked
-        # straight into the map).
-        if scope == "library":
-            rows = conn.execute(
-                f"""
-                SELECT pe.paper_id, pe.embedding
-                FROM publication_embeddings pe
-                JOIN papers p ON p.id = pe.paper_id
-                WHERE pe.model = ? AND p.status = 'library'
-                  AND {standalone_paper_sql("p")}
-                """,
-                (active_model,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"""
-                SELECT pe.paper_id, pe.embedding
-                FROM publication_embeddings pe
-                JOIN papers p ON p.id = pe.paper_id
-                WHERE pe.model = ? AND {standalone_paper_sql("p")}
-                """,
-                (active_model,),
-            ).fetchall()
-    except sqlite3.OperationalError:
-        return {}
-
-    # Always decode through the canonical helper — `publication_embeddings`
-    # stores float16 since commit 918e5fc, so the old struct-unpack path
-    # interpreted bytes as float32 and returned half-dim garbage vectors.
-    # `decode_vector` upcasts to runtime float32 and (when given an
-    # `expected_dim`) auto-rescues legacy float32 rows by byte length.
-    from alma.core.vector_blob import decode_vector
-
-    embeddings: dict[str, list[float]] = {}
-    for row in rows:
-        if isinstance(row, sqlite3.Row):
-            paper_id = row["paper_id"]
-            blob = row["embedding"]
-        else:
-            paper_id = row[0]
-            blob = row[1]
-        if not blob:
-            continue
-        try:
-            vec = decode_vector(blob)
-        except Exception:
-            continue
-        embeddings[paper_id] = vec.tolist()
-    return embeddings
-
-
 def _latest_recommendation_scores(
     conn: sqlite3.Connection,
     paper_ids: list[str],
@@ -3592,7 +3421,7 @@ def _build_embedding_paper_map(
     incremental layout; the synchronous custom-options GET passes ``persist=False``
     so a read request never writes + commits mid-response.
     """
-    from alma.ai.clustering import cluster_publications, label_clusters_tfidf
+    from alma.ai.clustering import label_clusters_tfidf
     from alma.ai.projections import project_embeddings
 
     opts = graph_options or {}
@@ -3849,36 +3678,44 @@ def _build_embedding_paper_map(
         # when the scope is small enough to afford the ~5× clustering cost
         # (_STABILITY_MAX_NODES) — corpus rebuilds skip it and report n/a.
         # `cluster_resolution` (default 1.0) is the user-facing detail knob.
-        clustering = cluster_publications(
+        # The clustering run is the core's (task 67 C2): one function clusters,
+        # labels and — when this is the persisting substrate rebuild at the
+        # partition's resolution — publishes the next generation. The layout
+        # takes its assignments from that result and only adds the 2-D
+        # projection, so a map is a projection OF the partition, never a second
+        # clustering of it. Variants (custom resolution, Library scope, GET)
+        # get the same recipe with nothing written.
+        from alma.application.semantic_partition import PARTITION_RESOLUTION, partition_corpus
+
+        build = partition_corpus(
+            conn,
             embeddings,
-            compute_stability=persist and len(embeddings) <= _STABILITY_MAX_NODES,
-            resolution=requested_resolution,
             precomputed_knn=shared_knn,
+            resolution=requested_resolution,
+            compute_stability=persist and len(embeddings) <= _STABILITY_MAX_NODES,
+            texts=texts,
+            publish=(
+                persist
+                and layout_scope == SUBSTRATE_SCOPE
+                and abs(requested_resolution - PARTITION_RESOLUTION) < 1e-6
+            ),
         )
+        clustering = build.clustering
         clusters = clustering.clusters
         node_probabilities = clustering.probabilities
-        labels = label_clusters_tfidf(
-            clusters,
-            texts,
-            background_doc_freq=background_df,
-            background_doc_count=background_n,
-        )
-        for cluster, label in zip(clusters, labels):
-            cluster.label = label
-            labels_by_cluster[int(cluster.cluster_id)] = str(label or "")
+        labels_by_cluster.update(build.labels)
+        for cluster in clusters:
+            cluster.label = build.labels.get(int(cluster.cluster_id), "")
         coords = project_embeddings(embeddings, precomputed_knn=shared_knn)
         for cluster in clusters:
             cid = int(cluster.cluster_id)
             cluster_members[cid] = list(cluster.member_keys)
-            for paper_id in cluster.member_keys:
-                assignments[paper_id] = cid
-        # I-6: density-noise papers are NOT forced into a cluster — collect them
-        # as the explicit Unclustered group so each renders honestly.
+        # I-6: density-noise papers are NOT forced into a cluster — the
+        # explicit Unclustered group renders honestly.
         if clustering.outliers:
             cluster_members[OUTLIER_CLUSTER_ID] = list(clustering.outliers)
-            labels_by_cluster[OUTLIER_CLUSTER_ID] = OUTLIER_LABEL
-            for paper_id in clustering.outliers:
-                assignments[paper_id] = OUTLIER_CLUSTER_ID
+        for paper_id, member in build.members.items():
+            assignments[paper_id] = member.cluster_id
         clustering_meta = {
             "method": clustering.method,
             "n_clusters": clustering.n_clusters,
@@ -3931,6 +3768,18 @@ def _build_embedding_paper_map(
         persist_ids = list(paper_ids) if layout_mode == "embeddings_full" else list(stale_ids)
         now_iso = datetime.now().isoformat()
         cluster_batch_size = 200
+        # A full substrate rebuild already published its generation inside
+        # `partition_corpus`; the incremental modes record the papers they placed
+        # so memberships never lag the layout (task 67 C2).
+        from alma.application.semantic_partition import (
+            ASSIGNMENT_FIT,
+            ASSIGNMENT_NEAREST,
+            ASSIGNMENT_OUTLIER,
+            Member,
+            record_memberships,
+        )
+
+        partition_members: dict[str, Member] = {}
         try:
             for batch_start in range(0, len(persist_ids), cluster_batch_size):
                 batch = persist_ids[batch_start : batch_start + cluster_batch_size]
@@ -3942,6 +3791,13 @@ def _build_embedding_paper_map(
                         x, y = coords.get(paper_id, (0.5, 0.5))
                         label = labels_by_cluster.get(cid) or (
                             OUTLIER_LABEL if cid < 0 else f"Cluster {cid + 1}"
+                        )
+                        partition_members[paper_id] = Member(
+                            cid,
+                            label,
+                            ASSIGNMENT_OUTLIER
+                            if cid < 0
+                            else (ASSIGNMENT_NEAREST if paper_id in interpolated_ids else ASSIGNMENT_FIT),
                         )
                         conn.execute(
                             """
@@ -3971,6 +3827,12 @@ def _build_embedding_paper_map(
                                 ),
                             ),
                         )
+            if (
+                layout_scope == SUBSTRATE_SCOPE
+                and partition_members
+                and layout_mode != "embeddings_full"
+            ):
+                record_memberships(conn, partition_members)
         except sqlite3.OperationalError:
             # A transient lock means this pass didn't fully cache the layout; the MV
             # row still persists and the next rebuild/refresh retries. write_section
