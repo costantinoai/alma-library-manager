@@ -152,31 +152,43 @@ Every status row is clickable, drilling into the items it affects:
   (`alma.services.author_attention`: identity ladder, degraded monitors,
   corpus-backfill states), so their counts and rows can never disagree.
 
-### Suggested but unplaceable
+### Suggested-author coverage
 
-`authors.unplaceable` counts authors the engine is currently suggesting that
-the corpus holds **fewer than two papers** for. Below two papers an author is
-invisible three times over: no dot on the [author map](analytics.md) (the
-layout needs two papers to place someone), no sample titles on their suggestion
-card (those are read from your local corpus, so "No sample title" is a missing
-*paper*, not missing metadata), and no score. The engine recommends them while
-showing you nothing to judge them on.
+**Suggested authors needing papers** (`authors.needing_papers`) counts suggested
+authors with fewer than two corpus papers that the seed operation can still
+address. Seeding fetches source papers, preferring first-author works, and saves
+them as `tracked`, never directly to your Library. Its dimension and pending
+count describe the same population. Zero eligible authors means no seed work;
+the card's Run button is disabled.
 
-**Seed their papers** repairs it: their most-cited first-author works are
-fetched and landed as tracked corpus papers — enough to place them, caption
-them, and score them. Papers save as `tracked`, never to your Library.
+**Suggested authors awaiting map placement** (`authors.unplaceable`) already
+have enough papers, but fewer than two have vectors and layout coordinates.
+They appear under observed gaps with vector/layout guidance. Fetching more
+papers cannot fix that state and does not keep the seed repair in attention.
+Check vector-fetch and local-embedding eligibility, then rebuild map layouts
+when vectors are available. If no usable vectors are available, an author may
+remain off the map without needing another seed run.
 
-Some authors can never clear the bar: OpenAlex genuinely holds fewer than two
-works for them. Those are recorded as **tried and terminal** and reported
-separately as `exhausted`, so the row converges to zero outstanding instead of
-nagging forever with a repair that can't move it. This is the same
-tried-and-terminal treatment papers get when Semantic Scholar has no vector for
-them.
+Authors whose source could not supply enough papers are recorded as **tried
+and terminal**, shown separately as `exhausted`, and excluded from pending
+seeding. Neither fetching papers nor local compute guarantees every author can
+be placed on the map.
 
 ## Observed — no automatic repair
 
 Data gaps that have no one-click fix are listed read-only at the bottom, so
 nothing a dimension surfaces is hidden just because there's no operation for it.
+Their explanation and next steps are visible beside the status.
+
+### When an assessment fails
+
+An unreadable repair count is **Unknown**, never zero or "All clear". The card
+shows the cause and recovery guidance. Use **Re-assess** to retry; if the failure
+persists, report its task key and cause with the server log. Run and Preview
+remain disabled while the task or a required prerequisite cannot be measured.
+Direct estimate/run requests return HTTP 503 without scheduling work. Other
+independent repairs can still be assessed and run; onboarding cannot report
+convergence while repair counts remain unknown.
 
 ## The idle healer
 

@@ -82,7 +82,7 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
       {dim.exhausted ? (
         <span
           className="font-normal text-slate-400"
-          title="Tried — no automatic fix available (e.g. Semantic Scholar has no vector for these). Only local compute can help."
+          title="Already checked: this repair cannot fix these remaining items. See the explanation for available alternatives."
         >
           · {dim.exhausted.toLocaleString()} no fix
         </span>
@@ -98,7 +98,7 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   // actually resolves the gap (retry / pick affiliation / accept-unidentified).
   const handleOpen = canDrilldown(dim.key)
     ? onOpen
-    : isAuthorDim
+    : isAuthorDim && dim.actions.some((action) => action.kind === 'link')
       ? () => navigateTo('authors', { focus: 'needs-attention' })
       : undefined
 

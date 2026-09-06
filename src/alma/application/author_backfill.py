@@ -24,10 +24,15 @@ What it does per author:
      vectors should be built from the widest available ground truth
      for that entity") and UPSERT into `author_centroids`.
 
-The batch variant walks every author that has a resolved OpenAlex
-ID whose centroid is missing or stale (>14 days). It commits between
-authors so concurrent reads don't freeze (per the "bulk background
-jobs must commit per unit of work" lesson).
+The batch variant walks every author with a resolved OpenAlex ID and no settled
+works-fetch outcome in `author_enrichment_status` (source `openalex`, purpose
+`works`) — see `author_hydrate.authors_needing_works_sql`, the ONE selector
+shared with the Health card's pending count. It deliberately does NOT key on
+the author's centroid: a centroid is a derived artifact that cannot testify
+that OpenAlex was read, and because it is deleted for an author with no usable
+vectors, keying on it made those authors permanently pending and re-fetched on
+every run. It commits between authors so concurrent reads don't freeze (per the
+"bulk background jobs must commit per unit of work" lesson).
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ import logging
 import sqlite3
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
@@ -53,9 +58,28 @@ from alma.openalex import client as openalex_client
 logger = logging.getLogger(__name__)
 
 
-_CENTROID_STALE_DAYS = 14
 _S2_BATCH_SIZE = 100
 _VECTOR_FIELDS = "paperId,externalIds,embedding.specter_v2"
+
+
+def _record_works_outcome(
+    conn: sqlite3.Connection, openalex_id: str, *, status: str, reason: str = ""
+) -> None:
+    """Stamp one works-fetch outcome, never letting the bookkeeping abort the run.
+
+    Recording the outcome is what makes the operation converge, so a failure to
+    record is logged loudly rather than swallowed — but it must not turn a
+    successful works fetch into a failed job."""
+    from alma.services import author_hydrate
+
+    try:
+        author_hydrate.record_author_works_outcome(
+            conn, openalex_id=openalex_id, status=status, reason=reason
+        )
+    except Exception:
+        logger.warning(
+            "could not record works outcome %s for %s", status, openalex_id, exc_info=True
+        )
 
 
 # -- centroid maintenance --------------------------------------------
@@ -192,8 +216,12 @@ def _authors_needing_centroid_sql() -> str:
     or when it predates the newest embedding for that author (a vector was
     refreshed in place). Both callers bind the embedding model twice (the
     `pe.model` filter and the `author_centroids` join)."""
+    # NB: the alias is `author_oid`, never `oid`. In SQLite `oid` is a built-in
+    # alias for `rowid`, so `GROUP BY oid` groups by the `authors` row id — two
+    # author rows sharing one OpenAlex identity then produce two identical
+    # groups and the pending count double-counts them.
     return f"""
-        SELECT lower(trim(a.openalex_id)) AS oid,
+        SELECT lower(trim(a.openalex_id)) AS author_oid,
                COUNT(DISTINCT pe.paper_id) AS emb_count,
                ac.paper_count             AS centroid_count,
                MAX(pe.created_at)         AS newest_emb,
@@ -210,11 +238,11 @@ def _authors_needing_centroid_sql() -> str:
           ON ac.author_openalex_id = lower(trim(a.openalex_id)) AND ac.model = ?
         WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
           AND {standalone_paper_sql('p')}
-        GROUP BY oid
+        GROUP BY author_oid
         HAVING ac.author_openalex_id IS NULL
             OR ac.paper_count <> emb_count
             OR ac.updated_at < MAX(pe.created_at)
-        ORDER BY oid
+        ORDER BY author_oid
     """
 
 
@@ -230,16 +258,13 @@ def count_authors_needing_centroid(
     conn: sqlite3.Connection, *, model: str | None = None
 ) -> int:
     """How many authors have an out-of-date centroid (the `author_centroids`
-    maintenance task's pending count). Never raises — a schema gap reports 0."""
+    maintenance task's pending count). Measurement failures propagate to the caller."""
     resolved = _centroid_model(conn, model)
-    try:
-        rows = conn.execute(
-            f"SELECT COUNT(*) AS n FROM ({_authors_needing_centroid_sql()})",
-            (resolved, resolved),
-        ).fetchone()
-        return int((rows["n"] if rows else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    rows = conn.execute(
+        f"SELECT COUNT(*) AS n FROM ({_authors_needing_centroid_sql()})",
+        (resolved, resolved),
+    ).fetchone()
+    return int((rows["n"] if rows else 0) or 0)
 
 
 def recompute_author_centroids(
@@ -267,7 +292,7 @@ def recompute_author_centroids(
         _authors_needing_centroid_sql() + " LIMIT ?",
         (resolved, resolved, cap),
     ).fetchall()
-    oids = [str(r["oid"]) for r in rows if r["oid"]]
+    oids = [str(r["author_oid"]) for r in rows if r["author_oid"]]
     total = len(oids)
     summary = {"selected": total, "processed": 0, "updated": 0, "cancelled": False}
     if set_job_status and job_id:
@@ -559,6 +584,7 @@ def refresh_author_works_and_vectors(
     """
 
     from alma.api.deps import open_db_connection
+    from alma.services import author_hydrate
 
     summary = {
         "author_openalex_id": author_openalex_id,
@@ -584,8 +610,10 @@ def refresh_author_works_and_vectors(
                 logger.debug("ctx.log_step failed on %s", step, exc_info=True)
 
     conn = open_db_connection()
+    # Bound before the try so the failure path below can always name the
+    # identity it is recording an outcome for.
+    oid_norm = openalex_client._normalize_openalex_author_id(author_openalex_id)
     try:
-        oid_norm = openalex_client._normalize_openalex_author_id(author_openalex_id)
 
         # Phase 1: fetch declared works_count and compare. Pre-batched
         # caches (e.g. `_deep_refresh_all_impl`'s pipe-filter pre-flight)
@@ -641,9 +669,18 @@ def refresh_author_works_and_vectors(
             summary["vectors_fetched"] = int(vector_summary.get("vectors_fetched") or 0)
             summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
             summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
+            # Record the works outcome BEFORE (and independently of) the
+            # centroid — the centroid may legitimately fail to build, and that
+            # must not erase the fact that we reached OpenAlex for this author.
             # still refresh centroid — embeddings may have just arrived (gated
             # local write; no raw commit racing the gate).
-            with write_section(conn, label="author centroid (skip path)"):
+            with write_section(conn, label="author works outcome (skip path)"):
+                _record_works_outcome(
+                    conn,
+                    oid_norm,
+                    status=author_hydrate.WORKS_SKIPPED_STATUS,
+                    reason=f"already hold {existing_count}/{declared} declared works",
+                )
                 summary["centroid_updated"] = refresh_author_centroid(
                     conn,
                     oid_norm,
@@ -743,16 +780,40 @@ def refresh_author_works_and_vectors(
             except Exception as exc:
                 _log("enrich_enqueue_skipped", f"Author enrichment enqueue skipped: {exc}")
 
-        # Phase 5: recompute centroid (gated local write — no raw commit racing
-        # the writer gate under concurrent deep-refresh workers).
+        # Phase 5: record the works outcome, then recompute the centroid (gated
+        # local write — no raw commit racing the writer gate under concurrent
+        # deep-refresh workers). The outcome is stamped FIRST and separately:
+        # the centroid is a derived artifact and cannot testify that OpenAlex
+        # was read, which is precisely why it must not gate the next run.
         _log("centroid", "Recomputing author centroid")
-        with write_section(conn, label="author centroid"):
+        with write_section(conn, label="author works outcome + centroid"):
+            _record_works_outcome(
+                conn,
+                oid_norm,
+                status=author_hydrate.WORKS_FETCHED_STATUS,
+                reason=f"fetched {summary['works_fetched']} works",
+            )
             summary["centroid_updated"] = refresh_author_centroid(
                 conn,
                 oid_norm,
                 model=semantic_scholar.S2_SPECTER2_MODEL,
             )
         return summary
+    except Exception as exc:
+        # A failed fetch is a RETRYABLE outcome, not silence. Without this the
+        # author stays pending with no cause and no backoff, and the next run
+        # hammers the same failing identity immediately.
+        try:
+            with write_section(conn, label="author works failure outcome"):
+                _record_works_outcome(
+                    conn,
+                    oid_norm,
+                    status=author_hydrate.RETRYABLE_STATUS,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+        except Exception:
+            logger.warning("could not record works failure for %s", author_openalex_id, exc_info=True)
+        raise
     finally:
         conn.close()
 
@@ -845,38 +906,35 @@ def _record_seed_attempt(
 
 
 def _existing_paper_ids_for_author(conn: sqlite3.Connection, openalex_id: str) -> set[str]:
-    """The corpus paper ids already linked to this author (any status)."""
+    """The corpus paper ids already linked to this author (any status).
+
+    Read failures propagate: an unknown existing set cannot deduplicate a seed.
+    """
     oid = str(openalex_id or "").strip().lower()
     if not oid:
         return set()
-    try:
-        rows = conn.execute(
-            "SELECT DISTINCT paper_id FROM publication_authors WHERE lower(openalex_id) = ?",
-            (oid,),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return set()
+    rows = conn.execute(
+        "SELECT DISTINCT paper_id FROM publication_authors WHERE lower(openalex_id) = ?",
+        (oid,),
+    ).fetchall()
     return {str(r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]) for r in rows}
 
 
 def count_local_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -> int:
-    """How many first-class corpus papers we hold for this OpenAlex author."""
+    """Count first-class corpus papers; unreadable coverage is not zero."""
     oid = str(openalex_id or "").strip().lower()
     if not oid:
         return 0
-    try:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(DISTINCT pa.paper_id) AS n
-            FROM publication_authors pa
-            JOIN papers p ON p.id = pa.paper_id
-            WHERE lower(pa.openalex_id) = ?
-              AND {standalone_paper_sql('p')}
-            """,
-            (oid,),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return 0
+    row = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT pa.paper_id) AS n
+        FROM publication_authors pa
+        JOIN papers p ON p.id = pa.paper_id
+        WHERE lower(pa.openalex_id) = ?
+          AND {standalone_paper_sql('p')}
+        """,
+        (oid,),
+    ).fetchone()
     return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
 
 
@@ -897,21 +955,20 @@ def count_placed_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -
     oid = str(openalex_id or "").strip().lower()
     if not oid:
         return 0
-    try:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(DISTINCT pa.paper_id) AS n
-            FROM publication_authors pa
-            JOIN papers p ON p.id = pa.paper_id
-            JOIN publication_clusters pc
-              ON pc.paper_id = pa.paper_id AND pc.scope = ?
-            WHERE lower(pa.openalex_id) = ?
-              AND {standalone_paper_sql('p')}
-            """,
-            (SUBSTRATE_SCOPE, oid),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return 0
+    # Health owns the unavailable/error state; do not invent a placement gap
+    # when the substrate cannot be read.
+    row = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT pa.paper_id) AS n
+        FROM publication_authors pa
+        JOIN papers p ON p.id = pa.paper_id
+        JOIN publication_clusters pc
+          ON pc.paper_id = pa.paper_id AND pc.scope = ?
+        WHERE lower(pa.openalex_id) = ?
+          AND {standalone_paper_sql('p')}
+        """,
+        (SUBSTRATE_SCOPE, oid),
+    ).fetchone()
     return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
 
 
@@ -975,6 +1032,10 @@ def seed_papers_for_author(
         summary["reason"] = "already_covered"
         return summary
 
+    # Finish local eligibility/dedup reads before spending upstream requests.
+    # A failed read must not become a successful empty-catalogue outcome.
+    seen_paper_ids = _existing_paper_ids_for_author(conn, oid_norm)
+
     # Gather over the network FIRST — never hold a write txn across HTTP.
     page = openalex_client.fetch_works_page_for_author(
         oid_norm, per_page=_SEED_SCAN_PER_PAGE, sort="cited_by_count:desc"
@@ -1031,7 +1092,6 @@ def seed_papers_for_author(
     needed = target_papers - existing
     now_iso = datetime.now(timezone.utc).isoformat()
     landed: list[str] = []
-    seen_paper_ids: set[str] = _existing_paper_ids_for_author(conn, oid_norm)
     pages_read = 0
     catalogue_walked = False
 
@@ -1168,37 +1228,32 @@ def backfill_all_resolved_authors(
     limit: int | None = None,
     is_cancellation_requested: Callable[[], bool] | None = None,
 ) -> dict:
-    """Run `refresh_author_works_and_vectors` over every resolved author
-    whose centroid is missing or older than 14 days.
+    """Run `refresh_author_works_and_vectors` over every resolved author with no
+    settled OpenAlex works-fetch outcome.
 
-    Commits between authors so concurrent reads stay responsive.
+    Selection goes through `authors_needing_works_sql` — the SAME selector the
+    Health card's pending count uses — so the number shown and the set walked
+    cannot drift. Commits between authors so concurrent reads stay responsive.
     """
 
     from alma.api.deps import open_db_connection
+    from alma.services.author_hydrate import (
+        authors_needing_works_params,
+        authors_needing_works_sql,
+    )
 
     conn = open_db_connection()
     try:
-        model = semantic_scholar.S2_SPECTER2_MODEL
-        cutoff_iso = (
-            datetime.now(timezone.utc) - timedelta(days=_CENTROID_STALE_DAYS)
-        ).isoformat()
-        rows = conn.execute(
-            """
-            SELECT DISTINCT lower(a.openalex_id) AS oid
-            FROM authors a
-            LEFT JOIN author_centroids ac
-              ON ac.author_openalex_id = lower(a.openalex_id)
-             AND ac.model = ?
-            WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
-              AND (ac.author_openalex_id IS NULL OR ac.updated_at < ?)
-            ORDER BY a.openalex_id
-            """ + (" LIMIT ?" if limit else ""),
-            (model, cutoff_iso, limit) if limit else (model, cutoff_iso),
-        ).fetchall()
+        sql = authors_needing_works_sql()
+        params = authors_needing_works_params()
+        if limit:
+            sql += " LIMIT ?"
+            params = (*params, limit)
+        rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
 
-    candidates = [str(r["oid"]) for r in rows if r["oid"]]
+    candidates = [str(r["author_oid"]) for r in rows if r["author_oid"]]
     total = len(candidates)
 
     # Pre-flight: pipe-filter every candidate's profile into ONE cache so each

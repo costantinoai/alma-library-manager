@@ -53,6 +53,7 @@ from alma.api.routes.signal_lab import router as signal_lab_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
+from alma.application.materialized_views import MaterializedViewReadError
 from alma.core.logging import setup_logging
 from alma.version import get_app_version
 
@@ -351,6 +352,33 @@ async def sqlite_lock_exception_handler(request: Request, exc: sqlite3.Operation
             },
         )
     return await general_exception_handler(request, exc)
+
+
+@app.exception_handler(MaterializedViewReadError)
+async def materialized_view_read_exception_handler(
+    request: Request, exc: MaterializedViewReadError
+):
+    """A stored view that cannot be READ is unavailable (503), never empty.
+
+    One handler rather than a try/except per route, so every consumer of the
+    materialized-view layer is truthful by default — including the ones nobody
+    remembered to wrap. Previously these reads returned a cache miss, and the
+    routes dutifully answered "not built yet" (202) or served an empty payload,
+    which is the app asserting something it does not know.
+    """
+    logger.error(
+        f"Stored view {exc.view_key!r} unreadable on "
+        f"{request.method} {request.url.path}: {exc.cause}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        headers={"Retry-After": "5"},
+        content={
+            "error": "StoredViewUnavailable",
+            "message": exc.message,
+            "detail": f"{exc.recovery} Cause: {exc.cause}",
+        },
+    )
 
 
 @app.exception_handler(Exception)

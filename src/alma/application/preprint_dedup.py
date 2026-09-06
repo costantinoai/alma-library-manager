@@ -260,10 +260,7 @@ def resolve_canonical_paper_id(
 def count_preprint_twins(conn: sqlite3.Connection, scope: str = "library") -> int:
     """How many preprint↔journal twin pairs the dedup would collapse for ``scope``.
     Drives the Health card's pending count (local DB scan — no ETA)."""
-    try:
-        return len(find_preprint_twin_candidates(conn, scope=scope))
-    except Exception:
-        return 0
+    return len(find_preprint_twin_candidates(conn, scope=scope))
 
 
 # -- batch runner -------------------------------------------------------------
@@ -371,19 +368,16 @@ def find_duplicate_identity_pairs(conn: sqlite3.Connection) -> list[dict[str, st
     present) so the retro-collapse can fold each loser into its ``<owner>``
     keeper. Returns ``[{"loser_id", "keeper_id"}]``.
     """
-    try:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT es.paper_id AS loser_id, es.reason AS reason
-            FROM paper_enrichment_status es
-            JOIN papers p ON p.id = es.paper_id
-            WHERE es.reason LIKE 'duplicate_identity:%'
-              AND es.status = 'terminal_no_match'
-              AND COALESCE(TRIM(p.canonical_paper_id), '') = ''
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    rows = conn.execute(
+        """
+        SELECT DISTINCT es.paper_id AS loser_id, es.reason AS reason
+        FROM paper_enrichment_status es
+        JOIN papers p ON p.id = es.paper_id
+        WHERE es.reason LIKE 'duplicate_identity:%'
+          AND es.status = 'terminal_no_match'
+          AND COALESCE(TRIM(p.canonical_paper_id), '') = ''
+        """
+    ).fetchall()
     pairs: list[dict[str, str]] = []
     seen: set[str] = set()
     for r in rows:
@@ -484,7 +478,4 @@ def run_duplicate_identity_collapse(
 def count_duplicate_identity_pairs(conn: sqlite3.Connection) -> int:
     """How many legacy duplicate-identity pairs the collapse would fold.
     Drives the maintenance op's pending count (local scan — no ETA)."""
-    try:
-        return len(find_duplicate_identity_pairs(conn))
-    except Exception:
-        return 0
+    return len(find_duplicate_identity_pairs(conn))

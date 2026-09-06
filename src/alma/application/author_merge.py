@@ -1070,21 +1070,18 @@ def count_dedup_orcid_candidates(db: sqlite3.Connection) -> int:
     forever. Counting the unswept remainder instead means a full run drives it to
     zero, and newly-followed or stale authors re-arm it — the honest "remaining
     work" signal a repair card promises (see migration 24 / ``orcid_swept_at``)."""
-    try:
-        row = db.execute(
-            f"""
-            SELECT COUNT(DISTINCT fa.author_id) AS c
-            FROM followed_authors fa
-            JOIN authors a ON a.id = fa.author_id
-            WHERE COALESCE(a.status, 'active') = 'active'
-              AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') <> ''
-              AND {_SWEEP_PENDING_SQL}
-            """,
-            (ORCID_RESWEEP_WINDOW,),
-        ).fetchone()
-        return int((row["c"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    row = db.execute(
+        f"""
+        SELECT COUNT(DISTINCT fa.author_id) AS c
+        FROM followed_authors fa
+        JOIN authors a ON a.id = fa.author_id
+        WHERE COALESCE(a.status, 'active') = 'active'
+          AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') <> ''
+          AND {_SWEEP_PENDING_SQL}
+        """,
+        (ORCID_RESWEEP_WINDOW,),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
 
 
 def _papers_for_oid(db: sqlite3.Connection, openalex_id: str | None) -> int:
@@ -1712,19 +1709,16 @@ def count_merge_candidates(db: sqlite3.Connection) -> int:
     — the truthful "N duplicate profiles to merge" the Health merge card shows.
     Zero until a scan finds duplicates; back to zero once they're applied (never
     the whole author list)."""
-    try:
-        row = db.execute(
-            f"""
-            SELECT COUNT(*) AS c
-            FROM author_merge_candidates c
-            JOIN authors p ON p.id = c.primary_author_id
-            JOIN authors a ON a.id = c.alt_author_id
-            WHERE {_CANDIDATE_ACTIVE_SQL}
-            """
-        ).fetchone()
-        return int((row["c"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    row = db.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM author_merge_candidates c
+        JOIN authors p ON p.id = c.primary_author_id
+        JOIN authors a ON a.id = c.alt_author_id
+        WHERE {_CANDIDATE_ACTIVE_SQL}
+        """
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
 
 
 def list_merge_candidates(

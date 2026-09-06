@@ -34,7 +34,10 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
       {attention.length > 0 ? (
         <div className="space-y-1.5">
           {attention.map((dim) => (
-            <DimensionStatusRow key={dim.key} dim={dim} onOpen={() => onOpenDim(dim)} />
+            <div key={dim.key} className="space-y-1">
+              <DimensionStatusRow dim={dim} onOpen={() => onOpenDim(dim)} />
+              <p className="text-xs text-slate-500">{dim.explanation} {dim.impact}</p>
+            </div>
           ))}
         </div>
       ) : null}

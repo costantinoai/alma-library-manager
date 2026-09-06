@@ -44,6 +44,28 @@ from alma.core.time import utcnow
 logger = logging.getLogger(__name__)
 
 
+class MaterializedViewReadError(RuntimeError):
+    """The cache could not be READ — which is never the same as "not built yet".
+
+    Raised instead of returning a cache miss, so a database that cannot answer
+    surfaces as unavailable rather than as an empty, healthy-looking result.
+    Callers that render a number to the user must show unknown/unavailable with
+    this cause; callers that decide whether to launch expensive work must not
+    treat it as "nothing is built" and rebuild the world.
+    """
+
+    def __init__(self, view_key: str, cause: BaseException | str):
+        self.view_key = view_key
+        self.cause = str(cause)
+        self.message = f"Could not read the stored view {view_key!r}."
+        self.recovery = (
+            "The stored payload is unavailable, not empty. Retry once the "
+            "database is readable; if this persists, check the server log for "
+            "the SQLite error below."
+        )
+        super().__init__(f"{self.message} {self.recovery} Cause: {self.cause}")
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -142,7 +164,31 @@ def _compute_fingerprint(conn: sqlite3.Connection, view: View) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _is_missing_table(exc: sqlite3.Error) -> bool:
+    """True only for a genuinely absent `materialized_views` table.
+
+    The ONE failure that legitimately means "no cache yet". Every other SQLite
+    error means the store could not answer, which is a different fact and must
+    never be rendered as an empty result."""
+    return "no such table" in str(exc).lower()
+
+
 def _read_row(conn: sqlite3.Connection, view_key: str) -> dict | None:
+    """Read one cache row. Returns None ONLY when the row genuinely does not exist.
+
+    A failed read is NOT a cache miss. This used to collapse every
+    `sqlite3.OperationalError` into `None`, which made "the database could not
+    answer" indistinguishable from "nothing has been built yet" — and every
+    consumer inherited that lie. A locked, corrupted or partially-migrated DB
+    read as: 0 critical health dimensions on Home, an empty-but-coherent Health
+    operations plan, "map not built yet" on the graph routes, Signal Lab quietly
+    off, and — worst — `_graph_view_staleness` reporting `never_built`, which is
+    an URGENT stale reason, so a bad read escalated past the idle gate and forced
+    full layout rebuilds.
+
+    So: a genuinely missing table still reads as "no cache yet" (that is real
+    bootstrap, and it is logged), but every other failure raises.
+    """
     try:
         row = conn.execute(
             "SELECT view_key, fingerprint, payload, computed_at, compute_ms, "
@@ -150,11 +196,17 @@ def _read_row(conn: sqlite3.Connection, view_key: str) -> dict | None:
             "FROM materialized_views WHERE view_key = ?",
             (view_key,),
         ).fetchone()
-    except sqlite3.OperationalError:
-        # Table missing — schema init should always have created it,
-        # but be defensive: a missing cache row is equivalent to "no
-        # cache yet".
-        return None
+    except sqlite3.Error as exc:
+        if _is_missing_table(exc):
+            # Schema init should always have created it; treat a genuinely
+            # absent table as "no cache yet", but never silently.
+            logger.warning(
+                "materialized_views: cache table missing while reading %s: %s",
+                view_key,
+                exc,
+            )
+            return None
+        raise MaterializedViewReadError(view_key, exc) from exc
     if row is None:
         return None
     if isinstance(row, sqlite3.Row):
@@ -365,8 +417,18 @@ def stored_version(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | 
             "FROM materialized_views WHERE view_key = ?",
             (view_key,),
         ).fetchone()
-    except sqlite3.OperationalError:
-        return None
+    except sqlite3.Error as exc:
+        # Same contract as `_read_row`: a failed read is not "nothing stored".
+        # This one gates conditional serves, so swallowing it silently turned a
+        # broken store into "no validator" — a full re-serve on every request.
+        if _is_missing_table(exc):
+            logger.warning(
+                "materialized_views: cache table missing while reading version of %s: %s",
+                view_key,
+                exc,
+            )
+            return None
+        raise MaterializedViewReadError(view_key, exc) from exc
     if row is None or not row["has_payload"]:
         return None
     return {
@@ -398,9 +460,14 @@ def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
     get_view(view_key)  # loud KeyError on unregistered keys
     try:
         conn.execute("DELETE FROM materialized_views WHERE view_key = ?", (view_key,))
-    except sqlite3.OperationalError:
-        # Table missing — nothing stored, nothing to invalidate.
-        return
+    except sqlite3.Error as exc:
+        if _is_missing_table(exc):
+            # Table missing — nothing stored, nothing to invalidate.
+            return
+        # A failed invalidation must NOT look like a successful one: the caller
+        # is destroying this view's inputs, and a surviving payload would be
+        # served as current forever.
+        raise MaterializedViewReadError(view_key, exc) from exc
     commit_unless_gated(conn, label="materialized_views.invalidate")
 
 

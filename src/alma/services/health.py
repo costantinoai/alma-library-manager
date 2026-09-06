@@ -1309,14 +1309,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         return len(list_affiliation_conflicts(conn, limit=None) or [])
 
     def _count_thin_suggested() -> tuple[int, int, int]:
-        # Same counter the `author_seed_thin` repair walks, so the repair's
-        # population is a subset of this row by construction — a run visibly
-        # drives it down instead of appearing to do nothing.
-        # Returns (fixable, exhausted, unvectorized). `exhausted` is reported
-        # separately so the row can reach a quiet, converged state;
-        # `unvectorized` is folded INTO the headline count because those authors
-        # are just as absent from the map — counting only the seedable ones let
-        # the row go green while the map stayed empty (2026-07-26).
+        # One assessment, separate repair populations: missing papers are
+        # seedable; authors with enough papers need vector/layout work instead.
         from alma.services.maintenance import count_thin_suggested_authors
 
         return count_thin_suggested_authors(conn)
@@ -1326,7 +1320,6 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     thin_fixable, thin_exhausted, thin_unvectorized = (
         thin_counts if thin_ok else (None, None, None)
     )
-    thin_suggested = (thin_fixable + thin_unvectorized) if thin_ok else None
     affiliation_conflicts, affil_ok = _safe_assess(
         "author_affiliation_conflicts", _count_affiliation_conflicts
     )
@@ -1350,7 +1343,7 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     # gap the repair closes on its own schedule, not a broken identity.
     if thin_ok:
         thin_sev, _, thin_reason = _count_severity(
-            thin_suggested, warn_at=None, crit_at=None, noun="unplaceable suggested authors"
+            thin_fixable, warn_at=None, crit_at=None, noun="suggested authors needing papers"
         )
     else:
         thin_sev, thin_reason = "warning", "Couldn't measure suggested-author coverage — see logs."
@@ -1407,10 +1400,10 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             extra_actions=_AUTHOR_REVIEW_ACTION,
         ),
         _dimension(
-            key="authors.unplaceable",
+            key="authors.needing_papers",
             entity="author",
-            label="Suggested but unplaceable",
-            count=thin_suggested if thin_ok else None,
+            label="Suggested authors needing papers",
+            count=thin_fixable if thin_ok else None,
             total=total,
             state=DIM_MEASURED if thin_ok else DIM_ERROR,
             severity=thin_sev,
@@ -1420,18 +1413,10 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             # outstanding) so this row converges to 0 instead of nagging.
             exhausted=thin_exhausted if thin_ok else None,
             explanation=(
-                f"{thin_suggested} currently-suggested authors are off the author "
-                f"map: {thin_fixable} hold fewer than two papers in the corpus"
+                f"{thin_fixable} suggested authors have fewer than two papers in the corpus."
                 + (
-                    f", and {thin_unvectorized} hold enough papers but fewer than "
-                    "two with a vector on the layout"
-                    if thin_unvectorized
-                    else ""
-                )
-                + "."
-                + (
-                    f" A further {thin_exhausted} can never reach two — OpenAlex "
-                    "holds only one work for them."
+                    f" A further {thin_exhausted} were checked, but the source could not "
+                    "supply enough papers; seeding will not retry them automatically."
                     if thin_exhausted
                     else ""
                 )
@@ -1439,13 +1424,35 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
                 else "Couldn't measure suggested-author coverage — see logs."
             ),
             impact=(
-                "Without two PLACED papers an author has no position on the author "
-                "map, no sample titles on their suggestion card, and no score — the "
-                "engine recommends them while showing you nothing to judge them on. "
-                "Seeding fixes the missing-papers half; the missing-vector half "
-                "clears when the embedding chain catches up."
+                "Seeding adds source papers for judging these suggestions. Map placement "
+                "also requires usable vectors and layout coordinates; fetching papers alone "
+                "does not guarantee a map position."
             ),
             repair_task="author_seed_thin",
+        ),
+        _dimension(
+            key="authors.unplaceable",
+            entity="author",
+            label="Suggested authors awaiting map placement",
+            count=thin_unvectorized if thin_ok else None,
+            total=total,
+            state=DIM_MEASURED if thin_ok else DIM_ERROR,
+            severity=("info" if thin_unvectorized else "ok") if thin_ok else "warning",
+            severity_reason=(
+                "These authors already have enough papers; seeding more cannot repair their map placement."
+                if thin_ok else "Could not measure suggested-author map placement. Re-assess Health to retry."
+            ),
+            explanation=(
+                f"{thin_unvectorized} suggested authors already have at least two papers, "
+                "but fewer than two are embedded and placed on the map."
+                if thin_ok else "Suggested-author map placement could not be measured."
+            ),
+            impact=(
+                "No more paper seeding is needed for these authors. Check the vector-fetch "
+                "and local-embedding steps above; when vectors are available, rebuild map "
+                "layouts. If no usable vectors are available, the author can remain absent "
+                "from the map without needing another seed run."
+            ),
         ),
         _dimension(
             key="authors.merge_conflicts",
@@ -1574,7 +1581,9 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 #             counting rows let the row go green while the map stayed empty.
 #             Measurement failures now propagate to DIM_ERROR instead of being
 #             swallowed into a green zero.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.07-3"
+# 2026.09-1: separate seedable papers from missing map placement, so the seed
+#             operation and its dimension describe exactly the same population.
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-1"
 
 mv.register(
     mv.View(

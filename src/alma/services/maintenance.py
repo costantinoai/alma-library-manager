@@ -45,6 +45,7 @@ from alma.core.time import utcnow
 from alma.services import health as health_service
 from alma.services.maintenance_contracts import (
     BatchSpec,
+    MaintenanceAssessmentError,
     MaintenanceRunPlan,
     MaintenanceRunSpec,
     MaintenanceStage,
@@ -384,7 +385,7 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
     substrate, so the author is still off the map. Seeding cannot help them —
     they need vectors — but leaving them out let the Health row go green while
     the map stayed empty (2026-07-26). The repair's `count_fn` claims only
-    ``fixable``; the dimension reports ``fixable + unvectorized``.
+    ``fixable``; its dimension does too. Map-placement gaps are observed separately.
 
     Exceptions PROPAGATE. `_safe_assess` in `health.py` owns the error path and
     renders `DIM_ERROR`; swallowing here returned a successful-looking zero and
@@ -402,16 +403,13 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
     )
 
     suggestions = list_author_suggestions(conn, limit=SUGGESTION_REVIEW_WINDOW)
-    try:
-        exhausted_ids = {
-            str(r[0]).lower()
-            for r in conn.execute(
-                "SELECT author_openalex_id FROM author_seed_status WHERE status = ?",
-                (SEED_STATUS_EXHAUSTED,),
-            )
-        }
-    except sqlite3.OperationalError:
-        exhausted_ids = set()
+    exhausted_ids = {
+        str(r[0]).lower()
+        for r in conn.execute(
+            "SELECT author_openalex_id FROM author_seed_status WHERE status = ?",
+            (SEED_STATUS_EXHAUSTED,),
+        )
+    }
 
     fixable = exhausted = unvectorized = 0
     for suggestion in suggestions:
@@ -563,16 +561,9 @@ def _count_graph_layouts(conn: sqlite3.Connection, params=None) -> int:
     """
     from alma.api.scheduler import _graph_view_staleness, _super_regions_built
 
-    pending = 0
-    try:
-        pending += len(_graph_view_staleness(conn))
-        if not _super_regions_built(conn):
-            pending += 1
-    except Exception:  # noqa: BLE001 — a diagnostic must never raise
-        # Returning 0 means "nothing to repair", which is a CLAIM, not an
-        # absence of one. It must at least be loud in the log with a traceback.
-        logger.exception("graph layout pending count failed; reporting 0")
-        return 0
+    pending = len(_graph_view_staleness(conn))
+    if not _super_regions_built(conn):
+        pending += 1
     return pending
 
 
@@ -659,10 +650,7 @@ def _count_corpus_backfill_stale(conn: sqlite3.Connection, params=None) -> int:
     count — tens, not thousands)."""
     from alma.services import author_attention
 
-    try:
-        _counts, rows = author_attention.corpus_backfill_rows(conn)
-    except sqlite3.OperationalError:
-        return 0
+    _counts, rows = author_attention.corpus_backfill_rows(conn)
     return sum(
         1
         for r in rows
@@ -671,31 +659,17 @@ def _count_corpus_backfill_stale(conn: sqlite3.Connection, params=None) -> int:
 
 
 def _count_author_works(conn: sqlite3.Connection, params=None) -> int:
-    """Resolved authors whose works/centroid are missing or >14 days stale — the
-    pool `backfill_all_resolved_authors` would walk."""
-    from datetime import timedelta
+    """Resolved authors with no settled OpenAlex works-fetch outcome — the exact
+    pool `backfill_all_resolved_authors` would walk (ONE shared selector).
 
-    from alma.discovery import semantic_scholar
+    This used to key on `author_centroids.updated_at`, which made a *derived*
+    artifact the freshness clock for a *network* fetch. Because
+    `refresh_author_centroid` deletes the centroid of an author with no usable
+    vectors, such authors never left the pool and were re-fetched from OpenAlex
+    on every run. The op now reads its own fetch ledger."""
+    from alma.services.author_hydrate import count_authors_needing_works
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-    try:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS n FROM (
-                SELECT lower(a.openalex_id) AS oid
-                FROM authors a
-                LEFT JOIN author_centroids ac
-                  ON ac.author_openalex_id = lower(a.openalex_id) AND ac.model = ?
-                WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
-                  AND (ac.author_openalex_id IS NULL OR ac.updated_at < ?)
-                GROUP BY oid
-            )
-            """,
-            (semantic_scholar.S2_SPECTER2_MODEL, cutoff),
-        ).fetchone()
-        return int((row["n"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    return count_authors_needing_works(conn)
 
 
 def _count_author_centroids(conn: sqlite3.Connection, params=None) -> int:
@@ -715,10 +689,7 @@ def _count_corpus_metadata(conn: sqlite3.Connection, params=None) -> int:
     """
     from alma.services.corpus_rehydrate import count_corpus_metadata_candidates
 
-    try:
-        return int(count_corpus_metadata_candidates(conn) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    return int(count_corpus_metadata_candidates(conn) or 0)
 
 
 def _count_reference_graph(conn: sqlite3.Connection, params=None) -> int:
@@ -732,45 +703,36 @@ def _count_reference_graph(conn: sqlite3.Connection, params=None) -> int:
     """
     from alma.core.sql_helpers import standalone_paper_sql
 
-    try:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS n
-            FROM papers p
-            WHERE COALESCE(TRIM(p.openalex_id), '') <> ''
-              AND {standalone_paper_sql("p")}
-              AND NOT EXISTS (SELECT 1 FROM publication_references r WHERE r.paper_id = p.id)
-              AND NOT EXISTS (
-                  SELECT 1 FROM paper_enrichment_status es
-                  WHERE es.paper_id = p.id
-                    AND es.source = 'references' AND es.purpose = 'metadata'
-                    AND es.status IN ('enriched', 'terminal_no_match')
-              )
-            """
-        ).fetchone()
-        return int((row["n"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS n
+        FROM papers p
+        WHERE COALESCE(TRIM(p.openalex_id), '') <> ''
+          AND {standalone_paper_sql("p")}
+          AND NOT EXISTS (SELECT 1 FROM publication_references r WHERE r.paper_id = p.id)
+          AND NOT EXISTS (
+              SELECT 1 FROM paper_enrichment_status es
+              WHERE es.paper_id = p.id
+                AND es.source = 'references' AND es.purpose = 'metadata'
+                AND es.status IN ('enriched', 'terminal_no_match')
+          )
+        """
+    ).fetchone()
+    return int((row["n"] if row else 0) or 0)
 
 
 def _count_paper_group_reconcile(conn: sqlite3.Connection, params=None) -> int:
     from alma.services.paper_group_reconcile import count_paper_group_reconcile_candidates
 
-    try:
-        return int(count_paper_group_reconcile_candidates(conn) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    return int(count_paper_group_reconcile_candidates(conn) or 0)
 
 
 def _count_topic_normalize(conn: sqlite3.Connection, params=None) -> int:
     """Topic terms not yet linked to a canonical `topics` row."""
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM publication_topics WHERE topic_id IS NULL"
-        ).fetchone()
-        return int((row["n"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM publication_topics WHERE topic_id IS NULL"
+    ).fetchone()
+    return int((row["n"] if row else 0) or 0)
 
 
 def _count_library_dedup(conn: sqlite3.Connection, params=None) -> int:
@@ -778,20 +740,17 @@ def _count_library_dedup(conn: sqlite3.Connection, params=None) -> int:
     A non-zero value means the destructive full dedup pass has real work."""
     from alma.core.sql_helpers import standalone_paper_sql
 
-    try:
-        row = conn.execute(
-            f"""
-            SELECT COALESCE(SUM(c - 1), 0) AS n FROM (
-                SELECT COUNT(*) AS c FROM papers p
-                WHERE COALESCE(TRIM(doi), '') <> ''
-                  AND {standalone_paper_sql("p")}
-                GROUP BY lower(trim(doi)) HAVING COUNT(*) > 1
-            )
-            """
-        ).fetchone()
-        return int((row["n"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    row = conn.execute(
+        f"""
+        SELECT COALESCE(SUM(c - 1), 0) AS n FROM (
+            SELECT COUNT(*) AS c FROM papers p
+            WHERE COALESCE(TRIM(doi), '') <> ''
+              AND {standalone_paper_sql("p")}
+            GROUP BY lower(trim(doi)) HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()
+    return int((row["n"] if row else 0) or 0)
 
 
 def _count_housekeeping(conn: sqlite3.Connection, params=None) -> int:
@@ -807,15 +766,12 @@ def _count_housekeeping(conn: sqlite3.Connection, params=None) -> int:
     """
     from datetime import timedelta
 
-    try:
-        cutoff = (utcnow() - timedelta(days=30)).isoformat()
-        return int(
-            (conn.execute(
-                "SELECT COUNT(*) AS n FROM operation_logs WHERE timestamp < ?", (cutoff,)
-            ).fetchone() or {"n": 0})["n"] or 0
-        )
-    except sqlite3.OperationalError:
-        return 0
+    cutoff = (utcnow() - timedelta(days=30)).isoformat()
+    return int(
+        (conn.execute(
+            "SELECT COUNT(*) AS n FROM operation_logs WHERE timestamp < ?", (cutoff,)
+        ).fetchone() or {"n": 0})["n"] or 0
+    )
 
 
 def _count_author_metadata(conn: sqlite3.Connection, params=None) -> int:
@@ -855,10 +811,7 @@ def _count_duplicate_identity(conn: sqlite3.Connection, params=None) -> int:
     """Legacy duplicate-identity pairs awaiting collapse (local scan)."""
     from alma.application.preprint_dedup import count_duplicate_identity_pairs
 
-    try:
-        return int(count_duplicate_identity_pairs(conn) or 0)
-    except Exception:
-        return 0
+    return int(count_duplicate_identity_pairs(conn) or 0)
 
 
 def _count_title_resolution_eligible(conn: sqlite3.Connection, params=None) -> int:
@@ -868,11 +821,7 @@ def _count_title_resolution_eligible(conn: sqlite3.Connection, params=None) -> i
     its dimension agree by construction."""
     from alma.services.title_resolution import count_remaining_eligible
 
-    try:
-        return int(count_remaining_eligible(conn) or 0)
-    except Exception:
-        logger.exception("title-resolution eligible count failed")
-        return 0
+    return int(count_remaining_eligible(conn) or 0)
 
 
 def _s2_vector_batch_maximum() -> int:
@@ -1136,23 +1085,16 @@ REGISTRY: dict[str, MaintenanceTask] = {
             key="author_seed_thin",
             label="Seed under-covered suggested authors",
             description=(
-                "Repair: land the 2 most-cited own papers (first-author preferred, "
-                "topped up by citations) for authors the engine is suggesting but "
-                "the corpus holds fewer than two papers for. Below two papers an "
-                "author has no position on the author map, no sample titles on "
-                "their card, and no score — one bounded fetch per author fixes all "
-                "three. Cheap: a single works page per author, not the full "
-                "pagination `author_works` does."
+                "Fetch up to two source papers for suggested authors with fewer than "
+                "two papers in the corpus, preferring first-author works. Authors already "
+                "holding enough papers need no seeding. Map placement also requires "
+                "vectors and a layout; this step does not guarantee either."
             ),
-            # This one DOES claim its dimension: the population it walks is the
-            # seedable subset of what `authors.unplaceable` counts, so a run
-            # visibly drives the Health number down (unlike `author_works`,
-            # whose disjoint population made repair counts look stuck). The
-            # remainder of that row is the missing-vector half, which the
-            # embedding chain owns — this task never claims it.
+            # Counter, dimension and runner all claim the seedable population.
+            # Map-placement gaps have a separate observed dimension.
             # `auto_chunk_size` caps AUTHORS SEEDED per chunk, not the window
             # inspected, so chunks drain the window instead of re-reading its head.
-            health_dimensions=("authors.unplaceable",),
+            health_dimensions=("authors.needing_papers",),
             candidate_path="",
             operation_key="authors.seed_thin_suggestions",
             job_id_prefix="maint_author_seed",
@@ -1873,14 +1815,25 @@ def migrate_maintenance_config(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
 def _candidate_count(health_payload: dict[str, Any], candidate_path: str) -> int:
     """Pending-work count for a task, read from the canonical health snapshot."""
+    if not candidate_path:
+        # Deliberate on-demand operation without a backlog counter.
+        return 0
     if candidate_path.startswith("totals."):
         totals = health_payload.get("totals") or {}
-        return int(totals.get(candidate_path.split(".", 1)[1]) or 0)
+        value = totals.get(candidate_path.split(".", 1)[1])
+        if value is None:
+            raise ValueError(f"Health snapshot has no measurement for {candidate_path}")
+        return int(value)
     if candidate_path.startswith("dim:"):
         wanted = candidate_path.split(":", 1)[1]
         for dim in health_payload.get("dimensions") or []:
             if dim.get("key") == wanted:
-                count = int(dim.get("count") or 0)
+                if dim.get("state") == "error" or dim.get("count") is None:
+                    raise ValueError(
+                        f"Health measurement {wanted} unavailable: "
+                        f"{dim.get('reason') or 'count is unknown'}"
+                    )
+                count = int(dim["count"])
                 # ACTIONABLE work only: the exhausted floor (every remaining
                 # row already tried; upstream can't supply) is not pending
                 # work. Counting it kept `s2_vector` "pending" forever on
@@ -1888,7 +1841,7 @@ def _candidate_count(health_payload: dict[str, Any], candidate_path: str) -> int
                 # local-embedding stage for the whole corpus (2026-07-04 e2e).
                 exhausted = int(dim.get("exhausted") or 0)
                 return max(0, count - exhausted)
-    return 0
+    raise ValueError(f"Health snapshot has no measurement for {candidate_path}")
 
 
 def default_params(task: MaintenanceTask) -> dict[str, Any]:
@@ -1908,16 +1861,27 @@ def task_pending_count(
     *,
     params: dict[str, Any] | None = None,
 ) -> int:
-    """Pending-work count for a task: its ``count_fn`` (author / dedup backlogs)
-    when present, else the canonical health-payload path. Never raises — a broken
-    counter logs and reports 0 so the operations list still renders."""
-    if task.count_fn is not None:
-        try:
-            return int(task.count_fn(conn, params if params is not None else default_params(task)) or 0)
-        except Exception:
-            logger.exception("count_fn failed for maintenance task %s", task.key)
-            return 0
-    return _candidate_count(health_payload, task.candidate_path)
+    """Return measured pending work, or raise a typed assessment failure.
+
+    Execution callers require a known count. Presentation callers may catch the
+    typed failure to display an unknown count without hiding healthy siblings.
+    """
+    try:
+        value = (
+            task.count_fn(conn, params if params is not None else default_params(task))
+            if task.count_fn is not None
+            else _candidate_count(health_payload, task.candidate_path)
+        )
+        if value is None or int(value) < 0:
+            raise ValueError("Pending count must be a non-negative measured integer")
+        return int(value)
+    except MaintenanceAssessmentError:
+        raise
+    except Exception as exc:
+        logger.exception("Pending assessment failed for maintenance task %s", task.key)
+        raise MaintenanceAssessmentError(
+            task.key, task.label, f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _validated_spec(task: MaintenanceTask, spec: MaintenanceRunSpec) -> MaintenanceRunSpec:
@@ -1982,7 +1946,15 @@ def plan_task(
     dependencies: list[PlanDependency] = []
     for key in task.prerequisites:
         dependency = REGISTRY[key]
-        dep_pending = task_pending_count(conn, dependency, payload)
+        required = not (dependency.optional or dependency.manual_gate)
+        dep_error = None
+        try:
+            dep_pending = task_pending_count(conn, dependency, payload)
+        except MaintenanceAssessmentError as exc:
+            if required:
+                raise
+            dep_pending = None
+            dep_error = exc.to_wire()
         dependencies.append(
             PlanDependency(
                 key=dependency.key,
@@ -1992,7 +1964,8 @@ def plan_task(
                 # human, so treating them as hard blockers deadlocks the auto
                 # chain (2 preprint-twin candidates froze the whole vector lane,
                 # 2026-07-04 e2e). The banner still warns; automation proceeds.
-                required=not (dependency.optional or dependency.manual_gate),
+                required=required,
+                assessment_error=dep_error,
             )
         )
 
@@ -2059,11 +2032,13 @@ def _task_budget(
     batch_size: int | None = None,
     target_paper_ids: list[str] | None = None,
     limit: int | None = None,
+    allow_unknown: bool = False,
 ) -> dict[str, Any]:
     """Canonical pending/batch/ETA budget for maintenance UI and launches."""
     from alma.services.eta import detect_auth, estimate_eta
 
     effective = {**default_params(task), **(params or {})}
+    assessment_error = None
     target_ids = [str(pid) for pid in (target_paper_ids or []) if str(pid).strip()]
     if target_ids:
         pending = len(target_ids)
@@ -2071,7 +2046,13 @@ def _task_budget(
         payload = health_payload
         if payload is None:
             payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-        pending = task_pending_count(conn, task, payload, params=effective)
+        try:
+            pending = task_pending_count(conn, task, payload, params=effective)
+        except MaintenanceAssessmentError as exc:
+            if not allow_unknown:
+                raise
+            pending = None
+            assessment_error = exc.to_wire()
 
     if batch_size is not None:
         if task.request_batch is None:
@@ -2080,6 +2061,19 @@ def _task_budget(
     else:
         batch = get_task_request_batch_size(conn, task)
 
+    if pending is None:
+        return {
+            "params": effective,
+            "target_paper_ids": target_ids,
+            "target_count": len(target_ids),
+            "candidates_pending": None,
+            "assessment_error": assessment_error,
+            "run_limit": limit,
+            "selected_items": None,
+            "batch_size": batch,
+            "eta": None,
+            "quota": None,
+        }
     pending = max(0, int(pending))
     selected = pending if limit is None else min(pending, max(0, int(limit)))
     openalex_authed, s2_authed = detect_auth()
@@ -2105,6 +2099,7 @@ def _task_budget(
         "target_paper_ids": target_ids,
         "target_count": len(target_ids),
         "candidates_pending": pending,
+        "assessment_error": None,
         "run_limit": int(limit) if limit is not None else None,
         "selected_items": int(selected),
         "batch_size": batch,
@@ -2189,15 +2184,23 @@ def describe_task(
         task,
         health_payload=health_payload,
         limit=get_task_manual_limit(conn, task),
+        allow_unknown=True,
     )
     dependencies = []
     for key in task.prerequisites:
         dependency = REGISTRY[key]
+        try:
+            dep_pending = task_pending_count(conn, dependency, health_payload)
+            dep_error = None
+        except MaintenanceAssessmentError as exc:
+            dep_pending = None
+            dep_error = exc.to_wire()
         dependencies.append(
             {
                 "key": dependency.key,
                 "label": dependency.label,
-                "pending": task_pending_count(conn, dependency, health_payload),
+                "pending": dep_pending,
+                "assessment_error": dep_error,
                 # Manual-gate deps are advisory (see PlanDependency note).
                 "required": not (dependency.optional or dependency.manual_gate),
             }
@@ -2231,6 +2234,7 @@ def describe_task(
         "repairs": list(task.health_dimensions),
         "operation_key": task.operation_key,
         "candidates_pending": budget["candidates_pending"],
+        "assessment_error": budget["assessment_error"],
         "params_spec": params_spec or None,
         "request_batch_size": budget["batch_size"],
         "request_batch_default": task.request_batch.default if task.request_batch else None,
@@ -2373,11 +2377,13 @@ def finalize_operation_plan(
         blocked_by = [
             row
             for row in operation["dependencies"]
-            if row["required"] and int(row["pending"] or 0) > 0
+            if row["required"] and (row["pending"] is None or int(row["pending"]) > 0)
         ]
         operation["blocked_by"] = blocked_by
-        pending = int(operation["candidates_pending"] or 0)
-        if pending <= 0:
+        pending = operation["candidates_pending"]
+        if pending is None:
+            operation["readiness"] = "assessment_failed"
+        elif pending <= 0:
             operation["readiness"] = "healthy"
         elif blocked_by:
             operation["readiness"] = "blocked"
@@ -2389,7 +2395,7 @@ def finalize_operation_plan(
             operation["readiness"] = "ready"
         quota = operation.get("quota") or {}
         quota_blocked = not quota.get("sufficient", True)
-        if pending > 0 and quota_blocked:
+        if pending is not None and pending > 0 and quota_blocked:
             operation["readiness"] = "blocked_external"
         operation["recommended"] = False
         # Recommended-next must be SAFE: it drives the one-click "Run recommended
@@ -2397,6 +2403,7 @@ def finalize_operation_plan(
         # are never auto-recommended — the user reaches those deliberately.
         if (
             recommended is None
+            and pending is not None
             and pending > 0
             and not blocked_by
             and not operation["optional"]
@@ -2689,21 +2696,24 @@ def _utc_midnight_iso() -> str:
 
 def _healer_used_today(conn: sqlite3.Connection, operation_key: str) -> int:
     """Items the healer has already processed for ``operation_key`` since UTC
-    midnight (only scheduler-triggered runs count toward the daily cap)."""
-    try:
-        row = conn.execute(
-            """
-            SELECT COALESCE(SUM(COALESCE(processed, 0)), 0) AS used
-            FROM operation_status
-            WHERE operation_key = ?
-              AND trigger_source = 'scheduler'
-              AND COALESCE(finished_at, started_at, updated_at) >= ?
-            """,
-            (operation_key, _utc_midnight_iso()),
-        ).fetchone()
-        return int((row["used"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    midnight (only scheduler-triggered runs count toward the daily cap).
+
+    A failed read must NOT return 0. Zero means "the whole daily budget is
+    still available", so an unreadable ledger used to silently DISABLE the cap
+    that exists to bound unattended network spend — the one moment the cap
+    matters most. Unknown usage means we cannot prove there is budget left, so
+    the caller must skip this tick rather than assume there is."""
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(COALESCE(processed, 0)), 0) AS used
+        FROM operation_status
+        WHERE operation_key = ?
+          AND trigger_source = 'scheduler'
+          AND COALESCE(finished_at, started_at, updated_at) >= ?
+        """,
+        (operation_key, _utc_midnight_iso()),
+    ).fetchone()
+    return int((row["used"] if row else 0) or 0)
 
 
 def _worst_severity_rank(payload: dict[str, Any], dim_keys: tuple[str, ...]) -> int:
@@ -2788,25 +2798,42 @@ def maintenance_repair_periodic() -> None:
                     paused_until.isoformat(),
                 )
                 continue
-            pending = task_pending_count(conn, task, payload)
+            try:
+                pending = task_pending_count(conn, task, payload)
+            except MaintenanceAssessmentError:
+                # The count boundary logged the cause. Other independent tasks
+                # may still run, but this task has no measured repair pool.
+                continue
             if pending <= 0:
                 continue
-            remaining = get_task_auto_daily_cap(conn, task) - _healer_used_today(conn, task.operation_key)
+            try:
+                used_today = _healer_used_today(conn, task.operation_key)
+            except sqlite3.Error:
+                # Unknown spend is not zero spend. Skip rather than run an
+                # unattended network task with an unenforceable daily cap.
+                logger.exception(
+                    "idle maintenance: %s skipped — daily cap usage unreadable", task.key
+                )
+                continue
+            remaining = get_task_auto_daily_cap(conn, task) - used_today
             if remaining <= 0:
                 logger.info("idle maintenance: %s hit its daily cap", task.key)
                 continue
             # Don't queue a network op with no external-API budget left — skip it
             # this tick with a clear log (another enabled task may still qualify).
             planned_batch = min(remaining, task.auto_chunk_size, HEALER_PER_TICK_LIMIT)
-            auto_plan = plan_task(
-                conn,
-                task,
-                MaintenanceRunSpec(
-                    trigger=MaintenanceTrigger.SCHEDULER,
-                    max_items=max(1, planned_batch),
-                ),
-                health_payload=payload,
-            )
+            try:
+                auto_plan = plan_task(
+                    conn,
+                    task,
+                    MaintenanceRunSpec(
+                        trigger=MaintenanceTrigger.SCHEDULER,
+                        max_items=max(1, planned_batch),
+                    ),
+                    health_payload=payload,
+                )
+            except MaintenanceAssessmentError:
+                continue  # prerequisite eligibility is unknown
             cap_message = _provider_daily_cap_block(auto_plan)
             if cap_message:
                 logger.info("idle maintenance: %s", cap_message)
@@ -2897,15 +2924,17 @@ _CONVERGE_POLL_SECONDS = 5.0
 
 
 def _converge_related_active(conn: sqlite3.Connection, own_job_id: str) -> list[str]:
-    """Operation keys of live jobs the convergence coordinator must wait on."""
+    """Operation keys of live jobs the convergence coordinator must wait on.
+
+    A failed read must NOT return an empty list. Empty means "nothing else is
+    running", which is exactly the answer that lets the coordinator stop
+    waiting and launch work on top of a job already in flight. Unknown is not
+    idle, so the read propagates and the caller decides."""
     registry_keys = {t.operation_key for t in REGISTRY.values()}
-    try:
-        rows = conn.execute(
-            "SELECT job_id, operation_key FROM operation_status "
-            "WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    rows = conn.execute(
+        "SELECT job_id, operation_key FROM operation_status "
+        "WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')"
+    ).fetchall()
     active: list[str] = []
     for row in rows:
         if str(row["job_id"]) == own_job_id:
@@ -2949,10 +2978,7 @@ def run_onboarding_convergence(
         """This task's live pending count (reads the health payload when not given)."""
         if payload is None:
             payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-        try:
-            return int(task_pending_count(conn, task, payload) or 0)
-        except Exception:
-            return 0
+        return task_pending_count(conn, task, payload)
 
     try:
         set_job_status(
@@ -2966,11 +2992,22 @@ def run_onboarding_convergence(
                 if is_cancellation_requested(job_id):
                     stop_reason = "cancelled"
                     break
-                active = _converge_related_active(conn, job_id)
+                try:
+                    active = _converge_related_active(conn, job_id)
+                except sqlite3.Error:
+                    # We cannot prove the field is clear, so we must not act as
+                    # if it were. Stop convergence instead of launching work on
+                    # top of a job that may still be running.
+                    logger.exception(
+                        "convergence: in-flight job set unreadable; stopping rather "
+                        "than assuming nothing is running"
+                    )
+                    stop_reason = "assessment_failed"
+                    break
                 if not active:
                     break
                 time.sleep(_CONVERGE_POLL_SECONDS)
-            if stop_reason == "cancelled":
+            if stop_reason in {"cancelled", "assessment_failed"}:
                 break
 
             # 1b) Did the step we just ran move its OWN counter? Measured per
@@ -3009,6 +3046,16 @@ def run_onboarding_convergence(
                 None,
             )
             if nxt is None:
+                failed = [
+                    o for o in operations
+                    if o.get("readiness") == "assessment_failed"
+                ]
+                if failed:
+                    keys = ", ".join(str(o["key"]) for o in failed)
+                    raise MaintenanceAssessmentError(
+                        "onboarding.converge", "library convergence",
+                        f"Repair counts remain unknown for: {keys}",
+                    )
                 break
             key = str(nxt["key"])
             task = REGISTRY.get(key)
@@ -3251,8 +3298,9 @@ def resume_orphaned_sweeps() -> int:
                 continue
             try:
                 pending = int(task_pending_count(conn, task, payload) or 0)
-            except Exception:
-                pending = 0
+            except MaintenanceAssessmentError:
+                logger.warning("auto-resume: deferring %s; repair count is unknown", task.key)
+                continue
             if pending <= 0:
                 continue  # the orphan already finished its work — nothing to drain
             # Generous session budget so the continuation chain actually drains

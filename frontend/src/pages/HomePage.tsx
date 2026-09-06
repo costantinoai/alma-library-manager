@@ -436,7 +436,13 @@ export function HomePage() {
 
   const brief = briefQuery.data
   const { feed, discovery, alerts } = brief.activity
-  const attentionTotal = Object.values(brief.attention).reduce((sum, value) => sum + value, 0)
+  // How many attention chips will render. A `null` count means "could not be
+  // measured", which renders its own chip, so it counts here too — otherwise
+  // the divider before the chips would vanish exactly when one is shown.
+  const attentionTotal = Object.values(brief.attention).reduce<number>(
+    (sum, value) => sum + (value === null ? 1 : value),
+    0,
+  )
   const carryoverTotal = feed.carryover + discovery.carryover
 
   return (

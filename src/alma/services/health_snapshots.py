@@ -73,7 +73,7 @@ mv.register(
         key=HEALTH_OPERATIONS_VIEW_KEY,
         fingerprint_sql="""
             SELECT
-              'health-operations-v1',
+              'health-operations-v2',
               COALESCE((SELECT fingerprint FROM materialized_views
                         WHERE view_key = 'health:corpus'), ''),
               COALESCE((SELECT fingerprint FROM materialized_views
@@ -92,11 +92,16 @@ mv.register(
 
 
 def stored_envelope(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
-    """Read one durable Health view without fingerprinting or building."""
+    """Read a durable view and overlay its coordinator's live refresh state.
+
+    Health rebuilds its views through one coordinator, not their individual
+    materialized-view jobs. The stored reader deliberately skips Activity scans;
+    overlay the cheap coordinator signal even when an older payload exists.
+    """
 
     stored = mv.get_stored(conn, view_key, include_rebuilding=False)
     if stored is not None:
-        return stored
+        return {**stored, "rebuilding": refresh_in_flight()}
     return {
         "payload": {},
         "stale": True,

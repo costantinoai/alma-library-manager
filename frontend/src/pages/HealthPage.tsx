@@ -344,7 +344,11 @@ export function HealthPage() {
       toast({ title: 'Health', description: 'Diagnostics are still refreshing — counts may lag briefly.' })
     }
     const opNow = (opsData?.operations ?? []).find((o) => o.key === completedKey)
-    const pendingNow = Number(opNow?.candidates_pending ?? 0)
+    const pendingNow = opNow?.candidates_pending
+    if (pendingNow == null || opNow?.assessment_error) {
+      stopSequence(opNow?.assessment_error?.message ?? 'Pending work could not be measured — auto-advance stopped. Re-assess Health before continuing.')
+      return
+    }
     // 42.5: keep running the same op while it is genuinely draining the backlog.
     if (pendingNow > 0 && pendingNow < pendingBefore) {
       runMutation.mutate({ key: completedKey, sequence: true })
@@ -352,7 +356,10 @@ export function HealthPage() {
     }
     const next = opsData?.recommended_next ?? null
     if (!next) {
-      stopSequence('Recommended sequence finished — no further safe steps (any manual-review gates remain for you).')
+      const unknown = opsData?.operations.filter((op) => op.candidates_pending == null) ?? []
+      stopSequence(unknown.length
+        ? `Sequence stopped: could not assess ${unknown.map((op) => op.label).join(', ')}. Re-assess Health before continuing.`
+        : 'Recommended sequence finished — no further safe steps (any manual-review gates remain for you).')
     } else if (next.key === completedKey) {
       // Same op still recommended but pending did NOT drop → truthful no-progress stop.
       stopSequence(

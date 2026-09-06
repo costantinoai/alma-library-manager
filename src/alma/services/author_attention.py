@@ -157,41 +157,32 @@ def corpus_backfill_rows(
         "unverified": 0,
     }
     rows: list[dict[str, Any]] = []
-    if not (_table_exists(db, "followed_authors") and _table_exists(db, "authors")):
-        return counts, rows
-
-    try:
-        followed_rows = db.execute(
-            """
-            SELECT a.id, a.name, COALESCE(a.works_count, 0) AS works_count
-            FROM authors a
-            JOIN followed_authors fa ON fa.author_id = a.id
-            ORDER BY a.name
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return counts, rows
+    followed_rows = db.execute(
+        """
+        SELECT a.id, a.name, COALESCE(a.works_count, 0) AS works_count
+        FROM authors a
+        JOIN followed_authors fa ON fa.author_id = a.id
+        ORDER BY a.name
+        """
+    ).fetchall()
 
     bg_counts: dict[str, int] = {}
-    if _table_exists(db, "publication_authors") and followed_rows:
-        try:
-            bg_rows = db.execute(
-                """
-                SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
-                FROM authors a
-                JOIN followed_authors fa ON fa.author_id = a.id
-                JOIN publication_authors pa
-                  ON lower(a.openalex_id) = lower(pa.openalex_id)
-                 AND a.openalex_id IS NOT NULL
-                 AND TRIM(a.openalex_id) <> ''
-                JOIN papers p ON p.id = pa.paper_id
-                WHERE p.status <> 'library'
-                GROUP BY a.id
-                """
-            ).fetchall()
-            bg_counts = {str(r["author_id"]): int(r["c"] or 0) for r in bg_rows}
-        except sqlite3.OperationalError:
-            bg_counts = {}
+    if followed_rows:
+        bg_rows = db.execute(
+            """
+            SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
+            FROM authors a
+            JOIN followed_authors fa ON fa.author_id = a.id
+            JOIN publication_authors pa
+              ON lower(a.openalex_id) = lower(pa.openalex_id)
+             AND a.openalex_id IS NOT NULL
+             AND TRIM(a.openalex_id) <> ''
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE p.status <> 'library'
+            GROUP BY a.id
+            """
+        ).fetchall()
+        bg_counts = {str(r["author_id"]): int(r["c"] or 0) for r in bg_rows}
 
     for row in followed_rows:
         author_id = str(row["id"] or "").strip()

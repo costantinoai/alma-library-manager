@@ -111,31 +111,28 @@ def count_orphan_authors(db: sqlite3.Connection) -> int:
     as one ``NOT EXISTS`` so the Health maintenance card can show a pending count
     without the per-row scan ``garbage_collect_orphan_authors`` does."""
     placeholders = ",".join("?" for _ in _LIVE_PAPER_STATES)
-    try:
-        row = db.execute(
-            f"""
-            SELECT COUNT(*) AS c
-            FROM authors a
-            LEFT JOIN followed_authors fa ON fa.author_id = a.id
-            WHERE COALESCE(a.status, 'active') = 'active'
-              AND fa.author_id IS NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM publication_authors pa
-                  JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
-                   AND {standalone_paper_sql('p')}
-                  WHERE (
-                        (lower(trim(COALESCE(a.openalex_id, ''))) <> ''
-                         AND lower(pa.openalex_id) = lower(trim(a.openalex_id)))
-                     OR (lower(trim(COALESCE(a.name, ''))) <> ''
-                         AND lower(trim(pa.display_name)) = lower(trim(a.name)))
-                  )
+    row = db.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM authors a
+        LEFT JOIN followed_authors fa ON fa.author_id = a.id
+        WHERE COALESCE(a.status, 'active') = 'active'
+          AND fa.author_id IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM publication_authors pa
+              JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
+               AND {standalone_paper_sql('p')}
+              WHERE (
+                    (lower(trim(COALESCE(a.openalex_id, ''))) <> ''
+                     AND lower(pa.openalex_id) = lower(trim(a.openalex_id)))
+                 OR (lower(trim(COALESCE(a.name, ''))) <> ''
+                     AND lower(trim(pa.display_name)) = lower(trim(a.name)))
               )
-            """,
-            tuple(_LIVE_PAPER_STATES),
-        ).fetchone()
-        return int((row["c"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+          )
+        """,
+        tuple(_LIVE_PAPER_STATES),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
 
 
 # --------------------------------------------------------------------------

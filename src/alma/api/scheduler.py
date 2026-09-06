@@ -1547,6 +1547,48 @@ def setup_scheduler() -> None:
         interval_minutes=inbox_sweep_minutes,
     )
 
+    # -- Scoring calibration freshness (interval) ----------------------------
+    # The per-library calibration follows the corpus. Registered unconditionally;
+    # the runner self-gates on there being a Library at all.
+    calibration_hours = _discovery_schedule_interval_hours(
+        "schedule.scoring_calibration_interval_hours",
+        12,
+    )
+    _register_interval_job(
+        sched,
+        job_id="scoring_calibration_refresh",
+        func=scoring_calibration_refresh_periodic,
+        name="Scoring calibration freshness",
+        description=(
+            "Re-derives the ranking calibration when the corpus or library changed "
+            f"significantly, every {calibration_hours}h"
+        ),
+        enabled=calibration_hours > 0,
+        interval_hours=calibration_hours,
+    )
+
+    # -- Signal Lab model freshness (interval, task 67 B2) -----------------
+    # Registered unconditionally: the runner self-gates on the Lab switch and on
+    # there being any rounds at all, so a Lab-less install pays one cheap SELECT
+    # per tick. Deliberately NOT folded into the graph layout pass — the map
+    # leaves main under D24 and retained learning keeps its freshness owner.
+    signal_lab_model_hours = _discovery_schedule_interval_hours(
+        "schedule.signal_lab_model_interval_hours",
+        6,
+    )
+    _register_interval_job(
+        sched,
+        job_id="signal_lab_model_refresh",
+        func=signal_lab_model_refresh_periodic,
+        name="Signal Lab model freshness",
+        description=(
+            "Refits the retained Signal Lab model when its inputs change, every "
+            f"{signal_lab_model_hours}h"
+        ),
+        enabled=signal_lab_model_hours > 0,
+        interval_hours=signal_lab_model_hours,
+    )
+
     # -- Citation graph maintenance (interval) -----------------------------
     graph_maintenance_hours = _discovery_schedule_interval_hours(
         "schedule.graph_maintenance_interval_hours",
@@ -2279,6 +2321,96 @@ def inbox_capture_sweep_periodic() -> None:
         )
 
 
+def signal_lab_model_refresh_periodic() -> None:
+    """Freshness owner for ``signal_lab:model`` (task 67 B2).
+
+    Every consumer of the fitted model — the ranker's Lab heads, the categorical
+    folds, the summary, the eval replay — reads it with ``mv.get_stored``, a pure
+    row read that computes no fingerprint. So nothing on the read path can ever
+    notice that the model's inputs have moved. Until this job existed the only
+    thing that queued a refit was answering a round on a ``refit_every_rounds``
+    boundary, which left every OTHER input unowned: re-fitting the super-regions,
+    changing what is in your Library, recomputing a shown paper's vector or
+    correcting its authors all kept the previous model in force indefinitely.
+
+    ``mv.get`` is the whole logic, the same shape as ``_ensure_super_regions_fresh``:
+    it runs the (cheap, bounded) fingerprint SQL, serves the stored row when it
+    matches, and enqueues a deduped background rebuild when it does not. Unlike
+    that one this job is deliberately independent of the map layout pass — under
+    D24 the map leaves the main branch, and retained learning must not lose its
+    freshness owner with it.
+
+    Self-gating, so an idle tick is one small SELECT:
+
+    * Signal Lab switched off ⇒ nothing consumes the model, so nothing is
+      refitted. Disabling stays a pure consumption gate: the rounds, the stored
+      model and this job's next tick all survive it.
+    * No rounds at all ⇒ nothing to fit. A fresh install does not get a model
+      row written for it, and purge already queues its own honestly-empty
+      rebuild.
+    """
+    job_id = "periodic_signal_lab_model"
+    try:
+        from alma.api.deps import open_db_connection
+        from alma.application import materialized_views as mv
+        from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+        from alma.application.signal_lab.settings import is_enabled
+
+        conn = open_db_connection()
+        try:
+            if not is_enabled(conn):
+                logger.debug("%s skipped: Signal Lab is switched off", job_id)
+                return
+            rounds = conn.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0]
+            if not rounds:
+                logger.debug("%s skipped: no rounds to fit", job_id)
+                return
+            envelope = mv.get(conn, MODEL_VIEW_KEY)
+            if envelope.get("stale") or envelope.get("rebuilding"):
+                logger.info(
+                    "Signal Lab model inputs changed; refit enqueued (rounds=%d)", rounds
+                )
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
+        logger.warning("Signal Lab model freshness check failed: %s", exc)
+
+
+def scoring_calibration_refresh_periodic() -> None:
+    """Freshness owner for ``scoring:calibration``.
+
+    The derived scoring calibration (corpus percentile tables + family priors)
+    must follow the library as it grows: its fingerprint moves when the
+    embedding set, the Library or the feedback history changed SIGNIFICANTLY
+    (bucketed — see `calibration._FINGERPRINT_SQL`). A lens refresh already
+    checks it on the way in; this tick catches drift between refreshes so a
+    long-idle install does not score its next deck against a stale corpus.
+    `mv.get` is the whole logic: one cheap fingerprint SELECT when nothing
+    moved, a deduped background rebuild when something did.
+    """
+    job_id = "periodic_scoring_calibration"
+    try:
+        from alma.api.deps import open_db_connection
+        from alma.application import materialized_views as mv
+        from alma.application.discovery.calibration import CALIBRATION_VIEW_KEY
+
+        conn = open_db_connection()
+        try:
+            library = conn.execute(
+                "SELECT COUNT(*) FROM papers WHERE status = 'library'"
+            ).fetchone()[0]
+            if not library:
+                logger.debug("%s skipped: no library to calibrate against", job_id)
+                return
+            envelope = mv.get(conn, CALIBRATION_VIEW_KEY)
+            if envelope.get("stale") or envelope.get("rebuilding"):
+                logger.info("Scoring calibration inputs changed; rebuild enqueued")
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
+        logger.warning("Scoring calibration freshness check failed: %s", exc)
+
+
 def refresh_feed_inbox_periodic() -> None:
     """Periodically refresh the feed inbox from active monitors.
 
@@ -2457,19 +2589,11 @@ _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
 def _super_regions_built(conn: sqlite3.Connection) -> bool:
-    """Has Signal Lab's substrate ever been built? Cheap, pure read."""
-    try:
-        from alma.application import materialized_views as mv
-        from alma.application import super_regions
+    """Has Signal Lab's substrate ever been built? Failed reads must propagate."""
+    from alma.application import materialized_views as mv
+    from alma.application import super_regions
 
-        return mv.stored_meta(conn, super_regions.VIEW_KEY) is not None
-    except Exception:  # noqa: BLE001 — advisory; never sink the pass
-        # Still returns "built" so a broken probe can't trigger an endless
-        # rebuild loop — but it is LOGGED with the traceback. It used to
-        # swallow silently, so a missing substrate and an unreadable one were
-        # the same answer: healthy.
-        logger.exception("super_regions built-probe failed; assuming built")
-        return True
+    return mv.stored_meta(conn, super_regions.VIEW_KEY) is not None
 
 
 def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:

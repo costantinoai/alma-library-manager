@@ -375,6 +375,21 @@ export interface MaintenanceParamSpec {
 }
 export type MaintenanceParamsSpec = Record<string, MaintenanceParamSpec>
 
+export interface MaintenanceAssessmentError {
+  task_key: string
+  cause: string
+  message: string
+  recovery: string
+}
+
+export interface MaintenanceDependency {
+  key: string
+  label: string
+  pending: number | null
+  required: boolean
+  assessment_error?: MaintenanceAssessmentError | null
+}
+
 /** One maintenance task in GET /health/operations. */
 export interface MaintenanceOperation {
   key: string
@@ -390,16 +405,17 @@ export interface MaintenanceOperation {
   target_kind: string
   supports_targets: boolean
   prerequisites: string[]
-  dependencies: Array<{ key: string; label: string; pending: number; required: boolean }>
-  blocked_by: Array<{ key: string; label: string; pending: number; required: boolean }>
+  dependencies: MaintenanceDependency[]
+  blocked_by: MaintenanceDependency[]
   unlocks: string[]
   optional: boolean
   manual_gate: boolean
-  readiness: 'healthy' | 'blocked' | 'blocked_external' | 'manual_review' | 'optional' | 'ready'
+  readiness: 'healthy' | 'blocked' | 'blocked_external' | 'manual_review' | 'optional' | 'ready' | 'assessment_failed'
   recommended: boolean
   repairs: string[]
   operation_key: string
-  candidates_pending: number
+  candidates_pending: number | null
+  assessment_error?: MaintenanceAssessmentError | null
   /** ETA to drain the backlog at the API's rate (null for local / nothing pending). */
   eta: MaintenanceEta | null
   quota: ProviderQuotaForecast | null
@@ -437,7 +453,7 @@ export interface MaintenancePlan {
   candidates_pending: number
   selected_items: number
   unit: string
-  dependencies: Array<{ key: string; label: string; pending: number; required: boolean }>
+  dependencies: Array<{ key: string; label: string; pending: number | null; required: boolean; assessment_error?: MaintenanceAssessmentError | null }>
   expected_requests: Record<string, number>
   quota: ProviderQuotaForecast | null
   plan_fingerprint: string
@@ -1801,6 +1817,15 @@ export interface ScoreAtom {
   role: 'sum' | 'max' | 'penalty'
   group: string | null
   available: boolean
+  /** Did this atom's value actually reach the score?
+   *
+   *  Grouped (`max`-role) atoms share one payment, and how the group settles it
+   *  is the family's decision: some groups pay only their strongest member
+   *  (several views of one fact), others pay every measured member
+   *  sub-additively (different facts corroborating each other). The backend
+   *  publishes the answer rather than leaving the UI to re-derive a rule that
+   *  now varies per group. Absent on rows from an older ranker. */
+  counted?: boolean
 }
 
 /** One ranking family: `points` is its exact contribution to the final score. */
@@ -1820,13 +1845,34 @@ export interface ScoreFamily {
   atoms: ScoreAtom[]
 }
 
-/** A bounded post-family adjustment (retraction), in score points. */
+/** One signed input to a post-family adjustment.
+ *
+ *  `value` is the head's signed reading in [-1, 1], `weight` the points
+ *  ceiling from Settings, and `points = weight × value`. `available: false`
+ *  means NOT MEASURED — never "measured zero". */
+export interface ScoreAdjustmentAtom {
+  key: string
+  label: string
+  description: string
+  value: number
+  weight: number
+  points: number
+  available: boolean
+}
+
+/** A bounded, SIGNED post-family adjustment in score points.
+ *
+ *  Two rows exist: `retraction` (points ≤ 0, no atoms) and `signal_lab`
+ *  (either sign — the Lab heads can lift a paper as well as sink it; its
+ *  atoms are the region and utility heads). `atoms` is optional only because
+ *  rows persisted by older rankers lack it; current rows always carry it. */
 export interface ScoreAdjustment {
   key: string
   label: string
   description: string
   points: number
   available: boolean
+  atoms?: ScoreAdjustmentAtom[]
 }
 
 /** The complete, closed decomposition of a paper's score.
@@ -1839,6 +1885,11 @@ export interface ScoreAdjustment {
 export interface ScoreExplanation {
   ranker_version: string
   final_score: number
+  /** What a paper that is average on every family scores under the same
+   *  weights — the point `final_score` should be read against. The scale is
+   *  0–100 but "average" is not 50: at the shipped weights it is about 60.
+   *  Absent on rows persisted by an older ranker. */
+  reference_score?: number
   families: ScoreFamily[]
   adjustments: ScoreAdjustment[]
   /** Correction applied when the raw total left the 0..100 band. */
@@ -2148,6 +2199,12 @@ export interface DiscoverySettings {
   monitor_defaults: DiscoveryMonitorDefaults
   embedding_model: string
   recommendation_mode?: string
+  /** What the ranker actually uses: sliders rescaled to sum to 1 with the
+   *  mode's multipliers applied, keyed by ranking FAMILY (`text_similarity`
+   *  drives both `semantic` and `lexical`). Read-only; ignored on save. */
+  effective_weights?: Record<string, number>
+  /** What an all-average paper scores under these weights. */
+  reference_score?: number
 }
 
 // ── Insights types ──
@@ -5120,7 +5177,10 @@ export interface HomeBrief {
     imports_pending: number
     monitors_need_resolution: number
     author_decisions: number
-    critical_health: number
+    /** `null` when the stored Health snapshots could not be READ — which is not
+     *  zero. Home hides a zero-count chip, so an unreadable snapshot must say
+     *  so rather than let Home imply nothing needs you. */
+    critical_health: number | null
     /** Captures that reached ALMa but resolved to no paper (a link with no
      *  DOI, or an upstream failure). Recorded rather than dropped, so this is
      *  where they ask for a human. See docs/concepts/inbox.md. */
@@ -5140,11 +5200,15 @@ export function markFeedSeen(): Promise<{ last_seen_at: string }> {
 
 // ── Signal Lab (task 54, D20) ────────────────────────────────────────────────
 
+/** The writable Signal Lab settings — exactly what `PUT /signal-lab/settings`
+ *  accepts. The server is strict: sending anything beyond these keys (e.g.
+ *  the read-only `limits` block from the GET view) is a 422. */
 export interface SignalLabSettings {
   enabled: boolean
   region_offset_points: number
   utility_points: number
   author_offset_points: number
+  venue_offset_points: number
   map_tint_strength: number
   ring_decay: number
   exploration_rate: number
@@ -5154,8 +5218,18 @@ export interface SignalLabSettings {
   override_min_votes: number
 }
 
-export function getSignalLabSettings(): Promise<SignalLabSettings> {
-  return api.get<SignalLabSettings>('/signal-lab/settings')
+/** Server-owned bounds for the per-head point knobs. Read-only: the UI
+ *  drives its inputs from these instead of hard-coding a ceiling. */
+export interface SignalLabHeadLimits {
+  head_points_max: number
+  head_points_default: number
+}
+
+/** What `GET /signal-lab/settings` serves: the settings plus their limits. */
+export type SignalLabSettingsView = SignalLabSettings & { limits: SignalLabHeadLimits }
+
+export function getSignalLabSettings(): Promise<SignalLabSettingsView> {
+  return api.get<SignalLabSettingsView>('/signal-lab/settings')
 }
 
 export function updateSignalLabSettings(
@@ -5242,13 +5316,48 @@ export interface SignalLabEval {
     utility_accuracy: number | null
   }
   counts?: { rounds: number; answered: number }
-  churn?: {
+  replay?: SignalLabReplay
+}
+
+/** Replay verdict for one lens: its latest deck re-scored through the real
+ *  ranker with the Lab heads at 0 vs at the current Settings weights. */
+export interface SignalLabReplayLens {
+  lens_id: string
+  lens_name: string | null
+  suggestion_set_id: string
+  candidates: number
+  status: 'ok' | 'unassessable'
+  reason: string | null
+  lab_measured?: number
+  /** Stored scores the ranker was asked to reproduce; `mismatched > 0` is
+   *  ranker drift, not a property of the Lab. */
+  parity: { checked: number; mismatched: number }
+  churn: {
     pool: number
-    top_n?: number
-    hypothetical_points?: number
-    entered_top?: number
-    mean_rank_displacement?: number
-  }
+    top_n: number
+    mean_rank_displacement: number
+    top_overlap: number
+    entered_top: number
+  } | null
+}
+
+/** Aggregate replay across every lens. `insufficient_evidence` carries a
+ *  `reason` to show verbatim — it is NOT "zero churn". */
+export interface SignalLabReplay {
+  status: 'ok' | 'insufficient_evidence'
+  reason: string | null
+  enabled: boolean
+  lab_points: { region: number; utility: number }
+  ranker_version: string
+  feature_schema_version: string
+  top_n: number
+  lenses_total: number
+  lenses_assessed: number
+  candidates: number
+  entered_top: number | null
+  mean_rank_displacement: number | null
+  parity: { checked: number; mismatched: number }
+  lenses: SignalLabReplayLens[]
 }
 
 export function getSignalLabEval(): Promise<SignalLabEval> {

@@ -22,6 +22,28 @@ class MaintenanceValidationError(ValueError):
     """A user/config value violates the task's declared contract."""
 
 
+class MaintenanceAssessmentError(RuntimeError):
+    """Pending work could not be measured; never equivalent to an empty pool."""
+
+    def __init__(self, task_key: str, label: str, cause: str):
+        self.task_key = task_key
+        self.cause = cause
+        self.message = f"Could not assess {label}."
+        self.recovery = (
+            "Use Health → Re-assess to retry. If this persists, report the task "
+            f"'{task_key}' and the cause below with the server log; repair eligibility is unknown."
+        )
+        super().__init__(f"{self.message} {self.recovery} Cause: {cause}")
+
+    def to_wire(self) -> dict[str, str]:
+        return {
+            "task_key": self.task_key,
+            "cause": self.cause,
+            "message": self.message,
+            "recovery": self.recovery,
+        }
+
+
 class MaintenanceStage(StrEnum):
     AUTHOR_IDENTITY = "author_identity"
     AUTHOR_CANONICALIZATION = "author_canonicalization"
@@ -117,8 +139,9 @@ class MaintenanceRunSpec(BaseModel):
 class PlanDependency:
     key: str
     label: str
-    pending: int
+    pending: int | None
     required: bool = True
+    assessment_error: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +183,7 @@ class MaintenanceRunPlan:
                     "label": dep.label,
                     "pending": dep.pending,
                     "required": dep.required,
+                    "assessment_error": dep.assessment_error,
                 }
                 for dep in self.dependencies
             ],

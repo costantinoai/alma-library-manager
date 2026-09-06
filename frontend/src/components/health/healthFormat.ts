@@ -122,6 +122,7 @@ export function opSeverity(dims: HealthDimension[]): Severity | null {
  * the bug where a backlog silently disappeared from the page.
  */
 export function isOpAttention(op: MaintenanceOperation, dims: HealthDimension[]): boolean {
+  if (op.candidates_pending == null || op.assessment_error || op.blocked_by.some((d) => d.pending == null)) return true
   const sev = opSeverity(dims)
   if (sev != null && sev !== 'ok') return true
   return op.candidates_pending > 0
@@ -135,6 +136,6 @@ export function sortOpsByAttention(
   return [...ops].sort((a, b) => {
     const ra = severityRank(opSeverity(dimsOf(a)) ?? 'ok')
     const rb = severityRank(opSeverity(dimsOf(b)) ?? 'ok')
-    return ra - rb || b.candidates_pending - a.candidates_pending
+    return ra - rb || (b.candidates_pending ?? Number.POSITIVE_INFINITY) - (a.candidates_pending ?? Number.POSITIVE_INFINITY)
   })
 }

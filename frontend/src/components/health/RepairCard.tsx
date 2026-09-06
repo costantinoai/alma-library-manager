@@ -123,6 +123,8 @@ export function RepairCard({
   const batchDirty = batchOverridable && batch !== persistedBatch
   const limitDirty = manualLimit !== op.manual_limit
   const dirty = scopeDirty || batchDirty || limitDirty
+  const assessmentFailed = op.candidates_pending == null || !!op.assessment_error
+  const prerequisiteUnknown = op.blocked_by.some((item) => item.pending == null)
   const estimateQuery = useQuery({
     queryKey: ['health', 'estimate', op.key, scope, batch, manualLimit],
     queryFn: () =>
@@ -131,14 +133,16 @@ export function RepairCard({
         max_items: manualLimit,
         request_batch_size: batchOverridable ? batch : undefined,
       }),
-    enabled: dirty,
+    enabled: dirty && !assessmentFailed && !prerequisiteUnknown,
     staleTime: 30_000,
   })
-  const estimate = dirty ? estimateQuery.data : undefined
-  const pending = estimate ? estimate.candidates_pending : op.candidates_pending
+  const estimate = dirty && !assessmentFailed && !estimateQuery.isError ? estimateQuery.data : undefined
+  const pending = assessmentFailed || (dirty && estimateQuery.isError) ? null : estimate ? estimate.candidates_pending : op.candidates_pending
   const eta = estimate ? estimate.eta : op.eta
   const quota = estimate ? estimate.quota : op.quota
-  const runBlocked = quota?.sufficient === false
+  const quotaBlocked = quota?.sufficient === false
+  const noEligibleWork = pending === 0 && op.unit !== 'operation'
+  const runBlocked = quotaBlocked || pending == null || prerequisiteUnknown || noEligibleWork || (dirty && estimateQuery.isFetching)
 
   const runRequest = (extra?: Partial<MaintenanceRunRequest>): MaintenanceRunRequest => ({
     max_items: manualLimit,
@@ -149,7 +153,7 @@ export function RepairCard({
 
   // Rolled-up severity = worst across the op's dimensions (null = dimension-less
   // cleanup op, which shows no severity badge — just its pending count).
-  const severity = opSeverity(dims)
+  const severity = assessmentFailed ? 'warning' : opSeverity(dims)
   const attentionDims = sortBySeverity(dims.filter((d) => d.severity !== 'ok'))
   const healthyCount = dims.length - attentionDims.length
   const last = op.last_run
@@ -191,10 +195,10 @@ export function RepairCard({
         <div className="flex shrink-0 flex-col items-end gap-1">
           <MetricTile
             label="pending"
-            value={pending}
+            value={pending ?? 'Unknown'}
             tone={severity ? severityMetricTone(severity) : 'neutral'}
             align="center"
-            className="w-28"
+            className="w-36"
             labelSuffix={
               <JargonHint
                 title="Pending"
@@ -202,24 +206,38 @@ export function RepairCard({
               />
             }
           />
-          <EtaHint eta={eta} />
+          {pending != null ? <EtaHint eta={eta} /> : null}
         </div>
       </div>
 
+      {assessmentFailed ? (
+        <div role="alert" className="text-sm text-warning-800">
+          <p>{op.assessment_error?.message ?? 'Could not measure pending work.'}</p>
+          {op.assessment_error ? <p>Cause: {op.assessment_error.cause}</p> : null}
+          <p>{op.assessment_error?.recovery ?? 'Re-assess Health before running this repair.'}</p>
+        </div>
+      ) : dirty && estimateQuery.isError ? (
+        <p role="alert" className="text-sm text-warning-800">{estimateQuery.error.message}</p>
+      ) : null}
+
+      {noEligibleWork ? <p className="text-xs text-slate-500">No eligible work for this repair in the selected scope.</p> : null}
+
       {op.blocked_by.length > 0 ? (
         <p className="rounded-sm border border-warning-100 bg-warning-50 px-3 py-2 text-xs text-warning-800">
-          Prerequisite still pending:{' '}
-          {op.blocked_by.map((item) => `${item.label} (${item.pending})`).join(', ')} — you can run this
-          now, but results may be incomplete until it finishes.
+          Prerequisites unresolved:{' '}
+          {op.blocked_by.map((item) => `${item.label} (${item.pending ?? 'unknown'})${item.assessment_error ? `: ${item.assessment_error.message} Cause: ${item.assessment_error.cause}. ${item.assessment_error.recovery}` : ''}`).join(', ')}
+          {prerequisiteUnknown
+            ? ' — re-assess Health before running this repair.'
+            : ' — you can run this now, but results may be incomplete until it finishes.'}
         </p>
       ) : null}
 
-      {runBlocked ? (
+      {quotaBlocked ? (
         <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{quota?.reason ?? 'Provider quota cannot cover this run.'}</span>
         </p>
-      ) : quota ? (
+      ) : quota && pending != null ? (
         <p className="text-xs text-slate-500">
           Planned cost: {quota.required.toLocaleString()} {quota.provider === 'openalex' ? 'OpenAlex credits' : quota.unit}
           {quota.available != null ? ` · ${quota.available.toLocaleString()} available` : ' · available quota not measured yet'}
@@ -236,7 +254,7 @@ export function RepairCard({
             <p className="pl-1 text-[11px] text-slate-400">+{healthyCount} healthy</p>
           ) : null}
         </div>
-      ) : dims.length > 0 ? (
+      ) : dims.length > 0 && !assessmentFailed ? (
         <p className="text-xs text-success-700">All {dims.length} repaired dimensions healthy.</p>
       ) : null}
 
@@ -373,6 +391,7 @@ export function RepairCard({
               variant="ghost"
               icon={<Eye className="h-4 w-4" />}
               pending={running}
+              disabled={runBlocked}
               className="text-alma-700 hover:bg-control-quiet"
               onClick={() => onRun(op.key, runRequest({ dry_run: true }))}
             >

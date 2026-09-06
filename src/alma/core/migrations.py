@@ -1437,6 +1437,65 @@ def _m_0038_rename_paper_signal_feedback_weight(conn: sqlite3.Connection) -> Non
     )
 
 
+def _m_0039_author_works_fetch_ledger(conn: sqlite3.Connection) -> None:
+    """Seed the author-works fetch ledger from existing centroids (2026-09-05).
+
+    `author_works` used to derive "is this author pending?" from
+    `author_centroids.updated_at`, making a DERIVED artifact the freshness clock
+    for a NETWORK fetch. Because `refresh_author_centroid` deletes the centroid
+    of an author with no usable vectors, those authors could never leave the
+    pool and were re-fetched from OpenAlex on every single run, forever.
+
+    The op now reads its own outcome ledger (`author_enrichment_status`, source
+    `openalex`, purpose `works`). Without this migrator every existing install
+    would show its entire author table as pending on first launch and re-fetch
+    the lot — so we seed one settled row per author that HAS a centroid, dated
+    at that centroid's `updated_at`. That timestamp is the best available
+    evidence of when we last read OpenAlex for them, and it is recorded as such
+    in `reason` rather than being passed off as a real fetch record.
+
+    Authors with no centroid get no row and stay pending — which is correct:
+    they are exactly the population the old predicate could never converge, and
+    they should be fetched once and then settle.
+    """
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if not {"authors", "author_centroids", "author_enrichment_status"} <= tables:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO author_enrichment_status (
+            author_id, source, purpose, lookup_key, fields_key, status, reason,
+            fields_requested_json, fields_filled_json, attempts,
+            last_attempt_at, next_retry_at, updated_at
+        )
+        SELECT a.id,
+               'openalex',
+               'works',
+               lower(trim(a.openalex_id)),
+               'openalex_author_works_v1',
+               'already_complete',
+               'seeded at migration from the author centroid timestamp; not a recorded fetch',
+               '[]',
+               '[]',
+               0,
+               ac.updated_at,
+               NULL,
+               ac.updated_at
+        FROM authors a
+        JOIN author_centroids ac
+          ON ac.author_openalex_id = lower(trim(a.openalex_id))
+        WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
+          AND COALESCE(ac.updated_at, '') <> ''
+        GROUP BY a.id
+        """
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1476,6 +1535,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (36, "discovery_ranking_observations", _m_0036_discovery_ranking_observations),
     (37, "finalize_discovery_observation_schema", _m_0037_finalize_discovery_observation_schema),
     (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
+    (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

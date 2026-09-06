@@ -9,6 +9,7 @@ stamping a visit or scheduling background work.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -24,6 +25,8 @@ from alma.application.discovery import lens_crud
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.services import author_attention
 from alma.services import health as health_service
+
+logger = logging.getLogger(__name__)
 
 RECENT_DAYS = 7
 FEED_INBOX_DAYS = 60
@@ -223,8 +226,18 @@ def _feed_reason(candidate: dict[str, Any]) -> dict[str, str]:
     return {"kind": kind, "label": text}
 
 
-def _critical_health_count(db: sqlite3.Connection) -> int:
-    """Actionable critical dimensions from stored snapshots only."""
+def _critical_health_count(db: sqlite3.Connection) -> int | None:
+    """Actionable critical dimensions from stored snapshots only.
+
+    Returns ``None`` when the stored snapshots could not be READ. That is not
+    the same as zero: Home hides a chip whose count is zero, so a failed read
+    used to make Home state — silently and confidently — that nothing needs
+    you, at the exact moment something did. An unknown count renders its own
+    visible chip instead.
+
+    A genuinely absent cache table stays 0: that is a fresh install with no
+    assessment yet, and Health is meant to be quiet there.
+    """
     if not _table_exists(db, "materialized_views"):
         return 0
     count = 0
@@ -232,7 +245,11 @@ def _critical_health_count(db: sqlite3.Connection) -> int:
         health_service.HEALTH_CORPUS_VIEW_KEY,
         health_service.HEALTH_AUTHORS_VIEW_KEY,
     ):
-        stored = mv.get_stored(db, key)
+        try:
+            stored = mv.get_stored(db, key)
+        except mv.MaterializedViewReadError:
+            logger.exception("home: health snapshot %s unreadable", key)
+            return None
         payload = (stored or {}).get("payload") or {}
         for dimension in payload.get("dimensions") or []:
             if (
@@ -244,7 +261,7 @@ def _critical_health_count(db: sqlite3.Connection) -> int:
     return count
 
 
-def _attention(db: sqlite3.Connection) -> dict[str, int]:
+def _attention(db: sqlite3.Connection) -> dict[str, int | None]:
     imports_pending = imports_app.count_resolution_queue(db)
     monitors_need_resolution = int(
         db.execute(

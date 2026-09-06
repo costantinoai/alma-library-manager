@@ -27,6 +27,14 @@ interface AttentionSpec {
   /** The full explanation, on hover — what happened and what happens next. */
   title: (count: number) => string
   href: string
+  /**
+   * How to render when the backend could not MEASURE this kind (count `null`).
+   *
+   * A chip with a zero count is hidden, so without this an unmeasurable kind
+   * would silently read as "nothing here" — the one thing it must never say.
+   * Only kinds whose count can genuinely be unknown declare it.
+   */
+  unknown?: { severity: Severity; metric: string; title: string }
 }
 
 /**
@@ -46,6 +54,14 @@ const ATTENTION: Record<AttentionKey, AttentionSpec> = {
     title: (n) =>
       `${n} Health ${n === 1 ? 'finding is' : 'findings are'} critical and actionable. Open Health to run the repair.`,
     href: buildHashRoute('health'),
+    unknown: {
+      // Not `critical`: we do not know that anything is critical. We know that
+      // we cannot tell, which is its own problem and must be visible.
+      severity: 'warning',
+      metric: 'status unavailable',
+      title:
+        'The stored Health snapshots could not be read, so ALMa cannot say whether anything is critical. This is not the same as "nothing is wrong". Open Health to re-assess.',
+    },
   },
   monitors_need_resolution: {
     icon: Radio,
@@ -106,12 +122,30 @@ export interface AttentionChipsProps {
  * Ordered by severity, so the worst thing is always first, and a kind with a
  * zero count is absent entirely. When nothing is waiting, nothing renders —
  * which makes their presence the signal.
+ *
+ * A count of `null` means the backend could not MEASURE that kind. Because
+ * absence here reads as "all clear", an unmeasurable kind renders its own chip
+ * saying so, rather than disappearing into the same silence as zero.
  */
 export function AttentionChips({ attention }: AttentionChipsProps) {
   const items = (Object.keys(ATTENTION) as AttentionKey[])
-    .map((key) => ({ key, count: attention[key] ?? 0, spec: ATTENTION[key] }))
-    .filter((item) => item.count > 0)
-    .sort((a, b) => severityRank(a.spec.severity) - severityRank(b.spec.severity))
+    .map((key) => {
+      const spec = ATTENTION[key]
+      const raw = attention[key]
+      const unmeasured = raw === null || raw === undefined
+      return {
+        key,
+        count: unmeasured ? 0 : raw,
+        unmeasured: unmeasured && spec.unknown !== undefined,
+        spec,
+      }
+    })
+    .filter((item) => item.unmeasured || item.count > 0)
+    .sort((a, b) => {
+      const rank = (i: typeof a) =>
+        severityRank(i.unmeasured ? i.spec.unknown!.severity : i.spec.severity)
+      return rank(a) - rank(b)
+    })
 
   if (items.length === 0) return null
 
@@ -119,17 +153,22 @@ export function AttentionChips({ attention }: AttentionChipsProps) {
   // connection dots.
   return (
     <>
-      {items.map(({ key, count, spec }) => (
-        <StatusChip
-          key={key}
-          variant="slim"
-          severity={spec.severity}
-          name={spec.label(count)}
-          href={spec.href}
-          title={`${spec.metric(count)}. ${spec.title(count)}`}
-          ariaLabel={`${spec.label(count)}: ${spec.metric(count)}`}
-        />
-      ))}
+      {items.map(({ key, count, unmeasured, spec }) => {
+        const severity = unmeasured ? spec.unknown!.severity : spec.severity
+        const metric = unmeasured ? spec.unknown!.metric : spec.metric(count)
+        const title = unmeasured ? spec.unknown!.title : spec.title(count)
+        return (
+          <StatusChip
+            key={key}
+            variant="slim"
+            severity={severity}
+            name={spec.label(count)}
+            href={spec.href}
+            title={`${metric}. ${title}`}
+            ariaLabel={`${spec.label(count)}: ${metric}`}
+          />
+        )
+      })}
     </>
   )
 }

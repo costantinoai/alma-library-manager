@@ -39,6 +39,7 @@ from alma.services.background_settings import (
     get_reserved_api_calls,
 )
 from alma.services.maintenance_contracts import (
+    MaintenanceAssessmentError,
     MaintenanceRunSpec,
     MaintenanceTrigger,
     MaintenanceValidationError,
@@ -188,6 +189,8 @@ def estimate_operation(
             request_batch_size=request_batch_size,
         )
         plan = maintenance.plan_task(db, task, spec, health_payload=_health_payload(db))
+    except MaintenanceAssessmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except MaintenanceValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # One plan, one ETA: ``plan.to_wire()`` already carries the bounded-run ETA
@@ -243,6 +246,8 @@ def run_operation(
             plan_fingerprint=request.plan_fingerprint,
         )
         outcome = maintenance.run_task_now(db, task, spec=spec)
+    except MaintenanceAssessmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except MaintenanceValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {

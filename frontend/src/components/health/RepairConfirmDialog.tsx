@@ -88,7 +88,7 @@ export function RepairConfirmDialog({
     enabled: open,
     staleTime: 0,
   })
-  const plan = planQuery.data
+  const plan = planQuery.isError ? undefined : planQuery.data
   const token = plan?.confirmation_token ?? null
   const fingerprint = plan?.plan_fingerprint ?? null
 
@@ -150,7 +150,7 @@ export function RepairConfirmDialog({
               candidate{plan.candidates_pending === 1 ? '' : 's'}.
             </p>
           ) : (
-            <p>Couldn't compute the plan. Close this dialog and try again.</p>
+            <p>{planQuery.error?.message ?? "Couldn't compute the plan. Close this dialog and try again."}</p>
           )}
           {plan?.eta ? <EtaHint eta={plan.eta} /> : null}
         </div>

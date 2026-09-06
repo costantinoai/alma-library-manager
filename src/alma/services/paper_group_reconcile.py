@@ -50,16 +50,13 @@ def _count_component_candidates(conn: sqlite3.Connection) -> int:
     """
     from alma.core.components import classify_component
 
-    try:
-        rows = conn.execute(
-            """
-            SELECT doi, work_type
-            FROM papers
-            WHERE component_type IS NULL
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return 0
+    rows = conn.execute(
+        """
+        SELECT doi, work_type
+        FROM papers
+        WHERE component_type IS NULL
+        """
+    ).fetchall()
     pending = 0
     for row in rows:
         component_type, parent_doi = classify_component(row["doi"], row["work_type"])
@@ -77,16 +74,10 @@ def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
     case: an orphan whose parent paper is absent from the corpus is terminal, so
     only the LINKABLE subset counts (`count_linkable_orphan_components`).
     """
-    try:
-        integrity = dict(relationship_integrity_counts(conn))
-    except sqlite3.OperationalError:
-        integrity = {}
+    integrity = dict(relationship_integrity_counts(conn))
     if integrity.get("orphan_components"):
         integrity["orphan_components"] = count_linkable_orphan_components(conn)
-    try:
-        preprint_twins = len(find_preprint_twin_candidates(conn, scope="corpus"))
-    except Exception:
-        preprint_twins = 0
+    preprint_twins = len(find_preprint_twin_candidates(conn, scope="corpus"))
     return _integrity_defect_total(integrity) + preprint_twins + _count_component_candidates(conn)
 
 

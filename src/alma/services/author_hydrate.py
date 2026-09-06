@@ -51,11 +51,39 @@ CROSSREF_SOURCE = "crossref"
 PROFILE_PURPOSE = "profile"
 AFFILIATION_PURPOSE = "affiliation"
 ALIASES_PURPOSE = "aliases"
+WORKS_PURPOSE = "works"
+"""The author-works expansion's fetch-outcome purpose.
+
+Deliberately NOT a member of `SOURCE_PURPOSES` below: that map drives the
+profile-hydration fanout (`hydrate_author_metadata`, `enqueue_pending_author_hydration`),
+and a `works` entry there would make the profile sweep try to paginate works
+through `_hydrate_openalex`. The works runner owns this purpose and writes it
+through `record_author_works_outcome`; the ledger row is only ever an *outcome*
+record, never an enrichment instruction."""
 PENDING_STATUS = "pending"
 RETRYABLE_STATUS = "retryable_error"
 TERMINAL_NO_MATCH_STATUS = "terminal_no_match"
 TERMINAL_STATUSES = {"enriched", "unchanged", TERMINAL_NO_MATCH_STATUS}
 UNCHANGED_RETRY_AFTER = timedelta(days=30)
+
+# -- author works fetch outcomes -------------------------------------
+#
+# The works expansion needs its OWN freshness horizon: `UNCHANGED_RETRY_AFTER`
+# (30 d) is the profile-hydration cadence, and works coverage is re-checked
+# more often than a display name changes.
+WORKS_FIELDS_KEY = "openalex_author_works_v1"
+WORKS_STALE_AFTER = timedelta(days=14)
+WORKS_RETRY_AFTER = timedelta(hours=6)
+WORKS_FETCHED_STATUS = "fetched"
+WORKS_SKIPPED_STATUS = "already_complete"
+WORKS_EXHAUSTED_STATUS = "source_exhausted"
+WORKS_OK_STATUSES = (WORKS_FETCHED_STATUS, WORKS_SKIPPED_STATUS)
+"""Outcomes that mean "we reached OpenAlex and the author's works are covered".
+They settle the author for `WORKS_STALE_AFTER`, then become eligible again."""
+WORKS_TERMINAL_STATUSES = (WORKS_EXHAUSTED_STATUS, TERMINAL_NO_MATCH_STATUS)
+"""Outcomes with no remaining fixable work. These leave the pool permanently —
+they are an *observed* gap, not pending repair, and must never be presented as
+work the user can run away (the same fixable/observed split the seed card uses)."""
 OPENALEX_AUTHOR_FIELDS_KEY = (
     "openalex_authors:"
     + hashlib.sha1(_AUTHORS_SELECT_FIELDS.encode("utf-8")).hexdigest()[:12]
@@ -158,11 +186,19 @@ def _upsert_enrichment_status(
     reason: str = "",
     fields_requested: list[str] | None = None,
     fields_filled: list[str] | None = None,
+    retry_after: timedelta | None = None,
 ) -> None:
+    """Record one (author, source, purpose) fetch outcome.
+
+    `retry_after` overrides the profile-hydration `UNCHANGED_RETRY_AFTER`
+    cadence for callers whose purpose has its own horizon (the works
+    expansion). Passing it keeps ONE upsert for every enrichment ledger row
+    instead of growing a second, drifting writer per purpose.
+    """
     now = _utcnow_iso()
     next_retry_at = None
     if status in {RETRYABLE_STATUS, "unchanged"}:
-        next_retry_at = (_utcnow() + UNCHANGED_RETRY_AFTER).isoformat()
+        next_retry_at = (_utcnow() + (retry_after or UNCHANGED_RETRY_AFTER)).isoformat()
     conn.execute(
         """
         INSERT INTO author_enrichment_status (
@@ -203,6 +239,119 @@ def _upsert_enrichment_status(
             now,
         ),
     )
+
+
+def record_author_works_outcome(
+    conn: sqlite3.Connection,
+    *,
+    openalex_id: str,
+    status: str,
+    reason: str = "",
+) -> int:
+    """Stamp the OpenAlex works-fetch outcome for one author identity.
+
+    This is the ONLY thing that clears an author from the `author_works`
+    pending pool. It is written for every terminal outcome — success, skip,
+    exhausted source, and failure — and independently of whether a centroid
+    could be computed afterwards.
+
+    Why it must not key on the centroid: `refresh_author_centroid` deletes the
+    centroid row for an author with no usable vectors, so an author whose
+    papers are simply un-embedded could never clear a centroid-derived pool.
+    They were re-fetched from OpenAlex on every run, forever. A derived
+    artifact cannot testify that a source was read.
+
+    The pool groups by OpenAlex id but the ledger keys on `authors.id`, so
+    every author row sharing this identity is stamped. Returns how many rows
+    were written (0 when the identity resolves to no author row).
+    """
+    oid = str(openalex_id or "").strip().lower()
+    if not oid:
+        return 0
+    rows = conn.execute(
+        "SELECT id FROM authors WHERE lower(trim(openalex_id)) = ?", (oid,)
+    ).fetchall()
+    for row in rows:
+        _upsert_enrichment_status(
+            conn,
+            author_id=str(row["id"]),
+            source=OPENALEX_SOURCE,
+            purpose=WORKS_PURPOSE,
+            lookup_key=oid,
+            fields_key=WORKS_FIELDS_KEY,
+            status=status,
+            reason=reason,
+            retry_after=WORKS_RETRY_AFTER,
+        )
+    return len(rows)
+
+
+def authors_needing_works_sql() -> str:
+    """Shared SELECT body for the `author_works` pending count AND the runner's
+    candidate selection, so the Health card's number is exactly the set a run
+    would walk (the precedent is `_authors_needing_centroid_sql`).
+
+    An author identity is pending when no settled works-fetch outcome exists
+    for it. Settled means one of:
+      * a successful fetch inside `WORKS_STALE_AFTER`,
+      * a terminal outcome (exhausted source / no match) — an observed gap
+        with no fixable work, which must leave the pool rather than sit in it,
+      * a retryable failure still inside its backoff window.
+
+    Binds, in order: source, purpose, ok-status list, fresh-cutoff,
+    terminal-status list, retryable status, now.
+    """
+    ok_placeholders = ", ".join("?" for _ in WORKS_OK_STATUSES)
+    terminal_placeholders = ", ".join("?" for _ in WORKS_TERMINAL_STATUSES)
+    # NB: the alias is `author_oid`, never `oid`. In SQLite `oid` is a built-in
+    # alias for `rowid`, so `GROUP BY oid` silently groups by row id and two
+    # author rows sharing one OpenAlex identity never collapse.
+    return f"""
+        SELECT lower(trim(a.openalex_id)) AS author_oid
+        FROM authors a
+        WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
+          AND COALESCE(a.status, '') <> 'removed'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM author_enrichment_status es
+              JOIN authors sib ON sib.id = es.author_id
+              WHERE lower(trim(sib.openalex_id)) = lower(trim(a.openalex_id))
+                AND es.source = ?
+                AND es.purpose = ?
+                AND (
+                      (es.status IN ({ok_placeholders}) AND es.last_attempt_at >= ?)
+                   OR (es.status IN ({terminal_placeholders}))
+                   OR (es.status = ? AND es.next_retry_at > ?)
+                )
+          )
+        GROUP BY author_oid
+        ORDER BY author_oid
+    """
+
+
+def authors_needing_works_params() -> tuple:
+    """Bind values for `authors_needing_works_sql`, computed once so the count
+    and the runner cannot drift apart on the staleness horizon."""
+    now = _utcnow()
+    return (
+        OPENALEX_SOURCE,
+        WORKS_PURPOSE,
+        *WORKS_OK_STATUSES,
+        (now - WORKS_STALE_AFTER).isoformat(),
+        *WORKS_TERMINAL_STATUSES,
+        RETRYABLE_STATUS,
+        now.isoformat(),
+    )
+
+
+def count_authors_needing_works(conn: sqlite3.Connection) -> int:
+    """Pending count for the `author_works` maintenance task. Measurement
+    failures propagate to the caller — an unreadable ledger is not zero work."""
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM ({authors_needing_works_sql()})",
+        authors_needing_works_params(),
+    ).fetchone()
+    return int((row["n"] if row else 0) or 0)
 
 
 def _insert_affiliation_evidence(
@@ -1022,22 +1171,19 @@ def count_metadata_candidates(
     """Total author-source fetches a metadata rehydration would make right now —
     the sum of eligible candidates across the OpenAlex / S2 / ORCID / Crossref
     phases (one upstream call each). Drives the Health card's pending count + ETA."""
-    try:
-        ensure_author_hydration_tables(conn)
-        total = 0
-        for source in (OPENALEX_SOURCE, S2_SOURCE, ORCID_SOURCE, CROSSREF_SOURCE):
-            total += len(
-                _select_source_candidates(
-                    conn,
-                    source=source,
-                    limit=None,
-                    force=force,
-                    target_author_ids=target_author_ids,
-                )
+    ensure_author_hydration_tables(conn)
+    total = 0
+    for source in (OPENALEX_SOURCE, S2_SOURCE, ORCID_SOURCE, CROSSREF_SOURCE):
+        total += len(
+            _select_source_candidates(
+                conn,
+                source=source,
+                limit=None,
+                force=force,
+                target_author_ids=target_author_ids,
             )
-        return int(total)
-    except Exception:
-        return 0
+        )
+    return int(total)
 
 
 def run_author_metadata_rehydration(
