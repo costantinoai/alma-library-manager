@@ -34,6 +34,23 @@ from datetime import datetime
 
 import numpy as np
 
+from alma.application.semantic_partition import (
+    CENTROID_SAMPLE_PER_CLUSTER,
+    PARTITION_SCOPE,
+)
+from alma.application.semantic_partition import (
+    INCREMENTAL_MIN_COSINE as PARTITION_MIN_COSINE,
+)
+from alma.application.semantic_partition import (
+    OUTLIER_CLUSTER_ID as PARTITION_OUTLIER_CLUSTER_ID,
+)
+from alma.application.semantic_partition import (
+    OUTLIER_LABEL as PARTITION_OUTLIER_LABEL,
+)
+from alma.application.semantic_partition import Assignment as Assignment
+from alma.application.semantic_partition import assign_with_margin as assign_with_margin
+from alma.application.semantic_partition import cosine as cosine
+from alma.application.semantic_partition import load_vectors_by_id as load_vectors_by_id
 from alma.core.db_write import write_section
 from alma.core.sql_helpers import standalone_paper_sql
 
@@ -41,7 +58,9 @@ logger = logging.getLogger(__name__)
 
 # The one scope the layout is ever computed/persisted for. Library views
 # FILTER these rows; they never get their own fit (50-G).
-SUBSTRATE_SCOPE = "corpus"
+# The partition scope is owned by the core semantic module; the substrate lays
+# out the SAME grouping, so the two names must stay one value.
+SUBSTRATE_SCOPE = PARTITION_SCOPE
 
 # The one cluster detail level the substrate is built at. This is ALSO the
 # default the frontend sends — the two MUST stay equal, or every page visit
@@ -52,8 +71,8 @@ SUBSTRATE_CLUSTER_RESOLUTION = 1.5
 
 # Outlier group (I-6): papers HDBSCAN judged to be density noise are retained
 # as a distinct "Unclustered" group rather than force-merged into a cluster.
-OUTLIER_CLUSTER_ID = -1
-OUTLIER_LABEL = "Unclustered"
+OUTLIER_CLUSTER_ID = PARTITION_OUTLIER_CLUSTER_ID
+OUTLIER_LABEL = PARTITION_OUTLIER_LABEL
 
 # Provenance of a row's COORDINATES, so an approximation never renders as a
 # computed fact. 'layout' = produced by the UMAP fit; 'interpolated' =
@@ -73,7 +92,7 @@ PLACEMENT_INTERPOLATED = "interpolated"
 # 0.10: 0.00%. Every paper attached to whichever centroid was least-far — the
 # "stays Unclustered until the next full rebuild" honesty path was unreachable.
 # The real test is :data:`ADMISSION_PERCENTILE` below.
-INCREMENTAL_MIN_COSINE = 0.10
+INCREMENTAL_MIN_COSINE = PARTITION_MIN_COSINE
 
 # THE admission test: a paper joins cluster C only if it is at least as close to
 # C's centre as C's own weakest members are — the p5 of the member→centroid
@@ -102,10 +121,9 @@ MAX_ADMISSION_COSINE = 0.99
 # rim of every cluster inward.
 INTERPOLATION_NEIGHBOURS = 6
 
-# How many member vectors to sample per cluster when estimating embedding-space
-# centroids for placement. Bounds the vector I/O of a placement sweep to
-# ~clusters × sample instead of the whole corpus.
-_CENTROID_SAMPLE_PER_CLUSTER = 64
+# Centroid sampling is the core partition's rule; placement reuses it so the
+# centroids it admits against are the very ones the regions were built from.
+_CENTROID_SAMPLE_PER_CLUSTER = CENTROID_SAMPLE_PER_CLUSTER
 
 
 class SubstrateUnavailableError(RuntimeError):
@@ -142,87 +160,6 @@ def cluster_jitter(paper_id: str, cluster_id: int, index: int) -> tuple[float, f
     return float(np.cos(angle) * radius), float(np.sin(angle) * radius)
 
 
-def cosine(a: np.ndarray, b: np.ndarray) -> float:
-    na = float(np.linalg.norm(a))
-    nb = float(np.linalg.norm(b))
-    if na <= 0 or nb <= 0:
-        return 0.0
-    return float(np.dot(a, b) / (na * nb))
-
-
-@dataclass(frozen=True)
-class Assignment:
-    """Nearest-centroid assignment with its runner-up and margin.
-
-    ``margin = best_cos - second_cos`` is the boundary-uncertainty measure the
-    Signal Lab sampler keys on (task 54 §2.1): a small margin means the paper
-    sits ambiguously between two regions. ``second_id`` is ``None`` when only
-    one centroid exists (margin degenerates to ``best_cos`` so a lone-centroid
-    corpus still sorts sensibly). ``best_id`` is :data:`OUTLIER_CLUSTER_ID`
-    when the paper is below ``min_cosine`` of every centroid — same honesty
-    rule as :func:`assign_to_centroids`.
-    """
-
-    best_id: int
-    best_cos: float
-    second_id: int | None
-    second_cos: float
-    margin: float
-
-
-def assign_with_margin(
-    vec: np.ndarray,
-    centroid_vectors: dict[int, np.ndarray],
-    *,
-    min_cosine: float = INCREMENTAL_MIN_COSINE,
-    admission: dict[int, float] | None = None,
-) -> Assignment:
-    """Nearest + runner-up centroid for ``vec``, with the assignment margin.
-
-    THE shared assignment rule — :func:`assign_to_centroids` delegates here,
-    so the incremental placement path, the standalone sweep, and the Signal
-    Lab boundary sampler can never disagree about where a paper belongs.
-
-    ``admission`` is the per-cluster membership test (cluster id → minimum
-    cosine, from :func:`load_placement_context`). It is OPT-IN because
-    membership is a *placement* concern: the Signal Lab callers ask this
-    function "which region is this nearest to, and by how much" over
-    super-region centroids, and must keep getting an answer for every paper.
-    Placement callers pass it; ranking callers do not.
-    """
-    if not centroid_vectors:
-        return Assignment(OUTLIER_CLUSTER_ID, 0.0, None, 0.0, 0.0)
-
-    # One pass, tracking best + runner-up — the sampler calls this over whole
-    # region pools, so avoid the sort-everything approach.
-    best_cid, best_cos = OUTLIER_CLUSTER_ID, -2.0
-    second_cid: int | None = None
-    second_cos = -2.0
-    for cid, centroid in centroid_vectors.items():
-        c = cosine(vec, centroid)
-        if c > best_cos:
-            second_cid, second_cos = best_cid, best_cos
-            best_cid, best_cos = int(cid), c
-        elif c > second_cos:
-            second_cid, second_cos = int(cid), c
-    if second_cid == OUTLIER_CLUSTER_ID:  # the initial sentinel, not a real runner-up
-        second_cid, second_cos = None, 0.0
-
-    # Two gates, in order: the absolute floor (degenerate vectors) and then the
-    # cluster's own admission radius (the real membership test).
-    floor = max(min_cosine, float((admission or {}).get(best_cid, min_cosine)))
-    if best_cos < floor:
-        return Assignment(OUTLIER_CLUSTER_ID, best_cos, second_cid, second_cos,
-                          best_cos - second_cos if second_cid is not None else best_cos)
-    return Assignment(
-        best_id=best_cid,
-        best_cos=best_cos,
-        second_id=second_cid,
-        second_cos=second_cos if second_cid is not None else 0.0,
-        margin=best_cos - second_cos if second_cid is not None else best_cos,
-    )
-
-
 def assign_to_centroids(
     vec: np.ndarray,
     centroid_vectors: dict[int, np.ndarray],
@@ -254,36 +191,8 @@ def substrate_row_count(conn: sqlite3.Connection) -> int:
         return 0
 
 
-def load_vectors_by_id(
-    conn: sqlite3.Connection, paper_ids: list[str], model: str
-) -> dict[str, np.ndarray]:
-    """Decode active-model vectors for exactly ``paper_ids`` (bounded IN batches)."""
-    from alma.core.vector_blob import decode_vector
-
-    out: dict[str, np.ndarray] = {}
-    for start in range(0, len(paper_ids), 500):
-        batch = paper_ids[start : start + 500]
-        rows = conn.execute(
-            f"""
-            SELECT pe.paper_id, pe.embedding FROM publication_embeddings pe
-            WHERE pe.model = ? AND pe.paper_id IN ({','.join('?' for _ in batch)})
-            """,
-            (model, *batch),
-        ).fetchall()
-        for row in rows:
-            pid = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
-            blob = row["embedding"] if isinstance(row, sqlite3.Row) else row[1]
-            if not blob:
-                continue
-            try:
-                out[str(pid)] = np.asarray(decode_vector(blob), dtype=np.float32)
-            except Exception:  # noqa: BLE001 — one bad blob must not sink the sweep
-                continue
-    return out
-
-
-# Back-compat alias — the loader went public for the Signal Lab sampler
-# (task 54 P2); internal callers migrated, external ones keep working.
+# ``load_vectors_by_id`` now lives in ``semantic_partition`` (the core owner);
+# it is re-exported here for the map-side callers, with its old private alias.
 _load_vectors_by_id = load_vectors_by_id
 
 
@@ -448,20 +357,6 @@ def load_placement_context(
     return PlacementContext(centroid_vectors, centroid_coords, admission, field)
 
 
-def load_cluster_centroids(
-    conn: sqlite3.Connection,
-    *,
-    sample_per_cluster: int = _CENTROID_SAMPLE_PER_CLUSTER,
-) -> tuple[dict[int, np.ndarray], dict[int, tuple[float, float]]]:
-    """Embedding-space + 2-D centroids of every real substrate cluster.
-
-    Thin projection of :func:`load_placement_context` for callers that only
-    need the centroids (super-region assembly).
-    """
-    ctx = load_placement_context(conn, sample_per_cluster=sample_per_cluster)
-    return ctx.centroid_vectors, ctx.centroid_coords
-
-
 @dataclass(frozen=True)
 class Placement:
     """Where an incrementally placed paper goes, and how honestly we know it."""
@@ -546,7 +441,7 @@ def find_unplaced_papers(
             SELECT p.id
             FROM papers p
             JOIN publication_embeddings pe ON pe.paper_id = p.id AND pe.model = ?
-            WHERE {standalone_paper_sql('p')}
+            WHERE {standalone_paper_sql("p")}
               {target_clause}
               AND NOT EXISTS (
                   SELECT 1 FROM publication_clusters pc

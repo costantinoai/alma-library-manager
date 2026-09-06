@@ -6,12 +6,15 @@ calibrate per-region taste against a few hundred human judgments. This module
 aggregates them into ≤ :data:`TARGET_SUPER_REGIONS` **super-regions** and
 publishes the result as the ``graph:super_regions`` materialized view:
 
-* **Payload is layout-derived geometry ONLY** — the cluster→region map,
-  region centroids, adjacency, labels. Rings (library distance) and
-  per-paper margins are deliberately NOT here: they depend on Library
-  membership / round context and are computed cheaply at round time, so a
-  Library save never invalidates this view (defect D-1 in the task 54
-  audit). The fingerprint tracks ``publication_clusters`` alone.
+* **Payload is partition-derived and coordinate-free** — the cluster→region
+  map, region centroids (embedding space), adjacency, labels. No ``x``/``y``:
+  regions are read by learning (Signal Lab fit, sampler, scoring terms),
+  which must work with no layout at all (Task 67 §14.3, decision D24); a map
+  that wants to draw a region derives its position from its own layout.
+  Rings (library distance) and per-paper margins are deliberately NOT here:
+  they depend on Library membership / round context and are computed cheaply
+  at round time, so a Library save never invalidates this view (defect D-1 in
+  the task 54 audit). The fingerprint tracks ``publication_clusters`` alone.
 * **Region identity survives re-layouts.** A full re-layout renumbers
   ``publication_clusters.cluster_id``; anything keyed on it silently
   orphans. The build therefore remaps: new region centroids are matched to
@@ -27,7 +30,7 @@ publishes the result as the ``graph:super_regions`` materialized view:
 
 Aggregation is average-link agglomerative clustering on centroid cosine —
 ≤ a 327×327 problem, milliseconds in scipy — so the build's real cost is the
-sampled member-vector I/O ``load_cluster_centroids`` already bounds.
+sampled member-vector I/O ``load_cluster_centroid_vectors`` already bounds.
 """
 
 from __future__ import annotations
@@ -41,9 +44,9 @@ import numpy as np
 
 from alma.ai.graph_versions import SUPER_REGION_VERSION, with_version
 from alma.application import materialized_views as mv
-from alma.application.graph_substrate import (
-    SUBSTRATE_SCOPE,
-    load_cluster_centroids,
+from alma.application.semantic_partition import (
+    PARTITION_SCOPE,
+    load_cluster_centroid_vectors,
 )
 from alma.core.vector_blob import decode_vector, encode_vector
 
@@ -99,7 +102,7 @@ def _cluster_masses_and_labels(
         WHERE scope = ? AND cluster_id >= 0
         GROUP BY cluster_id
         """,
-        (SUBSTRATE_SCOPE,),
+        (PARTITION_SCOPE,),
     ).fetchall()
     for row in rows:
         cid = int(row["cluster_id"])
@@ -212,7 +215,7 @@ def build_super_regions(conn: sqlite3.Connection) -> dict[str, Any]:
     Empty substrate ⇒ an honest empty payload (``regions: []``) — consumers
     treat it as "lab unavailable", never an error.
     """
-    centroid_vectors, centroid_coords = load_cluster_centroids(conn)
+    centroid_vectors = load_cluster_centroid_vectors(conn)
     masses, labels = _cluster_masses_and_labels(conn)
     cluster_ids = sorted(centroid_vectors.keys())
 
@@ -237,22 +240,17 @@ def build_super_regions(conn: sqlite3.Connection) -> dict[str, Any]:
     matrix = np.stack([centroid_vectors[cid] for cid in cluster_ids]).astype(np.float32)
     grouping = _agglomerate(cluster_ids, matrix, TARGET_SUPER_REGIONS)
 
-    # Mass-weighted embedding + 2-D centroids per group.
+    # Mass-weighted embedding centroid per group. Nothing 2-D: a region is a
+    # direction in embedding space, and that is all its consumers compare.
     group_members: dict[int, list[int]] = {}
     for cid, g in grouping.items():
         group_members.setdefault(g, []).append(cid)
 
     fresh_centroids: dict[int, np.ndarray] = {}
-    fresh_coords: dict[int, tuple[float, float]] = {}
     for g, members in group_members.items():
         weights = np.asarray([max(1, masses.get(cid, 1)) for cid in members], dtype=np.float32)
         vecs = np.stack([centroid_vectors[cid] for cid in members])
         fresh_centroids[g] = (vecs * weights[:, None]).sum(axis=0) / weights.sum()
-        coords = np.asarray(
-            [centroid_coords.get(cid, (0.5, 0.5)) for cid in members], dtype=np.float32
-        )
-        wx, wy = (coords * weights[:, None]).sum(axis=0) / weights.sum()
-        fresh_coords[g] = (float(wx), float(wy))
 
     id_map, retired, version = _carry_identities(fresh_centroids, previous)
 
@@ -269,8 +267,6 @@ def build_super_regions(conn: sqlite3.Connection) -> dict[str, Any]:
                 "clusters": sorted(members),
                 "label": labels.get(top_member, ""),
                 "centroid_b64": _b64(fresh_centroids[g]),
-                "x": fresh_coords[g][0],
-                "y": fresh_coords[g][1],
                 "mass": int(sum(masses.get(cid, 0) for cid in members)),
             }
         )
@@ -323,7 +319,7 @@ def compute_rings(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[int
         JOIN papers p ON p.id = pc.paper_id
         WHERE pc.scope = ? AND pc.cluster_id >= 0 AND p.status = 'library'
         """,
-        (SUBSTRATE_SCOPE,),
+        (PARTITION_SCOPE,),
     ).fetchall()
     seeds = {
         cluster_to_region[int(r[0])]
