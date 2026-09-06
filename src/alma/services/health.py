@@ -1424,34 +1424,34 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
                 else "Couldn't measure suggested-author coverage — see logs."
             ),
             impact=(
-                "Seeding adds source papers for judging these suggestions. Map placement "
-                "also requires usable vectors and layout coordinates; fetching papers alone "
-                "does not guarantee a map position."
+                "Seeding adds source papers for judging these suggestions. Semantic "
+                "placement also requires usable vectors; fetching papers alone does not "
+                "guarantee a position."
             ),
             repair_task="author_seed_thin",
         ),
         _dimension(
             key="authors.unplaceable",
             entity="author",
-            label="Suggested authors awaiting map placement",
+            label="Suggested authors awaiting semantic placement",
             count=thin_unvectorized if thin_ok else None,
             total=total,
             state=DIM_MEASURED if thin_ok else DIM_ERROR,
             severity=("info" if thin_unvectorized else "ok") if thin_ok else "warning",
             severity_reason=(
-                "These authors already have enough papers; seeding more cannot repair their map placement."
-                if thin_ok else "Could not measure suggested-author map placement. Re-assess Health to retry."
+                "These authors already have enough papers; seeding more cannot repair their semantic placement."
+                if thin_ok else "Could not measure suggested-author semantic placement. Re-assess Health to retry."
             ),
             explanation=(
                 f"{thin_unvectorized} suggested authors already have at least two papers, "
-                "but fewer than two are embedded and placed on the map."
-                if thin_ok else "Suggested-author map placement could not be measured."
+                "but fewer than two are embedded and placed in the semantic partition."
+                if thin_ok else "Suggested-author semantic placement could not be measured."
             ),
             impact=(
                 "No more paper seeding is needed for these authors. Check the vector-fetch "
-                "and local-embedding steps above; when vectors are available, rebuild map "
-                "layouts. If no usable vectors are available, the author can remain absent "
-                "from the map without needing another seed run."
+                "and local-embedding steps above; once vectors exist, the semantic partition "
+                "refresh places them. If no usable vectors are available, the author can "
+                "remain absent without needing another seed run."
             ),
         ),
         _dimension(
@@ -1583,7 +1583,9 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 #             swallowed into a green zero.
 # 2026.09-1: separate seedable papers from missing map placement, so the seed
 #             operation and its dimension describe exactly the same population.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-1"
+# 2026.09-2: "placed" means a row in the core semantic partition, not a map
+#             layout row (task 67 C2); copy says semantic placement.
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-2"
 
 mv.register(
     mv.View(

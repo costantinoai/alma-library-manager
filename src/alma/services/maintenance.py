@@ -381,11 +381,12 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
     Semantic Scholar has no vector for.
 
     ``unvectorized`` is the third, previously invisible, bucket: enough PAPERS to
-    clear the threshold but fewer than two of them embedded and placed on the
-    substrate, so the author is still off the map. Seeding cannot help them —
-    they need vectors — but leaving them out let the Health row go green while
-    the map stayed empty (2026-07-26). The repair's `count_fn` claims only
-    ``fixable``; its dimension does too. Map-placement gaps are observed separately.
+    clear the threshold but fewer than two of them embedded and placed in the
+    semantic partition, so the author has no semantic position. Seeding cannot
+    help them — they need vectors — but leaving them out let the Health row go
+    green while the author stayed absent (2026-07-26). The repair's `count_fn`
+    claims only ``fixable``; its dimension does too. Semantic-placement gaps are
+    observed separately.
 
     Exceptions PROPAGATE. `_safe_assess` in `health.py` owns the error path and
     renders `DIM_ERROR`; swallowing here returned a successful-looking zero and
@@ -417,7 +418,7 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
         if not openalex_id:
             continue
         if count_local_papers_for_author(conn, openalex_id) >= SEED_TARGET_PAPERS:
-            # Enough papers — but placement needs them EMBEDDED and laid out.
+            # Enough papers — but placement needs them EMBEDDED and partitioned.
             if count_placed_papers_for_author(conn, openalex_id) < SEED_TARGET_PAPERS:
                 unvectorized += 1
             continue
@@ -552,17 +553,18 @@ def _run_reference_graph(job_id: str, cap: int, target_paper_ids=None, params=No
 def _count_graph_layouts(conn: sqlite3.Connection, params=None) -> int:
     """Materialized layout views that are missing or stale — the repair pool.
 
-    Counts the four paper/author layout views plus ``graph:super_regions``.
+    Counts the four paper/author layout views plus ``semantic:regions``.
     Super-regions is included because it is Signal Lab's ENTIRE substrate:
     without it every game reports "not available" and Home drops the section,
     with a full corpus sitting right there. It had no health surface at all, so
     a prod instance ran for months with Signal Lab silently switched off and
     nothing anywhere saying why (2026-07-28).
     """
-    from alma.api.scheduler import _graph_view_staleness, _super_regions_built
+    from alma.api.scheduler import _graph_view_staleness
+    from alma.application.super_regions import regions_ready
 
     pending = len(_graph_view_staleness(conn))
-    if not _super_regions_built(conn):
+    if not regions_ready(conn):
         pending += 1
     return pending
 
@@ -1087,11 +1089,11 @@ REGISTRY: dict[str, MaintenanceTask] = {
             description=(
                 "Fetch up to two source papers for suggested authors with fewer than "
                 "two papers in the corpus, preferring first-author works. Authors already "
-                "holding enough papers need no seeding. Map placement also requires "
-                "vectors and a layout; this step does not guarantee either."
+                "holding enough papers need no seeding. Semantic placement also requires "
+                "vectors; this step does not guarantee them."
             ),
             # Counter, dimension and runner all claim the seedable population.
-            # Map-placement gaps have a separate observed dimension.
+            # Semantic-placement gaps have a separate observed dimension.
             # `auto_chunk_size` caps AUTHORS SEEDED per chunk, not the window
             # inspected, so chunks drain the window instead of re-reading its head.
             health_dimensions=("authors.needing_papers",),
