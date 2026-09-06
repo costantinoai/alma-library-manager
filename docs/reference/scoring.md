@@ -133,6 +133,18 @@ this, the two largest sliders in Settings bought almost no discrimination —
 `semantic` had the second-largest weight and the least influence of all ten,
 because raw cosines against one library sit in a band 0.018 wide.
 
+### Which seeds are the exemplars (2026-09-06)
+
+The `exemplar` atom is a candidate's best cosine to a small set of seed
+papers (12 positive, 8 negative). Those seeds are chosen to **cover** the seed
+set — greedy facility location in `similarity.select_representatives`: each
+pick maximises how similar every seed is to its nearest chosen exemplar, so a
+lens with several themes gets exemplars for all of them in proportion to their
+mass, and an isolated outlier comes last. Before this they were simply the
+first twelve in list order (the most recently added), which could leave a
+whole branch of a lens without an exemplar. One rule, used by lens scoring
+and by the calibration build.
+
 ### How grouped inputs combine (2026-09-06)
 
 Several families measure one question more than one way. Those atoms share a

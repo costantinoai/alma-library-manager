@@ -1058,30 +1058,68 @@ def compute_embedding_centroid(
     return np.mean(np.stack(aligned), axis=0)
 
 
+# How many seed vectors the exemplar selection considers. Bounds the n×n
+# similarity matrix (400² floats) while covering any realistic lens.
+EXEMPLAR_POOL = 400
+
+
+def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[numpy.ndarray]:
+    """The ``limit`` vectors that best COVER the whole set — greedy facility location.
+
+    Each pick maximises the total gain in "how similar is every seed to its
+    nearest chosen exemplar", so every theme in the set earns an exemplar in
+    proportion to how much of the set it explains, and an isolated outlier
+    (which covers only itself) comes last. Deterministic for a given order.
+    Cosine on unit vectors; ``limit >= len(vectors)`` returns them all.
+    """
+    n = len(vectors)
+    if n <= max(1, int(limit)):
+        return list(vectors)
+    matrix = numpy.stack(vectors).astype(numpy.float32)
+    sims = matrix @ matrix.T
+    cover = numpy.zeros(n, dtype=numpy.float32)
+    chosen: list[int] = []
+    for _ in range(int(limit)):
+        gains = numpy.maximum(sims, cover[None, :]).sum(axis=1) - cover.sum()
+        gains[chosen] = -numpy.inf
+        pick = int(numpy.argmax(gains))
+        chosen.append(pick)
+        cover = numpy.maximum(cover, sims[pick])
+    return [vectors[i] for i in chosen]
+
+
 def load_publication_example_embeddings(
     pubs: list[dict],
     conn: sqlite3.Connection,
     *,
     limit: int = 12,
 ) -> list[numpy.ndarray]:
-    """Load a small set of normalized publication embeddings for exemplar matching."""
+    """The exemplars a candidate's ``exemplar`` similarity is measured against.
+
+    Until 2026-09-06 these were simply the first ``limit`` publications in
+    list order — the most recently added — so a lens whose branches differ in
+    age could carry a whole theme with no exemplar at all, and candidates near
+    it earned semantic credit only from the lens-wide centroid, which sits
+    between the themes. Now the exemplars are chosen to cover the seed set
+    (:func:`select_representatives`), from a bounded pool of the same list.
+    One rule, used by lens scoring and by the calibration build alike.
+    """
     if not _NUMPY_AVAILABLE:
         return []
 
-    out: list[numpy.ndarray] = []
+    pool: list[numpy.ndarray] = []
     seen: set[str] = set()
     for pub in pubs:
-        if len(out) >= max(1, int(limit or 12)):
+        if len(pool) >= EXEMPLAR_POOL:
             break
         paper_id = str(pub.get("id") or "").strip()
         if not paper_id or paper_id in seen:
             continue
         seen.add(paper_id)
-        embedding = get_cached_embedding(paper_id, conn)
-        normalized = _normalize_embedding_vector(embedding)
+        normalized = _normalize_embedding_vector(get_cached_embedding(paper_id, conn))
         if normalized is not None:
-            out.append(normalized)
-    return out
+            pool.append(normalized)
+    return select_representatives(pool, max(1, int(limit or 12)))
 
 
 # ---------------------------------------------------------------------------

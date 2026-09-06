@@ -53,7 +53,9 @@ CALIBRATION_VIEW_KEY = "scoring:calibration"
 
 # Bump when the build logic or the set of calibrated inputs changes: the stored
 # row must be rebuilt even though the corpus did not move.
-CALIBRATION_VERSION = "2026.09-2"
+# 2026.09-3: exemplars are chosen to cover the seed set (facility location),
+#            so the exemplar percentile tables must be re-measured.
+CALIBRATION_VERSION = "2026.09-3"
 
 #: The quantile grid every CDF table is sampled on. Dense at the top because a
 #: Discovery deck is drawn from the top percent of the corpus.
