@@ -22,7 +22,7 @@ from __future__ import annotations
 import itertools
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -30,7 +30,9 @@ from alma.application.signal_lab.evidence import (
     EdgeEvidence,
     LedgerEvidence,
     edge_key,
+    frontier_probability,
     load_ledger_evidence,
+    sign_uncertainty,
 )
 from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import MiniGame
@@ -101,6 +103,9 @@ class QueueContext:
     base_region_weights: dict[int, float]
     utility_ensemble: list[np.ndarray]
     metric_ensemble: list[np.ndarray]
+    # (wins, votes) behind each fitted region offset — the model's own counts,
+    # so valence questions are answered from one posterior, never re-derived.
+    region_evidence: dict[int, tuple[int, int]] = field(default_factory=dict)
 
 
 def region_weights(
@@ -111,8 +116,15 @@ def region_weights(
     uncertainty: dict[int, float] | None = None,
     staleness: dict[int, float] | None = None,
     judgeability: dict[int, float] | None = None,
+    valence: dict[int, float] | None = None,
 ) -> dict[int, float]:
-    """Pure region allocation weights; caller owns evidence derivation."""
+    """Pure region allocation weights; caller owns evidence derivation.
+
+    ``valence`` is ``0.5 + sign_uncertainty`` per region: a region whose
+    like/dislike verdict is still a coin toss — no votes, or votes that
+    contradict each other — draws up to 3× the attention of one that is
+    settled, on top of the coverage decay.
+    """
     weights: dict[int, float] = {}
     for region in payload.get("regions", []):
         region_id = int(region["id"])
@@ -121,6 +133,7 @@ def region_weights(
         weight *= (uncertainty or {}).get(region_id, 1.0)
         weight *= (staleness or {}).get(region_id, 1.0)
         weight *= (judgeability or {}).get(region_id, 1.0)
+        weight *= (valence or {}).get(region_id, 1.0)
         if weight > 0:
             weights[region_id] = float(weight)
     return weights
@@ -489,7 +502,7 @@ def _staleness(age_days: float | None) -> float:
 def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
     from alma.application import materialized_views as mv
     from alma.application import super_regions as sr
-    from alma.application.graph_substrate import load_vectors_by_id
+    from alma.application.semantic_partition import load_vectors_by_id
     from alma.application.signal_lab import lab_tuning
     from alma.application.signal_lab.fit import MODEL_VIEW_KEY, decode_head_vector
     from alma.discovery.similarity import get_active_embedding_model
@@ -510,11 +523,16 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
 
     utility_ensemble: list[np.ndarray] = []
     metric_ensemble: list[np.ndarray] = []
+    region_evidence: dict[int, tuple[int, int]] = {}
     gamma = lab_tuning(conn)["gamma_start"]
     model_stored = mv.get_stored(conn, MODEL_VIEW_KEY)
     if model_stored is not None:
         model_payload = model_stored["payload"]
         gamma = float(model_payload.get("gamma") or gamma)
+        region_evidence = {
+            int(region_id): (int(counts.get("wins") or 0), int(counts.get("votes") or 0))
+            for region_id, counts in (model_payload.get("region_evidence") or {}).items()
+        }
         utility_ensemble = [
             decode_head_vector(encoded) for encoded in model_payload.get("ensemble_b64") or []
         ]
@@ -542,6 +560,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
     uncertainty: dict[int, float] = {}
     staleness: dict[int, float] = {}
     judgeability: dict[int, float] = {}
+    valence: dict[int, float] = {}
     for region_id in pools:
         history = ledger.regions.get(region_id)
         answered = history.answered if history is not None else 0
@@ -549,6 +568,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
         uncertainty[region_id] = coverage * posterior.get(region_id, 1.0)
         staleness[region_id] = _staleness(history.age_days if history else None)
         judgeability[region_id] = history.answerability if history else 1.0
+        valence[region_id] = 0.5 + sign_uncertainty(*region_evidence.get(region_id, (0, 0)))
     base_weights = region_weights(
         payload,
         rings,
@@ -556,6 +576,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
         uncertainty=uncertainty,
         staleness=staleness,
         judgeability=judgeability,
+        valence=valence,
     )
     base_weights = {
         region_id: weight
@@ -575,6 +596,7 @@ def _build_context(conn: sqlite3.Connection) -> QueueContext | None:
         base_region_weights=base_weights,
         utility_ensemble=utility_ensemble,
         metric_ensemble=metric_ensemble,
+        region_evidence=region_evidence,
     )
 
 
@@ -614,7 +636,7 @@ def _boundary_focus_pools(
     pair_region_id: int,
 ) -> tuple[list[str], list[str], dict[str, float]]:
     """Low-margin cores plus complete pools for protected broad exploration."""
-    from alma.application.graph_substrate import assign_with_margin
+    from alma.application.semantic_partition import assign_with_margin
     from alma.application.super_regions import decode_centroid
 
     centroids = {
@@ -699,6 +721,38 @@ def _boundary_candidates(
     return candidates
 
 
+def boundary_edge_weight(
+    *,
+    history: EdgeEvidence,
+    mass: float,
+    frontier: float,
+    coverage_target: int,
+    repeats: int,
+) -> float:
+    """How much a boundary query on one edge is worth right now.
+
+    Evidence terms (thin, contradictory, stale, unanswerable, already drawn)
+    come from the edge's own ledger. ``frontier`` is the model's belief that
+    this edge separates a liked region from a disliked one: the like/dislike
+    boundary is where a query moves ranking most, so it draws up to 3× the
+    attention of an edge between two regions of the same settled valence.
+    """
+    prior_variance = 1.0 / 12.0
+    uncertainty = 0.5 + history.posterior_variance / prior_variance
+    coverage = 1.0 / (1.0 + history.answered / float(coverage_target))
+    diversity = 1.0 / (1.0 + repeats)
+    weight = (
+        mass
+        * uncertainty
+        * coverage
+        * _staleness(history.age_days)
+        * history.answerability
+        * diversity
+        * (0.5 + frontier)
+    )
+    return max(weight, 1e-12)
+
+
 def _ordered_boundary_neighbours(
     context: QueueContext,
     *,
@@ -715,21 +769,17 @@ def _ordered_boundary_neighbours(
     weighted: list[tuple[int, float]] = []
     for neighbour in neighbours:
         key = edge_key(region_id, neighbour)
-        history = context.ledger.edges.get(key, EdgeEvidence())
-        prior_variance = 1.0 / 12.0
-        uncertainty = 0.5 + history.posterior_variance / prior_variance
-        coverage = 1.0 / (1.0 + history.answered / float(coverage_target))
-        mass = (context.masses.get(region_id, 1) + context.masses.get(neighbour, 1)) ** 0.5
-        diversity = 1.0 / (1.0 + selected_edges.get(key, 0))
-        weight = (
-            mass
-            * uncertainty
-            * coverage
-            * _staleness(history.age_days)
-            * history.answerability
-            * diversity
+        weight = boundary_edge_weight(
+            history=context.ledger.edges.get(key, EdgeEvidence()),
+            mass=(context.masses.get(region_id, 1) + context.masses.get(neighbour, 1)) ** 0.5,
+            frontier=frontier_probability(
+                context.region_evidence.get(region_id, (0, 0)),
+                context.region_evidence.get(neighbour, (0, 0)),
+            ),
+            coverage_target=coverage_target,
+            repeats=selected_edges.get(key, 0),
         )
-        weighted.append((neighbour, max(weight, 1e-12)))
+        weighted.append((neighbour, weight))
 
     ordered: list[int] = []
     remaining = weighted[:]

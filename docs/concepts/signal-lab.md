@@ -114,12 +114,19 @@ One request designs the whole 10–30-round sheet:
 1. ALMa loads every eligible paper in every super-region. There is no
    first-800 SQL prefix. Region priority combines the Library-outward ring
    prior, sub-linear affected mass, current posterior disagreement, coverage,
-   answer/skip rate, elapsed-time staleness, and a protected ring-uniform
+   answer/skip rate, elapsed-time staleness, **how undecided the region's
+   valence still is** (a Beta posterior over the votes behind its fitted
+   offset: no votes and contradictory votes are equally undecided, and draw
+   up to 3× the attention of a settled region), and a protected ring-uniform
    exploration share.
 2. Best/worst candidates are sampled across the complete chosen region.
    Odd-one-out candidates combine low-margin papers on an adjacent edge with a
    25% broad-pool escape route, so a mistaken current boundary cannot trap the
-   sampler.
+   sampler. Which edge is asked about weighs its own thin, contradictory or
+   stale evidence **and the probability it separates a liked region from a
+   disliked one** — the like/dislike frontier is where an answer moves
+   ranking most, so it outdraws an edge between two regions of the same
+   settled valence by up to 3×.
 3. With fitted bootstrap heads, ALMa evaluates all six ordered MaxDiff outcomes
    or all three odd-one-out outcomes and scores their expected information
    gain. Cold start uses a D-optimal contrast-geometry score. Best/worst also
@@ -142,6 +149,15 @@ not a promise that one heuristic wins on every corpus.
 The card remains hidden until the stored `graph:super_regions` view exists.
 Graph-layout maintenance builds it, or an explicit graph rebuild can trigger
 the chain.
+
+Regions are **coordinate-free** (2026-09-06, decision D24). The build reads
+cluster membership and paper vectors through the core-owned
+`application/semantic_partition.py` — the same module that owns the one
+nearest-centroid assignment rule the sampler's boundary margins and the
+scoring terms use — and the payload carries no `x`/`y`. A map that draws a
+region derives its position from its own layout; the Lab never needs one.
+Region identities survive a rebuild through the cosine remap (32/32 carried
+on an unchanged corpus).
 
 ## Model and effects
 
@@ -173,7 +189,11 @@ signal was lost. Fixed 2026-07-27; tokens minted before that no longer verify,
 which is exactly what that message covers.
 
 The region head can bend paper-space Terrain at read time. The utility head
-stores only its delta from the Library prior, projects that direction onto
+stores only its delta from the prior — and the prior is the same taste
+direction Discovery's feedback family reads (`library_taste_direction`: the
+centroid of what you kept and rated up minus the centroid of what you rated
+down), so the Lab learns what your ordinary saves and ratings do not already
+say. It projects that direction onto
 super-region centroids, then mass-centres the projection so weak evidence
 cannot wash the whole map green. Confidence grows with answered preferences.
 Neither head moves map positions: semantic coordinates describe what papers
@@ -242,22 +262,82 @@ Two shrinkage guards, both continuous rather than a gate: `VENUE_SHRINKAGE`
 and `VENUE_MIN_COMPARISONS` (2), because one comparison cannot distinguish a
 preference from a misclick.
 
-### Promotion and units
+### Weights and units
 
-Ranking terms are separately promotion-gated: `weights.lab_region_offset`,
-`weights.lab_utility`, `weights.lab_author_offset` and
-`weights.lab_venue_offset`, each `0…10` points on the 0-100 score.
+Four ranking weights, each `0…10` points on the 0-100 score and **5 by
+default**: `weights.lab_region_offset`, `weights.lab_utility`,
+`weights.lab_author_offset`, `weights.lab_venue_offset`. Nothing needs
+promoting: an install with no fitted model is unaffected because
+`load_lab_scoring_context` returns `None`, and a thin fit stays small on its own
+through the evidence dampers (utility confidence `min(1, train_prefs / 60)`;
+per-region and per-author James–Stein shrinkage). Setting a weight to 0
+switches that head off. The Settings card reads the ceiling and default from
+the settings payload (`limits`) rather than hard-coding them — it shipped with
+a 2.5-point ceiling against a backend of 10 (bug B3).
 
-The region and utility heads are added to that score directly. The **categorical
-heads are not** — they are folded into an affinity map that the scorer then
-clamps to `[0, 1]`, so their setting is converted from score points into
-affinity units (`CATEGORICAL_HEAD_MAX_AFFINITY`, 0.35 at the maximum setting).
-Without that conversion the default of 5.0 made a +0.2 offset land as +1.0 on a
-`[0, 1]` map, and the clamp turned every judged entity into a hard 1.0 or 0.0 —
-a binary override of the curated signal, in a feature whose contract is
-"Signal Lab nudges, your Library decides".
+The region and utility heads reach the score through ONE place: the ranker's
+`LAB_ADJUSTMENTS` (`application/discovery/ranker.py`). `measure_candidate`
+records each head's signed input (`lab_region_offset_raw`, `lab_utility_raw`,
+in `[-1, 1]`, evidence damper already applied) and the ranker adds
+`weight × input` once, as a single explained **Signal Lab** row with one atom
+per head, bounded by ±weight. The explanation still closes: families +
+retraction + Signal Lab + clipping = the score. The immutable ranking snapshot
+(`discovery_ranking_candidates`, feature schema v4) stores those inputs, the
+effective weights and the model generation, so eval replays exactly what
+ranking saw.
 
-Settings shows the held-out and churn evidence used to decide.
+**Bug B1 (v0.22.0 → 2026-09-06):** both heads were measured and then dropped —
+the ranker never read them, so the sliders were inert while eval described a
+hypothetical effect. `tests/test_signal_lab_ranker_boundary.py` pins the
+boundary: a non-zero weight moves a score once by the stated amount; zero,
+disabled, or unmeasured contribute exactly zero, and unmeasured is labelled
+*unavailable* rather than "measured 0".
+
+The **categorical heads are not** added to the score — they are folded into an
+affinity map that the scorer then clamps to `[0, 1]`, so their setting is
+converted from score points into affinity units
+(`CATEGORICAL_HEAD_MAX_AFFINITY`, 0.35 at the maximum setting). Without that
+conversion the default of 5.0 made a +0.2 offset land as +1.0 on a `[0, 1]`
+map, and the clamp turned every judged entity into a hard 1.0 or 0.0 — a
+binary override of the curated signal, in a feature whose contract is
+"Signal Lab nudges, your Library decides". Every `weights.lab_*` value is
+parsed by one function, `discovery.defaults.lab_head_points`, so the gate that
+decides whether to load the model and the ranker that weights it cannot
+disagree.
+
+The default Settings card shows the purpose, on/off switch and learning status.
+**Advanced settings and evidence** contains weights, sampler controls, held-out
+accuracies, replay evidence and reset. Unsaved advanced edits remain signposted
+when the disclosure is closed. Loading failures and score-verification warnings
+stay visible; **Retry loading Signal Lab** recovers failed settings/status reads.
+The utility evidence damper measures feedback volume, not a calibrated probability
+that the model is correct.
+
+### When the model refits
+
+The fitted model is a materialized view, so it is recomputed when its inputs
+change — and every consumer reads the stored row without computing a
+fingerprint, so *something* has to check. Three things do:
+
+- **you answer a round**, on the `signal_lab.refit_every_rounds` boundary;
+- **you save a fitting knob** (ring decay, override votes, coverage target) —
+  those three are what the fit consumes, so saving one refits immediately;
+- **a background tick** (`signal_lab_model_refresh`, every
+  `schedule.signal_lab_model_interval_hours`, default 6) compares the view's
+  fingerprint and refits if any other input moved.
+
+That third owner is the one that matters, because most inputs change without a
+round being answered: the super-regions get re-fitted, a shown paper's vector is
+recomputed or its authors corrected, your Library grows. The fingerprint covers
+all of them (round content, active embedding model, shown vectors / clusters /
+author+venue metadata, the region payload, the Library prior set, the three
+tuning knobs). Before 2026-09-06 it covered only the round count and highest id,
+so every one of those changes left the previous model in force indefinitely.
+
+It is deliberately precise in both directions: the map tint, the sampler's own
+knobs and unrelated papers are NOT inputs to the fit, and changing them refits
+nothing. The tick is one small indexed query when nothing moved, and it does
+nothing at all when Signal Lab is switched off or you have never played a round.
 
 ## Disable is not purge
 
@@ -269,7 +349,8 @@ The **Active** switch is reversible. When off:
 
 Re-enabling makes that retained evidence consumable again.
 
-**Purge signals** is separate, destructive, and explicit. It deletes all round
+**Reset Signal Lab**, inside the advanced disclosure, is separate, destructive,
+and requires confirmation. It deletes all round
 rows and invalidates the model in one write unit. Library, ratings, ordinary
 feedback, activation, and knobs remain unchanged.
 
@@ -287,38 +368,35 @@ GET  /api/v1/signal-lab/eval
 POST /api/v1/signal-lab/purge
 ```
 
-The settings model strictly validates activation, map tint, promotion points,
+The settings model strictly validates activation, map tint, head weights,
 ring decay, exploration, coverage, refit cadence, holdout share, and override
 votes.
 
-## Promotion verdict, 2026-07-27: not yet
+## What the heads do to your decks: the eval replay
 
-All three scoring weights (`weights.lab_region_offset`, `weights.lab_utility`,
-`weights.lab_author_offset`) are `0.0`, so the shipping build is byte-identical
-to one with no Signal Lab at all — `load_lab_scoring_context` early-returns
-`None` when both scoring weights are ≤ 0. That is D20 working as designed:
-promotion is a deliberate act on held-out evidence, never a side effect of
-fitting.
+`GET /signal-lab/eval` serves the held-out accuracies AND a **replay**: each
+lens's latest immutable ranking snapshots are re-scored through the ranker with
+the heads at 0 and at the current Settings weights, and the two orderings are
+compared (`core.scoring_math.rank_churn`: candidates entering the top 20, mean
+rank displacement). It uses the signed inputs recorded at ranking time, the
+family weights recorded beside them, and the same clamped settings the runtime
+reads. There is no private "what-if" bonus any more: the old probe added 2.5
+points per head with confidence 1 onto stored scores, which the runtime never
+did.
 
-The evidence was evaluated on 2026-07-27 and does not support promotion:
+Honesty rules: a lens whose snapshots predate the recorded Lab inputs (schema
+< v4), or were ranked with no fitted model loaded, is reported **unassessable**
+with its reason — never scored with invented zeros. Replaying a snapshot under
+its own recorded weights must reproduce its stored score; the
+`parity.mismatched` count is a correctness gate on the ranker, and Settings
+shows it as ranker drift when it is non-zero. Churn is diagnostic only: it
+says the heads *reorder*, never that the reordering is *better*. That question
+belongs to the calibration lane in task 67.
 
-| Check | Measured |
-|---|---|
-| Held-out preference pairs | **0** |
-| Regions ever seen in a round | 11 of 32 |
-| Region-boundary edges observed | 4 of 26 |
-| Authors the head moves | 0 |
-| Candidates entering the top-20 if promoted | 0 |
-| Mean rank displacement if promoted | 0.34 |
-
-The first row settles it: 20 rounds produced exactly one holdout round, and it
-yielded no usable pairs, so there is nothing to test the head against. The last
-two rows say the question is moot today anyway — promoting would reorder
-essentially nothing.
-
-**Re-check when** the holdout is non-empty (target ≥ 30 pairs) and
-`utility_accuracy` beats `prior_accuracy` by a margin that survives a binomial
-test at that sample size. Read it from `GET /signal-lab/eval`. Play more rounds
+The 2026-07-27 measurement (0 held-out pairs; 11 of 32 regions ever visited)
+remains the last recorded state of the *model* number. Re-check when the
+holdout has ≥ 30 pairs and `utility_accuracy` beats `prior_accuracy` by a
+margin that survives a binomial test at that sample size. Play more rounds
 first; the map is two-thirds unvisited.
 
 ## Evaluation evidence

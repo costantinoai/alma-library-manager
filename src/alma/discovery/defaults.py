@@ -6,6 +6,56 @@ from collections.abc import Mapping
 
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
+LAB_HEAD_MAX_POINTS = 10.0
+"""Ceiling for one Signal Lab head, in points on the 0-100 score.
+
+Was 2.5, which put the whole lab BELOW `citation_quality` (5 points) — your
+explicit pairwise taste judgements counting for less than how many strangers
+cited a paper. That is backwards for a signal whose entire purpose is to record
+what you actually prefer.
+
+10 puts a fully-evidenced head on par with `feedback_adj` and
+`preference_affinity`, the other two signals that encode your own opinions.
+
+Raising it is safe because the ceiling is NOT what protects against a thin fit:
+the evidence dampers do (`map_terms.utility_confidence` and the per-region
+James-Stein shrinkage), continuously and in proportion to how much you have
+actually answered. A low ceiling only guaranteed the feature could never
+matter, even at full evidence.
+
+Lives here, next to the setting defaults, because the ranker
+(`application.discovery.ranker.LAB_ADJUSTMENTS`) and the Signal Lab settings
+validator both read it: one number, one owner."""
+
+LAB_HEAD_DEFAULT_POINTS = 5.0
+"""Default weight per head.
+
+Non-zero (was 0.0) so a fitted head takes effect without a manual promotion
+step. There is nothing to promote: `load_lab_scoring_context` already
+early-returns when no usable model exists, so an unplayed install is unaffected,
+and the dampers make an under-evidenced one small on their own."""
+
+def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
+    """Read ONE Signal Lab head weight, in score points, from a settings map.
+
+    The single parser for every ``weights.lab_*`` key — the ranker's additive
+    heads, the categorical folds and the scoring-context gate all read through
+    here, so "what does 5 mean" is answered once. An absent or unparseable
+    value is the shipped default (never 0: a corrupt row must not silently
+    switch a head off), and the result is clamped to ``[0, LAB_HEAD_MAX_POINTS]``
+    so a hand-edited row cannot exceed the ceiling the validator enforces.
+    """
+
+    raw = (settings or {}).get(key, LAB_HEAD_DEFAULT_POINTS)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = LAB_HEAD_DEFAULT_POINTS
+    if value != value:  # NaN parses as a float; treat like unparseable
+        value = LAB_HEAD_DEFAULT_POINTS
+    return max(0.0, min(LAB_HEAD_MAX_POINTS, value))
+
+
 DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.source_relevance": "0.15",
     "weights.topic_score": "0.20",
@@ -37,12 +87,12 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # `preference_affinity`, the other signals encoding the user's own opinion).
     # An unplayed install is still unaffected — `load_lab_scoring_context`
     # early-returns when no usable model exists.
-    "weights.lab_region_offset": "5.0",
-    "weights.lab_utility": "5.0",
+    "weights.lab_region_offset": str(LAB_HEAD_DEFAULT_POINTS),
+    "weights.lab_utility": str(LAB_HEAD_DEFAULT_POINTS),
     # The author and venue heads fold into the canonical author / journal
     # signals rather than scoring on their own.
-    "weights.lab_author_offset": "5.0",
-    "weights.lab_venue_offset": "5.0",
+    "weights.lab_author_offset": str(LAB_HEAD_DEFAULT_POINTS),
+    "weights.lab_venue_offset": str(LAB_HEAD_DEFAULT_POINTS),
     # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
     # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
     # epsilon: ring-uniform exploration share — the self-confirmation guard.

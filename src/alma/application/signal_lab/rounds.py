@@ -17,10 +17,10 @@ import sqlite3
 from typing import Any
 
 from alma.ai.graph_versions import SIGNAL_LAB_POLICY_VERSION
-from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+from alma.application.signal_lab.fit import enqueue_model_refit
 from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import RoundRow
-from alma.core.db_write import run_after_gate_release, run_write_unit
+from alma.core.db_write import run_write_unit
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +131,11 @@ def record_answer(
 def _maybe_enqueue_refit(db: sqlite3.Connection, *, every: int = REFIT_EVERY_N_ROUNDS) -> None:
     """Debounced model refit — deferred past this thread's write lock.
 
-    ``enqueue_rebuild`` persists job state on the scheduler's own connection;
-    firing it while this thread still holds the SQLite write lock busy-waits
-    the whole timeout and then drops the row, so the enqueue is ALWAYS routed
-    through ``run_after_gate_release(..., conn=db)``.
+    Only the debounce lives here; the enqueue itself is
+    ``fit.enqueue_model_refit`` (which owns the deferral past this thread's
+    write lock). Answering rounds is one of several things that can invalidate
+    the model — background input drift is the freshness owner's job, not this
+    counter's.
     """
     try:
         n = int(
@@ -148,12 +149,7 @@ def _maybe_enqueue_refit(db: sqlite3.Connection, *, every: int = REFIT_EVERY_N_R
     if n == 0 or n % max(1, every) != 0:
         return
 
-    def _enqueue() -> None:
-        from alma.application import materialized_views as mv
-
-        mv.enqueue_rebuild(MODEL_VIEW_KEY)
-
-    run_after_gate_release(_enqueue, conn=db, label="signal_lab refit")
+    enqueue_model_refit(db, label="signal_lab refit")
 
 
 def load_rounds(conn: sqlite3.Connection) -> list[RoundRow]:

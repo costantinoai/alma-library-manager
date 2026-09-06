@@ -8,6 +8,7 @@ acquisition policy cannot optimize a different metric from the one users see.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -141,3 +142,40 @@ def load_ledger_evidence(
 
     evidence.unique_queries = len(seen)
     return evidence
+
+
+# ── valence posteriors ──────────────────────────────────────────────────────
+#
+# A region's fitted offset is a shrunk win-rate; what the SAMPLER needs to know
+# is not the rate but whether its SIGN is settled. Under a Beta(1 + wins,
+# 1 + losses) posterior that is exact with integer counts, so no approximation
+# and no scipy: I_½(α, β) = 2^-n · Σ_{j=α..n} C(n, j) with n = α + β − 1.
+
+
+def probability_below_half(wins: int, votes: int) -> float:
+    """P(win-rate < ½) under Beta(1 + wins, 1 + losses) — exact."""
+    wins = max(0, int(wins))
+    votes = max(wins, int(votes))
+    alpha = 1 + wins
+    n = votes + 1  # α + β − 1 with β = 1 + (votes − wins)
+    return sum(math.comb(n, j) for j in range(alpha, n + 1)) / (1 << n)
+
+
+def sign_uncertainty(wins: int, votes: int) -> float:
+    """1 when a region's valence is a coin toss, 0 when it is settled.
+
+    Both kinds of missing knowledge score high: NO evidence (0 votes) and
+    SPLIT evidence (15 of 30) are equally undecided, which is exactly the
+    "thin or inconsistent" territory the Lab exists to sample.
+    """
+    below = probability_below_half(wins, votes)
+    return 2.0 * min(below, 1.0 - below)
+
+
+def frontier_probability(a: tuple[int, int], b: tuple[int, int]) -> float:
+    """P(sign_a ≠ sign_b): the odds this edge separates a liked region from a
+    disliked one. ~1 for a confirmed like/dislike frontier, ½ when either side
+    is unknown, ~0 between two regions of the same settled valence."""
+    liked_a = 1.0 - probability_below_half(*a)
+    liked_b = 1.0 - probability_below_half(*b)
+    return liked_a * (1.0 - liked_b) + (1.0 - liked_a) * liked_b

@@ -382,7 +382,10 @@ want?" rounds over the map. Three distinct things are done with the answers.
 ### 7.1 What it fits
 
 Answers accumulate into a model with two heads, refit on a debounce
-(`signal_lab.refit_every_rounds`, default every 5 rounds):
+(`signal_lab.refit_every_rounds`, default every 5 rounds — plus an immediate
+refit when a fitting knob is saved, and a `signal_lab_model_refresh` background
+tick that catches every other input drifting; see
+[Signal Lab → When the model refits](../concepts/signal-lab.md)):
 
 - **`region_offsets`** — a per-super-region scalar: does this region of the
   corpus run hotter or colder than your baseline?
@@ -408,20 +411,29 @@ when a region's uncertainty relaxes.
 
 ### 7.2 How it reaches recommendations
 
-Through three separate doors, and all three are currently **shut by default**:
+Through two doors, and both are **open by default** (5 of a 0–10 ceiling):
 
 ```
-weights.lab_region_offset  = 0.0
-weights.lab_utility        = 0.0
-weights.lab_author_offset  = 0.0
+weights.lab_region_offset  = 5.0   → ranker LAB_ADJUSTMENTS "region"
+weights.lab_utility        = 5.0   → ranker LAB_ADJUSTMENTS "utility"
+weights.lab_author_offset  = 5.0   → folded into author_affinity (fold_lab_offsets)
+weights.lab_venue_offset   = 5.0   → folded into journal_affinity (fold_lab_offsets)
 ```
 
-`signal_lab/scoring_terms.py::load_lab_scoring_context` early-returns `None`
-when both scoring weights are ≤ 0, so at the defaults the lab context is never
-even loaded and scoring is **byte-identical to a lab-less build**. This is
-deliberate (decision D20): a head is promoted manually, one at a time, only on
-stage-1 held-out evidence plus churn evidence. A model fitted on a few hundred
-game answers does not get to silently move your deck.
+`signal_lab/scoring_terms.py::load_lab_scoring_context` returns `None` unless
+the Lab is enabled, at least one of the two additive weights is positive, and a
+fitted model exists — so an unplayed install is byte-identical to a lab-less
+build. When it loads, `measure_candidate` records `lab_region_offset_raw` and
+`lab_utility_raw` (signed, `[-1, 1]`, evidence damper applied) and the ranker
+(`application/discovery/ranker.py::LAB_ADJUSTMENTS`) adds `weight × input`
+once per head as one explained "Signal Lab" adjustment row. A weight of 0, the
+Lab switched off, or no model all contribute exactly zero. Every `weights.lab_*`
+value is parsed once, by `discovery.defaults.lab_head_points`.
+
+This was broken from v0.22.0 until 2026-09-06 (task 67 bug B1): the heads were
+measured, written into the breakdown, and never read by the ranker, so the
+sliders were inert. `tests/test_signal_lab_ranker_boundary.py` now asserts
+that a non-zero weight moves the score by the stated amount, once.
 
 ### 7.3 The separate `preference_affinity` signal
 
@@ -472,31 +484,22 @@ The same reasoning admits PPR: seeding a walk reads Library membership as a node
 *attribute* to choose a starting distribution. It is retrieval targeting, which
 is ranking, not geometry.
 
-### 7.5 Promotion verdict, 2026-07-27: not yet
+### 7.5 The eval replay, and the last measured verdict
 
-`weights.lab_region_offset`, `weights.lab_utility` and `weights.lab_author_offset`
-are all `0.0`, so today's build is byte-identical to a lab-less one
-(`load_lab_scoring_context` early-returns `None` when both scoring weights are
-≤ 0). D20 requires manual promotion on **held-out** evidence. The evidence was
-evaluated and does not support promotion:
+`GET /signal-lab/eval` (`signal_lab/eval.py`) replays each lens's latest
+immutable ranking snapshots through the ranker with the heads at 0 and at the
+current settings, comparing the orderings with `core.scoring_math.rank_churn`
+(the same helper the shadow-ranker comparison uses). It reads the recorded
+inputs and weights — never re-measured or guessed features — reports a lens
+whose snapshots predate the Lab inputs (feature schema < v4) or were ranked
+with no model as *unassessable* with a reason, and counts parity mismatches
+(a snapshot that does not reproduce its stored score under its own weights).
+Churn says the heads reorder; it does not say the reordering is better.
 
-| Check | Measured | Needed |
-|---|---|---|
-| Held-out preference pairs | **0** | enough to test at all |
-| Regions ever seen in a round | 11 of 32 | most of the map |
-| Region-boundary edges observed | 4 of 26 | — |
-| Authors the head moves | 0 | non-zero |
-| Candidates entering the top-20 if promoted | 0 | — |
-| Mean rank displacement if promoted | 0.34 | — |
-
-The first row is decisive on its own: 20 rounds produced exactly one holdout
-round, and it yielded no usable pairs, so there is literally nothing to test the
-head against. The last two rows say the argument is moot anyway — promoting
-today would reorder essentially nothing.
-
-**The gate to re-check:** a non-empty holdout (target ≥ 30 pairs) where
-`utility_accuracy` beats `prior_accuracy` by a margin that survives a binomial
-test at that sample size. Read it from `GET /signal-lab/eval`.
+The last measured *model* verdict (2026-07-27) was **not yet**: 0 held-out
+preference pairs, 11 of 32 regions ever seen. The gate to re-check: a holdout
+of ≥ 30 pairs where `utility_accuracy` beats `prior_accuracy` by a margin that
+survives a binomial test.
 
 ---
 

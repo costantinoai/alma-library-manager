@@ -1,20 +1,22 @@
 """Lab → ranking bridge: the ONLY reader of the model for scoring (task 54 P11).
 
-Two shapes of consumption live here. `load_lab_scoring_context` serves the
-per-candidate terms (region offset + utility direction) that `score_candidate`
-adds itself. `fold_lab_offsets` serves the CATEGORICAL heads, which do not score
-on their own at all — they are added into the curated signal that already
-answers the same question, so there is never a second definition of "how much do
-I care about this author / this venue".
-
+Two shapes of consumption live here. `load_lab_scoring_context` +
+`compute_lab_adjustments` MEASURE the per-candidate heads (region offset +
+utility direction) on the signed unit interval; `measure_candidate` writes
+them into the breakdown and the ranker (`discovery.ranker.LAB_ADJUSTMENTS`)
+is the one place they are WEIGHTED into a score. `fold_lab_offsets` serves the
+CATEGORICAL heads, which do not score on their own at all — they are added
+into the curated signal that already answers the same question, so there is
+never a second definition of "how much do I care about this author / this
+venue".
 
 `load_lab_scoring_context` runs ONCE per scoring pass (lens refresh / feed
-scan) and returns None unless BOTH lab weights are... nonzero? No — unless a
-model AND super-regions exist; the per-candidate cost is then 32 dot
-products (region assignment) + one dot product (utility), zero queries.
-Weights stay "0.0" until stage-1 evidence promotes them (D20) — with both
-at zero the loader returns None and score_candidate's output is
-byte-identical to a lab-less build.
+scan) and returns None unless the Lab is enabled, at least one head weight is
+positive, and a fitted model exists; the per-candidate cost is then ≤32 dot
+products (region assignment) + one dot product (utility), zero queries. With
+the loader returning None, `measure_candidate` writes no Lab keys, the ranker
+reads them as *unavailable*, and the score is byte-identical to a lab-less
+build.
 """
 
 from __future__ import annotations
@@ -79,19 +81,16 @@ def fold_lab_offsets(
     from alma.application import materialized_views as mv
     from alma.application.discovery.lens_crud import read_settings
     from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-    from alma.application.signal_lab.settings import LAB_HEAD_MAX_POINTS
+    from alma.discovery.defaults import LAB_HEAD_MAX_POINTS, lab_head_points
 
-    try:
-        settings = read_settings(conn)
-    except Exception:  # noqa: BLE001 — no settings table ⇒ the lab contributes 0
-        return 0
+    # `read_settings` already answers "no settings table" with the defaults;
+    # any OTHER failure is a real read error and must surface, not read as
+    # "the Lab contributes 0" (an unreadable state impersonating an empty one).
+    settings = read_settings(conn)
 
     if str(settings.get("signal_lab.enabled", "true")).lower() != "true":
         return 0
-    try:
-        points = float(settings.get(weight_key, "0.0") or 0.0)
-    except (TypeError, ValueError):
-        points = 0.0
+    points = lab_head_points(settings, weight_key)
     if points <= 0:
         return 0
     # Points on the 0-100 score → affinity units on a [0, 1] map.
@@ -120,14 +119,15 @@ def load_lab_scoring_context(
     conn: sqlite3.Connection, settings: dict[str, str]
 ) -> dict[str, Any] | None:
     """One-shot load of everything scoring needs. None ⇒ lab contributes 0."""
+    from alma.application.discovery.ranker import resolve_lab_points
     from alma.application.signal_lab.map_terms import utility_confidence
     from alma.application.signal_lab.settings import is_enabled
 
     if not is_enabled(conn):
         return None
-    w_offset = float(settings.get("weights.lab_region_offset", "0.0") or 0.0)
-    w_utility = float(settings.get("weights.lab_utility", "0.0") or 0.0)
-    if w_offset <= 0 and w_utility <= 0:
+    # Same parser the ranker weights with, so the gate and the score can never
+    # disagree about whether a head is on.
+    if not any(points > 0 for points in resolve_lab_points(settings).values()):
         return None
     from alma.application import materialized_views as mv
     from alma.application import super_regions as sr
@@ -150,13 +150,26 @@ def load_lab_scoring_context(
             centroids[int(region["id"])] = sr.decode_centroid(region["centroid_b64"])
     if not offsets and utility is None:
         return None
+    confidence = utility_confidence(payload)
     return {
-        "w_offset": w_offset,
-        "w_utility": w_utility,
         "offsets": offsets,
         "utility": utility,
-        "utility_confidence": utility_confidence(payload),
+        "utility_confidence": confidence,
         "centroids": centroids,
+        # Provenance stamped onto every measured candidate (→ the immutable
+        # ranking snapshot's exposure), so a stored score names the model and
+        # region payload that produced its Lab inputs.
+        "generation": {
+            "model_fingerprint": model_stored.get("fingerprint"),
+            "model_computed_at": model_stored.get("computed_at"),
+            "regions_fingerprint": (
+                regions_stored.get("fingerprint") if regions_stored else None
+            ),
+            "regions_computed_at": (
+                regions_stored.get("computed_at") if regions_stored else None
+            ),
+            "utility_confidence": confidence,
+        },
     }
 
 
@@ -164,7 +177,7 @@ def compute_lab_adjustments(embedding, lab_ctx: dict[str, Any]) -> tuple[float, 
     """(region_offset_raw, utility_raw) for one candidate. Pure, no queries.
 
     Region via nearest super-centroid on the embedding already in hand —
-    the same cosine rule as everywhere else (graph_substrate).
+    the same cosine rule as everywhere else (semantic_partition).
     """
     if embedding is None:
         return 0.0, 0.0
@@ -172,7 +185,7 @@ def compute_lab_adjustments(embedding, lab_ctx: dict[str, Any]) -> tuple[float, 
     offset_raw = 0.0
     centroids = lab_ctx.get("centroids") or {}
     if centroids and lab_ctx.get("offsets"):
-        from alma.application.graph_substrate import assign_with_margin
+        from alma.application.semantic_partition import assign_with_margin
 
         assigned = assign_with_margin(vec, centroids)
         offset_raw = float(lab_ctx["offsets"].get(assigned.best_id, 0.0))

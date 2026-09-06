@@ -39,7 +39,7 @@ from alma.application.signal_lab import policy as lab_policy
 from alma.application.signal_lab import purge as lab_purge
 from alma.application.signal_lab import rounds as lab_rounds
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-from alma.application.signal_lab.settings import SignalLabSettings
+from alma.application.signal_lab.settings import SignalLabSettings, SignalLabSettingsView
 from alma.application.signal_lab.spec import SKIP_OPTION
 from alma.core.db_write import run_write_unit
 from alma.core.time import utcnow
@@ -284,14 +284,14 @@ def answer_round(game_id: str, body: RoundAnswer, db: sqlite3.Connection = Depen
     return {"status": "recorded", "round_id": round_id, "skipped": skipped}
 
 
-@router.get("/settings", response_model=SignalLabSettings)
+@router.get("/settings", response_model=SignalLabSettingsView)
 def get_signal_lab_settings(
     db: sqlite3.Connection = Depends(get_db),
 ) -> SignalLabSettings:
-    """Read first-class Signal Lab feature settings."""
+    """Read first-class Signal Lab feature settings, with their head limits."""
     from alma.application.signal_lab import settings as lab_settings
 
-    return lab_settings.read(db)
+    return lab_settings.read_view(db)
 
 
 @router.put("/settings", response_model=SignalLabSettings)

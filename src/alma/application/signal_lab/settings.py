@@ -15,30 +15,22 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from alma.core.db_write import run_write_unit
 
-LAB_HEAD_MAX_POINTS = 10.0
-"""Ceiling for one Signal Lab head, in points on the 0-100 score.
+# The two head constants live with the setting defaults (`alma.discovery.
+# defaults`) because the ranker reads them too; re-exported here so the feature's
+# own callers keep one import path.
+from alma.discovery.defaults import LAB_HEAD_DEFAULT_POINTS, LAB_HEAD_MAX_POINTS
 
-Was 2.5, which put the whole lab BELOW `citation_quality` (5 points) — your
-explicit pairwise taste judgements counting for less than how many strangers
-cited a paper. That is backwards for a signal whose entire purpose is to record
-what you actually prefer.
-
-10 puts a fully-evidenced head on par with `feedback_adj` and
-`preference_affinity`, the other two signals that encode your own opinions.
-
-Raising it is safe because the ceiling is NOT what protects against a thin fit:
-the evidence dampers do (`map_terms.utility_confidence` and
-`region_confidence`), continuously and in proportion to how much you have
-actually answered. A low ceiling only guaranteed the feature could never
-matter, even at full evidence."""
-
-LAB_HEAD_DEFAULT_POINTS = 5.0
-"""Default weight per head.
-
-Non-zero (was 0.0) so a fitted head takes effect without a manual promotion
-step. There is nothing to promote: `load_lab_scoring_context` already
-early-returns when no usable model exists, so an unplayed install is unaffected,
-and the dampers make an under-evidenced one small on their own."""
+__all__ = [
+    "LAB_HEAD_DEFAULT_POINTS",
+    "LAB_HEAD_MAX_POINTS",
+    "SignalLabHeadLimits",
+    "SignalLabSettings",
+    "SignalLabSettingsView",
+    "is_enabled",
+    "read",
+    "read_view",
+    "write",
+]
 
 
 class SignalLabSettings(BaseModel):
@@ -106,6 +98,27 @@ class SignalLabSettings(BaseModel):
     override_min_votes: Annotated[int, Field(ge=1, le=100)] = 3
 
 
+class SignalLabHeadLimits(BaseModel):
+    """The head-weight contract, served with the settings so the UI cannot
+    hard-code a ceiling the backend does not enforce (it did: 2.5 against 10)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    head_points_max: float = LAB_HEAD_MAX_POINTS
+    head_points_default: float = LAB_HEAD_DEFAULT_POINTS
+
+
+class SignalLabSettingsView(SignalLabSettings):
+    """``GET /signal-lab/settings``: the settings plus their read-only limits.
+
+    Writes take :class:`SignalLabSettings` only — ``limits`` is server truth,
+    not a knob, and the strict ``extra="forbid"`` on the write model is what
+    keeps it that way.
+    """
+
+    limits: SignalLabHeadLimits = Field(default_factory=SignalLabHeadLimits)
+
+
 _KEYS = {
     "enabled": "signal_lab.enabled",
     "region_offset_points": "weights.lab_region_offset",
@@ -142,10 +155,26 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
     )
 
 
+def read_view(db: sqlite3.Connection) -> SignalLabSettingsView:
+    """The settings as the UI needs them: values plus the head-weight limits."""
+
+    return SignalLabSettingsView(**read(db).model_dump())
+
+
+#: The knobs `fit.build_signal_lab_model` actually consumes. Changing one makes
+#: the retained model a fit of different inputs, so it must be refitted; changing
+#: the map tint or a sampler knob does not, and refitting on those is churn. Kept
+#: in step with the `tuning` term of `fit._FINGERPRINT_SQL` — the fingerprint is
+#: what makes a MISSED refit recoverable, this list is what makes it immediate.
+FIT_INPUT_FIELDS = ("ring_decay", "override_min_votes", "coverage_target")
+
+
 def write(db: sqlite3.Connection, settings: SignalLabSettings) -> SignalLabSettings:
     from alma.application.discovery.lens_crud import upsert_setting
+    from alma.application.signal_lab.fit import enqueue_model_refit
 
     validated = SignalLabSettings.model_validate(settings)
+    previous = read(db)
 
     def _write() -> None:
         values = validated.model_dump()
@@ -155,6 +184,15 @@ def write(db: sqlite3.Connection, settings: SignalLabSettings) -> SignalLabSetti
             upsert_setting(db, storage_key, stored)
 
     run_write_unit(db, _write, label="signal_lab.settings")
+    # Saving a fitting knob is a user action with a visible promise ("this is how
+    # the lab weighs your answers"), so it takes effect now rather than at the
+    # next freshness tick hours later. The enqueue defers past this thread's
+    # write lock; see `fit.enqueue_model_refit`.
+    if any(
+        getattr(previous, field) != getattr(validated, field)
+        for field in FIT_INPUT_FIELDS
+    ):
+        enqueue_model_refit(db, label="signal_lab.settings refit")
     return read(db)
 
 

@@ -1,122 +1,266 @@
-"""Stage-1 counterfactual eval — the promotion evidence (task 54 §6).
+"""Signal Lab eval — what the fitted heads DO to your decks (task 54 §6, 67 C1).
 
-The ``insights:signal_lab_eval`` view answers two questions with the lab's
-weights still at 0.0:
+The ``insights:signal_lab_eval`` view answers two questions:
 
-* **Model number** — held-out pairwise accuracy per nested head (already
-  computed by the fit; re-served here alongside the outcome number).
-* **Outcome number** — top-20 churn of the LIVE Discovery list under a
-  hypothetical promotion (``HYPOTHETICAL_POINTS`` per head): how many of the
-  current top papers would change, and the mean rank displacement. Accuracy
-  says the model learned something; churn says whether shipping it would
-  visibly matter.
+* **Model number** — held-out pairwise accuracy per nested head (computed by
+  the fit; re-served here alongside the outcome number).
+* **Outcome number** — a *replay*: every lens's latest immutable ranking
+  snapshots are re-scored through the ONE ranker, once with the Lab heads at
+  zero and once at the current Settings weights, and the two orderings are
+  compared (``core.scoring_math.rank_churn``). Accuracy says the model learned
+  something; churn says whether it visibly matters on the decks you see.
 
-Heads get promoted by raising ``weights.lab_*`` in Settings, one at a time,
-only when both numbers argue for it (D20 stage gates).
+The replay is honest by construction:
+
+* it uses the signed inputs recorded at ranking time (``reward_features``,
+  schema v4+) and the family weights recorded beside them — never a guessed
+  feature or a re-measured one;
+* it applies the SAME evidence damper the runtime applied (it is inside the
+  stored ``lab_utility_raw``) and the SAME clamped settings the runtime reads
+  (``ranker.resolve_lab_points``), so there is no private "what-if" bonus —
+  the previous probe added 2.5 points per head with ``confidence=1`` onto
+  stored scores, which described an effect the runtime never had (bug B1);
+* a lens whose snapshots predate the Lab inputs, or were ranked with no Lab
+  model loaded, is reported as **unassessable** with the reason, not scored
+  with invented zeros;
+* re-scoring a snapshot under its own recorded weights must reproduce its
+  stored ``prior_score``. That parity count is a correctness gate on the
+  ranker itself; a mismatch means replay and runtime have diverged.
+
+Churn is diagnostic only. It says the heads *reorder*; it never says the
+reordering is *better* — that is the calibration lane's question.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
-import numpy as np
-
-from alma.ai.graph_versions import SIGNAL_LAB_FIT_VERSION, with_version
+from alma.ai.graph_versions import (
+    SIGNAL_LAB_EVAL_VERSION,
+    SIGNAL_LAB_FIT_VERSION,
+    with_version,
+)
 from alma.application import materialized_views as mv
+from alma.application.discovery.calibration import ScoringCalibration
+from alma.application.discovery.features import FEATURE_SCHEMA_VERSION
+from alma.application.discovery.ranker import (
+    LAB_ADJUSTMENTS,
+    RANKER_VERSION,
+    repaired_prior_score,
+    resolve_lab_points,
+)
+from alma.core.scoring_math import rank_churn
 
 EVAL_VIEW_KEY = "insights:signal_lab_eval"
 
-# The what-if weight (score points) applied per head for the churn probe.
-HYPOTHETICAL_POINTS = 2.5
+# The window the ordering comparison is measured on, per lens.
+TOP_N = 20
 
-# How many live recommendations the churn probe rescoreS, and the window the
-# overlap is measured on.
-_PROBE_POOL = 200
-_TOP_N = 20
+# Replaying a snapshot under its own recorded weights must land on its stored
+# score. 6-dp rounding of ~14 published terms cannot drift past this.
+_PARITY_TOLERANCE = 1e-3
 
+# Every input the replay reads, so the view rebuilds when — and only when —
+# one of them changes: the rounds (→ model), the fitted model row itself, the
+# newest snapshot per lens, the Lab weights + enable switch, and the code
+# versions of fit, eval, ranker and snapshot schema.
 _FINGERPRINT_SQL = with_version(
     """
     SELECT (SELECT COUNT(*) FROM signal_lab_rounds),
            (SELECT COALESCE(MAX(id), 0) FROM signal_lab_rounds),
-           (SELECT COUNT(*) FROM recommendations
-             WHERE user_action IS NULL OR user_action = 'seen')
+           (SELECT COALESCE(fingerprint, '') FROM materialized_views
+             WHERE view_key = 'signal_lab:model'),
+           (SELECT COALESCE(MAX(created_at), '') FROM suggestion_sets),
+           (SELECT COUNT(*) FROM suggestion_sets),
+           (SELECT COALESCE(GROUP_CONCAT(key || '=' || value, ';'), '')
+              FROM (SELECT key, value FROM discovery_settings
+                     WHERE key IN ('signal_lab.enabled',
+                                   'weights.lab_region_offset',
+                                   'weights.lab_utility')
+                     ORDER BY key))
     """,
     SIGNAL_LAB_FIT_VERSION,
+    SIGNAL_LAB_EVAL_VERSION,
+    RANKER_VERSION,
+    FEATURE_SCHEMA_VERSION,
 )
+
+_ZERO_LAB_POINTS = {spec.key: 0.0 for spec in LAB_ADJUSTMENTS}
+_LAB_ATOM_KEYS = tuple(spec.atom_key for spec in LAB_ADJUSTMENTS)
+
+
+def _latest_snapshot_per_lens(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT l.id AS lens_id, l.name AS lens_name, ss.id AS suggestion_set_id,
+               ss.ranker_version AS set_ranker_version
+        FROM discovery_lenses l
+        JOIN suggestion_sets ss ON ss.id = (
+            SELECT id FROM suggestion_sets
+            WHERE lens_id = l.id
+            ORDER BY COALESCE(created_at, '') DESC, id DESC
+            LIMIT 1
+        )
+        ORDER BY l.name, l.id
+        """
+    ).fetchall()
+
+
+def _snapshot_rows(conn: sqlite3.Connection, suggestion_set_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, prior_score, reward_features, exposure_features,
+               feature_schema_version
+        FROM discovery_ranking_candidates
+        WHERE suggestion_set_id = ?
+        ORDER BY fused_rank
+        """,
+        (suggestion_set_id,),
+    ).fetchall()
+
+
+def _lab_measured(reward: dict) -> bool:
+    return any(
+        bool((reward.get(key) or {}).get("availability")) for key in _LAB_ATOM_KEYS
+    )
+
+
+def _replay_lens(
+    lens: sqlite3.Row,
+    rows: list[sqlite3.Row],
+    *,
+    lab_points: dict[str, float],
+) -> dict[str, Any]:
+    """One lens's replay verdict. Never guesses: a snapshot that cannot be
+    replayed faithfully makes the lens *unassessable*, with the reason."""
+
+    report: dict[str, Any] = {
+        "lens_id": str(lens["lens_id"]),
+        "lens_name": lens["lens_name"],
+        "suggestion_set_id": str(lens["suggestion_set_id"]),
+        "candidates": len(rows),
+        "status": "unassessable",
+        "reason": None,
+        "parity": {"checked": 0, "mismatched": 0},
+        "churn": None,
+    }
+    if not rows:
+        report["reason"] = "no immutable ranking snapshots for this lens; refresh it"
+        return report
+    versions = {str(row["feature_schema_version"] or "") for row in rows}
+    if versions != {FEATURE_SCHEMA_VERSION}:
+        report["reason"] = (
+            "snapshots predate the recorded Lab inputs "
+            f"({', '.join(sorted(versions))}); refresh the lens"
+        )
+        return report
+
+    baseline: dict[str, float] = {}
+    adjusted: dict[str, float] = {}
+    measured = 0
+    checked = mismatched = 0
+    for row in rows:
+        try:
+            reward = json.loads(row["reward_features"] or "{}")
+            exposure = json.loads(row["exposure_features"] or "{}")
+        except (TypeError, ValueError):
+            report["reason"] = "a snapshot's stored features could not be decoded"
+            return report
+        recorded = exposure.get("ranking_weights") or {}
+        families = recorded.get("families")
+        calibration = ScoringCalibration.from_dict(recorded.get("calibration"))
+        if not isinstance(families, dict) or not families:
+            report["reason"] = "snapshots carry no recorded family weights; refresh the lens"
+            return report
+        if _lab_measured(reward):
+            measured += 1
+        # Parity: the ranker must reproduce what it stored, under what it stored.
+        replayed, _ = repaired_prior_score(
+            reward, weights=families, lab_points=recorded.get("lab_points") or _ZERO_LAB_POINTS,
+            calibration=calibration,
+        )
+        checked += 1
+        if abs(replayed - float(row["prior_score"] or 0.0)) > _PARITY_TOLERANCE:
+            mismatched += 1
+        cid = str(row["id"])
+        baseline[cid], _ = repaired_prior_score(
+            reward, weights=families, lab_points=_ZERO_LAB_POINTS, calibration=calibration
+        )
+        adjusted[cid], _ = repaired_prior_score(
+            reward, weights=families, lab_points=lab_points, calibration=calibration
+        )
+
+    report["parity"] = {"checked": checked, "mismatched": mismatched}
+    if measured == 0:
+        report["reason"] = (
+            "Lab inputs were not measured when this deck was ranked "
+            "(Lab off or no fitted model at the time); refresh the lens"
+        )
+        return report
+    report["status"] = "ok"
+    report["lab_measured"] = measured
+    report["churn"] = rank_churn(baseline, adjusted, top_n=TOP_N)
+    return report
 
 
 def build_signal_lab_eval(conn: sqlite3.Connection) -> dict[str, Any]:
-    from alma.application.graph_substrate import load_vectors_by_id
-    from alma.application.signal_lab import scoring_terms
+    from alma.application.discovery.lens_crud import read_settings
     from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-    from alma.discovery.similarity import get_active_embedding_model
+    from alma.application.signal_lab.settings import is_enabled
 
     model_stored = mv.get_stored(conn, MODEL_VIEW_KEY)
     if model_stored is None:
         return {"ready": False}
     payload = model_stored["payload"]
 
-    # Hypothetical lab context: the fitted heads at the probe weight.
-    lab_ctx = {
-        "w_offset": HYPOTHETICAL_POINTS,
-        "w_utility": HYPOTHETICAL_POINTS,
-        "offsets": {int(k): float(v) for k, v in (payload.get("region_offsets") or {}).items()},
-        "utility": None,
-        "utility_confidence": 1.0,
-        "centroids": {},
+    settings = read_settings(conn)
+    lab_points = resolve_lab_points(settings)
+    lenses = [
+        _replay_lens(lens, _snapshot_rows(conn, str(lens["suggestion_set_id"])), lab_points=lab_points)
+        for lens in _latest_snapshot_per_lens(conn)
+    ]
+    assessed = [lens for lens in lenses if lens["status"] == "ok"]
+    parity_checked = sum(lens["parity"]["checked"] for lens in lenses)
+    parity_mismatched = sum(lens["parity"]["mismatched"] for lens in lenses)
+
+    replay: dict[str, Any] = {
+        "status": "ok" if assessed else "insufficient_evidence",
+        "reason": None,
+        "enabled": is_enabled(conn),
+        "lab_points": lab_points,
+        "ranker_version": RANKER_VERSION,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "top_n": TOP_N,
+        "lenses_total": len(lenses),
+        "lenses_assessed": len(assessed),
+        "candidates": sum(lens["candidates"] for lens in assessed),
+        "entered_top": None,
+        "mean_rank_displacement": None,
+        "parity": {"checked": parity_checked, "mismatched": parity_mismatched},
+        "lenses": lenses,
     }
-    from alma.application import super_regions as sr
-    from alma.application.signal_lab.fit import decode_head_vector
-
-    if payload.get("utility_delta_b64"):
-        lab_ctx["utility"] = decode_head_vector(payload["utility_delta_b64"])
-    regions_stored = mv.get_stored(conn, sr.VIEW_KEY)
-    if regions_stored is not None and lab_ctx["offsets"]:
-        for region in regions_stored["payload"].get("regions", []):
-            lab_ctx["centroids"][int(region["id"])] = sr.decode_centroid(region["centroid_b64"])
-
-    rows = conn.execute(
-        """
-        SELECT id, paper_id, score FROM recommendations
-        WHERE user_action IS NULL OR user_action = 'seen'
-        ORDER BY score DESC LIMIT ?
-        """,
-        (_PROBE_POOL,),
-    ).fetchall()
-    churn: dict[str, Any] = {"pool": len(rows)}
-    if rows:
-        model = get_active_embedding_model(conn)
-        vectors = load_vectors_by_id(conn, [str(r["paper_id"]) for r in rows], model)
-        baseline = [(str(r["id"]), float(r["score"])) for r in rows]
-        adjusted = []
-        for r in rows:
-            bonus = 0.0
-            vec = vectors.get(str(r["paper_id"]))
-            if vec is not None:
-                off, util = scoring_terms.compute_lab_adjustments(vec, lab_ctx)
-                bonus = lab_ctx["w_offset"] * off + lab_ctx["w_utility"] * util
-            adjusted.append((str(r["id"]), float(r["score"]) + bonus))
-        base_top = [rid for rid, _ in baseline[:_TOP_N]]
-        adj_sorted = [rid for rid, _ in sorted(adjusted, key=lambda kv: -kv[1])]
-        adj_top = adj_sorted[:_TOP_N]
-        entered = len(set(adj_top) - set(base_top))
-        base_rank = {rid: i for i, (rid, _) in enumerate(baseline)}
-        displacement = [abs(base_rank[rid] - i) for i, rid in enumerate(adj_sorted)]
-        churn.update(
-            {
-                "top_n": _TOP_N,
-                "hypothetical_points": HYPOTHETICAL_POINTS,
-                "entered_top": entered,
-                "mean_rank_displacement": round(float(np.mean(displacement)), 2),
-            }
+    if assessed:
+        replay["entered_top"] = sum(int(lens["churn"]["entered_top"]) for lens in assessed)
+        replay["mean_rank_displacement"] = round(
+            sum(float(lens["churn"]["mean_rank_displacement"]) for lens in assessed)
+            / len(assessed),
+            3,
+        )
+    elif not lenses:
+        replay["reason"] = "no lens has a ranked deck yet"
+    else:
+        replay["reason"] = (
+            "no lens has snapshots that recorded Lab inputs; refresh a lens "
+            "with the Lab enabled and a fitted model"
         )
 
     return {
         "ready": True,
         "holdout": payload.get("holdout", {}),
         "counts": payload.get("counts", {}),
-        "churn": churn,
+        "replay": replay,
     }
 
 

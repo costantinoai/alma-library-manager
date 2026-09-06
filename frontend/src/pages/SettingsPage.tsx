@@ -230,7 +230,7 @@ export function SettingsPage() {
         lede="How ALMa runs."
         detail="Where papers come from, what the AI does, when background work happens, and where your data lives. Changes apply as soon as you save them."
       />
-      <div className="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
         {/* ── Sticky TOC ─────────────────────────────────────────────── */}
         <aside className="hidden lg:block">
           <nav className="sticky top-6 space-y-5" aria-label="Settings sections">
@@ -270,7 +270,7 @@ export function SettingsPage() {
         </aside>
 
         {/* ── Grouped content ───────────────────────────────────────── */}
-        <div ref={contentRef} className="space-y-10">
+        <div ref={contentRef} className="min-w-0 space-y-10">
           {/* -- You -- ALMa puts a person at the centre of a literature, so
               the person is the first thing Settings talks about. */}
           <SettingsSection

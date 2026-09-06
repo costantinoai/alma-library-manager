@@ -36,9 +36,10 @@ I/O. The fit holds the paper→venue map, so it keys the attribution on the
 game's declared ``draw.contrast``. Adding a second axis is a new entry in
 ``_CONTRAST_FITTERS``, not new plumbing.
 
-M0 note: the prior is the Library vector centroid. M1 wires the true Rocchio
-prior (``feedback_positive_centroid − feedback_negative_centroid``) once the
-scoring integration lands — same shape, better zero-round behaviour.
+The prior is the Rocchio direction of the feedback profile
+(``positive centroid − negative centroid`` over the rated Library), from the
+same loader Discovery's feedback family uses — so a paper you rated down pulls
+the prior away from itself before a single round is played.
 
 Holdout: rounds stamped ``holdout=1`` at creation never train; the payload
 reports pairwise accuracy of each nested model on them (prior-only vs
@@ -121,11 +122,117 @@ OVERRIDE_MIN_VOTES = 3
 # M0 publishes the constant so the policy has one source for it.
 GAMMA_START = 0.35
 
+# Every input `build_signal_lab_model` reads, one term each. A materialized view
+# only rebuilds when this row changes, so an input missing HERE is an input that
+# can drift while the served model stays stale — and nothing on the read path
+# would ever notice, because every model consumer uses `mv.get_stored` (a pure
+# row read that computes no fingerprint). It tracked round COUNT/MAX(id) alone
+# until 2026-09-06 (task 67 B2), so editing an answer, re-fitting the regions,
+# changing the Library, or moving a tuning knob all left the previous model in
+# force until the next qualifying round.
+#
+#   term                     | input it covers
+#   -------------------------|--------------------------------------------------
+#   rounds_count             | how many rounds exist
+#   rounds_content           | every fit-relevant round COLUMN, verbatim — an
+#                            | edited answer keeps its length, so summing sizes
+#                            | would miss it
+#   embedding_model          | `get_active_embedding_model` (settings row)
+#   shown_vectors            | the vectors of the shown papers (count + bytes +
+#                            | newest write, so a recompute in place is caught)
+#   super_regions            | the stored payload the offsets head maps through
+#   shown_clusters           | each shown paper's corpus cluster assignment
+#   shown_metadata           | shown papers' `authors` / `journal` (author +
+#                            | venue heads). Content, not `updated_at`: hydration
+#                            | touches that row weekly without changing either
+#   library_prior            | the Library-centroid prior's membership + vectors
+#   tuning                   | the three knobs the fit consumes. Named, not
+#                            | `signal_lab.%`: the map tint and the sampler's
+#                            | own settings change nothing about the fitted
+#                            | model, and refitting on them would be churn
+#
+# Cost: the shown set is bounded by the rounds themselves (a few papers per
+# round), and every join is on an indexed `paper_id`, so an idle freshness tick
+# is one small scan — see `scheduler.signal_lab_model_refresh_periodic`.
 _FINGERPRINT_SQL = with_version(
-    "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM signal_lab_rounds",
+    """
+    WITH shown AS (
+        SELECT DISTINCT je.value AS paper_id
+        FROM signal_lab_rounds r, json_each(r.shown_json) je
+    )
+    SELECT
+        (SELECT COUNT(*) FROM signal_lab_rounds) AS rounds_count,
+        (SELECT COALESCE(GROUP_CONCAT(
+                    id || '|' || COALESCE(game_id, '')
+                       || '|' || COALESCE(region_id, -1)
+                       || '|' || COALESCE(pair_region_id, -1)
+                       || '|' || COALESCE(ring, -1)
+                       || '|' || COALESCE(policy_version, -1)
+                       || '|' || COALESCE(shown_json, '')
+                       || '|' || COALESCE(answer_json, '')
+                       || '|' || skipped
+                       || '|' || holdout, char(10)), '')
+           FROM (SELECT * FROM signal_lab_rounds ORDER BY id)) AS rounds_content,
+        (SELECT COALESCE(value, '') FROM discovery_settings
+          WHERE key = 'embedding_model') AS embedding_model,
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(LENGTH(pe.embedding)), 0)
+                       || ':' || COALESCE(MAX(pe.created_at), '')
+           FROM publication_embeddings pe
+           JOIN shown s ON s.paper_id = pe.paper_id) AS shown_vectors,
+        (SELECT COALESCE(fingerprint, '') FROM materialized_views
+          WHERE view_key = 'graph:super_regions') AS super_regions,
+        (SELECT COALESCE(GROUP_CONCAT(pair, char(10)), '') FROM (
+            SELECT pc.paper_id || '=' || pc.cluster_id AS pair
+              FROM publication_clusters pc
+              JOIN shown s ON s.paper_id = pc.paper_id
+             WHERE pc.scope = 'corpus'
+             ORDER BY pc.paper_id)) AS shown_clusters,
+        (SELECT COALESCE(GROUP_CONCAT(row, char(10)), '') FROM (
+            SELECT p.id || '|' || COALESCE(p.authors, '')
+                        || '|' || COALESCE(p.journal, '') AS row
+              FROM papers p
+              JOIN shown s ON s.paper_id = p.id
+             ORDER BY p.id)) AS shown_metadata,
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(LENGTH(pe.embedding)), 0)
+                       || ':' || COALESCE(MAX(pe.created_at), '')
+                       || ':' || COALESCE(SUM(COALESCE(p.rating, 0)), 0)
+                       || ':' || COALESCE(SUM(CASE WHEN p.rating BETWEEN 1 AND 2 THEN 1 ELSE 0 END), 0)
+           FROM publication_embeddings pe
+           JOIN papers p ON p.id = pe.paper_id
+          WHERE p.status = 'library') AS library_prior,
+        (SELECT COALESCE(GROUP_CONCAT(key || '=' || value, ';'), '') FROM (
+            SELECT key, value FROM discovery_settings
+             WHERE key IN ('signal_lab.gamma_start',
+                           'signal_lab.override_min_votes',
+                           'signal_lab.coverage_target')
+             ORDER BY key)) AS tuning
+    """,
     SIGNAL_LAB_FIT_VERSION,
     str(SIGNAL_LAB_POLICY_VERSION),
 )
+
+
+def enqueue_model_refit(conn: sqlite3.Connection, *, label: str) -> None:
+    """Queue a wholesale refit of the model, deferred past this thread's lock.
+
+    The ONE way anything asks for a refit. ``enqueue_rebuild`` persists job state
+    on the scheduler's own connection, so firing it while the caller still holds
+    the SQLite write lock busy-waits the whole timeout and then drops the row —
+    which is why every caller goes through ``run_after_gate_release(..., conn=)``
+    and why that is spelled here once rather than at each site.
+
+    Callers: answering a round on its debounce boundary (``rounds``), changing a
+    knob the fit consumes (``settings``), and purge. Background input drift is
+    NOT a caller — it belongs to the periodic freshness owner
+    (``scheduler.signal_lab_model_refresh_periodic``), which compares the view's
+    fingerprint instead of guessing.
+    """
+    from alma.core.db_write import run_after_gate_release
+
+    def _enqueue() -> None:
+        mv.enqueue_rebuild(MODEL_VIEW_KEY)
+
+    run_after_gate_release(_enqueue, conn=conn, label=label)
 
 
 def _b64(vec: np.ndarray) -> str:
@@ -249,6 +356,9 @@ def fit_model(
             "venues_fitted": len(venue_offsets),
         },
         "region_offsets": {str(k): round(v, 4) for k, v in offsets.items()},
+        "region_evidence": {
+            str(k): v for k, v in _region_evidence(train_prefs, paper_regions).items()
+        },
         "author_offsets": {k: round(v, 4) for k, v in author_offsets.items()},
         "venue_offsets": {k: round(v, 4) for k, v in venue_offsets.items()},
         "utility_b64": _b64(utility) if utility is not None else None,
@@ -324,20 +434,39 @@ def shrunk_win_rates(
     }
 
 
-def _fit_region_offsets(prefs: list[Pref], paper_regions: dict[str, int]) -> dict[int, float]:
-    """Per-region win-rate offsets, James–Stein-shrunk toward the global mean.
-
-    A preferred paper scores +1 for its region, the rejected one −1; the
-    offset is the shrunk mean in [−1, 1]. ~32 parameters, converges in tens
-    of rounds — the head that ships first for a reason (task 53).
-    """
+def _region_votes(prefs: list[Pref], paper_regions: dict[str, int]) -> list[tuple[int, float]]:
+    """A preferred paper scores +1 for its region, the rejected one −1."""
     votes: list[tuple[int, float]] = []
     for p in prefs:
         for pid, val in ((p.a, 1.0), (p.b, -1.0)):
             region = paper_regions.get(pid)
             if region is not None:
                 votes.append((region, val))
-    return shrunk_win_rates(votes, shrinkage=OFFSET_SHRINKAGE)
+    return votes
+
+
+def _fit_region_offsets(prefs: list[Pref], paper_regions: dict[str, int]) -> dict[int, float]:
+    """Per-region win-rate offsets, James–Stein-shrunk toward the global mean.
+
+    The offset is the shrunk mean in [−1, 1]. ~32 parameters, converges in
+    tens of rounds — the head that ships first for a reason (task 53).
+    """
+    return shrunk_win_rates(_region_votes(prefs, paper_regions), shrinkage=OFFSET_SHRINKAGE)
+
+
+def _region_evidence(prefs: list[Pref], paper_regions: dict[str, int]) -> dict[int, dict[str, int]]:
+    """The raw counts behind each offset — ``wins`` and ``votes`` per region.
+
+    Published so the sampler can ask "is this region's valence settled?"
+    through one Beta posterior (``evidence.sign_uncertainty``) instead of
+    re-deriving votes from rounds with a second copy of this logic.
+    """
+    counts: dict[int, dict[str, int]] = {}
+    for region, val in _region_votes(prefs, paper_regions):
+        entry = counts.setdefault(region, {"votes": 0, "wins": 0})
+        entry["votes"] += 1
+        entry["wins"] += int(val > 0)
+    return counts
 
 
 def author_match_keys(name: str) -> set[str]:
@@ -636,7 +765,7 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
     """Gather (rounds, vectors, regions, prior) and run :func:`fit_model`."""
     from alma.application import signal_lab as lab
     from alma.application import super_regions as sr
-    from alma.application.graph_substrate import load_vectors_by_id
+    from alma.application.semantic_partition import load_vectors_by_id
     from alma.application.signal_lab.rounds import load_rounds
     from alma.discovery.similarity import get_active_embedding_model
 
@@ -698,25 +827,15 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         except sqlite3.OperationalError:
             pass
 
-    # M0 prior: the Library vector centroid (M1 swaps in the true Rocchio
-    # profile prior — see module docstring).
-    prior: np.ndarray | None = None
-    try:
-        rows = conn.execute(
-            """
-            SELECT pe.embedding FROM publication_embeddings pe
-            JOIN papers p ON p.id = pe.paper_id
-            WHERE pe.model = ? AND p.status = 'library'
-            LIMIT 2000
-            """,
-            (model,),
-        ).fetchall()
-        if rows:
-            decoded = [decode_vector(r["embedding"]) for r in rows if r["embedding"]]
-            if decoded:
-                prior = np.mean(np.stack(decoded), axis=0)
-    except sqlite3.OperationalError:
-        pass
+    # The prior is the SAME taste the Discovery ranker's feedback family reads:
+    # the Rocchio direction toward what you kept and rated up, away from what
+    # you rated down (one owner, `library_taste_direction`). The Lab therefore
+    # learns the residual beyond what ordinary interactions already say — the
+    # utility head is stored as its delta from this — never a second copy of
+    # the Library. Read from the connection here so `fit_model` stays pure.
+    from alma.application.discovery.seed_profile import library_taste_direction
+
+    prior = library_taste_direction(conn)
 
     from alma.application.signal_lab import lab_tuning
 

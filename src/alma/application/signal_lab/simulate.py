@@ -100,7 +100,7 @@ def world_from_corpus(
     """
     from alma.application import materialized_views as mv
     from alma.application import super_regions as sr
-    from alma.application.graph_substrate import load_vectors_by_id
+    from alma.application.semantic_partition import load_vectors_by_id
     from alma.discovery.similarity import get_active_embedding_model
 
     stored = mv.get_stored(conn, sr.VIEW_KEY)
