@@ -23,6 +23,86 @@ FAMILY_CITATION = "citation"
 FAMILY_TASTE = "taste"
 RETRIEVAL_FAMILIES = (FAMILY_LEXICAL, FAMILY_SEMANTIC, FAMILY_CITATION, FAMILY_TASTE)
 
+# ── The local `papers` → candidate projection. ONE owner. ──────────────────
+#
+# Every lane that pulls candidates out of the local corpus reads THESE columns
+# and builds its dict with `local_paper_candidate`. It was copy-pasted in four
+# places (lexical once, graph three times), all selecting the same eleven
+# columns — which is why the ranker could declare inputs the pipeline never
+# delivered, silently, for as long as nobody edited all four copies:
+#
+#   * `is_retracted` was never selected, so the −45-point retraction
+#     adjustment — the one bounded safety penalty in the ranker — never fired
+#     for a single locally-sourced candidate;
+#   * `fwci` was never selected, so the field-weighted-impact atom was dead on
+#     6,108 papers that had the value stored;
+#   * `referenced_works_count` likewise.
+#
+# Adding a ranking input is therefore a two-line change here, not a
+# four-file search. `tests/test_ranking_inputs_fire.py` fails if a declared
+# input stops arriving.
+LOCAL_PAPER_COLUMNS: tuple[str, ...] = (
+    "id",
+    "title",
+    "authors",
+    "abstract",
+    "url",
+    "doi",
+    "openalex_id",
+    "semantic_scholar_id",
+    "year",
+    "publication_date",
+    "journal",
+    "cited_by_count",
+    "influential_citation_count",
+    "fwci",
+    "referenced_works_count",
+    "is_retracted",
+)
+
+#: The column list as it appears in a ``SELECT``; lanes interpolate this.
+LOCAL_PAPER_SELECT = ", ".join(LOCAL_PAPER_COLUMNS)
+
+
+def local_paper_candidate(row) -> dict:
+    """One ``papers`` row → the candidate dict the scorer expects.
+
+    Text columns are coerced to ``""`` because downstream string handling
+    expects a string. Numeric and boolean columns are NOT zero-filled: the
+    feature snapshot distinguishes "measured zero" from "not measured", and
+    zero-filling would tell the ranker that a paper with no known impact has a
+    measured impact of zero. That is the trap that got ``usefulness_boost``
+    deleted — ranking by how completely a row happens to be hydrated.
+    """
+
+    def text(column: str) -> str:
+        return row[column] or ""
+
+    candidate = {
+        "paper_id": row["id"],
+        "title": text("title"),
+        "authors": text("authors"),
+        "abstract": text("abstract"),
+        "url": text("url"),
+        "doi": text("doi"),
+        "openalex_id": text("openalex_id"),
+        "semantic_scholar_id": text("semantic_scholar_id"),
+        "year": row["year"],
+        "publication_date": row["publication_date"],
+        "journal": text("journal"),
+        "cited_by_count": row["cited_by_count"] or 0,
+        "is_retracted": bool(row["is_retracted"]),
+    }
+    # Present only when actually known, so `build_feature_snapshot` can mark
+    # them unavailable rather than measured-at-zero.
+    if row["influential_citation_count"] is not None:
+        candidate["influential_citation_count"] = row["influential_citation_count"]
+    if row["fwci"] is not None:
+        candidate["fwci"] = row["fwci"]
+    if row["referenced_works_count"] is not None:
+        candidate["referenced_works_count"] = row["referenced_works_count"]
+    return candidate
+
 
 def attach_hits(
     items: list[dict],

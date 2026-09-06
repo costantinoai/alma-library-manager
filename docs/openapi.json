@@ -7302,6 +7302,130 @@
         }
       }
     },
+    "/api/v1/settings/network-policy": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Network Policy",
+        "description": "Effective outbound state, including the operations hard override.",
+        "operationId": "get_network_policy_api_v1_settings_network_policy_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkPolicyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Network Policy",
+        "description": "Persist only the global outbound switch; never rewrite other settings.",
+        "operationId": "update_network_policy_api_v1_settings_network_policy_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NetworkPolicyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkPolicyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/export": {
       "get": {
         "tags": [
@@ -16119,6 +16243,59 @@
         }
       }
     },
+    "/api/v1/health/refresh": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Refresh all durable Health snapshots",
+        "description": "Queues corpus, author, and operation-plan assessment in the background.",
+        "operationId": "refresh_health_api_v1_health_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health/governance": {
       "get": {
         "tags": [
@@ -21228,7 +21405,7 @@
           "signal-lab"
         ],
         "summary": "Get Signal Lab Settings",
-        "description": "Read first-class Signal Lab feature settings.",
+        "description": "Read first-class Signal Lab feature settings, with their head limits.",
         "operationId": "get_signal_lab_settings_api_v1_signal_lab_settings_get",
         "responses": {
           "200": {
@@ -21236,7 +21413,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SignalLabSettings"
+                  "$ref": "#/components/schemas/SignalLabSettingsView"
                 }
               }
             }
@@ -24552,6 +24729,18 @@
             "type": "string",
             "title": "Recommendation Mode",
             "default": "balanced"
+          },
+          "effective_weights": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Effective Weights"
+          },
+          "reference_score": {
+            "type": "number",
+            "title": "Reference Score",
+            "default": 0.0
           }
         },
         "type": "object",
@@ -26371,6 +26560,44 @@
         ],
         "title": "MergeSuggestionRequest"
       },
+      "NetworkPolicyResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "settings_enabled": {
+            "type": "boolean",
+            "title": "Settings Enabled"
+          },
+          "forced_off_by_env": {
+            "type": "boolean",
+            "title": "Forced Off By Env"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "settings_enabled",
+          "forced_off_by_env"
+        ],
+        "title": "NetworkPolicyResponse"
+      },
+      "NetworkPolicyUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "NetworkPolicyUpdate",
+        "description": "Scoped update used by operational control surfaces such as Health."
+      },
       "NotDuplicateRequest": {
         "properties": {
           "openalex_id": {
@@ -27645,7 +27872,7 @@
           "score"
         ],
         "title": "RecommendationExplainResponse",
-        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope. Different ranker versions emit different signal\ntaxonomies \u2014 the legacy 10-signal layout\n(``source_relevance``, ``topic_score``, ``text_similarity``, \u2026,\n``usefulness_boost``), the v2 retrieval-channel layout\n(``lexical``, ``vector``), and various raw-diagnostic fields \u2014 and a\nhardcoded Pydantic model silently dropped every v2 key via\n``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live\nDB. The route returns the stored breakdown exactly as scoring wrote\nit, annotated with descriptions for known signal names; the frontend\niterates keys generically and renders the ones it recognises (see\n``components/shared/PaperCard.tsx::SIGNAL_META``)."
+        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope, and the route returns the stored value verbatim.\nRows persisted by older rankers carry older taxonomies, and a hardcoded\nmodel silently dropped their keys via ``extra='ignore'``, rendering\n48 / 201 rows as all-nulls on the live DB.\n\nThe part clients should read is ``breakdown[\"explanation\"]``: the closed\ndecomposition of the score written by\n``alma.application.discovery.ranker``, where\n\n    \u03a3 families[].points + \u03a3 adjustments[].points + clipped == final_score\n\nEach family carries its own ``label`` and ``description`` (from\n``ranker.FAMILY_SPECS``) plus the ``atoms`` it was built from, so the\npayload is self-describing and no client keeps a parallel copy of the\nvocabulary. Everything alongside it \u2014 raw similarity values, retrieval\nprovenance, mode strings \u2014 is diagnostic."
       },
       "RecommendationResponse": {
         "properties": {
@@ -28232,6 +28459,12 @@
             "description": "Publication backend",
             "default": "openalex"
           },
+          "network_access_enabled": {
+            "type": "boolean",
+            "title": "Network Access Enabled",
+            "description": "Allow outbound requests to external APIs and integration transports",
+            "default": true
+          },
           "openalex_email": {
             "anyOf": [
               {
@@ -28568,6 +28801,24 @@
         "title": "SignalLabFitEvidence",
         "description": "Evidence actually consumed by the current wholesale fit."
       },
+      "SignalLabHeadLimits": {
+        "properties": {
+          "head_points_max": {
+            "type": "number",
+            "title": "Head Points Max",
+            "default": 10.0
+          },
+          "head_points_default": {
+            "type": "number",
+            "title": "Head Points Default",
+            "default": 5.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SignalLabHeadLimits",
+        "description": "The head-weight contract, served with the settings so the UI cannot\nhard-code a ceiling the backend does not enforce (it did: 2.5 against 10)."
+      },
       "SignalLabRoundEvidence": {
         "properties": {
           "today": {
@@ -28709,6 +28960,107 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SignalLabSettings"
+      },
+      "SignalLabSettingsView": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enable Signal Lab",
+            "description": "Offer games on Home and consume their retained model.",
+            "default": true
+          },
+          "region_offset_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Region scoring nudge",
+            "description": "Maximum additive Discovery/Feed points from region preference, before the evidence damper scales it down. Reaches full strength only once a region has actually been judged several times.",
+            "default": 5.0
+          },
+          "utility_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Utility scoring nudge",
+            "description": "Maximum additive Discovery/Feed points from the confidence-scaled learned utility direction.",
+            "default": 5.0
+          },
+          "author_offset_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Author scoring nudge",
+            "description": "How much affinity a fully-preferred author gains. Fitted from within-region comparisons only, and ADDED to the author signal your Library already produces \u2014 never a replacement for it.",
+            "default": 5.0
+          },
+          "venue_offset_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Venue scoring nudge",
+            "description": "How much affinity a fully-preferred journal gains. Fitted only from same-field, different-venue rounds \u2014 the one place ALMa can learn which venue you would rather read at equal topic \u2014 and ADDED to the venue signal your Library already produces.",
+            "default": 5.0
+          },
+          "map_tint_strength": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Map taste tint",
+            "description": "How strongly learned region preference bends terrain.",
+            "default": 0.45
+          },
+          "ring_decay": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Ring decay",
+            "description": "Library-outward sampling decay \u03b3.",
+            "default": 0.35
+          },
+          "exploration_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Exploration rate",
+            "description": "Ring-uniform sampling fraction \u03b5.",
+            "default": 0.2
+          },
+          "coverage_target": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Coverage Target",
+            "default": 20
+          },
+          "refit_every_rounds": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Refit Every Rounds",
+            "default": 5
+          },
+          "holdout_percent": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Holdout Percent",
+            "default": 15
+          },
+          "override_min_votes": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Override Min Votes",
+            "default": 3
+          },
+          "limits": {
+            "$ref": "#/components/schemas/SignalLabHeadLimits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SignalLabSettingsView",
+        "description": "``GET /signal-lab/settings``: the settings plus their read-only limits.\n\nWrites take :class:`SignalLabSettings` only \u2014 ``limits`` is server truth,\nnot a knob, and the strict ``extra=\"forbid\"`` on the write model is what\nkeeps it that way."
       },
       "SignalLabSummaryResponse": {
         "properties": {

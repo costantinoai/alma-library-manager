@@ -723,6 +723,15 @@ class DiscoverySettingsResponse(BaseModel):
     monitor_defaults: DiscoveryMonitorDefaults = Field(default_factory=DiscoveryMonitorDefaults)
     embedding_model: str = S2_SPECTER2_MODEL
     recommendation_mode: str = "balanced"
+    # What the ranker will ACTUALLY use, derived by the ranker itself: the
+    # sliders rescaled to sum to 1 with the recommendation mode's multipliers
+    # applied, keyed by ranking family (one slider can drive two). Read-only;
+    # ignored on update. Published so the Settings card describes the weights
+    # the score uses, not the raw numbers the user typed.
+    effective_weights: dict[str, float] = Field(default_factory=dict)
+    # The score a paper that is average on every family gets under these
+    # weights — the reference point every displayed score is read against.
+    reference_score: float = 0.0
 
 
 class DiscoverySettingsUpdate(BaseModel):

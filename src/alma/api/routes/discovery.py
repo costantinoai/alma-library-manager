@@ -53,8 +53,12 @@ router = APIRouter(
 def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
     """Read all discovery_settings rows and return a structured response."""
     kv: dict[str, str] = discovery_app.read_settings(db)
+    from alma.application.discovery.calibration import load_calibration
+    from alma.application.discovery.ranker import resolve_family_weights, typical_prior_score
 
     return DiscoverySettingsResponse(
+        effective_weights={k: round(v, 4) for k, v in resolve_family_weights(kv).items()},
+        reference_score=round(typical_prior_score(kv, load_calibration(db)), 1),
         weights=DiscoveryWeights(
             source_relevance=float(kv.get("weights.source_relevance", "0.15")),
             topic_score=float(kv.get("weights.topic_score", "0.20")),

@@ -175,7 +175,7 @@ rest.
 | `POST` | `/discovery/refresh` | Refresh recs (Activity) |
 | `GET` | `/discovery/status` | Refresh status |
 | `GET` | `/discovery/stats` | Engagement counters |
-| `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config |
+| `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config; `GET` also serves `effective_weights` (what the ranker uses after rescaling + mode) and `reference_score` (the all-average paper's score) |
 | `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
 | `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
 | `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |
@@ -355,9 +355,9 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/signal-lab/{game}/queue?count=12` | At least ten signed, zero-write rounds for Home's game deck |
 | `POST` | `/signal-lab/{game}/round/answer` | Validate signature and persist exactly one answered round |
 | `GET` | `/signal-lab/summary` | Unique/duplicate ledger evidence, current-fit observations and constraints, freshness, structural region/edge coverage, and active effects |
-| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded promotion weights |
+| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded head weights; `GET` also serves the read-only `limits` (ceiling + default) |
 | `GET` | `/signal-lab/model` | Current wholesale fit |
-| `GET` | `/signal-lab/eval` | Held-out metrics and promotion evidence |
+| `GET` | `/signal-lab/eval` | Held-out metrics and the ranker replay (churn at current weights, parity, unassessable lenses) |
 | `POST` | `/signal-lab/purge` | Delete round history and invalidate the model; does not change activation/config |
 
 ### Other

@@ -1,7 +1,13 @@
 import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
 
-import type { ScoreAtom, ScoreBreakdown, ScoreFamily } from '@/api/client'
+import type {
+  ScoreAdjustment,
+  ScoreAdjustmentAtom,
+  ScoreAtom,
+  ScoreBreakdown,
+  ScoreFamily,
+} from '@/api/client'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Meter } from '@/components/ui/meter'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -19,8 +25,10 @@ import { cn } from '@/lib/utils'
  * ScoreBreakdownPanel — THE explanation of a paper's score, on every surface.
  *
  * Shows only, and all of, what produced the number: the ranking families that
- * contributed, any bounded adjustment, and the clipping term. Those sum to the
- * final score exactly — the backend guarantees that invariant
+ * contributed, any bounded adjustment (a retraction, which only ever subtracts;
+ * the Signal Lab heads, which are SIGNED and can lift a paper as well as sink
+ * it), and the clipping term. Those sum to the final score exactly — the
+ * backend guarantees that invariant
  * (`ranker.repaired_prior_score`) and this panel renders it rather than
  * computing a parallel decomposition of its own.
  *
@@ -30,7 +38,10 @@ import { cn } from '@/lib/utils'
  * picture of a calculation nobody was running.
  *
  * Colour is IDENTITY (which family), never valence: a large red `feedback` bar
- * is your own strong approval, not a warning.
+ * is your own strong approval, not a warning. Adjustment rows are the one
+ * exception, because an adjustment has no identity hue — there its colour IS
+ * the sign (critical below zero, success above), which is what the number
+ * already says.
  */
 
 /** One decimal is the resolution at which a gap between two families means
@@ -45,13 +56,22 @@ function familyColor(key: string): string {
 
 /** One measured input, inside an expanded family.
  *
- * `max` atoms compete and only the winner is paid, so the losers stay visible
- * but dimmed and tagged — seeing that the exemplar similarity lost to the
- * centroid is exactly the diagnostic worth having, and hiding it would leave
- * the family's value looking unexplained.
+ * Grouped atoms share a single payment, so a measured one can still contribute
+ * nothing. Those stay visible but dimmed and tagged: seeing that the exemplar
+ * similarity was passed over for the centroid is exactly the diagnostic worth
+ * having, and hiding it would leave the family's value looking unexplained.
+ *
+ * Whether an atom was paid comes from the scorer (`counted`) rather than being
+ * recomputed here. It used to be re-derived in this component as "the highest
+ * value in the group wins", which was true of every group until one began
+ * paying all of its measured members — at which point a duplicated rule would
+ * have started drawing "lost" beside a value that did reach the score.
  */
-function AtomRow({ atom, isGroupWinner }: { atom: ScoreAtom; isGroupWinner: boolean }) {
-  const spent = atom.available && (atom.role !== 'max' || isGroupWinner)
+function AtomRow({ atom }: { atom: ScoreAtom }) {
+  // `counted` is absent on rows persisted by an older ranker; fall back to the
+  // rule that held when they were written.
+  const counted = atom.counted ?? atom.role !== 'max'
+  const spent = atom.available && counted
   return (
     <div className="flex items-baseline gap-2 py-0.5 text-[11px]">
       <span
@@ -65,9 +85,12 @@ function AtomRow({ atom, isGroupWinner }: { atom: ScoreAtom; isGroupWinner: bool
           −{atom.weight}×
         </span>
       )}
-      {atom.role === 'max' && atom.available && (
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-slate-500">
-          {isGroupWinner ? 'used' : 'lost'}
+      {atom.role === 'max' && atom.available && !counted && (
+        <span
+          className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-slate-500"
+          title="Measured, but another member of its group was paid instead — one piece of evidence is only counted once."
+        >
+          not used
         </span>
       )}
       <span
@@ -94,21 +117,6 @@ function FamilyRow({
   const [open, setOpen] = React.useState(false)
   const expandable = family.atoms.length > 1
   const color = familyColor(family.key)
-
-  // Within each `max` group only the highest-valued available atom is paid.
-  // Mirrors `ranker._family_reading`; recomputed here rather than sent, so the
-  // payload stays a description of values and not of the renderer's state.
-  const groupWinners = React.useMemo(() => {
-    const best = new Map<string, { key: string; value: number }>()
-    for (const atom of family.atoms) {
-      if (atom.role !== 'max' || !atom.group || !atom.available) continue
-      const current = best.get(atom.group)
-      if (!current || atom.value > current.value) {
-        best.set(atom.group, { key: atom.key, value: atom.value })
-      }
-    }
-    return new Set([...best.values()].map((winner) => winner.key))
-  }, [family.atoms])
 
   return (
     <div>
@@ -175,7 +183,96 @@ function FamilyRow({
       {open && (
         <div className="mb-1 ml-6 border-l border-edge-2 pl-3">
           {family.atoms.map((atom) => (
-            <AtomRow key={atom.key} atom={atom} isGroupWinner={groupWinners.has(atom.key)} />
+            <AtomRow key={atom.key} atom={atom} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Signed points, with an explicit `+` so a lift reads as a lift. */
+function signedPoints(value: number): string {
+  return value > 0 ? `+${points(value)}` : points(value)
+}
+
+/** One signed head input, inside an expanded adjustment: the reading, the
+ *  ceiling it was scaled by, and the points that produced. Same shape as
+ *  `AtomRow`, without the family-only `max` / `penalty` tags — an adjustment
+ *  atom is always paid, so there is nothing to mark as used or lost. */
+function AdjustmentAtomRow({ atom }: { atom: ScoreAdjustmentAtom }) {
+  const tone = atom.available ? 'text-slate-600' : 'text-slate-400'
+  return (
+    <div className="flex items-baseline gap-2 py-0.5 text-[11px]" title={atom.description}>
+      <span className={cn('min-w-0 flex-1 truncate', tone)} title={atom.label}>
+        {atom.label}
+      </span>
+      <span className={cn('w-12 shrink-0 text-right font-mono tabular-nums', tone)}>
+        {atom.available ? atom.value.toFixed(2) : '—'}
+      </span>
+      <span className="shrink-0 font-mono text-[10px] text-slate-500">
+        × {atom.weight.toFixed(1)}
+      </span>
+      <span
+        className={cn(
+          'w-9 shrink-0 text-right font-mono tabular-nums',
+          atom.available ? 'text-slate-700' : 'text-slate-400',
+        )}
+      >
+        {atom.available ? signedPoints(atom.points) : '—'}
+      </span>
+    </div>
+  )
+}
+
+/** A post-family adjustment. Coloured by SIGN — a positive Signal Lab nudge
+ *  drawn in red would claim a lift was a loss. Expands to its atoms when the
+ *  ranker sent any (older persisted rows carry none). */
+function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {
+  const [open, setOpen] = React.useState(false)
+  const atoms = adjustment.atoms ?? []
+  const expandable = atoms.length > 0
+  const tone = adjustment.points < 0 ? 'text-critical-700' : 'text-success-700'
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={
+          expandable
+            ? (event) => {
+                // Same reason as FamilyRow: the panel sits inside a clickable
+                // paper card, and expanding is not a request to open it.
+                event.stopPropagation()
+                setOpen((prev) => !prev)
+              }
+            : undefined
+        }
+        aria-expanded={expandable ? open : undefined}
+        disabled={!expandable}
+        title={adjustment.description}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-sm px-1.5 py-0.5 text-left text-xs',
+          expandable && 'hover:bg-control-quiet-hover',
+        )}
+      >
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-slate-500 transition-transform',
+            !expandable && 'invisible',
+            open && 'rotate-90',
+          )}
+          aria-hidden
+        />
+        <span className={cn('flex-1 truncate font-medium', tone)}>{adjustment.label}</span>
+        <span className={cn('w-9 shrink-0 text-right font-mono font-semibold tabular-nums', tone)}>
+          {signedPoints(adjustment.points)}
+        </span>
+      </button>
+      {open && (
+        <div className="mb-1 ml-6 border-l border-edge-2 pl-3">
+          {atoms.map((atom) => (
+            <AdjustmentAtomRow key={atom.key} atom={atom} />
           ))}
         </div>
       )}
@@ -271,16 +368,7 @@ export function ScoreBreakdownPanel({
       {(adjustments.length > 0 || clipped !== 0) && (
         <div className="space-y-0.5 border-t border-edge-2 pt-2">
           {adjustments.map((adjustment) => (
-            <div
-              key={adjustment.key}
-              className="flex items-center gap-2 px-1.5 text-xs"
-              title={adjustment.description}
-            >
-              <span className="flex-1 font-medium text-critical-700">{adjustment.label}</span>
-              <span className="w-9 text-right font-mono font-semibold tabular-nums text-critical-700">
-                {points(adjustment.points)}
-              </span>
-            </div>
+            <AdjustmentRow key={adjustment.key} adjustment={adjustment} />
           ))}
           {clipped !== 0 && (
             <div

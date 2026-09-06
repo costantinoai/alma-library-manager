@@ -9,7 +9,13 @@ from alma.core.sql_helpers import standalone_paper_sql
 
 from ..frontier import load_live_frontier
 from ..seed_profile import _extract_keywords
-from ._common import FAMILY_LEXICAL, _candidate_key, attach_hits
+from ._common import (
+    FAMILY_LEXICAL,
+    LOCAL_PAPER_SELECT,
+    _candidate_key,
+    attach_hits,
+    local_paper_candidate,
+)
 
 _MAX_TOPIC_QUERIES = 8
 _PER_QUERY_LIMIT = 25
@@ -83,29 +89,15 @@ def _load_local_pool(db: sqlite3.Connection) -> list[dict]:
     out: dict[str, dict] = {}
     rows = db.execute(
         f"""
-        SELECT id, title, authors, abstract, url, doi, openalex_id,
-               semantic_scholar_id, year, journal, cited_by_count
+        SELECT {LOCAL_PAPER_SELECT}
         FROM papers
         WHERE status NOT IN ('library', 'dismissed', 'removed')
           AND {standalone_paper_sql('papers')}
         """
     ).fetchall()
     for row in rows:
-        candidate = {
-            "paper_id": row["id"],
-            "title": row["title"] or "",
-            "authors": row["authors"] or "",
-            "abstract": row["abstract"] or "",
-            "url": row["url"] or "",
-            "doi": row["doi"] or "",
-            "openalex_id": row["openalex_id"] or "",
-            "semantic_scholar_id": row["semantic_scholar_id"] or "",
-            "year": row["year"],
-            "journal": row["journal"] or "",
-            "cited_by_count": row["cited_by_count"] or 0,
-            "source_type": "lexical_local",
-            "source_api": "local",
-        }
+        candidate = local_paper_candidate(row)
+        candidate.update({"source_type": "lexical_local", "source_api": "local"})
         out[_candidate_key(candidate)] = candidate
 
     for candidate in load_live_frontier(db):

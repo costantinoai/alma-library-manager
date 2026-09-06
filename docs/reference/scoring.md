@@ -80,16 +80,92 @@ the UI cannot describe a formula the scorer is not running.
 
 | Family | Default weight | Built from |
 |---|---|---|
-| `semantic` | 0.14 | max(library centroid, closest exemplar, support set) − 0.5 · similarity to passed-on papers |
+| `semantic` | 0.14 | max(library centroid, closest exemplar) − 0.5 · similarity to passed-on papers |
 | `topic` | 0.20 | `topic_score` |
 | `retrieval` | 0.15 | 0.75 · max(RRF over the four channels) + 0.25 · (channels that agreed / 4) |
 | `author` | 0.15 | `author_affinity` |
 | `lexical` | 0.06 | 0.45 word + 0.35 char n-gram + 0.20 key term − 0.5 · overlap with passed-on papers |
 | `recency` | 0.10 | `recency_boost` |
-| `citation` | 0.05 | 0.50 `citation_quality` + 0.10 (`fwci`/3) + 0.20 max(coupling, co-citation) + 0.20 max(PPR library, PPR loved) |
+| `citation` | 0.05 | 0.50 `citation_quality` + 0.10 log-ratio(`fwci`) + 0.20 noisy-OR(coupling, co-citation) + 0.20 max(PPR library, PPR loved) |
 | `feedback` | 0.10 | `feedback_adj` |
 | `preference` | 0.10 | `preference_affinity` |
 | `venue` | 0.05 | `journal_affinity` |
+
+### Calibration is derived per library, never hardcoded (2026-09-06)
+
+A cosine, an overlap fraction, a family value: none has a useful absolute
+scale. Measured over one corpus, similarity to the Library ran 0.785..0.956
+between the 1st and 99th percentiles — and a library in another field sits
+somewhere else entirely. So the ranker reads every calibrated input as its
+**percentile in this install's own corpus**, and imputes an unmeasured family at
+**what a random paper from this corpus scores**. Both come from one stored
+artifact, `scoring:calibration` (`application/discovery/calibration.py`):
+
+- **How it is built.** A seeded random sample of corpus papers is scored through
+  the real measurement path with the real preference profile — the code a lens
+  refresh runs — in two passes: the first, uncalibrated, gives each input's raw
+  distribution (the similarity-to-centroid one over *every* corpus vector, so
+  the top tail keeps its order); the second, under the derived tables, gives
+  each family's mean *as scoring will read it*. Never measured on a Discovery
+  deck, which retrieval already selected for these very quantities.
+- **How it is used.** Loaded once per scoring pass and passed explicitly to
+  `measure_candidate` and the ranker (`ScoringCalibration`), like the Signal
+  Lab context. Every ranking snapshot records the tables it was scored with,
+  so a replay is exact after a rebuild; the explanation carries the generation.
+- **When it refreshes.** Its fingerprint moves when the corpus or the Library
+  changed *significantly* — the Library by 5 papers, the embedding set by 250
+  vectors or a new day of writes, feedback by 10 events, the model, the build
+  version — not on every save. A lens refresh checks it on the way in
+  (`ensure_calibration`, first build synchronous), and a periodic job
+  (`scoring_calibration_refresh`, every `schedule.scoring_calibration_interval_hours`,
+  default 12) catches drift between refreshes.
+- **Until measured.** A fresh install with no Library or vectors scores
+  *uncalibrated*: inputs read raw, families impute at their declared fallback
+  priors, and the explanation says `calibration: null`. It never borrows a
+  curve tuned for someone else's corpus.
+
+`scripts/measure_ranking_priors.py` prints what the build derives for a given DB,
+for review. The `prior_mean` on each `FamilySpec` is only that fallback.
+
+**Leverage, not weight, is what moves a ranking.** A family's influence is its
+weight times how much its value actually varies across a deck. Before any of
+this, the two largest sliders in Settings bought almost no discrimination —
+`semantic` had the second-largest weight and the least influence of all ten,
+because raw cosines against one library sit in a band 0.018 wide.
+
+### How grouped inputs combine (2026-09-06)
+
+Several families measure one question more than one way. Those atoms share a
+group that pays its weight **once**, and `FamilySpec.combine` declares how the
+group settles it:
+
+- **`max`** when the members are the same evidence measured several ways — three
+  views of one embedding comparison, two PageRank walks over nested seed sets
+  (measured correlation 0.92). Paying each would multiply one fact by however
+  many ways we happened to measure it.
+- **`noisy_or`** (`1 − Π(1 − v)`) when they are *different* evidence for the same
+  question. Sharing references with your library and being cited alongside it
+  are separate relations (measured correlation 0.59, each deciding the group on
+  a large share of papers), so a paper supported by both should outrank a paper
+  supported by one — sub-additively, and still bounded by the group's weight.
+
+The explanation publishes a `counted` flag per atom, so the card shows which
+measured inputs actually reached the score instead of re-deriving a rule that
+now differs per group.
+
+**`semantic_similarity_support_raw` left the semantic group.** It is defined as
+`min(centroid, exemplar)` — the minimum of the two atoms it was competing
+against — so inside a group paying the maximum it could not win on any corpus,
+ever. Measured: it won 0 of 138 papers, and removing it changed no score by any
+amount. It is still recorded as a diagnostic; the two views agreeing is worth
+seeing, it just is not a third opinion.
+
+**`fwci` is read on a log ratio, not divided by 3.** It is a ratio to the field
+average with a very long tail (measured over 6,108 papers: median 0.16, 95th
+percentile 19.6, maximum 8,825). Dividing by 3 pinned 22.5% of the corpus at the
+ceiling and squeezed the median to 0.05. The curve is now
+`0.5 + 0.5 · log10(fwci) / 2`, so the field average sits at 0.5, two decades
+either side reach the ends, 1% saturate and the median lands at 0.30.
 
 Weights come from `discovery_settings.weights.*` (Settings → Discovery). One
 slider, `weights.text_similarity`, drives two families — `semantic` takes 70%
@@ -404,6 +480,31 @@ Three knobs change the balance:
 
 The `recommendations` table caches the last batch, so re-tuning does not lose
 results — only the next refresh applies new weights.
+
+### What the weights card promises (2026-09-06)
+
+The sliders are **relative**. The ranker rescales them to sum to 1
+(`resolve_family_weights`) and applies the recommendation mode's multipliers
+before any score is computed, so the number on a slider is not what a family
+gets. The card therefore shows, per slider:
+
+* **share** — this slider's fraction of the current (unsaved) slider total,
+  recomputed live on every row as you type;
+* **· saved N%** — the fraction the ranker gives it under the SAVED settings
+  (`GET /discovery/settings` → `effective_weights`), shown only while it differs
+  from the live share;
+* **Typical paper scores N** in the section header — `reference_score`, what an
+  all-average paper scores under the saved weights (the same number every score
+  meter draws as its tick). It moves when you save, never while you edit.
+
+Saving writes settings only; no lens is refreshed. Verified end to end on the
+dev stack: recency 0.1→0.9 moved the effective weight 0.09→0.47 and the
+reference 55→45 on save, and the next refresh replaced 8 of the top 20 and moved
+their mean year by two years; a zero weight gives zero points; restoring the
+weights gives the original deck back. Guards:
+`frontend/src/components/settings/DiscoveryWeightsCard.test.tsx` (the live
+share is read over the NEW total) and `frontend/e2e/discovery-weights.spec.mjs`
+(the real page, restoring the weights it found).
 
 ## Score breakdown
 

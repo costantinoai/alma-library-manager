@@ -72,7 +72,9 @@ export function PaperHoverCard({
                 {paper.cited_by_count.toLocaleString()} citations
               </span>
             )}
-            {score != null && <ScoreMeter score={score} />}
+            {score != null && (
+              <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
+            )}
           </div>
 
           <ScoreBreakdownTeaser breakdown={scoreBreakdown} explanation={explanation} />

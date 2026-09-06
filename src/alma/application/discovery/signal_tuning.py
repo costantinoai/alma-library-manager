@@ -50,6 +50,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from alma.core.scoring_math import rank_churn
+
 logger = logging.getLogger(__name__)
 
 # The reward signals a stored `score_breakdown` carries. Deliberately spelled
@@ -355,15 +357,13 @@ def _shadow_vs_prior(conn: sqlite3.Connection) -> dict[str, Any]:
     for pairs in by_set.values():
         if len(pairs) < 2:
             continue
-        prior_order = sorted(range(len(pairs)), key=lambda i: -pairs[i][0])
-        shadow_order = sorted(range(len(pairs)), key=lambda i: -pairs[i][1])
-        rank_of = {idx: pos for pos, idx in enumerate(shadow_order)}
-        displacements.append(
-            sum(abs(rank_of[idx] - pos) for pos, idx in enumerate(prior_order)) / len(pairs)
+        churn = rank_churn(
+            {str(i): prior for i, (prior, _) in enumerate(pairs)},
+            {str(i): shadow for i, (_, shadow) in enumerate(pairs)},
+            top_n=10,
         )
-        k = min(10, len(pairs))
-        overlap = len(set(prior_order[:k]) & set(shadow_order[:k])) / k
-        top10_overlap.append(overlap)
+        displacements.append(float(churn["mean_rank_displacement"]))
+        top10_overlap.append(float(churn["top_overlap"]))
 
     if not displacements:
         return {

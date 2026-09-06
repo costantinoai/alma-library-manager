@@ -203,3 +203,99 @@ def days_since(raw, now: datetime) -> float | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0)
+
+
+def rank_churn(
+    baseline: Mapping[str, float],
+    adjusted: Mapping[str, float],
+    *,
+    top_n: int,
+) -> dict[str, float | int]:
+    """How differently two scorings of the SAME pool order it.
+
+    ``baseline`` / ``adjusted`` map one candidate id to its score under each
+    scoring; they must cover the same ids. Returns
+
+    * ``mean_rank_displacement`` — mean absolute change in rank position,
+    * ``top_overlap`` — fraction of the baseline top-``top_n`` still in the
+      adjusted top-``top_n`` (``k = min(top_n, pool)``),
+    * ``entered_top`` — how many candidates joined that top-``k``,
+    * ``pool`` / ``top_n`` — the sizes those numbers are relative to.
+
+    One implementation for every "what would promoting this head DO" probe —
+    the Signal Lab eval replay and the shadow-ranker comparison — so the two
+    never report differently-defined displacements under one label.
+    """
+
+    ids = list(baseline)
+    if set(ids) != set(adjusted):
+        raise ValueError("rank_churn: baseline and adjusted must score the same pool")
+    pool = len(ids)
+    k = min(int(top_n), pool)
+    if pool < 2:
+        return {
+            "pool": pool,
+            "top_n": k,
+            "mean_rank_displacement": 0.0,
+            "top_overlap": 1.0 if pool else 0.0,
+            "entered_top": 0,
+        }
+    # Ties break on id so two identical scorings always report zero churn.
+    base_order = sorted(ids, key=lambda cid: (-baseline[cid], cid))
+    adj_order = sorted(ids, key=lambda cid: (-adjusted[cid], cid))
+    base_rank = {cid: pos for pos, cid in enumerate(base_order)}
+    displacement = sum(abs(base_rank[cid] - pos) for pos, cid in enumerate(adj_order))
+    base_top = set(base_order[:k])
+    adj_top = set(adj_order[:k])
+    return {
+        "pool": pool,
+        "top_n": k,
+        "mean_rank_displacement": round(displacement / pool, 3),
+        "top_overlap": round(len(base_top & adj_top) / k, 3),
+        "entered_top": len(adj_top - base_top),
+    }
+
+
+# ── Calibration tables ─────────────────────────────────────────────────────
+#
+# A raw similarity or overlap has no useful absolute scale, so calibrated inputs
+# are read as their percentile in THIS install's corpus. The tables are derived
+# per library (`application/discovery/calibration.py`) and stored, never written
+# into code: a corpus in another field sits somewhere else entirely. This module
+# only owns the arithmetic.
+
+
+def interpolate_calibration(
+    raw_score: float, points: tuple[tuple[float, float], ...]
+) -> float:
+    """Piecewise-linear interpolation through a monotone (x, y) table."""
+
+    if raw_score <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if raw_score <= x1:
+            if x1 <= x0:
+                return y1
+            ratio = (raw_score - x0) / (x1 - x0)
+            return y0 + ((y1 - y0) * ratio)
+    return points[-1][1]
+
+
+def calibrate_similarity_score(
+    raw_score: float, points: tuple[tuple[float, float], ...] | None
+) -> float:
+    """Map a raw similarity onto [0, 1] through a derived table.
+
+    ``points`` ``None`` means "this install has not been measured yet": the raw
+    value is returned clipped, which is the honest uncalibrated reading rather
+    than a curve tuned for some other corpus.
+    """
+
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        return 0.0
+    score = max(0.0, min(1.0, score))
+    if not points:
+        return score
+    return float(max(0.0, min(1.0, interpolate_calibration(score, points))))

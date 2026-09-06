@@ -674,9 +674,11 @@ def _score_search_result(
         candidate["cross_family_evidence_count"] = len(sources)
         candidate["retrieval_hit_count"] = len(sources)
     try:
+        from alma.application.discovery.calibration import load_calibration
         from alma.application.discovery.ranker import rank_candidate
         from alma.discovery.scoring import measure_candidate
 
+        calibration = load_calibration(db)
         candidate["score_breakdown"] = measure_candidate(
             candidate,
             preference_profile,
@@ -688,11 +690,13 @@ def _score_search_result(
             settings,
             lexical_profile=lexical_profile,
             precomputed_lexical_details=precomputed_lexical_details,
+            calibration=calibration,
         )
         return rank_candidate(
             candidate,
             timestamp=utcnow().isoformat(),
             scoring_settings=settings,
+            calibration=calibration,
         )
     except Exception:
         return 0.0, {}

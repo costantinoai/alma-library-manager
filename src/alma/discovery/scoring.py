@@ -49,11 +49,17 @@ from alma.core.scoring_math import (
 )
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
+from alma.core.utils import candidate_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.services.feedback_substrate import get_preference_affinity_signal
 
 logger = logging.getLogger(__name__)
+
+# Feedback family: the structured projection's clamp, and how the two estimates
+# of "resembles what you rated up" are averaged (embedding view vs entity view).
+_PROJECTED_FEEDBACK_CAP = 0.6
+_FEEDBACK_SEMANTIC_SHARE = 0.6
 
 
 # Sentinel for `measure_candidate(topic_provider=...)`: distinguishes "caller
@@ -218,7 +224,7 @@ def resolve_candidate_topics(
     if topics:
         return topics
 
-    paper_id = str(candidate.get("id") or "").strip()
+    paper_id = candidate_paper_id(candidate)
     if conn is not None and paper_id:
         try:
             rows = conn.execute(
@@ -582,6 +588,7 @@ def measure_candidate(
     topic_provider: Any = _PROVIDER_UNSET,
     citation_fabric: dict[str, Any] | None = None,
     lab_ctx: dict[str, Any] | None = None,
+    calibration: Any = None,
 ) -> dict[str, Any]:
     """Measure every observable signal for a candidate paper.
 
@@ -621,6 +628,12 @@ def measure_candidate(
     # Normalize to [0, 1]
     if source_relevance > 1.0:
         source_relevance = min(1.0, source_relevance / 100.0)
+
+    # The install's derived calibration (corpus percentiles). `None` ⇒ the
+    # uncalibrated fallback, which reads raw and says so in the explanation.
+    from alma.application.discovery.calibration import UNCALIBRATED
+
+    _calibration = calibration if calibration is not None else UNCALIBRATED
 
     # -- 2. Topic score --
     paper_topics = resolve_candidate_topics(candidate, conn)
@@ -701,7 +714,7 @@ def measure_candidate(
         }
 
     semantic_similarity = (
-        sim_module.calibrate_similarity_score(semantic_similarity_raw, mode="semantic")
+        _calibration.read("semantic_similarity_raw", semantic_similarity_raw)
         if semantic_similarity_raw > 0.0
         else 0.0
     )
@@ -736,7 +749,7 @@ def measure_candidate(
             "negative_penalty": 0.0,
         }
     lexical_similarity = (
-        sim_module.calibrate_similarity_score(lexical_similarity_raw, mode="lexical")
+        _calibration.read("lexical_similarity_raw", lexical_similarity_raw)
         if lexical_similarity_raw > 0.0
         else 0.0
     )
@@ -888,22 +901,36 @@ def measure_candidate(
         + (0.30 * projected_axes["tag"])
         + (0.40 * projected_axes["author"])
         + (0.30 * projected_axes["author_name"]),
-        -0.6,
-        0.6,
+        -_PROJECTED_FEEDBACK_CAP,
+        _PROJECTED_FEEDBACK_CAP,
     )
 
-    if fb_pos_centroid is not None and candidate_embedding is not None:
+    # The two inputs estimate the SAME latent quantity — "resembles what you
+    # rated up" — one from the full-document embedding, one from structured
+    # entities. They were summed and clamped, so two confident positives
+    # saturated at 1.0 (77% of a measured deck sat at the ceiling, and the
+    # family with a 0.10 weight moved the ranking by 0.30 points). A bounded
+    # weighted mean keeps both voices, never exceeds either's range, and
+    # reserves 1.0 for a paper both estimates are certain about.
+    semantic_signed = 0.0
+    semantic_available = fb_pos_centroid is not None and candidate_embedding is not None
+    if semantic_available:
         try:
-            semantic_fb_raw = sim_module.compute_semantic_similarity(
+            semantic_signed = sim_module.feedback_semantic_signal(
                 candidate_embedding, fb_pos_centroid, fb_neg_centroid,
+                points=_calibration.table("semantic_similarity_centroid_raw"),
             )
-            semantic_fb = sim_module.calibrate_similarity_score(semantic_fb_raw, mode="semantic")
-            feedback_adj = (semantic_fb * 2.0) - 1.0
         except Exception as exc:
             logger.debug("Semantic feedback centroid failed: %s", exc)
-            feedback_adj = 0.0
-
-    feedback_adj += projected_adj
+            semantic_available = False
+    projected_signed = projected_adj / _PROJECTED_FEEDBACK_CAP  # → [-1, 1]
+    if semantic_available:
+        feedback_adj = (
+            _FEEDBACK_SEMANTIC_SHARE * semantic_signed
+            + (1.0 - _FEEDBACK_SEMANTIC_SHARE) * projected_signed
+        )
+    else:
+        feedback_adj = projected_signed
     feedback_adj = max(-1.0, min(1.0, feedback_adj))
     feedback_adj_norm = (feedback_adj + 1.0) / 2.0  # Shift to [0, 1]
 
@@ -930,9 +957,10 @@ def measure_candidate(
     cocitation_strength = max(0.0, min(1.0, float(cf.get("cocitation_strength") or 0.0)))
 
     # -- Signal Lab per-candidate terms (task 54, D20). `lab_ctx` is loaded once
-    # per scoring pass by the caller (None unless the lab weights are promoted
-    # off 0.0 AND a fitted model exists), so at the default weights this block
-    # adds no breakdown keys — byte-identical to a lab-less build. --
+    # per scoring pass by the caller (None unless the Lab is enabled, a weight
+    # is > 0 AND a fitted model exists), so with the Lab off this block adds
+    # no breakdown keys — byte-identical to a lab-less build. Measured here,
+    # weighted in the ranker (`LAB_ADJUSTMENTS`). --
     if lab_ctx is not None:
         from alma.application.signal_lab.scoring_terms import compute_lab_adjustments
 
@@ -1014,9 +1042,13 @@ def measure_candidate(
     # papers"). Strengths are always emitted; counts/partners only when non-zero.
     breakdown["coupling_strength"] = round(coupling_strength, 4)
     breakdown["cocitation_strength"] = round(cocitation_strength, 4)
+    # Signed Lab inputs, read by `ranker.LAB_ADJUSTMENTS`; written ONLY when a
+    # usable model was loaded so their absence means "not measured". The
+    # generation stamp travels with them into the immutable snapshot.
     if lab_ctx is not None:
         breakdown["lab_region_offset_raw"] = round(float(lab_offset_raw), 4)
         breakdown["lab_utility_raw"] = round(float(lab_utility_raw), 4)
+        breakdown["lab_generation"] = lab_ctx.get("generation")
     if cf.get("coupling_count"):
         breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
         if cf.get("coupling_partner_id"):
@@ -1069,7 +1101,7 @@ def _projected_feedback_axes(
         axes[axis] += float(value)
         axes[f"{axis}_evidence_count"] += 1.0
 
-    paper_id = str(candidate.get("paper_id") or candidate.get("id") or "").strip().lower()
+    paper_id = candidate_paper_id(candidate).lower()
     if paper_id:
         add("paper", projected.paper.get(paper_id, 0.0))
         add("semantic_neighbor", projected.semantic_neighbor.get(paper_id, 0.0))

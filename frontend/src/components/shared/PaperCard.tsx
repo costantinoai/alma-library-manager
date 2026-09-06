@@ -657,7 +657,7 @@ export function PaperCard({
                 about it. */}
             {score != null && (
               <div className="mt-2 flex items-center gap-2">
-                <ScoreMeter score={score} />
+                <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
                 {(hasBreakdown || hasExplanation) && (
                   <HoverCard openDelay={200} closeDelay={100}>
                     <HoverCardTrigger asChild>

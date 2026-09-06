@@ -69,6 +69,18 @@ _MERGED_FIELDS = (
     "field_provenance",
     "taste_strength",
     "negative_pref_penalty",
+    # Personalised-PageRank proximity and the coupling/co-citation counts the
+    # graph lane computes. They were absent until 2026-09-06, so the lane's
+    # walks were run, attached to its candidates, and then dropped HERE — the
+    # two `ppr_*` ranker atoms were unavailable on 100% of 2290 measured
+    # candidates. An input the ranker declares must survive this boundary;
+    # `tests/test_ranking_inputs_fire.py` now fails if one does not.
+    "ppr_library",
+    "ppr_loved",
+    "coupling_count",
+    "cocitation_count",
+    "seed_overlap",
+    "reference_support_count",
 )
 
 _MAX_FIELDS = (

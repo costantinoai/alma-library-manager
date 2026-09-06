@@ -6,7 +6,30 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
-FEATURE_SCHEMA_VERSION = "discovery-features-v3"
+# v4: the snapshot carries the SIGNED Signal Lab head inputs
+# (`_LAB_SIGNED_INPUTS`) and the exposure carries the Lab model generation.
+# Rows stamped v3 never recorded them, so a v3 row cannot say whether the Lab
+# was off or simply not captured — eval must treat it as unassessable, not as
+# "Lab contributed 0". Additive keys on their own would not have earned a bump;
+# that ambiguity did.
+# v5: four declared ranking inputs began arriving that never had (2026-09-06).
+# `is_retracted` (so the −45-point penalty fires at all), `fwci`, and both PPR
+# proximities were absent from every locally-sourced candidate; `topic_score`
+# was the "no overlap" constant 0.5 because the resolver looked up the wrong
+# identity key and scored title word-tokens instead of the paper's topics.
+# MUST bump: a v4 row and a v5 row measure different things under the same
+# names, so replay, evaluation and the shadow ranker's training pool must not
+# mix them. Nothing about the snapshot's SHAPE changed — its meaning did.
+FEATURE_SCHEMA_VERSION = "discovery-features-v5"
+
+# Signal Lab heads, on the signed unit interval, evidence damper already
+# applied (see `signal_lab.scoring_terms.compute_lab_adjustments`). Written by
+# `measure_candidate` only when a usable Lab model was loaded, so absence means
+# "not measured", which the snapshot records as unavailable.
+_LAB_SIGNED_INPUTS = (
+    "lab_region_offset_raw",
+    "lab_utility_raw",
+)
 
 _SCALAR_DIAGNOSTICS = (
     "semantic_similarity_centroid_raw",
@@ -120,6 +143,14 @@ def build_feature_snapshot(
             availability = bool(str(candidate.get("authors") or "").strip())
         elif name == "journal_affinity":
             availability = bool(str(candidate.get("journal") or "").strip())
+        elif name == "topic_score":
+            # A paper whose topics could not be resolved at all has an UNKNOWN
+            # topic score, not a measured zero. `measure_candidate` reports that
+            # as `topic_match_mode == "none"`. Marking it measured would let the
+            # graded overlap (which is 0.0 when nothing matches) punish a paper
+            # for missing metadata — the hydration-completeness trap — instead
+            # of imputing the family at its corpus prior.
+            availability = str(breakdown.get("topic_match_mode") or "none") != "none"
         elif name == "recency_boost":
             availability = bool(candidate.get("publication_date") or candidate.get("year"))
         elif name == "citation_quality":
@@ -162,6 +193,9 @@ def build_feature_snapshot(
             if name.endswith("_strength")
             else 0,
         )
+
+    for name in _LAB_SIGNED_INPUTS:
+        reward[name] = _feature(breakdown.get(name), available=name in breakdown)
 
     referenced = candidate.get("referenced_works")
     reference_count = (
@@ -274,6 +308,10 @@ def build_feature_snapshot(
             or candidate.get("specter2_model")
         ),
         "embedding_model_compatible": candidate.get("embedding_model_compatible"),
+        # Which fitted Lab model / region payload produced the signed inputs
+        # above (None when no Lab context was loaded). Lets eval tell a
+        # snapshot from the current model apart from one fitted on fewer rounds.
+        "lab_generation": breakdown.get("lab_generation"),
     }
     return reward, exposure
 

@@ -1437,6 +1437,9 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
 
     lab_ctx = load_lab_scoring_context(db, settings)
+    from alma.application.discovery.calibration import ensure_calibration
+
+    calibration = ensure_calibration(db)
 
     # ── Embedding centroids ──
     pos_ids = [p["id"] for p in positive_pubs if p.get("id")]
@@ -1576,11 +1579,13 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 settings=settings,
                 candidate_embedding=candidate_embeddings.get(str(fr["id"])),
                 lab_ctx=lab_ctx,
+                calibration=calibration,
             )
             score, breakdown = rank_candidate(
                 candidate,
                 timestamp=scored_at,
                 scoring_settings=settings,
+                calibration=calibration,
             )
 
             signal_value = max(0, min(100, int(round(score))))

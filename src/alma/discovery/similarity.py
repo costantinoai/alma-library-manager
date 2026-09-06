@@ -19,6 +19,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+# The similarity calibration lives in `core.scoring_math` — one curve for the
+# composite signal, the feedback comparison AND the ranker's atoms. Re-exported
+# here because this module is the historical import path (`sim_module.calibrate_
+# similarity_score`); it is a re-export, not a second implementation.
+from alma.core.scoring_math import calibrate_similarity_score  # noqa: F401
 from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np
 
@@ -32,33 +37,6 @@ _SCHOLARLY_STOPWORDS = {
     "this", "those", "using", "used", "use", "very", "were", "what", "when", "where", "which",
     "while", "with", "within", "without", "your",
 }
-
-_SEMANTIC_CALIBRATION_POINTS: tuple[tuple[float, float], ...] = (
-    (0.0, 0.0),
-    (0.03, 0.07),
-    (0.08, 0.18),
-    (0.14, 0.31),
-    (0.22, 0.47),
-    (0.32, 0.65),
-    (0.45, 0.82),
-    (0.60, 0.92),
-    (0.78, 0.98),
-    (1.0, 1.0),
-)
-
-_LEXICAL_CALIBRATION_POINTS: tuple[tuple[float, float], ...] = (
-    (0.0, 0.0),
-    (0.03, 0.04),
-    (0.08, 0.11),
-    (0.15, 0.24),
-    (0.24, 0.42),
-    (0.34, 0.60),
-    (0.48, 0.79),
-    (0.64, 0.92),
-    (0.82, 0.98),
-    (1.0, 1.0),
-)
-
 
 @dataclass
 class LexicalProfile:
@@ -220,18 +198,6 @@ def _format_similarity_facets(title: str, values: Iterable[str], *, label: str, 
         return ""
     emphasis = f"{title}. " if title else ""
     return f"{emphasis}{label}: {', '.join(unique)}."
-
-
-def _interpolate_similarity(raw_score: float, points: tuple[tuple[float, float], ...]) -> float:
-    if raw_score <= points[0][0]:
-        return points[0][1]
-    for (x0, y0), (x1, y1) in zip(points, points[1:]):
-        if raw_score <= x1:
-            if x1 <= x0:
-                return y1
-            ratio = (raw_score - x0) / (x1 - x0)
-            return y0 + ((y1 - y0) * ratio)
-    return points[-1][1]
 
 
 def _extract_weighted_terms(text: str) -> Counter:
@@ -396,24 +362,35 @@ def compute_topic_overlap(
             ut)` on every iteration.
 
     Returns:
-        A score between -1 and 1.  0.0 is returned when no overlap exists or
-        inputs are empty.
+        A score between -1 and 1: the preference-weighted share of the PAPER's
+        topic mass that matches your profile. 0.0 when nothing matches or the
+        inputs are empty; negative when the matches are topics you rated down.
     """
     if not user_topics or not paper_topics:
         return 0.0
 
     score = 0.0
-    max_possible = 0.0
+    # Denominator: the paper's ENTIRE topic mass, matched or not. Normalising by
+    # the matched mass instead (the behaviour until 2026-09-06) makes the result
+    # `score / |score|` whenever every user weight is positive — i.e. exactly 1.0
+    # for any paper sharing a single topic, and 0.0 otherwise. Measured on the
+    # dev corpus, that produced 132 papers at 1.0 and 10 at 0.0 out of 142: a
+    # boolean wearing the label "topic overlap", in the family carrying the
+    # joint-largest weight. Dividing by the whole mass asks the question the
+    # name promises — how much of THIS paper is about things you care about —
+    # and stays in [-1, 1] because |weight| <= 1.
+    total_relevance = 0.0
     unmatched: list[tuple[str, float]] = []  # (term, relevance)
 
     for t in paper_topics:
         term = (t.get("term") or "").strip().lower()
         relevance = t.get("score", 0.5) or 0.5
+        if not term:
+            continue
+        total_relevance += relevance
         if term in user_topics:
-            weight = user_topics[term]
-            score += weight * relevance
-            max_possible += abs(weight) * relevance
-        elif term:
+            score += user_topics[term] * relevance
+        else:
             unmatched.append((term, relevance))
 
     # Semantic fallback for unmatched terms.
@@ -467,11 +444,10 @@ def compute_topic_overlap(
                             best_weight = ut_weights[best_idx]
                             semantic_match = (best_sim - 0.6) / 0.4  # 0→1
                             score += best_weight * relevance * semantic_match
-                            max_possible += abs(best_weight) * relevance * semantic_match
         except Exception:
             pass
 
-    return score / max_possible if max_possible > 0 else 0.0
+    return score / total_relevance if total_relevance > 0 else 0.0
 
 
 def _get_or_build_user_topic_matrix(
@@ -932,23 +908,6 @@ def build_similarity_text(
     return full_text
 
 
-def calibrate_similarity_score(raw_score: float, *, mode: str = "semantic") -> float:
-    """Calibrate scholarly similarity scores into a more usable 0..1 range.
-
-    Academic cosine similarities are often compressed into low-looking values.
-    A mild power transform preserves ordering while making mid-strength matches
-    visible enough to matter in the ranker and UI.
-    """
-    try:
-        score = float(raw_score)
-    except (TypeError, ValueError):
-        return 0.0
-    score = max(0.0, min(1.0, score))
-    points = _SEMANTIC_CALIBRATION_POINTS if mode == "semantic" else _LEXICAL_CALIBRATION_POINTS
-    calibrated = _interpolate_similarity(score, points)
-    return float(max(0.0, min(1.0, calibrated)))
-
-
 # ---------------------------------------------------------------------------
 # Embedding cache
 # ---------------------------------------------------------------------------
@@ -1163,6 +1122,47 @@ def compute_semantic_similarity(
         score -= 0.5 * neg_sim
 
     return float(max(0.0, min(1.0, score)))
+
+
+def feedback_semantic_signal(
+    candidate_embedding: numpy.ndarray | None,
+    positive_centroid: numpy.ndarray | None,
+    negative_centroid: numpy.ndarray | None = None,
+    *,
+    points: tuple[tuple[float, float], ...] | None = None,
+) -> float:
+    """Signed [-1, 1] resemblance to what you rated up (and, if any, down).
+
+    Each cosine goes through this install's derived table first (``points``, the
+    corpus CDF of similarity to the Library), so it is a percentile before it is
+    compared with anything:
+
+    * with a negative centroid: ``cal(pos) - cal(neg)`` — 0 means "as close to
+      what you liked as to what you disliked";
+    * without one: ``2 * cal(pos) - 1`` — 0 means "as close to what you liked
+      as the median corpus paper".
+
+    The previous form combined the two raw cosines (``pos - 0.5 * neg``) and
+    THEN calibrated the difference, feeding a curve built for cosines a number
+    that is not one; and its caller added the structured projection on top and
+    clamped, so the family sat at the ceiling on 77% of a deck.
+    """
+    if candidate_embedding is None or positive_centroid is None or not _NUMPY_AVAILABLE:
+        return 0.0
+    cand = numpy.asarray(candidate_embedding, dtype=numpy.float32)
+    norm = float(numpy.linalg.norm(cand))
+    if norm <= 0.0:
+        return 0.0
+    cand = cand / norm
+    positive = calibrate_similarity_score(
+        _cosine_similarity_np(cand, positive_centroid), points
+    )
+    if negative_centroid is None:
+        return max(-1.0, min(1.0, 2.0 * positive - 1.0))
+    negative = calibrate_similarity_score(
+        _cosine_similarity_np(cand, negative_centroid), points
+    )
+    return max(-1.0, min(1.0, positive - negative))
 
 
 def compute_semantic_similarity_details(

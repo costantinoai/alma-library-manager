@@ -33,8 +33,10 @@ from alma.discovery.scoring import (
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
+from .calibration import ensure_calibration  # also registers the scoring:calibration view
 from .citation_fabric import build_citation_fabric_maps
 from .exploration import build_slate
+from .features import FEATURE_SCHEMA_VERSION
 
 # --- D-9: re-exported from .lens_crud (moved out of this god-module) ---
 from .lens_crud import (
@@ -137,7 +139,6 @@ from .seed_profile import (
     _cluster_seed_papers_vector,
     _extract_keywords,
     _fetch_seed_embedding_vectors,
-    _load_library_preference_inputs,
     _load_seed_papers_for_lens,
     _negative_preference_context,
     _plan_branch_queries_deterministic,
@@ -152,6 +153,7 @@ from .seed_profile import (
     _top_negative_terms,
     _top_preferred_authors,
     _top_profile_terms,
+    load_library_preference_inputs,
     preview_lens_branches,
     split_preference_pubs,
 )
@@ -356,7 +358,7 @@ def _refresh_lens_recommendations(
     # into a focused lens. The library_global lens keeps the full-Library inputs
     # (and the monitored-corpus prior) because the Library *is* its scope.
     if lens.get("context_type") == "library_global":
-        _library_pubs, positive_pubs, negative_pubs = _load_library_preference_inputs(db)
+        _library_pubs, positive_pubs, negative_pubs = load_library_preference_inputs(db)
         scope_paper_ids = None
     else:
         positive_pubs, negative_pubs = split_preference_pubs(seeds)
@@ -1125,11 +1127,15 @@ def _refresh_lens_recommendations(
     from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
 
     lab_ctx = load_lab_scoring_context(db, scoring_settings)
+    # This install's derived calibration: built now if never built, refreshed
+    # in the background if the corpus/library moved significantly.
+    calibration = ensure_calibration(db)
     _scoring_aggregates = score_candidates(
         merged,
         ScoringContext(
             db=db,
             lab_ctx=lab_ctx,
+            calibration=calibration,
             profile=profile,
             scoring_settings=scoring_settings,
             positive_centroid=positive_centroid,
@@ -1159,6 +1165,7 @@ def _refresh_lens_recommendations(
         scoring_settings=scoring_settings,
         shadow_model=shadow_model,
         shadow_training_size=shadow_training_size,
+        calibration=calibration,
     )
     # MMR consumes the same verified, same-model vectors as semantic scoring.
     # Keep them private/in-memory: ranking snapshots record the semantic atoms,
@@ -1305,7 +1312,7 @@ def _refresh_lens_recommendations(
         "budgets": external_summary.get("budgets") or {},
         "lane_runs": external_summary.get("lane_runs") or [],
         "diversity": diversity_summary,
-        "feature_schema_version": "discovery-features-v3",
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_timestamp": feature_timestamp,
     }
     cold_start_summary = _build_topic_keyword_cold_start_summary(

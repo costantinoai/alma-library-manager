@@ -152,8 +152,10 @@ def score_discovery_candidate(
     (``measure_candidate`` → ``rank_candidate``) so a paper it scores is
     directly comparable with one Discovery scored.
     """
+    from alma.application.discovery.calibration import load_calibration
     from alma.application.discovery.ranker import rank_candidate
 
+    calibration = load_calibration(conn)
     candidate["score_breakdown"] = measure_candidate(
         candidate,
         preference_profile,
@@ -163,11 +165,13 @@ def score_discovery_candidate(
         negative_texts,
         conn,
         settings,
+        calibration=calibration,
     )
     return rank_candidate(
         candidate,
         timestamp=utcnow().isoformat(),
         scoring_settings=settings,
+        calibration=calibration,
     )
 
 

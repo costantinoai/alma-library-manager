@@ -67,6 +67,7 @@ class ScoringContext:
     preloaded_preference_profile: Any
     topic_provider: Any
     lab_ctx: Any = None  # Signal Lab scoring context (task 54); None ⇒ lab off
+    calibration: Any = None  # ScoringCalibration; None ⇒ uncalibrated fallback
 
 
 @dataclass
@@ -172,6 +173,7 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             topic_provider=_topic_provider,
             citation_fabric=citation_fabric,
             lab_ctx=ctx.lab_ctx,
+            calibration=ctx.calibration,
         )
         # Fold retrieval provenance ("why this paper surfaced") into the
         # persisted breakdown so the UI can explain more than the branch

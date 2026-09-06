@@ -9,7 +9,13 @@ from typing import Any
 from alma.core.sql_helpers import standalone_paper_sql
 
 from ..ppr import SEED_LIBRARY, SEED_LOVED, compute_ppr_variants
-from ._common import FAMILY_CITATION, _candidate_key, attach_hits
+from ._common import (
+    FAMILY_CITATION,
+    LOCAL_PAPER_SELECT,
+    _candidate_key,
+    attach_hits,
+    local_paper_candidate,
+)
 
 
 def _retrieve_graph_channel(
@@ -331,8 +337,7 @@ def _candidates_by_paper_id(
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
             f"""
-            SELECT id, title, authors, abstract, url, doi, openalex_id,
-                   semantic_scholar_id, year, journal, cited_by_count
+            SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE id IN ({placeholders})
               AND status NOT IN ('library', 'dismissed', 'removed')
@@ -341,19 +346,7 @@ def _candidates_by_paper_id(
             chunk,
         ).fetchall()
         for row in rows:
-            out[str(row["id"])] = {
-                "paper_id": row["id"],
-                "title": row["title"] or "",
-                "authors": row["authors"] or "",
-                "abstract": row["abstract"] or "",
-                "url": row["url"] or "",
-                "doi": row["doi"] or "",
-                "openalex_id": row["openalex_id"] or "",
-                "semantic_scholar_id": row["semantic_scholar_id"] or "",
-                "year": row["year"],
-                "journal": row["journal"] or "",
-                "cited_by_count": row["cited_by_count"] or 0,
-            }
+            out[str(row["id"])] = local_paper_candidate(row)
     return out
 
 
@@ -368,8 +361,7 @@ def _candidates_by_openalex_id(
         placeholders = ",".join("?" for _ in chunk)
         paper_rows = db.execute(
             f"""
-            SELECT id, title, authors, abstract, url, doi, openalex_id,
-                   semantic_scholar_id, year, journal, cited_by_count
+            SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE openalex_id IN ({placeholders})
               AND status NOT IN ('library', 'dismissed', 'removed')
@@ -378,19 +370,7 @@ def _candidates_by_openalex_id(
             chunk,
         ).fetchall()
         for row in paper_rows:
-            out[str(row["openalex_id"])] = {
-                "paper_id": row["id"],
-                "title": row["title"] or "",
-                "authors": row["authors"] or "",
-                "abstract": row["abstract"] or "",
-                "url": row["url"] or "",
-                "doi": row["doi"] or "",
-                "openalex_id": row["openalex_id"] or "",
-                "semantic_scholar_id": row["semantic_scholar_id"] or "",
-                "year": row["year"],
-                "journal": row["journal"] or "",
-                "cited_by_count": row["cited_by_count"] or 0,
-            }
+            out[str(row["openalex_id"])] = local_paper_candidate(row)
 
         frontier_rows = db.execute(
             f"""
@@ -446,8 +426,7 @@ def _ppr_candidates(
         placeholders = ",".join("?" for _ in chunk)
         rows = db.execute(
             f"""
-            SELECT id, title, authors, abstract, url, doi, openalex_id,
-                   semantic_scholar_id, year, journal, cited_by_count
+            SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE id IN ({placeholders})
               AND status NOT IN ('library', 'dismissed', 'removed')
@@ -456,19 +435,7 @@ def _ppr_candidates(
             chunk,
         ).fetchall()
         for row in rows:
-            by_id[str(row["id"])] = {
-                "paper_id": row["id"],
-                "title": row["title"] or "",
-                "authors": row["authors"] or "",
-                "abstract": row["abstract"] or "",
-                "url": row["url"] or "",
-                "doi": row["doi"] or "",
-                "openalex_id": row["openalex_id"] or "",
-                "semantic_scholar_id": row["semantic_scholar_id"] or "",
-                "year": row["year"],
-                "journal": row["journal"] or "",
-                "cited_by_count": row["cited_by_count"] or 0,
-            }
+            by_id[str(row["id"])] = local_paper_candidate(row)
     out: list[dict] = []
     for paper_id, score in scores.items():
         candidate = by_id.get(paper_id)

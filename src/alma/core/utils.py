@@ -122,6 +122,29 @@ def normalize_title_key(title: str | None) -> str:
     return _TITLE_KEY_NOISE_RE.sub("", title.strip().lower())
 
 
+def candidate_paper_id(item: dict) -> str:
+    """THE local ``papers.id`` of a candidate dict. One spelling, one owner.
+
+    Retrieval lanes key their candidates on ``paper_id``; rows read straight
+    out of ``papers`` (Home, Feed) carry ``id``. Both are the same fact, so
+    every reader must accept both — and before this existed they did not.
+    ``discovery.scoring.resolve_candidate_topics`` read ``id`` alone, so for
+    every lane-built candidate the stored ``publication_topics`` lookup was
+    skipped and scoring silently fell through to title-word tokens. Those
+    tokens ("eeg-based", "valence") never match the preference profile, whose
+    keys are OpenAlex topic names, so ``topic_score`` was the "no overlap"
+    constant 0.5 on every candidate of every deck from 2026-07 to 2026-09 —
+    while ``topic`` carried the joint-largest family weight. Measured on the
+    dev corpus: 2290 of 2290 snapshots at exactly 0.500.
+
+    ``paper_id`` wins when both are present: an externally-sourced candidate
+    can carry a provider's own ``id`` (an OpenAlex work id), and using that to
+    query a local table by primary key silently matches nothing.
+    """
+
+    return str(item.get("paper_id") or item.get("id") or "").strip()
+
+
 def candidate_dedup_key(item: dict) -> str:
     """Canonical in-memory dedup key for a candidate / paper dict (D-7).
 

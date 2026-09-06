@@ -106,7 +106,9 @@ def _plan_branch_queries_deterministic(
     temperature = _planner_clamp(float(temperature), 0.0, 1.0)
 
     core_topics = [str(x).strip() for x in (branch.get("core_topics") or []) if str(x).strip()]
-    explore_topics = [str(x).strip() for x in (branch.get("explore_topics") or []) if str(x).strip()]
+    explore_topics = [
+        str(x).strip() for x in (branch.get("explore_topics") or []) if str(x).strip()
+    ]
     seed_context = branch.get("seed_context") or []
     seed_titles: list[str] = []
     if isinstance(seed_context, list):
@@ -160,7 +162,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
             WHERE status = 'library'
-              AND {standalone_paper_sql('papers')}
+              AND {standalone_paper_sql("papers")}
             ORDER BY COALESCE(rating, 0) DESC, COALESCE(cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -178,7 +180,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             JOIN collection_items ci ON ci.paper_id = p.id
             WHERE ci.collection_id = ?
               AND p.status = 'library'
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -195,7 +197,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
             WHERE (title LIKE ? OR abstract LIKE ?)
-              AND {standalone_paper_sql('papers')}
+              AND {standalone_paper_sql("papers")}
             ORDER BY COALESCE(cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -212,7 +214,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
                 FROM papers p
                 JOIN publication_tags pt ON pt.paper_id = p.id
                 WHERE pt.tag_id = ?
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 ORDER BY COALESCE(p.cited_by_count, 0) DESC
                 LIMIT ?
                 """,
@@ -230,13 +232,41 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
     return []
 
 
-_KEYWORD_STOP_WORDS: frozenset[str] = frozenset({
-    "the", "and", "for", "with", "from", "using", "towards", "into", "between",
-    "study", "studies", "analysis", "approach", "model", "models", "data",
-    "this", "that", "these", "those", "paper", "papers", "method", "methods",
-    "result", "results", "research", "review", "reviews", "library",
-    "scientific",
-})
+_KEYWORD_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "using",
+        "towards",
+        "into",
+        "between",
+        "study",
+        "studies",
+        "analysis",
+        "approach",
+        "model",
+        "models",
+        "data",
+        "this",
+        "that",
+        "these",
+        "those",
+        "paper",
+        "papers",
+        "method",
+        "methods",
+        "result",
+        "results",
+        "research",
+        "review",
+        "reviews",
+        "library",
+        "scientific",
+    }
+)
 
 
 def _tokenize_for_keywords(text: str) -> list[str]:
@@ -326,7 +356,7 @@ def split_preference_pubs(pubs: list[dict]) -> tuple[list[dict], list[dict]]:
     1-2). Crucially this does NOT drop the default-rated (rating 3) papers — a
     freshly imported collection is almost all rating 3, and treating those as
     "not a signal" collapses the taste to nothing (the whole-Library heuristic
-    in :func:`_load_library_preference_inputs`, which excludes rating 3, is the
+    in :func:`load_library_preference_inputs`, which excludes rating 3, is the
     wrong rule for a curated set). Used by every non-library lens so each is
     scoped to its own papers.
     """
@@ -335,7 +365,7 @@ def split_preference_pubs(pubs: list[dict]) -> tuple[list[dict], list[dict]]:
     return positive_pubs, negative_pubs
 
 
-def _load_library_preference_inputs(
+def load_library_preference_inputs(
     db: sqlite3.Connection,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Load the whole-Library taste inputs (used by the ``library_global`` lens).
@@ -349,17 +379,37 @@ def _load_library_preference_inputs(
         f"""SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
            FROM papers
            WHERE status = 'library'
-             AND {standalone_paper_sql('papers')}
+             AND {standalone_paper_sql("papers")}
            ORDER BY COALESCE(added_at, '') DESC"""
     ).fetchall()
     library_pubs = [dict(r) for r in rows]
-    positive_pubs = [
-        dict(r) for r in rows if (r["rating"] or 0) >= 4 or (r["rating"] or 0) == 0
-    ]
+    positive_pubs = [dict(r) for r in rows if (r["rating"] or 0) >= 4 or (r["rating"] or 0) == 0]
     negative_pubs = [dict(r) for r in rows if 1 <= int(r["rating"] or 0) <= 2]
     if library_pubs and not any((r["rating"] or 0) >= 4 for r in rows):
         positive_pubs = list(library_pubs)
     return library_pubs, positive_pubs, negative_pubs
+
+
+def library_taste_direction(db: sqlite3.Connection) -> np.ndarray | None:
+    """The Rocchio direction of the Library's taste: positive centroid minus
+    negative centroid (or the positive centroid alone when nothing was rated
+    down). ``None`` without an embedded positive set.
+
+    One owner for "which way does the user's taste point in embedding space":
+    the Signal Lab fits its utility head as a delta from this, so what the Lab
+    learns is what your ordinary saves and ratings do NOT already say.
+    """
+    from alma.discovery.similarity import compute_embedding_centroid
+
+    _, positive_pubs, negative_pubs = load_library_preference_inputs(db)
+    positive = compute_embedding_centroid(positive_pubs, db) if positive_pubs else None
+    if positive is None:
+        return None
+    negative = compute_embedding_centroid(negative_pubs, db) if negative_pubs else None
+    direction = np.asarray(positive, dtype=np.float32)
+    if negative is not None:
+        direction = direction - np.asarray(negative, dtype=np.float32)
+    return direction
 
 
 def _top_profile_terms(
@@ -434,9 +484,7 @@ def _scoped_top_authors(
     return ranked[: max(1, limit)]
 
 
-def resolve_author_openalex_ids(
-    db: sqlite3.Connection, names: list[str]
-) -> dict[str, str]:
+def resolve_author_openalex_ids(db: sqlite3.Connection, names: list[str]) -> dict[str, str]:
     """Map author display names to their OpenAlex author ids.
 
     The taste-author lane needs an id, not a name: OpenAlex's ``search``
@@ -538,7 +586,7 @@ def _top_preferred_authors(
                 JOIN papers p ON p.id = pa.paper_id
                 WHERE p.status = 'library'
                   AND COALESCE(TRIM(pa.display_name), '') != ''
-                  AND {standalone_paper_sql('p')}
+                  AND {standalone_paper_sql("p")}
                 GROUP BY LOWER(TRIM(pa.display_name))
                 """
             ).fetchall()
@@ -606,10 +654,7 @@ def _top_preferred_authors(
                 scores.pop(key, None)
 
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    return [
-        (display_names.get(key, key), score)
-        for key, score in ranked[: max(1, limit)]
-    ]
+    return [(display_names.get(key, key), score) for key, score in ranked[: max(1, limit)]]
 
 
 def _recent_positive_publications(
@@ -625,7 +670,7 @@ def _recent_positive_publications(
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE r.user_action IN ('save', 'like')
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(r.action_at, r.created_at, '') DESC
             LIMIT ?
             """,
@@ -839,9 +884,7 @@ def _seed_strength(seed: dict) -> float:
     return (rating_score * 0.6) + (citation_score * 0.25) + (recency_score * 0.15)
 
 
-def _attach_signal_scores_to_seeds(
-    db: sqlite3.Connection, seeds: list[dict]
-) -> list[dict]:
+def _attach_signal_scores_to_seeds(db: sqlite3.Connection, seeds: list[dict]) -> list[dict]:
     """Stamp `_signal_score` on each seed via `paper_signal.score_papers_batch`.
 
     One batched call per refresh; the per-seed sort key inside
@@ -857,6 +900,7 @@ def _attach_signal_scores_to_seeds(
         return seeds
     try:
         from alma.application.paper_signal import score_papers_batch
+
         scores = score_papers_batch(db, paper_ids)
     except Exception as exc:
         logger.debug("score_papers_batch unavailable for seed strength: %s", exc)
@@ -888,13 +932,14 @@ def _fetch_seed_embedding_vectors(
             JOIN papers p ON p.id = pe.paper_id
             WHERE pe.model = ?
               AND pe.paper_id IN ({placeholders})
-              AND {standalone_paper_sql('p')}
+              AND {standalone_paper_sql("p")}
             """,
             [active_model, *seed_ids],
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
     from alma.core.vector_blob import decode_vector
+
     out: dict[str, np.ndarray] = {}
     for row in rows:
         paper_id = str(row["paper_id"] or "").strip()
@@ -957,9 +1002,7 @@ def _cluster_seed_papers_vector(
         ids = [k for k in cluster.member_keys if k in seed_by_id]
         if not ids:
             continue
-        real.append(
-            {"ids": ids, "centroid": _unit(np.asarray(cluster.centroid, dtype=float))}
-        )
+        real.append({"ids": ids, "centroid": _unit(np.asarray(cluster.centroid, dtype=float))})
 
     if not real:
         # The engine placed every seed in density-noise → one catch-all branch
@@ -1041,9 +1084,9 @@ def _cluster_seed_papers_lexical(
     # below any halfway-distinctive runner-up.
     groups: dict[str, list[dict]] = defaultdict(list)
     for seed, tokens in seed_token_sets:
-        token_counts = Counter(_tokenize_for_keywords(
-            f"{seed.get('title', '')} {seed.get('abstract', '')}"
-        ))
+        token_counts = Counter(
+            _tokenize_for_keywords(f"{seed.get('title', '')} {seed.get('abstract', '')}")
+        )
         if not token_counts:
             groups["__misc__"].append(seed)
             continue
@@ -1184,7 +1227,9 @@ def _build_seed_branches(
                         best_sim = sim
                         best_idx = j
             if best_idx is not None:
-                neighbor_terms = _extract_keywords(clusters[best_idx].get("seeds") or [], max_keywords=12)
+                neighbor_terms = _extract_keywords(
+                    clusters[best_idx].get("seeds") or [], max_keywords=12
+                )
                 if neighbor_terms:
                     direction_hint = " / ".join(neighbor_terms[:2])
 
@@ -1202,7 +1247,9 @@ def _build_seed_branches(
             explore_pool.append(term)
         explore_topics = explore_pool[:explore_count]
 
-        branch_score = sum(_seed_strength(seed) for seed in cluster_seeds) / max(1, len(cluster_seeds))
+        branch_score = sum(_seed_strength(seed) for seed in cluster_seeds) / max(
+            1, len(cluster_seeds)
+        )
         label = " / ".join(core_topics[:2]) if core_topics else f"Branch {i}"
 
         sample_papers: list[dict] = []
@@ -1252,7 +1299,10 @@ def _build_seed_branches(
             }
         )
 
-    branches.sort(key=lambda b: (float(b.get("branch_score") or 0.0), int(b.get("seed_count") or 0)), reverse=True)
+    branches.sort(
+        key=lambda b: (float(b.get("branch_score") or 0.0), int(b.get("seed_count") or 0)),
+        reverse=True,
+    )
     return branches[:effective_max]
 
 

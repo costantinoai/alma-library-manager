@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -40,16 +40,22 @@ import { useToast, errorToast } from '@/hooks/useToast'
 // stated in its description rather than left for the user to infer.
 // ---------------------------------------------------------------------------
 
-const WEIGHT_LABELS: { key: keyof DiscoveryWeights; label: string; description: string }[] = [
-  { key: 'text_similarity', label: 'Semantic + Lexical', description: 'Drives two families: embedding similarity to what you keep (70%) and terminology overlap (30%).' },
-  { key: 'topic_score', label: 'Topic', description: 'Overlap with the topics your rated papers cluster on.' },
-  { key: 'source_relevance', label: 'Retrieval', description: 'How strongly the search channels surfaced it, and how many agreed.' },
-  { key: 'author_affinity', label: 'Author', description: 'Authors you follow or repeatedly save.' },
-  { key: 'recency_boost', label: 'Recency', description: 'How recently it was published.' },
-  { key: 'citation_quality', label: 'Citation', description: 'Citation weight, and citation-graph proximity to your library.' },
-  { key: 'feedback_adj', label: 'Feedback', description: 'Your explicit verdicts on similar papers.' },
-  { key: 'preference_affinity', label: 'Preference', description: 'The taste profile accumulated from Signal Lab and your history.' },
-  { key: 'journal_affinity', label: 'Venue', description: 'Journals and conferences you read.' },
+const WEIGHT_LABELS: {
+  key: keyof DiscoveryWeights
+  label: string
+  description: string
+  /** The ranking families this slider drives (`ranker.FAMILY_SPECS.weight_setting`). */
+  families: string[]
+}[] = [
+  { key: 'text_similarity', label: 'Semantic + Lexical', families: ['semantic', 'lexical'], description: 'Drives two families: embedding similarity to what you keep (70%) and terminology overlap (30%).' },
+  { key: 'topic_score', label: 'Topic', families: ['topic'], description: 'Overlap with the topics your rated papers cluster on.' },
+  { key: 'source_relevance', label: 'Retrieval', families: ['retrieval'], description: 'How strongly the search channels surfaced it, and how many agreed.' },
+  { key: 'author_affinity', label: 'Author', families: ['author'], description: 'Authors you follow or repeatedly save.' },
+  { key: 'recency_boost', label: 'Recency', families: ['recency'], description: 'How recently it was published.' },
+  { key: 'citation_quality', label: 'Citation', families: ['citation'], description: 'Citation weight, and citation-graph proximity to your library.' },
+  { key: 'feedback_adj', label: 'Feedback', families: ['feedback'], description: 'Your explicit verdicts on similar papers.' },
+  { key: 'preference_affinity', label: 'Preference', families: ['preference'], description: 'The taste profile accumulated from Signal Lab and your history.' },
+  { key: 'journal_affinity', label: 'Venue', families: ['venue'], description: 'Journals and conferences you read.' },
 ]
 
 const STRATEGY_LABELS: { key: keyof DiscoveryStrategies; label: string; description: string }[] = [
@@ -294,11 +300,11 @@ export function DiscoveryWeightsCard() {
   }, [discoveryQuery.data])
 
   const values = form.watch()
-  const weightSum = useMemo(
-    () => Object.values(values.weights).reduce((s, v) => s + (v ?? 0), 0),
-    [values.weights],
-  )
-  const weightsBalanced = Math.abs(weightSum - 1.0) < 0.02
+  // Not memoised on purpose: react-hook-form mutates `values.weights` in place,
+  // so its reference never changes and a memo keyed on it kept the PRE-edit
+  // total. Every slider's live "share" was then wrong until the next save
+  // (0.9 over the old 1.1 read 82% instead of 47%). Nine numbers: just add.
+  const weightSum = Object.values(values.weights).reduce((s, v) => s + (v ?? 0), 0)
 
   const discSaveMutation = useMutation({
     mutationFn: (data: DiscoveryForm) => api.put<DiscoverySettings>('/discovery/settings', data),
@@ -330,9 +336,16 @@ export function DiscoveryWeightsCard() {
     [setValue],
   )
 
+  // The sliders are RELATIVE: the ranker rescales them to sum to 1 and applies
+  // the recommendation mode's multipliers before any score is computed. This
+  // badge used to warn whenever the raw numbers did not add to 1 — a rule the
+  // backend never had. It now shows the one number a reader needs to interpret
+  // any score: what an all-average paper scores under the saved weights.
+  const savedReference = discoveryQuery.data?.reference_score
+  const effective = discoveryQuery.data?.effective_weights ?? {}
   const headerStat = (
-    <StatusBadge tone={weightsBalanced ? 'positive' : 'warning'} size="sm">
-      Sum {weightSum.toFixed(2)}
+    <StatusBadge tone="neutral" size="sm" title="A paper that is average on every signal scores this under the saved weights. Read every score against it.">
+      {savedReference != null ? `Typical paper scores ${Math.round(savedReference)}` : `Sum ${weightSum.toFixed(2)}`}
     </StatusBadge>
   )
 
@@ -395,10 +408,25 @@ export function DiscoveryWeightsCard() {
                     label={item.label}
                     description={item.description}
                     value={values.weights[item.key] ?? 0}
+                    share={
+                      weightSum > 0
+                        ? (values.weights[item.key] ?? 0) / weightSum
+                        : undefined
+                    }
+                    savedShare={item.families.reduce(
+                      (sum, family) => sum + (effective[family] ?? 0),
+                      0,
+                    )}
                     onChange={(v) => setWeight(item.key, v)}
                   />
                 ))}
               </div>
+              <p className="mt-3 text-xs text-slate-500">
+                Weights are relative: the ranker rescales them to sum to 1, and the
+                Explore / Exploit modes multiply some of them on top. "Share" is what
+                each slider actually gets. Changes apply the next time a lens is
+                refreshed — already-ranked decks keep the scores they were given.
+              </p>
             </SettingsSection>
 
             {/* Retrieval strategies — 12 toggles, all-on is the expected
@@ -720,19 +748,36 @@ function WeightSlider({
   label,
   description,
   value,
+  share,
+  savedShare,
   onChange,
 }: {
   label: string
   description?: string
   value: number
+  /** This slider's fraction of the current (unsaved) slider total. */
+  share?: number
+  /** The fraction the ranker gives it under the SAVED settings, mode applied. */
+  savedShare?: number
   onChange: (value: number) => void
 }) {
   const safeValue = Number.isFinite(value) ? value : 0
+  const pct = (v: number | undefined) => (v == null ? null : `${Math.round(v * 100)}%`)
   return (
     <div className="space-y-1.5 rounded-sm border border-[var(--color-border)] p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-slate-800">{label}</p>
+          <p className="text-sm font-medium text-slate-800">
+            {label}
+            {share != null && (
+              <span className="ml-2 font-mono text-[11px] font-normal text-slate-500" title="Share of the ranking this slider gets once all sliders are rescaled to sum to 1.">
+                share {pct(share)}
+                {savedShare != null && Math.abs(savedShare - share) > 0.005 && (
+                  <span className="text-slate-400"> · saved {pct(savedShare)}</span>
+                )}
+              </span>
+            )}
+          </p>
           {description ? <p className="text-xs text-slate-500">{description}</p> : null}
         </div>
         <Input
