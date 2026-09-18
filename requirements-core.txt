@@ -34,6 +34,9 @@ scholarly
 # --- Plugins (Slack notifier) ---
 slack-sdk>=3.20.0
 
+# --- Paper PDFs (verify a stored file is the paper it claims to be) ---
+pypdf>=6.0
+
 # --- Library imports (BibTeX / Zotero) ---
 bibtexparser>=1.4.0
 pyzotero>=1.5.0

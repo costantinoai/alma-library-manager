@@ -40,6 +40,9 @@ dependencies = [
     "platformdirs>=4.0.0",
     # Slack notifier plugin (lazy-imported, but bundled for default UX)
     "slack-sdk>=3.20.0",
+    # Paper PDFs: open, count pages and read pages 1-2 to verify a file is the
+    # paper it claims to be (pure Python; 6.x carries the FlateDecode-bomb fix)
+    "pypdf>=6.0",
     # Google Scholar fallback (optional but included for out-of-box experience)
     "scholarly",
     # Discovery clustering / projections / TF-IDF text similarity. These
