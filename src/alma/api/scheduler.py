@@ -2509,6 +2509,7 @@ def semantic_partition_refresh_periodic() -> None:
         from alma.application.semantic_partition import (
             assign_missing_members,
             build_partition,
+            prune_vectorless_members,
             read_state,
         )
         from alma.application.signal_lab import settings as lab_settings
@@ -2524,6 +2525,7 @@ def semantic_partition_refresh_periodic() -> None:
                     logger.info("%s: corpus too small to partition", job_id)
                     return
                 logger.info("%s: built partition generation %d", job_id, built.generation)
+            prune_vectorless_members(conn)
             assigned = assign_missing_members(conn)
             if assigned.get("assigned") or assigned.get("outliers"):
                 logger.info(
