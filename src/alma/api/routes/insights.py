@@ -23,6 +23,7 @@ from alma.application import materialized_views as mv
 from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
     count_outcomes,
+    recommendation_engagement,
 )
 from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
@@ -1788,6 +1789,14 @@ def _build_operational_snapshot(
     }
 
 
+@router.get("/recommendations", summary="Read recommendation engagement")
+def get_recommendation_engagement(db: sqlite3.Connection = Depends(get_db)):
+    try:
+        return recommendation_engagement(db)
+    except Exception as exc:
+        raise_internal("Failed to read recommendation engagement", exc)
+
+
 @router.get(
     "",
     summary="Get insights data",
@@ -1797,20 +1806,13 @@ def get_insights(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Library-scoped analytics for the Insights page.
-
-    Served via the materialised-view layer (`alma.application.materialized_views`):
-    a cache hit returns in <10 ms; on a content-fingerprint mismatch the
-    stale payload is returned immediately and a background rebuild is
-    enqueued, so the page never blocks on recomputation. The response
-    shape stays backwards-compatible — callers see the original payload
-    fields at the top level — and three SWR flags are added alongside:
-    `stale`, `rebuilding`, `computed_at`.
-    """
+    """Read the stored Library analytics snapshot; never compute or schedule."""
     try:
-        envelope = mv.get(db, "insights:overview")
+        envelope = mv.get_stored(db, "insights:overview", include_rebuilding=False)
     except Exception as exc:
-        raise_internal("Failed to compute insights", exc)
+        raise_internal("Failed to read insights", exc)
+    if envelope is None:
+        return None
     payload = envelope.get("payload") or {}
     return {
         **payload,
@@ -1818,6 +1820,17 @@ def get_insights(
         "rebuilding": envelope.get("rebuilding", False),
         "computed_at": envelope.get("computed_at"),
     }
+
+
+@router.post("/refresh", status_code=202, summary="Refresh Library analytics in the background")
+def refresh_insights(
+    force: bool = Query(default=False),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    try:
+        return {"job_id": mv.request_refresh(db, "insights:overview", force=force)}
+    except Exception as exc:
+        raise_internal("Failed to refresh insights", exc)
 
 
 # ── Drilldown: one parameterized paper list behind every Insights figure ──
@@ -2491,50 +2504,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                 }
             )
 
-        # ── Recommendations (Discovery-layer, intentionally NOT Library-scoped) ──
-        # This block reports Discovery engine engagement (seen / liked /
-        # dismissed). It's about the recommender, not curation, so it
-        # aggregates across all recommendations. Keep here for the single
-        # "Insights" screen; if this block grows, consider moving it to a
-        # Discovery-specific insight tab.
-        rec_data = {
-            "total": 0,
-            "seen": 0,
-            "liked": 0,
-            "dismissed": 0,
-            "engagement_rate": 0.0,
-            "by_lens": [],
-        }
-        if table_exists(db, "recommendations"):
-            # I-21/D6: `liked`/`dismissed` come from the authoritative outcome
-            # projection (feedback/ratings/lifecycle), not the like/dismiss
-            # user_action that D6 never stamps. `seen` is real exposure (any
-            # stamped action). `by_lens` (volume + avg score) is provenance, not
-            # engagement, so it stays a plain group-by.
-            counts = count_outcomes(build_recommendation_outcomes(db))
-
-            rows = db.execute(
-                f"""
-                SELECT COALESCE(r.lens_id, 'unknown') AS lens_id,
-                       COUNT(*) AS count,
-                       ROUND(AVG(r.score), 3) AS avg_score
-                FROM recommendations r
-                JOIN papers p ON p.id = r.paper_id
-                WHERE {standalone_paper_sql("p")}
-                GROUP BY r.lens_id
-                ORDER BY count DESC
-                """
-            ).fetchall()
-            by_lens = [dict(r) for r in rows]
-
-            rec_data = {
-                "total": counts.total,
-                "seen": counts.seen,
-                "liked": counts.positive,
-                "dismissed": counts.dismissed,
-                "engagement_rate": counts.engagement_rate,
-                "by_lens": by_lens,
-            }
+        rec_data = recommendation_engagement(db)
 
         # ── Embeddings (Library-scoped coverage) ──
         # "X vectors / Y% coverage" reflects "how much of my Library is
@@ -2659,7 +2629,7 @@ def get_insights_diagnostics(
     alerts, feedback, operational, evaluation) is registered as a
     fingerprint-based materialised view in
     ``alma.api.routes.insights_diagnostics``. We pull each section's
-    cached payload through ``mv.get`` and recompose them into the
+    stored payload through ``mv.get_stored`` and recompose them into the
     legacy ``InsightsDiagnostics`` shape so existing consumers keep
     working. New consumers should hit the section endpoints directly
     for finer-grained loading + caching.

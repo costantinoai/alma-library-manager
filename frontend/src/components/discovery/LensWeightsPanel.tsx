@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 
 interface LensWeightsPanelProps {
+  enabled?: boolean
   lens: Lens | null
   onSave: (weights: Record<string, number>) => void
 }
@@ -20,7 +21,7 @@ const CHANNEL_DESCRIPTIONS: Record<string, string> = {
   external: 'OpenAlex related/citing/topic works for out-of-library discovery',
 }
 
-export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
+export function LensWeightsPanel({ lens, onSave, enabled = true }: LensWeightsPanelProps) {
   const [weights, setWeights] = useState<Record<string, number>>({
     lexical: 0.25,
     vector: 0.25,
@@ -28,8 +29,10 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
     external: 0.25,
   })
 
-  const { data: aiStatus } = useQuery({
+  const { data: aiStatus, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['ai-status'],
+    enabled: enabled && !!lens,
+    retry: 1,
     queryFn: () => api.get<AIStatus>('/ai/status'),
     staleTime: 30_000,
   })
@@ -69,6 +72,12 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
       <div className="font-brand text-sm font-semibold text-alma-800">
         Lens Weights
       </div>
+      {isError && (
+        <div role="alert" className="space-y-2 text-sm text-critical-700">
+          <p>Could not check embedding availability.</p>
+          <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>Retry</Button>
+        </div>
+      )}
       <div className="space-y-4">
         {CHANNELS.map((channel) => {
           const isVectorChannel = channel === 'vector'
@@ -115,7 +124,7 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
               {disabled && (
                 <p className="mt-1 flex items-center gap-1 text-xs text-warning-600">
                   <AlertCircle className="h-3 w-3" />
-                  Fetch vectors or configure embeddings in Settings
+                  {isLoading ? 'Checking embedding availability…' : isError ? 'Embedding availability unknown' : 'Fetch vectors or configure embeddings in Settings'}
                   {activeModel ? ` (${activeModel})` : ''}
                 </p>
               )}

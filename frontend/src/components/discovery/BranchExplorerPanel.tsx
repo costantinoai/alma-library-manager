@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import {
   Compass,
   Flame,
@@ -13,7 +13,8 @@ import {
   VolumeX,
 } from 'lucide-react'
 
-import { previewLensBranches, type Lens, type LensBranchItem } from '@/api/client'
+import { getApiErrorMessage, type Lens, type LensBranchItem } from '@/api/client'
+import { useBranchPreview } from '@/hooks/useBranchPreview'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,6 +29,7 @@ import { useBranchControls } from '@/hooks/useBranchControls'
 
 interface BranchExplorerPanelProps {
   lens: Lens | null
+  enabled?: boolean
   /**
    * The host already carries the title. Drops the panel's own "Branch Studio"
    * heading, its subtitle, and its sheet, keeping only the controls: hosted
@@ -94,10 +96,10 @@ function closestPreset(temperature: number) {
   }, BRANCH_PRESETS[1])
 }
 
-export function BranchExplorerPanel({ lens, bare = false }: BranchExplorerPanelProps) {
+export function BranchExplorerPanel({ lens, bare = false, enabled = true }: BranchExplorerPanelProps) {
   const { toast } = useToast()
   const [temperature, setTemperature] = useState(0.28)
-  const [resolution, setResolution] = useState(BRANCH_RESOLUTION_DEFAULT)
+  const [resolution, setResolution] = useState(() => normalizeControls(lens).resolution)
   const [pinned, setPinned] = useState<string[]>([])
   const [muted, setMuted] = useState<string[]>([])
   const [boosted, setBoosted] = useState<string[]>([])
@@ -111,14 +113,7 @@ export function BranchExplorerPanel({ lens, bare = false }: BranchExplorerPanelP
     setBoosted(controls.boosted)
   }, [lens])
 
-  const branchQuery = useQuery({
-    // `resolution` in the key so dragging the slider re-previews live before the
-    // controls are persisted (mirrors the graph's cluster-detail behaviour).
-    queryKey: ['lens-branches', lens?.id, lens?.branch_controls, resolution],
-    queryFn: () => previewLensBranches(lens?.id as string, { max_branches: 8, resolution }),
-    enabled: Boolean(lens?.id),
-    staleTime: 30_000,
-  })
+  const branchQuery = useBranchPreview(lens, resolution, enabled)
 
   // Both writers go through the shared hook so the merge rule (never drop a
   // field the other surface owns) lives in exactly one place.
@@ -283,8 +278,8 @@ export function BranchExplorerPanel({ lens, bare = false }: BranchExplorerPanelP
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => branchQuery.refetch()} disabled={branchQuery.isFetching}>
-              {branchQuery.isFetching ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+            <Button size="sm" variant="outline" onClick={branchQuery.refresh} disabled={branchQuery.building}>
+              {branchQuery.building ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
               Preview
             </Button>
             <Button
@@ -562,11 +557,19 @@ export function BranchExplorerPanel({ lens, bare = false }: BranchExplorerPanelP
           </div>
         )}
 
-        {branchQuery.isLoading ? (
+        {(branchQuery.buildError || branchQuery.isError) && (
+          <p role="alert" className="text-sm text-critical-600">
+            Branch preview unavailable: {branchQuery.buildError || getApiErrorMessage(branchQuery.error)}. Use Preview to retry.
+          </p>
+        )}
+        {branchQuery.building && branchQuery.data && (
+          <p role="status" className="text-sm text-slate-500">Updating preview… Previous result stays visible.</p>
+        )}
+        {branchQuery.isLoading || (branchQuery.building && !branchQuery.data) ? (
           <div className="flex items-center justify-center rounded-sm border border-[var(--color-border)] bg-surface-1 py-16 text-sm text-slate-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Building branch studio...
           </div>
-        ) : branches.length === 0 ? (
+        ) : (branchQuery.buildError || branchQuery.isError) && !branchQuery.data ? null : branches.length === 0 ? (
           <EmptyState
             title="No branch structure yet"
             description="Add more embedded library papers or refresh after more intake."

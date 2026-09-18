@@ -6,9 +6,7 @@
  * a reader asking "are these suggestions any good?" was sent to a different
  * page to find out (task 47 Phase 3/4 — "move + delete together").
  *
- * It reads the shared `['insights']` query, so opening it here costs nothing
- * extra when Analytics has already been viewed, and the numbers can never
- * disagree between the two surfaces.
+ * Reads the shared outcome projection only while its disclosure is open.
  */
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -26,6 +24,7 @@ import { COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SectionHeader } from '@/components/shared'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Sparkles } from 'lucide-react'
 
@@ -37,19 +36,28 @@ function lensLabel(lensId: string, names: Map<string, string>): string {
 
 export function RecommendationEngagement({
   lensNames,
+  enabled = true,
 }: {
   /** id → display name, so the per-lens rows read as lenses, not as UUIDs. */
   lensNames?: Map<string, string>
+  enabled?: boolean
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['insights'],
-    queryFn: () => api.get<InsightsData>('/insights'),
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ['insights', 'recommendations'],
+    enabled,
+    queryFn: () => api.get<InsightsData['recommendations']>('/insights/recommendations'),
     staleTime: 60_000,
     retry: 1,
   })
 
   if (isLoading && !data) return <Skeleton className="h-48 w-full" />
-  const recommendations = data?.recommendations
+  if (isError) return (
+    <div role="alert" className="space-y-2 text-sm text-critical-700">
+      <p>Could not load recommendation engagement.</p>
+      <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>Retry</Button>
+    </div>
+  )
+  const recommendations = data
   if (!recommendations) return null
 
   const names = lensNames ?? new Map<string, string>()

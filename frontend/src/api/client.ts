@@ -2827,8 +2827,8 @@ export interface AIProviderInfo {
   device?: 'cuda' | 'cpu' | null
 }
 
-export function getInsightsDiagnostics(): Promise<InsightsDiagnostics> {
-  return api.get<InsightsDiagnostics>('/insights/diagnostics')
+export function getInsightsDiagnostics(): Promise<InsightsDiagnostics | null> {
+  return api.get<InsightsDiagnostics | null>('/insights/diagnostics')
 }
 
 // ── Per-section diagnostics endpoints ────────────────────────────────────
@@ -2939,10 +2939,14 @@ export type DiagnosticsSectionPayload = {
 
 export function getDiagnosticsSection<K extends DiagnosticsSectionKey>(
   section: K,
-): Promise<DiagnosticsSectionPayload[K]> {
-  return api.get<DiagnosticsSectionPayload[K]>(
+): Promise<DiagnosticsSectionPayload[K] | null> {
+  return api.get<DiagnosticsSectionPayload[K] | null>(
     `/insights/diagnostics/sections/${section}`,
   )
+}
+
+export function refreshDiagnostics(force = false): Promise<{ job_id: string | null }> {
+  return api.post(`/insights/diagnostics/refresh?force=${force}`)
 }
 
 /**
@@ -4092,16 +4096,28 @@ export function listLensRecommendations(
   return api.get<LensRecommendation[]>(`/lenses/${encodeURIComponent(lensId)}/recommendations${q ? `?${q}` : ''}`)
 }
 
-export function previewLensBranches(
-  lensId: string,
-  params?: { max_branches?: number; temperature?: number; resolution?: number },
-): Promise<LensBranchPreview> {
+export interface BranchPreviewOptions {
+  max_branches?: number
+  temperature?: number
+  resolution?: number
+}
+
+function branchPreviewPath(lensId: string, params?: BranchPreviewOptions, refresh = false, force = false): string {
   const qs = new URLSearchParams()
-  if (params?.max_branches != null) qs.set('max_branches', String(params.max_branches))
-  if (params?.temperature != null) qs.set('temperature', String(params.temperature))
-  if (params?.resolution != null) qs.set('resolution', String(params.resolution))
-  const q = qs.toString()
-  return api.get<LensBranchPreview>(`/lenses/${encodeURIComponent(lensId)}/branches${q ? `?${q}` : ''}`)
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value != null) qs.set(key, String(value))
+  }
+  if (force) qs.set('force', 'true')
+  const query = qs.toString()
+  return `/lenses/${encodeURIComponent(lensId)}/branches${refresh ? '/refresh' : ''}${query ? `?${query}` : ''}`
+}
+
+export function previewLensBranches(lensId: string, params?: BranchPreviewOptions): Promise<LensBranchPreview | null> {
+  return api.get(branchPreviewPath(lensId, params))
+}
+
+export function refreshLensBranches(lensId: string, params: BranchPreviewOptions, force = false): Promise<{ job_id: string | null }> {
+  return api.post(branchPreviewPath(lensId, params, true, force), {})
 }
 
 export function explainRecommendation(recId: string): Promise<{

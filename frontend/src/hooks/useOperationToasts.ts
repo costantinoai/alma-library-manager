@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { invalidateQueryRoots } from '@/lib/queryHelpers'
+import { invalidateAfterSignalLabMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
@@ -155,11 +155,17 @@ function rootsForOperation(operationKey?: string): string[] {
   // refetch so the page swaps the stale payload for the new one. Keys
   // mirror the view_key suffix (`materialize.insights.overview` →
   // `['insights']`).
+  if (key.startsWith('materialize.insights.diag.')) {
+    return ['insights-diag', 'insights-diagnostics']
+  }
   if (key.startsWith('materialize.insights.')) {
     return ['insights']
   }
   if (key.startsWith('materialize.graph.')) {
     return ['graph', 'frontier', 'paper-map', 'author-network']
+  }
+  if (key.startsWith('materialize.variant:discovery:branches:')) {
+    return ['lens-branches']
   }
   if (key.startsWith('materialize.variant:')) {
     return ['graph']
@@ -232,6 +238,12 @@ export function useOperationToasts() {
 
     for (const op of newlyTerminal) {
       seenRef.current.add(op.job_id)
+      // The answer/settings POST precedes its asynchronous fit. Refresh again
+      // when the actual learned artifact lands, without replacing a live deck.
+      if (op.operation_key === 'materialize.signal_lab.model'
+        || op.operation_key === 'materialize.signal_lab.eval') {
+        void invalidateAfterSignalLabMutation(queryClient)
+      }
       // Always refetch affected pages — background plumbing (cache
       // materialization, hydration) is precisely what pages need to pick up,
       // even though it never toasts.

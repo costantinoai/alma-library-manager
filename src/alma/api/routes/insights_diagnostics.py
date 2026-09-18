@@ -1,34 +1,7 @@
-"""Diagnostics tab for the Insights page — split into per-section MVs.
+"""Stored-only diagnostics; POST refreshes through the central MV worker.
 
-The diagnostics endpoint used to compute its full payload on every GET
-(~50 SQL queries, an N+1 in the branch source-mix loop, and 5+ trend-
-series scans). The cost showed up as a slow first paint of Insights →
-Diagnostics. We now split the payload into eight named sections, each
-registered as a fingerprint-based materialised view (see
-``alma.application.materialized_views``):
-
-    feed, discovery, ai, authors, alerts, feedback, operational, evaluation
-
-Each section's fingerprint touches only the tables that influence its
-slice of the payload, so:
-
-* On a GET, only sections whose inputs changed rebuild in the
-  background; the rest are served from cache (~1 ms).
-* The eight section endpoints let the frontend stream cards in
-  independently with skeletons, instead of waiting for a single
-  monolithic response.
-* The legacy ``/diagnostics`` endpoint composes the eight section
-  payloads through ``mv.get``, so existing consumers keep working
-  until they migrate to the section endpoints.
-
-Section dependencies:
-    feed, discovery, ai, authors, alerts, feedback are independent.
-    operational depends on ai/authors/alerts/feed (issue derivation).
-    evaluation depends on every section above (composes scorecards
-    and recommended actions).
-
-Both downstream sections read upstream sections through ``mv.get`` so
-they ride the cache instead of recomputing.
+Independent sections build first, operational consumes those snapshots, and
+then evaluation composes them. GET never computes, enqueues or reaps jobs.
 """
 
 from __future__ import annotations
@@ -38,7 +11,7 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.api.deps import get_current_user, get_db
@@ -560,24 +533,22 @@ def _build_diag_feedback(db: sqlite3.Connection) -> dict[str, Any]:
 # ── Section: operational --------------------------------------------------
 
 
-def _build_diag_operational(db: sqlite3.Connection) -> dict[str, Any]:
-    """Operational health.
+def _stored_section(db: sqlite3.Connection, section: str) -> dict[str, Any]:
+    envelope = mv.get_stored(db, _section_view_key(section), include_rebuilding=False)
+    if envelope is None:
+        raise RuntimeError(f"Diagnostics dependency {section!r} has not been built")
+    return envelope["payload"]
 
-    Reads the ai/authors/alerts payloads through ``mv.get`` so we ride
-    the cache instead of recomputing those snapshots. ``mv.get`` is
-    stale-while-revalidate: when an upstream view is being rebuilt we
-    still get its prior payload, which is fine for derivation —
-    downstream rebuilds again the next time its own fingerprint
-    advances (which it does, because operational's fingerprint
-    depends on the upstream sections' fingerprints).
-    """
+
+def _build_diag_operational(db: sqlite3.Connection) -> dict[str, Any]:
+    """Derive operational health from prerequisites refreshed by the worker."""
     from alma.application import discovery as discovery_app
 
     monitors = _list_monitors(db)
     discovery_settings = discovery_app.read_settings(db)
-    ai_payload = (mv.get(db, _section_view_key("ai")).get("payload")) or {}
-    authors_payload = (mv.get(db, _section_view_key("authors")).get("payload")) or {}
-    alerts_payload = (mv.get(db, _section_view_key("alerts")).get("payload")) or {}
+    ai_payload = _stored_section(db, "ai")
+    authors_payload = _stored_section(db, "authors")
+    alerts_payload = _stored_section(db, "alerts")
 
     return _build_operational_snapshot(
         db,
@@ -655,24 +626,14 @@ def _make_scorecard(
 
 
 def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
-    """Composes all section scorecards, recommended actions, automation tips.
-
-    Reads upstream sections via ``mv.get`` so it never blocks on
-    recompute. The scorecards / actions logic is lifted from the
-    legacy ``get_insights_diagnostics`` body unchanged — only the
-    *source* of the inputs changed (cache instead of inline compute).
-    """
-    feed_payload = (mv.get(db, _section_view_key("feed")).get("payload")) or {}
-    discovery_payload = (
-        mv.get(db, _section_view_key("discovery")).get("payload")
-    ) or {}
-    ai_payload = (mv.get(db, _section_view_key("ai")).get("payload")) or {}
-    authors_payload = (mv.get(db, _section_view_key("authors")).get("payload")) or {}
-    alerts_payload = (mv.get(db, _section_view_key("alerts")).get("payload")) or {}
-    feedback_payload = (mv.get(db, _section_view_key("feedback")).get("payload")) or {}
-    operational_payload = (
-        mv.get(db, _section_view_key("operational")).get("payload")
-    ) or {}
+    """Compose scorecards from prerequisites refreshed by the worker."""
+    feed_payload = _stored_section(db, "feed")
+    discovery_payload = _stored_section(db, "discovery")
+    ai_payload = _stored_section(db, "ai")
+    authors_payload = _stored_section(db, "authors")
+    alerts_payload = _stored_section(db, "alerts")
+    feedback_payload = _stored_section(db, "feedback")
+    operational_payload = _stored_section(db, "operational")
 
     feed_summary = feed_payload.get("summary") or {}
     total_monitors = _safe_int(feed_summary.get("total_monitors"))
@@ -1527,6 +1488,11 @@ _SECTION_BUILDS: dict[str, tuple[str, Any]] = {
     "evaluation": (_EVALUATION_FINGERPRINT_SQL, _build_diag_evaluation),
 }
 
+_SECTION_DEPENDENCIES = {
+    "operational": ("feed", "ai", "authors", "alerts"),
+    "evaluation": ("feed", "discovery", "ai", "authors", "alerts", "feedback", "operational"),
+}
+
 for _section, (_fp_sql, _build_fn) in _SECTION_BUILDS.items():
     mv.register(
         mv.View(
@@ -1537,6 +1503,7 @@ for _section, (_fp_sql, _build_fn) in _SECTION_BUILDS.items():
             # alone can't, which is why a corrected metric used to stay stale.
             fingerprint_sql=with_version(_fp_sql, INSIGHTS_LOGIC_VERSION),
             build_fn=_build_fn,
+            dependencies=tuple(_section_view_key(key) for key in _SECTION_DEPENDENCIES.get(_section, ())),
             operation_key=f"materialize.insights.diag.{_section}",
         )
     )
@@ -1586,33 +1553,38 @@ def get_diagnostics_section(
             ),
         )
     try:
-        envelope = mv.get(db, _section_view_key(section))
+        envelope = mv.get_stored(db, _section_view_key(section), include_rebuilding=False)
     except Exception as exc:  # noqa: BLE001 — surface a 5xx with context
         raise_internal(f"Failed to compute diagnostics section {section!r}", exc)
-    return _envelope_to_response(envelope)
+    return _envelope_to_response(envelope) if envelope is not None else None
 
 
-def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]:
-    """Re-assemble the legacy ``InsightsDiagnostics`` shape from cached sections.
+@router.post("/diagnostics/refresh", status_code=202, summary="Refresh diagnostic snapshots asynchronously")
+def refresh_diagnostics(
+    force: bool = Query(default=False),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    try:
+        # Evaluation owns the complete dependency tree: one worker, no fan-out
+        # of nested jobs waiting on the same scheduler pool.
+        return {"job_id": mv.request_refresh(db, _section_view_key("evaluation"), force=force)}
+    except Exception as exc:
+        raise_internal("Failed to refresh diagnostics", exc)
 
-    Public so the legacy ``/diagnostics`` endpoint in ``insights.py``
-    can stay a thin adapter. We always go through ``mv.get`` so the
-    legacy endpoint also benefits from caching + SWR.
-    """
-    feed_payload = (mv.get(db, _section_view_key("feed")).get("payload")) or {}
-    discovery_payload = (
-        mv.get(db, _section_view_key("discovery")).get("payload")
-    ) or {}
-    ai_payload = (mv.get(db, _section_view_key("ai")).get("payload")) or {}
-    authors_payload = (mv.get(db, _section_view_key("authors")).get("payload")) or {}
-    alerts_payload = (mv.get(db, _section_view_key("alerts")).get("payload")) or {}
-    feedback_payload = (mv.get(db, _section_view_key("feedback")).get("payload")) or {}
-    operational_payload = (
-        mv.get(db, _section_view_key("operational")).get("payload")
-    ) or {}
-    evaluation_payload = (
-        mv.get(db, _section_view_key("evaluation")).get("payload")
-    ) or {}
+
+def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any] | None:
+    """Compose stored sections; a missing section means no complete snapshot."""
+    versions = {key: mv.stored_version(db, _section_view_key(key)) for key in DIAGNOSTICS_SECTION_KEYS}
+    if any(version is None for version in versions.values()):
+        return None
+    feed_payload = _stored_section(db, "feed")
+    discovery_payload = _stored_section(db, "discovery")
+    ai_payload = _stored_section(db, "ai")
+    authors_payload = _stored_section(db, "authors")
+    alerts_payload = _stored_section(db, "alerts")
+    feedback_payload = _stored_section(db, "feedback")
+    operational_payload = _stored_section(db, "operational")
+    evaluation_payload = _stored_section(db, "evaluation")
 
     feed_section_scorecards = [
         c
@@ -1631,7 +1603,7 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
     ]
 
     return {
-        "generated_at": utcnow().isoformat(),
+        "generated_at": versions["evaluation"]["computed_at"],
         "feed": {
             "summary": feed_payload.get("summary") or {},
             "monitors": feed_payload.get("monitors") or [],

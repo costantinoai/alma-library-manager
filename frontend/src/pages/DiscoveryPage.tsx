@@ -187,6 +187,10 @@ export function DiscoveryPage() {
   const routeLensId = route.params.get('lens')?.trim() ?? ''
   const routePaperId = route.params.get('paper')?.trim() ?? ''
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const [weightsOpen, setWeightsOpen] = useState(false)
+  const [branchStudioOpen, setBranchStudioOpen] = useState(false)
+  const [branchStudioOpened, setBranchStudioOpened] = useState(false)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   // Discovery already excludes Library papers when it BUILDS a deck, but keeps
   // a card visible the moment you save it so it doesn't vanish under the
@@ -1257,6 +1261,8 @@ export function DiscoveryPage() {
           data-tour="discovery-performance"
           icon={Gauge}
           title="Lens performance"
+          open={performanceOpen}
+          onOpenChange={setPerformanceOpen}
           description="What this lens learned from your signals, and how the last refresh composed its lanes."
           contentClassName="space-y-4"
           meta={
@@ -1397,7 +1403,7 @@ export function DiscoveryPage() {
               Analytics Overview, which described the LIBRARY. "Are these
               suggestions any good?" is a Discovery question, so it lives on
               the surface that answers it. */}
-          <RecommendationEngagement lensNames={lensNameById} />
+          <RecommendationEngagement lensNames={lensNameById} enabled={performanceOpen} />
         </DisclosurePanel>
 
         {/* Branch Studio is its own fold, called what it is (user call
@@ -1408,10 +1414,15 @@ export function DiscoveryPage() {
           data-tour="discovery-branches"
           icon={GitBranch}
           title="Branch Studio"
+          open={branchStudioOpen}
+          onOpenChange={(open) => {
+            setBranchStudioOpen(open)
+            if (open) setBranchStudioOpened(true)
+          }}
           description="The sub-themes this lens is exploring. Pin, boost, or mute them to steer where the next refresh spends its effort."
           contentClassName="p-0"
         >
-          <BranchExplorerPanel bare lens={selectedLens} />
+          {branchStudioOpened && <BranchExplorerPanel key={selectedLens?.id} bare lens={selectedLens} enabled={branchStudioOpen} />}
         </DisclosurePanel>
 
         {/* "Tune this lens" is now the ONE home for advanced knobs — the place
@@ -1420,10 +1431,13 @@ export function DiscoveryPage() {
         <DisclosurePanel
           icon={SlidersHorizontal}
           title="Tune this lens"
+          open={weightsOpen}
+          onOpenChange={setWeightsOpen}
           description="Advanced knobs — how this lens turns its signals into a score. The defaults are right for most people."
           contentClassName="px-2 pb-2 pt-3"
         >
           <LensWeightsPanel
+            enabled={weightsOpen}
             lens={selectedLens as Lens | null}
             onSave={(weights) => {
               if (!selectedLensId) return

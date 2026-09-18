@@ -43,6 +43,7 @@ import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { RepairGroup } from '@/components/health/RepairGroup'
 import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { SystemStatusCards } from '@/components/health/SystemStatusCards'
 import { ApiBudgetCard } from '@/components/health/ApiBudgetCard'
 import { SectionLabel } from '@/components/health/SectionLabel'
@@ -484,9 +485,18 @@ export function HealthPage() {
         ) : null}
 
         <div className="border-t border-[var(--color-border)] pt-4">
-          <SectionLabel>System status</SectionLabel>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel>System status</SectionLabel>
+            <Button variant="outline" size="sm" onClick={diagnosticsSections.refresh} disabled={diagnosticsSections.building}>
+              {diagnosticsSections.building ? 'Refreshing diagnostics…' : 'Refresh diagnostics'}
+            </Button>
+          </div>
+          {diagnosticsSections.refreshError && (
+            <ErrorState message={diagnosticsSections.refreshError} actionLabel="Retry diagnostics" onAction={diagnosticsSections.refresh} actionPending={diagnosticsSections.building} />
+          )}
+          {diagnosticsSections.building && <p role="status" className="text-sm text-slate-500">Refreshing diagnostics. Existing snapshots stay visible.</p>}
           <div className="mt-2">
-            <SystemStatusCards />
+            <SystemStatusCards sections={diagnosticsSections} onRefresh={diagnosticsSections.refresh} />
           </div>
           {/* External-API budget + last credit-limit abort (task 37 B/C). */}
           <div className="mt-3">

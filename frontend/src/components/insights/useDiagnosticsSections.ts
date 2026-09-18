@@ -6,10 +6,13 @@
  * twice. It also owns the section-state TYPES, which used to live in the
  * (now deleted) Insights diagnostics tab.
  */
-import { useQuery } from '@tanstack/react-query'
+import { useAsyncRefresh } from '@/hooks/useAsyncRefresh'
+import { useQueries } from '@tanstack/react-query'
 
 import {
   getDiagnosticsSection,
+  refreshDiagnostics,
+  type DiagnosticsSectionKey,
   type DiagnosticsAiSection,
   type DiagnosticsAlertsSection,
   type DiagnosticsAuthorsSection,
@@ -45,77 +48,34 @@ export interface InsightsDiagnosticsSections {
   evaluation: SectionState<DiagnosticsEvaluationSection>
 }
 
-function toSectionState<T extends { stale?: boolean }>(query: {
-  data?: T
-  isLoading: boolean
-  isError: boolean
-}): SectionState<T> {
-  return {
-    data: query.data,
-    loading: query.isLoading,
-    error: query.isError,
-    stale: query.data?.stale ?? false,
-  }
-}
+const SECTIONS: DiagnosticsSectionKey[] = ['feed', 'discovery', 'ai', 'authors', 'alerts', 'feedback', 'operational', 'evaluation']
 
-export function useDiagnosticsSections(): InsightsDiagnosticsSections {
-  const feed = useQuery({
-    queryKey: ['insights-diag', 'feed'],
-    queryFn: () => getDiagnosticsSection('feed'),
+export function useDiagnosticsSections() {
+  const { building, buildError, refresh } = useAsyncRefresh({
+    queryKey: ['insights-diag'],
+    request: refreshDiagnostics,
+  })
+  const queries = useQueries({ queries: SECTIONS.map(section => ({
+    queryKey: ['insights-diag', section],
+    queryFn: () => getDiagnosticsSection(section),
     staleTime: 60_000,
     retry: 1,
-  })
-  const discovery = useQuery({
-    queryKey: ['insights-diag', 'discovery'],
-    queryFn: () => getDiagnosticsSection('discovery'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const ai = useQuery({
-    queryKey: ['insights-diag', 'ai'],
-    queryFn: () => getDiagnosticsSection('ai'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const authors = useQuery({
-    queryKey: ['insights-diag', 'authors'],
-    queryFn: () => getDiagnosticsSection('authors'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const alerts = useQuery({
-    queryKey: ['insights-diag', 'alerts'],
-    queryFn: () => getDiagnosticsSection('alerts'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const feedback = useQuery({
-    queryKey: ['insights-diag', 'feedback'],
-    queryFn: () => getDiagnosticsSection('feedback'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const operational = useQuery({
-    queryKey: ['insights-diag', 'operational'],
-    queryFn: () => getDiagnosticsSection('operational'),
-    staleTime: 60_000,
-    retry: 1,
-  })
-  const evaluation = useQuery({
-    queryKey: ['insights-diag', 'evaluation'],
-    queryFn: () => getDiagnosticsSection('evaluation'),
-    staleTime: 60_000,
-    retry: 1,
-  })
+    refetchInterval: building ? 1500 : false as const,
+  })) })
 
+  const sections = Object.fromEntries(SECTIONS.map((section, index) => {
+    const query = queries[index]
+    return [section, {
+      data: query.data ?? undefined,
+      loading: !query.data && !buildError && (query.isLoading || building),
+      error: !query.data && (query.isError || Boolean(buildError)),
+      stale: Boolean(query.data && building),
+    }]
+  })) as unknown as InsightsDiagnosticsSections
   return {
-    feed: toSectionState<DiagnosticsFeedSection>(feed),
-    discovery: toSectionState<DiagnosticsDiscoverySection>(discovery),
-    ai: toSectionState<DiagnosticsAiSection>(ai),
-    authors: toSectionState<DiagnosticsAuthorsSection>(authors),
-    alerts: toSectionState<DiagnosticsAlertsSection>(alerts),
-    feedback: toSectionState<DiagnosticsFeedbackSection>(feedback),
-    operational: toSectionState<DiagnosticsOperationalSection>(operational),
-    evaluation: toSectionState<DiagnosticsEvaluationSection>(evaluation),
+    ...sections,
+    building,
+    refreshError: buildError || (queries.some(query => query.isError) ? 'Could not load diagnostic snapshots.' : null),
+    refresh,
   }
 }
