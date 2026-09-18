@@ -78,8 +78,9 @@ _CACHEABLE_STATUSES = frozenset({200, 404})
 _MAX_PER_PAGE = 100
 
 # Cost classes under the Feb-2026 usage-based pricing. Singleton entity GETs
-# are free and unlimited; list+filter costs $0.10/1k; search costs $1.00/1k.
-_CLASS_COSTS_USD = {"singleton": 0.0, "list": 0.0001, "search": 0.001}
+# are free and unlimited; list+filter costs $0.10/1k; search costs $1.00/1k;
+# a cached full-text file (content.openalex.org PDF / GROBID XML) costs $0.01.
+_CLASS_COSTS_USD = {"singleton": 0.0, "list": 0.0001, "search": 0.001, "content": 0.01}
 
 # Credit units (the X-RateLimit headers count the $0.0001 list-call unit; the
 # daily $1.00 free budget is 10,000 units) charged per `?search` call. Budget
@@ -92,18 +93,31 @@ SEARCH_COST_CREDITS = 10
 # whose remaining credits can't cover THIS call's class cannot succeed on any
 # backoff within the run (the pool refills at the daily reset). Singleton GETs
 # are free — their 429s are per-second bursts and take the normal backoff.
-_CLASS_COST_CREDITS = {"singleton": 0, "list": 1, "search": SEARCH_COST_CREDITS}
+CONTENT_COST_CREDITS = 100  # $0.01 in $0.0001 units
+
+_CLASS_COST_CREDITS = {
+    "singleton": 0,
+    "list": 1,
+    "search": SEARCH_COST_CREDITS,
+    "content": CONTENT_COST_CREDITS,
+}
+
+# The full-text content host serves files, not JSON.
+CONTENT_BASE_URL = "https://content.openalex.org"
 
 # Anything under an entity collection path is a singleton GET — note `.+`
 # not `[^/]+`: DOI-form ids (`/works/doi:10.1234/abc`) contain slashes.
 _SINGLETON_PATH_RE = re.compile(
     r"^/(works|authors|sources|institutions|topics|publishers|funders|concepts|keywords)/.+"
 )
+# A content-host file: `/works/W123.pdf` or `/works/W123.grobid-xml`.
+_CONTENT_PATH_RE = re.compile(r"^/works/W\d+\.(pdf|grobid-xml)$", re.IGNORECASE)
 
 
 def classify_request(path: str, params: dict[str, Any] | None = None) -> str:
     """Return the OpenAlex cost class of a request: ``singleton`` (free,
-    unlimited), ``search`` ($1.00/1k — 10× list), or ``list`` ($0.10/1k).
+    unlimited), ``search`` ($1.00/1k — 10× list), ``list`` ($0.10/1k) or
+    ``content`` ($0.01 per cached full-text file).
 
     ONE canonical classifier — budget gates, usage snapshots, and fallback
     logic must all route through this instead of re-deriving URL shapes.
@@ -113,6 +127,8 @@ def classify_request(path: str, params: dict[str, Any] | None = None) -> str:
         return "search"
     clean = path if path.startswith("/") else f"/{path}"
     clean = clean.split("?", 1)[0].rstrip("/")
+    if _CONTENT_PATH_RE.match(clean):
+        return "content"
     if _SINGLETON_PATH_RE.match(clean) and not str(p.get("filter") or "").strip():
         return "singleton"
     return "list"
@@ -192,7 +208,7 @@ class OpenAlexClient:
         self._calls_saved_by_cache: int = 0
         # Upstream calls by cost class (cache hits excluded) — backs the
         # per-class spend estimate in the usage snapshot / ApiBudgetCard.
-        self._class_counts: dict[str, int] = {"singleton": 0, "list": 0, "search": 0}
+        self._class_counts: dict[str, int] = {"singleton": 0, "list": 0, "search": 0, "content": 0}
         self._cache_lock = threading.RLock()
         # key -> (expires_at, status_code, headers, content, url, reason, encoding)
         self._response_cache: dict[
@@ -361,6 +377,38 @@ class OpenAlexClient:
         resp.raise_for_status()
         return resp.json()
 
+    def download_content(
+        self,
+        work_id: str,
+        *,
+        fmt: str = "pdf",
+        timeout: float = 60,
+    ) -> requests.Response:
+        """Stream one cached full-text file of a work from the content host.
+
+        OpenAlex keeps copies of open-access full texts (``has_content.pdf`` /
+        ``content_urls.pdf`` on the work). Each download is a paid ``content``
+        call ($0.01) and needs an API key, so it passes the same quota gate,
+        pricing counters, retries and network switch as every OpenAlex call —
+        but is never cached (it is a file, not a reusable JSON answer).
+
+        Returns the STREAMED response; the caller reads it under its own byte
+        cap and must ``close()`` it. A non-retryable status (401 without a valid
+        key, 404 without content) comes back as-is for the caller to classify.
+        Raises ``ValueError`` without an API key, and ``HTTPError`` when
+        retries are exhausted.
+        """
+        if not self._api_key:
+            raise ValueError("OpenAlex full-text downloads need an OpenAlex API key")
+        wid = str(work_id or "").strip().rsplit("/", 1)[-1]
+        if not re.fullmatch(r"W\d+", wid, flags=re.IGNORECASE):
+            raise ValueError(f"Not an OpenAlex work id: {work_id!r}")
+        ext = {"pdf": "pdf", "grobid_xml": "grobid-xml"}[fmt]
+        url = f"{CONTENT_BASE_URL}/works/{wid.upper()}.{ext}"
+        return self._request_with_retry(
+            url, self._inject_auth(None), timeout, stream=True, cache=False
+        )
+
     def seed_cache(
         self,
         path: str,
@@ -484,19 +532,29 @@ class OpenAlexClient:
         url: str,
         params: dict[str, Any],
         timeout: float,
+        *,
+        stream: bool = False,
+        cache: bool = True,
     ) -> requests.Response:
-        """Execute a GET with bounded exponential backoff on retryable errors."""
+        """Execute a GET with bounded exponential backoff on retryable errors.
+
+        ``cache=False`` bypasses both response caches (read and write) — for
+        file downloads, which are neither reusable nor small. ``stream=True``
+        returns before the body is read (the caller owns ``close()``); a
+        streamed response that is retried is closed first.
+        """
         cache_key = self._cache_key(url, params)
 
-        # 1) Check operation-scoped cache first (tighter scope, no TTL)
-        op_cached = self._op_cache_get(cache_key)
-        if op_cached is not None:
-            return op_cached
+        if cache:
+            # 1) Check operation-scoped cache first (tighter scope, no TTL)
+            op_cached = self._op_cache_get(cache_key)
+            if op_cached is not None:
+                return op_cached
 
-        # 2) Check persistent response cache
-        cached = self._get_cached_response(cache_key)
-        if cached is not None:
-            return cached
+            # 2) Check persistent response cache
+            cached = self._get_cached_response(cache_key)
+            if cached is not None:
+                return cached
 
         from alma.core.network_policy import require_network_access
 
@@ -524,14 +582,18 @@ class OpenAlexClient:
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                resp = self._session().get(url, params=params, timeout=timeout)
+                resp = self._session().get(url, params=params, timeout=timeout, stream=stream)
                 self._update_rate_limits(resp)
                 last_resp = resp
 
                 if resp.status_code not in _RETRYABLE_STATUSES:
-                    self._store_cached_response(cache_key, resp, fallback_url=url)
-                    self._op_cache_put(cache_key, resp, fallback_url=url)
+                    if cache:
+                        self._store_cached_response(cache_key, resp, fallback_url=url)
+                        self._op_cache_put(cache_key, resp, fallback_url=url)
                     return resp
+                if stream:
+                    # Unread body: release the connection before any backoff.
+                    resp.close()
 
                 if resp.status_code == 429:
                     self._rate_limited_events += 1
