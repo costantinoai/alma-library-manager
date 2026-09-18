@@ -145,6 +145,27 @@ def _crossref_to_candidate(item: dict, score: float) -> dict | None:
     }
 
 
+def fetch_work_message(doi: str) -> dict | None:
+    """The raw Crossref ``message`` for one DOI — every field, unnormalized.
+
+    `fetch_work_by_doi` projects this onto the candidate shape, which drops
+    fields a caller may need (e.g. ``link[]``, the publisher's full-text links
+    with their content types). Returns ``None`` for a blank DOI, a 404 or an
+    empty message; raises ``requests.RequestException`` (``HTTPError`` for a
+    429/5xx that survived the client's retries) or ``ValueError`` (a non-JSON
+    body) so a caller can tell an outage from "Crossref has no such work".
+    """
+    normalized = normalize_doi(doi or "")
+    if not normalized:
+        return None
+    resp = get_source_http_client("crossref").get(f"/works/{normalized}", timeout=20)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    message = (resp.json() or {}).get("message") or {}
+    return message if isinstance(message, dict) and message else None
+
+
 def fetch_work_by_doi(doi: str) -> dict | None:
     """Fetch a single Crossref work by DOI.
 
@@ -157,30 +178,12 @@ def fetch_work_by_doi(doi: str) -> dict | None:
     fetcher because the existing `search_works` is a free-text search,
     not an identifier lookup.
     """
-    normalized = normalize_doi(doi or "")
-    if not normalized:
-        return None
     try:
-        resp = get_source_http_client("crossref").get(
-            f"/works/{normalized}", timeout=20
-        )
+        message = fetch_work_message(doi)
     except Exception as exc:
-        logger.warning("Crossref by-DOI fetch failed for %s: %s", normalized, exc)
+        logger.warning("Crossref by-DOI fetch failed for %s: %s", doi, exc)
         return None
-    if resp.status_code != 200:
-        if resp.status_code != 404:
-            logger.debug(
-                "Crossref by-DOI returned HTTP %d for %s",
-                resp.status_code,
-                normalized,
-            )
-        return None
-    try:
-        message = ((resp.json() or {}).get("message")) or {}
-    except Exception as exc:
-        logger.warning("Crossref by-DOI JSON decode failed for %s: %s", normalized, exc)
-        return None
-    if not isinstance(message, dict) or not message:
+    if not message:
         return None
     return _crossref_to_candidate(message, score=1.0)
 
