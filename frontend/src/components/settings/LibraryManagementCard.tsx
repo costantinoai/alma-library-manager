@@ -36,14 +36,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { formatBytes } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { parseAlmaTimestamp } from '@/lib/utils'
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 export function LibraryManagementCard() {
   const queryClient = useQueryClient()

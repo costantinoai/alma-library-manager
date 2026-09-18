@@ -64,6 +64,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
+import { PaperPdfSection } from '@/components/pdf/PaperPdfSection'
+import type { PaperPdfState } from '@/api/client'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
@@ -88,6 +90,7 @@ interface PaperDetails extends Publication {
   referenced_works_count?: number
   components?: PaperComponent[] | null
   preprint_versions?: PreprintVersion[] | null
+  pdf?: PaperPdfState | null
 }
 
 // Render order + presentation for the "Related items" section. Each group is
@@ -496,6 +499,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 <span className="text-slate-500">{p.referenced_works_count} references</span>
               )}
             </div>
+
+            {/* The kept PDF: open it, or find / attach one (task 81). */}
+            <PaperPdfSection paperId={p.id} pdf={details?.pdf} />
 
             {/* Abstract */}
             <section>

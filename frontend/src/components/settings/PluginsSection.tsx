@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Mail, MessageSquare, PlugZap, TestTube2 } from 'lucide-react'
+import { FileSearch, LibraryBig, Mail, MessageSquare, PlugZap, TestTube2 } from 'lucide-react'
 
 import {
   getApiErrorMessage,
@@ -26,7 +26,16 @@ type ConfigValue = string | number | boolean | null
 const ICONS = {
   slack: MessageSquare,
   email: Mail,
+  open_access: FileSearch,
+  shadow_libraries: LibraryBig,
 } as const
+
+// What each runtime seam means to a reader, instead of the raw capability id.
+const CAPABILITY_LABELS: Record<string, string> = {
+  send: 'Sends alerts',
+  receive: 'Captures papers',
+  pdf_source: 'Finds PDFs',
+}
 
 function schemaFields(plugin: PluginInfo) {
   return Object.entries(plugin.config_schema.properties ?? {}).sort(
@@ -163,7 +172,8 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-slate-500">
-            {plugin.capabilities.join(' · ')} · v{plugin.version}
+            {plugin.capabilities.map((capability) => CAPABILITY_LABELS[capability] ?? capability).join(' · ')} ·
+            v{plugin.version}
           </span>
           <Button
             size="sm"

@@ -44,6 +44,25 @@ export function parseHashRoute(rawHash?: string): HashRoute {
   }
 }
 
+/**
+ * `#/read?paper=ID` — the PDF handoff page. Not a `Page`: it has no nav entry
+ * and renders outside the app shell (a new tab that becomes the PDF). The
+ * paper-card PDF link opens it; it opens the stored PDF at once or fetches it
+ * first, showing each source's progress.
+ */
+export function parseReaderRoute(rawHash?: string): { paperId: string } | null {
+  const raw = typeof rawHash === 'string' ? rawHash : window.location.hash
+  const normalized = raw.replace(/^#?\/?/, '')
+  const [pagePart, queryPart = ''] = normalized.split('?', 2)
+  if (pagePart !== 'read') return null
+  const paperId = new URLSearchParams(queryPart).get('paper')?.trim()
+  return paperId ? { paperId } : null
+}
+
+export function buildReaderHref(paperId: string): string {
+  return `#/read?paper=${encodeURIComponent(paperId)}`
+}
+
 export function buildHashRoute(
   page: Page,
   params?: Record<string, string | number | boolean | null | undefined>,

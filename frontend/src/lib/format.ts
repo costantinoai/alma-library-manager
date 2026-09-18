@@ -7,6 +7,13 @@
  * just waiting to happen.
  */
 
+/** A byte count as B / KB / MB (one decimal above bytes). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 /**
  * Format a unit-interval ratio (0..1) as a percent string with the
  * given number of fraction digits. The trailing `%` is included.

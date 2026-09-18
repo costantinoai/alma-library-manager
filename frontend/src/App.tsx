@@ -6,7 +6,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { PageReveal } from '@/components/ui/reveal'
 import { OnboardingGate } from '@/components/onboarding'
 import { prefetchMapPage } from '@/components/map/mapQueries'
-import { parseHashRoute, navigateTo, type HashRoute } from '@/lib/hashRoute'
+import { parseHashRoute, parseReaderRoute, navigateTo, type HashRoute } from '@/lib/hashRoute'
 import { pageLoaders, preloadPage } from '@/lib/pageLoaders'
 import NotFoundPage from '@/pages/NotFoundPage'
 
@@ -22,6 +22,8 @@ const InsightsRedirect = lazy(pageLoaders.insights)
 const HealthPage = lazy(pageLoaders.health)
 const AlertsPage = lazy(pageLoaders.alerts)
 const SettingsPage = lazy(pageLoaders.settings)
+// The PDF handoff page is not a Page: no nav entry, no app shell.
+const PdfReaderPage = lazy(() => import('@/pages/PdfReaderPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -102,6 +104,17 @@ function AppContent() {
       default:
         return <HomePage />
     }
+  }
+
+  // `#/read?paper=ID` opens in its own tab and becomes the PDF — it renders
+  // outside the app shell (see PdfReaderPage).
+  const reader = parseReaderRoute(route.raw)
+  if (reader) {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <PdfReaderPage paperId={reader.paperId} />
+      </Suspense>
+    )
   }
 
   return (

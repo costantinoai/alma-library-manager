@@ -35,6 +35,7 @@ function operationToastTitle(operationKey: string | undefined, failed: boolean):
     key.startsWith('tags.') ? 'Tags' :
     key.startsWith('alerts.') ? 'Alerts' :
     key.startsWith('ai.') ? 'AI' :
+    key.startsWith('pdf.') ? 'PDF' :
     'Operation')
   return failed ? `${domain} failed` : `${domain} complete`
 }
@@ -42,6 +43,15 @@ function operationToastTitle(operationKey: string | undefined, failed: boolean):
 function rootsForOperation(operationKey?: string): string[] {
   const key = (operationKey ?? '').trim()
   if (!key) return []
+
+  // Paper PDFs (task 81): a fetch/attach refreshes that paper's PDF state; a
+  // PDF-first import can add a paper to the Library.
+  if (key.startsWith('pdf.import:')) {
+    return ['paper-pdf', 'papers', 'library-saved', 'library-info', 'library-workflow-summary']
+  }
+  if (key.startsWith('pdf.')) {
+    return ['paper-pdf']
+  }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
     return [

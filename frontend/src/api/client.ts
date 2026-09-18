@@ -135,6 +135,9 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  /** POST a file as the raw request body (e.g. a PDF), not multipart. */
+  postFile: <T>(path: string, file: Blob, contentType: string) =>
+    request<T>(path, { method: 'POST', body: file, headers: { 'Content-Type': contentType } }),
 }
 
 // ── Activity job polling ──
@@ -178,6 +181,9 @@ export interface WaitForJobOptions {
   intervalMs?: number
   timeoutMs?: number
   signal?: AbortSignal
+  /** Called with every non-terminal poll, so a UI can show the job's live
+   *  step message ("Asking Unpaywall…") while it waits. */
+  onProgress?: (status: JobStatus) => void
 }
 
 /**
@@ -204,6 +210,7 @@ export async function waitForJob<T>(jobId: string, opts: WaitForJobOptions = {})
     if (st.status === 'failed' || st.status === 'cancelled') {
       throw new Error(st.error || st.message || `Job ${jobId} ${st.status}`)
     }
+    opts.onProgress?.(st)
     await new Promise<void>((resolve) => setTimeout(resolve, intervalMs))
   }
   throw new Error(`Timeout waiting for job ${jobId}`)
@@ -3005,6 +3012,8 @@ export interface PluginInfo {
   configured: boolean
   can_send: boolean
   can_receive: boolean
+  /** A `pdf_source` plugin that is configured to find PDFs. */
+  can_fetch?: boolean
   config_schema: {
     title?: string
     properties?: Record<string, PluginSchemaProperty>
@@ -3065,6 +3074,100 @@ export async function testPluginConnection(
     ok: Boolean((resp as { success?: boolean }).success),
     message: String((resp as { message?: string }).message ?? ''),
   }
+}
+
+// ── Paper PDFs (task 81) ──
+// Every PDF operation is an Activity job: these calls return its envelope,
+// and callers poll `/activity/{job_id}` (`waitForJob`). The PDF's state rides
+// the paper's `/details` payload; the file itself is `GET /papers/{id}/pdf`.
+
+export type PdfVerification = 'doi' | 'title' | 'unverified' | 'mismatch'
+
+export interface PaperPdfStored {
+  filename: string
+  sha256: string
+  bytes: number
+  pages: number | null
+  origin: 'fetched' | 'uploaded' | 'imported'
+  verification: PdfVerification
+  source_id: string | null
+  source_plugin: string | null
+  source_url: string | null
+  version: string | null
+  license: string | null
+  stored_at: string
+}
+
+export interface PaperPdfAttempt {
+  source_id: string
+  outcome: string
+  http_status: number | null
+  detail: string | null
+  candidate_url: string | null
+  job_id: string | null
+  attempted_at: string
+}
+
+export interface PaperPdfState {
+  stored: PaperPdfStored | null
+  file_missing: boolean
+  url: string | null
+  attempts: PaperPdfAttempt[]
+}
+
+/** Result of a finished `pdf.fetch` job. */
+export interface PdfFetchResult {
+  found: boolean
+  paper_id: string
+  title: string
+  source?: string
+  verification?: PdfVerification
+  filename?: string
+  tried?: string[]
+}
+
+/** Result of a finished `pdf.import` job. */
+export interface PdfImportResult {
+  outcome: 'imported' | 'attached' | 'already_stored' | 'unresolved'
+  paper_id?: string
+  title?: string
+  verification?: PdfVerification
+  filename?: string
+  upload_id?: string
+  hints?: string[]
+}
+
+/** The stored PDF, served inline (the browser's own viewer opens it). */
+export function paperPdfUrl(paperId: string): string {
+  return `${BASE_URL}/papers/${encodeURIComponent(paperId)}/pdf`
+}
+
+/** The paper's PDF state, read from its `/details` payload (one owner). */
+export async function getPaperPdfState(paperId: string): Promise<PaperPdfState> {
+  const details = await api.get<{ pdf: PaperPdfState }>(`/papers/${encodeURIComponent(paperId)}/details`)
+  return details.pdf
+}
+
+export function fetchPaperPdf(paperId: string): Promise<JobEnvelope> {
+  return api.post<JobEnvelope>(`/papers/${encodeURIComponent(paperId)}/pdf/fetch`)
+}
+
+export function uploadPaperPdf(paperId: string, file: File): Promise<JobEnvelope> {
+  const name = encodeURIComponent(file.name || 'upload.pdf')
+  return api.postFile<JobEnvelope>(`/papers/${encodeURIComponent(paperId)}/pdf?filename=${name}`, file, 'application/pdf')
+}
+
+export function deletePaperPdf(paperId: string, reject = false): Promise<{ status: string; job_id: string }> {
+  return api.delete(`/papers/${encodeURIComponent(paperId)}/pdf${reject ? '?reject=true' : ''}`)
+}
+
+export function importPdf(file: File): Promise<JobEnvelope> {
+  const name = encodeURIComponent(file.name || 'upload.pdf')
+  return api.postFile<JobEnvelope>(`/library/import/pdf?filename=${name}`, file, 'application/pdf')
+}
+
+export function retryPdfImport(uploadId: string, hint: { doi?: string; title?: string }): Promise<JobEnvelope> {
+  return api.post<JobEnvelope>(`/library/import/pdf/uploads/${encodeURIComponent(uploadId)}`, hint)
 }
 
 export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {

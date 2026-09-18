@@ -5,6 +5,8 @@ import {
   Calendar,
   Compass,
   Database,
+  FileCheck,
+  FileQuestion,
   FileText,
   FlaskConical,
   GitBranch,
@@ -73,6 +75,11 @@ export type SignalKind =
   | 'lab-boundary'
   | 'lab-fit'
   | 'lab-coverage'
+  // The paper's kept PDF (task 81). Plumbing, not a verdict: neutral, with
+  // the icon saying whether the file's own text confirmed the paper.
+  | 'pdf'
+  | 'pdf-unverified'
+  | 'pdf-mismatch'
 
 interface SignalSpec {
   tone: StatusBadgeTone
@@ -127,4 +134,16 @@ export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
   'lab-boundary': { tone: 'accent', icon: Split, hint: 'Region boundaries your answers moved' },
   'lab-fit': { tone: 'accent', icon: Scale, hint: 'What the current fit was trained on' },
   'lab-coverage': { tone: 'accent', icon: Compass, hint: 'How much of the map the rounds have visited' },
+
+  pdf: { tone: 'neutral', icon: FileCheck, hint: 'A PDF is kept for this paper; its text names this paper' },
+  'pdf-unverified': {
+    tone: 'neutral',
+    icon: FileQuestion,
+    hint: 'A PDF is kept, but it has no readable text to confirm which paper it is',
+  },
+  'pdf-mismatch': {
+    tone: 'neutral',
+    icon: AlertTriangle,
+    hint: 'You attached this PDF, but its text names a different paper',
+  },
 }
