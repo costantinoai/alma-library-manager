@@ -71,6 +71,18 @@ class SourcePolicy:
     # Set both to 0.0 to disable.
     adaptive_throttle_floor_seconds: float = 0.0
     adaptive_cooldown_seconds: float = 0.0
+    # Transport override. ``None`` = a plain ``requests.Session``. A factory
+    # returns any requests-compatible session (e.g. a ``curl_cffi`` session
+    # with browser TLS impersonation), so a plugin-owned source still gets
+    # the throttle, retry, cooldown, diagnostics and network switch below.
+    session_factory: Callable[[], Any] | None = None
+    # Extra exception classes the transport raises for connection-level
+    # failures. ``requests`` errors are always caught; a non-requests session
+    # (curl_cffi) names its own here so they retry and record the same way.
+    transport_errors: tuple[type[BaseException], ...] = ()
+    # An impersonating transport must keep the browser User-Agent it forges;
+    # every ordinary source identifies itself as ALMa.
+    send_app_user_agent: bool = True
 
 
 class SourceDiagnosticsCollector:
@@ -350,8 +362,10 @@ class SourceHttpClient:
     def _session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
         if session is None:
-            session = requests.Session()
-            session.headers.update({"User-Agent": get_app_user_agent()})
+            factory = self._policy.session_factory
+            session = factory() if factory is not None else requests.Session()
+            if self._policy.send_app_user_agent:
+                session.headers.update({"User-Agent": get_app_user_agent()})
             for key, value in self._policy.default_headers:
                 session.headers[key] = value
             self._local.session = session
@@ -486,6 +500,8 @@ class SourceHttpClient:
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        stream: bool = False,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         """Issue one rate-limited, retried request.
 
@@ -493,6 +509,13 @@ class SourceHttpClient:
         only. Interactive surfaces (e.g. Find & Add search lanes racing a
         lane deadline) pass a small value so a 429/5xx fails fast instead
         of burning the policy's full background-job backoff chain.
+
+        ``stream=True`` returns before the body is read, so a large download
+        (a PDF) can be consumed chunk by chunk under a byte cap; the caller
+        then owns the response and must ``close()`` it. A streamed response
+        that is retried is closed here first so its connection returns to
+        the pool. ``allow_redirects=False`` hands 3xx back to the caller —
+        used when every redirect hop must be validated before it is followed.
         """
         from alma.core.network_policy import require_network_access
 
@@ -506,6 +529,7 @@ class SourceHttpClient:
         )
         diagnostics = get_active_source_diagnostics()
         path_label = path_or_url if path_or_url.startswith("/") else url.replace(self._policy.base_url, "", 1) or "/"
+        transport_errors = (requests.exceptions.RequestException, *self._policy.transport_errors)
 
         last_exc: Exception | None = None
         last_resp: requests.Response | None = None
@@ -521,6 +545,8 @@ class SourceHttpClient:
                         headers=request_headers,
                         json=json,
                         timeout=timeout_value,
+                        stream=stream,
+                        allow_redirects=allow_redirects,
                     )
                     elapsed_ms = (time.monotonic() - started_at) * 1000.0
                     last_resp = response
@@ -534,7 +560,7 @@ class SourceHttpClient:
                             status_code=response.status_code,
                             error=None if response.ok else f"HTTP {response.status_code}",
                         )
-                except requests.exceptions.RequestException as exc:
+                except transport_errors as exc:
                     elapsed_ms = (time.monotonic() - started_at) * 1000.0
                     last_exc = exc
                     if diagnostics is not None:
@@ -583,6 +609,10 @@ class SourceHttpClient:
                 response.status_code,
                 wait,
             )
+            if stream:
+                # The body was never read; release the connection before the
+                # retry sleep instead of pinning it for the whole backoff.
+                response.close()
             time.sleep(wait)
 
         if last_resp is not None:
@@ -599,6 +629,8 @@ class SourceHttpClient:
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        stream: bool = False,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         return self.request(
             "GET",
@@ -607,6 +639,8 @@ class SourceHttpClient:
             headers=headers,
             timeout=timeout,
             max_retries=max_retries,
+            stream=stream,
+            allow_redirects=allow_redirects,
         )
 
     def post(
@@ -634,6 +668,34 @@ def get_source_http_client(source_name: str) -> SourceHttpClient:
         if client is None:
             client = SourceHttpClient(_POLICIES[key])
             _CLIENTS[key] = client
+        return client
+
+
+def client_for_policy(policy: SourcePolicy) -> SourceHttpClient:
+    """The shared client for a policy owned OUTSIDE this module (a plugin's).
+
+    Built-in sources are named in ``_POLICIES`` and reached through
+    :func:`get_source_http_client`. A plugin that talks to a service ALMa does
+    not know about (e.g. a user-configured mirror) defines its own
+    ``SourcePolicy`` and gets the same throttle, retries, cooldown,
+    diagnostics and network switch through here — one client per policy
+    name, so pacing is shared across every caller of that source.
+
+    A plugin policy may not shadow a built-in source's name, and one name maps
+    to one policy for the life of the process.
+    """
+    key = (policy.name or "").strip().lower()
+    if not key:
+        raise ValueError("A source policy needs a name")
+    if key in _POLICIES:
+        raise ValueError(f"Source policy {key!r} is built in; use get_source_http_client")
+    with _CLIENTS_LOCK:
+        client = _CLIENTS.get(key)
+        if client is None:
+            client = SourceHttpClient(policy)
+            _CLIENTS[key] = client
+        elif client._policy is not policy and client._policy != policy:
+            raise ValueError(f"Source policy {key!r} is already registered with different settings")
         return client
 
 
