@@ -1547,6 +1547,21 @@ def _m_0040_semantic_partition(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m_0041_paper_pdfs(conn: sqlite3.Connection) -> None:
+    """Paper PDF tables (task 81, 2026-09-19).
+
+    ``paper_pdfs`` (one kept file per paper), ``paper_pdf_attempts`` (latest
+    outcome per paper × source) and ``paper_pdf_rejections`` (files the user
+    marked wrong). The statements are the owner's ``DDL`` — the same ones the
+    bootstrap runs — so a migrated DB and a fresh one are identical. Additive
+    and repeat-safe; no data to move.
+    """
+    from alma.application.pdfs.store import DDL
+
+    for statement in DDL:
+        conn.execute(statement)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1588,6 +1603,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
     (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
     (40, "semantic_partition", _m_0040_semantic_partition),
+    (41, "paper_pdfs", _m_0041_paper_pdfs),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

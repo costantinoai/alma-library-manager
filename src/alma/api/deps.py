@@ -1213,6 +1213,14 @@ def init_db_schema() -> None:
             for statement in PARTITION_DDL:
                 conn.execute(statement)
 
+            # Paper PDFs (task 81): stored file rows, per-source attempts and
+            # user rejections. The DDL lives with its owner; migration 41 runs
+            # the same statements for existing installs.
+            from alma.application.pdfs.store import DDL as PDF_STORE_DDL
+
+            for statement in PDF_STORE_DDL:
+                conn.execute(statement)
+
             # ==============================================================
             # ALERTS: Digest-based system (rules + digests + assignments)
             # ==============================================================

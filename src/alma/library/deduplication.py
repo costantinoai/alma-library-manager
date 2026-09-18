@@ -175,6 +175,9 @@ def _rewire_paper_refs(conn: sqlite3.Connection, old_paper_id: str, new_paper_id
         "feed_items",
         "recommendations",
         "lens_signals",
+        # The kept PDF (the survivor's own wins) and "wrong PDF" verdicts.
+        "paper_pdfs",
+        "paper_pdf_rejections",
     ]
 
     for table in tables:

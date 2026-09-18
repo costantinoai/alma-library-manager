@@ -403,6 +403,17 @@ def get_db_path() -> Path:
     return get_data_dir() / "scholar.db"
 
 
+def get_pdf_store_dir() -> Path:
+    """Directory holding the paper PDFs ALMa keeps (``<db dir>/pdfs``).
+
+    Anchored to the DATABASE's directory, not ``get_data_dir()``: the files
+    and the ``paper_pdfs`` rows that point at them must always travel
+    together — a ``DB_PATH`` override (tests, a relocated library) moves both.
+    In Docker this is ``/app/data/pdfs`` on the data volume. Not created here.
+    """
+    return get_db_path().parent / "pdfs"
+
+
 def update_settings(updates: dict[str, Any]) -> None:
     """Update settings.json with new values.
 

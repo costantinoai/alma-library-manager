@@ -50,6 +50,11 @@ _PREPRINT_TO_PAPER_MIGRATE_TABLES = (
     "lens_signals",
     "alerted_publications",
     "alert_history",
+    # A preprint's kept PDF serves its published root until the root has its
+    # own (repointing is UPDATE OR IGNORE, so the root's file wins); the
+    # user's "wrong PDF" verdicts follow the paper too.
+    "paper_pdfs",
+    "paper_pdf_rejections",
 )
 
 _ALL_PAPER_SIDECAR_TABLES = frozenset(
@@ -59,6 +64,9 @@ _ALL_PAPER_SIDECAR_TABLES = frozenset(
         "publication_embedding_fetch_status",
         "paper_enrichment_status",
         "paper_network_cache",
+        # Per-source fetch outcomes describe the child's identifiers; the
+        # root retries fresh instead of inheriting them.
+        "paper_pdf_attempts",
     }
 )
 
