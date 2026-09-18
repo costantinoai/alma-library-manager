@@ -19,7 +19,7 @@ from typing import Any
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
-from alma.core.utils import normalize_doi
+from alma.core.utils import canonical_lookup_doi, normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -156,3 +156,34 @@ def search_works(
         if candidate:
             out.append(candidate)
     return out[: max(1, int(limit))]
+
+
+def lookup_by_doi(doi: str) -> dict | None:
+    """The Europe PMC record for one DOI, or ``None`` when it has none.
+
+    An identifier lookup, not a search: the result must carry the same DOI.
+    Its value is the identifiers ALMa does not store — PMID and, above all,
+    PMCID (the key to the PMC open-access PDF bucket). Uses the ``lite``
+    result tier: identifiers and OA flags are all a lookup needs, and the
+    abstract-bearing ``core`` tier is heavier.
+
+    Raises ``requests.RequestException`` (``HTTPError`` for a 429/5xx that
+    survived the client's retries) or ``ValueError`` (non-JSON body) so a
+    caller can tell an outage from "not indexed".
+    """
+    wanted = canonical_lookup_doi(doi or "")
+    if not wanted:
+        return None
+    params: dict[str, Any] = {
+        "query": f'DOI:"{wanted}"',
+        "format": "json",
+        "resultType": "lite",
+        "pageSize": 5,
+    }
+    resp = get_source_http_client("europe_pmc").get("/search", params=params, timeout=20)
+    resp.raise_for_status()
+    rows = (((resp.json() or {}).get("resultList") or {}).get("result")) or []
+    for item in rows if isinstance(rows, list) else []:
+        if isinstance(item, dict) and canonical_lookup_doi(str(item.get("doi") or "")) == wanted:
+            return _europe_pmc_to_candidate(item, 1.0)
+    return None
