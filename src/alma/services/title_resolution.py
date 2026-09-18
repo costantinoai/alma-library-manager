@@ -65,7 +65,6 @@ openalex_id).
 from __future__ import annotations
 
 import logging
-import re
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -83,6 +82,7 @@ from alma.core.fetch_pipeline import (
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import canonical_lookup_doi
+from alma.core.utils import title_tokens as _title_tokens
 from alma.core.utils import utcnow_iso as _utcnow_iso
 from alma.discovery import semantic_scholar
 from alma.openalex.client import _normalize_openalex_work_id
@@ -118,8 +118,6 @@ _S2_FETCH_WORKERS = 2
 # one `write_section` (one BEGIN IMMEDIATE → commit) before yielding.
 _WRITE_BATCH_SIZE = 50
 
-_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
-
 # Match threshold. Jaccard token-set on lowercased alpha-numeric
 # tokens. Tight enough that a clean title-only match almost certainly
 # identifies the same work, while leaving room for differing
@@ -141,10 +139,6 @@ OPENALEX_FALLBACK_PER_RUN_BUDGET = 100
 # papers per click — generous for any realistic backlog and bounded
 # so a stuck loop can't run away.
 _MAX_CONTINUATION_DEPTH = 50
-
-
-def _title_tokens(title: str) -> frozenset[str]:
-    return frozenset(_TITLE_TOKEN_RE.findall((title or "").lower()))
 
 
 def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:

@@ -38,14 +38,9 @@ from alma.application.inbox_schema import (
 )
 from alma.core.resolution import extract_arxiv_id, extract_biorxiv_doi
 from alma.core.time import utcnow
-from alma.core.utils import is_doi_shaped, normalize_doi, normalize_openalex_id
+from alma.core.utils import find_dois_in_text, normalize_openalex_id
 
 logger = logging.getLogger(__name__)
-
-# A DOI anywhere in free text. Stops at whitespace and at the punctuation that
-# realistically terminates a DOI in prose or a URL — angle brackets (Slack
-# wraps links as `<url|label>`), quotes, parens, and a trailing sentence period.
-_DOI_IN_TEXT = re.compile(r"\b(10\.\d{4,9}/[^\s<>\"'()\[\]]+)", re.IGNORECASE)
 
 # Bare URLs in free text, for the no-DOI fallback.
 _URL_IN_TEXT = re.compile(r"https?://[^\s<>\"'\]]+", re.IGNORECASE)
@@ -75,12 +70,10 @@ def extract_identifiers(message: InboundMessage) -> ExtractedIdentifiers:
     if not haystack:
         return ExtractedIdentifiers()
 
-    doi: str | None = None
-    match = _DOI_IN_TEXT.search(haystack)
-    if match:
-        candidate = match.group(1).rstrip(_DOI_TRAILING_JUNK)
-        if is_doi_shaped(candidate):
-            doi = normalize_doi(candidate)
+    # The shared DOI-in-text reader (angle brackets, quotes, parens and a
+    # trailing sentence period end a DOI — Slack wraps links as `<url|label>`).
+    dois = find_dois_in_text(haystack)
+    doi: str | None = dois[0] if dois else None
 
     # Preprints: prefer the registered DOI form over the raw id.
     arxiv_id = extract_arxiv_id(haystack)

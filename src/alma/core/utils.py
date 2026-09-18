@@ -370,6 +370,39 @@ def is_doi_shaped(value: str | None) -> bool:
     """
     norm = normalize_doi(value)
     return bool(norm and _DOI_SHAPE_RE.match(norm))
+
+
+# A DOI inside free text (a message, a PDF page). Stops at whitespace, quotes,
+# brackets and angle brackets — the characters that end a DOI in running text.
+_DOI_IN_TEXT_RE = re.compile(r"\b(10\.\d{4,9}/[^\s<>\"'()\[\]]+)", re.IGNORECASE)
+# Trailing punctuation a DOI never really ends with — a DOI at the end of a
+# sentence otherwise resolves with the period attached and misses.
+_DOI_TRAILING_JUNK = ".,;:"
+
+
+def find_dois_in_text(text: str | None) -> list[str]:
+    """Every registry-shaped DOI in free text, in order, normalized, deduplicated.
+
+    The one DOI-in-text reader: Inbox capture takes the first, PDF
+    verification and identification read them all.
+    """
+    found: list[str] = []
+    for match in _DOI_IN_TEXT_RE.finditer(text or ""):
+        candidate = match.group(1).rstrip(_DOI_TRAILING_JUNK)
+        if not is_doi_shaped(candidate):
+            continue
+        normalized = normalize_doi(candidate)
+        if normalized and normalized not in found:
+            found.append(normalized)
+    return found
+
+
+_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def title_tokens(title: str | None) -> frozenset[str]:
+    """Lower-cased alphanumeric tokens of a title (for set-overlap matching)."""
+    return frozenset(_TITLE_TOKEN_RE.findall((title or "").lower()))
 # Trailing publisher fragments observed in the wild on bibtex / RIS imports.
 # Stripped only when at the end of the suffix; never inside the suffix.
 _DOI_TRAILING_FRAGMENTS = ("/abstract", "/full", "/pdf", "/epdf", "/meta")
