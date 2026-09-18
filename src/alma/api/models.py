@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from alma.discovery.defaults import DEFAULT_SIGNAL_WEIGHTS
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
 # ============================================================================
@@ -602,17 +603,20 @@ class RecommendationExplainResponse(BaseModel):
 
 
 class DiscoveryWeights(BaseModel):
-    """Weights for scoring signals (should sum to ~1.0)."""
+    """Relative weights for the scoring signals; the ranker rescales them to 1.
 
-    source_relevance: float = Field(0.15, ge=0.0, le=1.0)
-    topic_score: float = Field(0.20, ge=0.0, le=1.0)
-    text_similarity: float = Field(0.20, ge=0.0, le=1.0)
-    author_affinity: float = Field(0.15, ge=0.0, le=1.0)
-    journal_affinity: float = Field(0.05, ge=0.0, le=1.0)
-    recency_boost: float = Field(0.10, ge=0.0, le=1.0)
-    citation_quality: float = Field(0.05, ge=0.0, le=1.0)
-    feedback_adj: float = Field(0.10, ge=0.0, le=1.0)
-    preference_affinity: float = Field(0.10, ge=0.0, le=1.0)
+    Defaults come from the one owner, ``discovery.defaults.DEFAULT_SIGNAL_WEIGHTS``.
+    """
+
+    source_relevance: float = Field(DEFAULT_SIGNAL_WEIGHTS["source_relevance"], ge=0.0, le=1.0)
+    topic_score: float = Field(DEFAULT_SIGNAL_WEIGHTS["topic_score"], ge=0.0, le=1.0)
+    text_similarity: float = Field(DEFAULT_SIGNAL_WEIGHTS["text_similarity"], ge=0.0, le=1.0)
+    author_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["author_affinity"], ge=0.0, le=1.0)
+    journal_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["journal_affinity"], ge=0.0, le=1.0)
+    recency_boost: float = Field(DEFAULT_SIGNAL_WEIGHTS["recency_boost"], ge=0.0, le=1.0)
+    citation_quality: float = Field(DEFAULT_SIGNAL_WEIGHTS["citation_quality"], ge=0.0, le=1.0)
+    feedback_adj: float = Field(DEFAULT_SIGNAL_WEIGHTS["feedback_adj"], ge=0.0, le=1.0)
+    preference_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["preference_affinity"], ge=0.0, le=1.0)
 
 
 class DiscoveryStrategies(BaseModel):

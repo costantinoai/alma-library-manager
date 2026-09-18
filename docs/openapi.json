@@ -22103,6 +22103,128 @@
           }
         }
       }
+    },
+    "/api/v1/discovery/outcome-evaluation": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Does the ranker's order predict what you kept? (stored result)",
+        "description": "Pure read of the stored evaluation summary; never computes.",
+        "operationId": "get_outcome_evaluation_api_v1_discovery_outcome_evaluation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/outcome-evaluation/refresh": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Re-run the ranker outcome evaluation in the background",
+        "description": "Queue a re-evaluation when its inputs moved (always, with ``force``).",
+        "operationId": "refresh_outcome_evaluation_api_v1_discovery_outcome_evaluation_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -24962,28 +25084,28 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Source Relevance",
-            "default": 0.15
+            "default": 0.14
           },
           "topic_score": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Topic Score",
-            "default": 0.2
+            "default": 0.0
           },
           "text_similarity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Text Similarity",
-            "default": 0.2
+            "default": 0.51
           },
           "author_affinity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Author Affinity",
-            "default": 0.15
+            "default": 0.0
           },
           "journal_affinity": {
             "type": "number",
@@ -24997,28 +25119,28 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Recency Boost",
-            "default": 0.1
+            "default": 0.0
           },
           "citation_quality": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Citation Quality",
-            "default": 0.05
+            "default": 0.12
           },
           "feedback_adj": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Feedback Adj",
-            "default": 0.1
+            "default": 0.09
           },
           "preference_affinity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Preference Affinity",
-            "default": 0.1
+            "default": 0.09
           }
         },
         "type": "object",

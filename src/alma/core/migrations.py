@@ -1547,6 +1547,39 @@ def _m_0040_semantic_partition(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m_0041_fitted_default_signal_weights(conn: sqlite3.Connection) -> None:
+    """Move untouched installs from the hand-picked default weights to the fitted ones (2026-09-18).
+
+    Default weights are written into `discovery_settings` on first run, so
+    changing the defaults in code reaches nobody who already has a database.
+    An install whose nine stored weights are EXACTLY the previous defaults has
+    never touched a slider; it moves to the new defaults. Any deviation means a
+    deliberate choice and is left alone — a migrator must not overrule a user.
+    """
+    from alma.discovery.defaults import DEFAULT_SIGNAL_WEIGHTS
+
+    previous = {
+        "source_relevance": 0.15, "topic_score": 0.20, "text_similarity": 0.20,
+        "author_affinity": 0.15, "journal_affinity": 0.05, "recency_boost": 0.10,
+        "citation_quality": 0.05, "feedback_adj": 0.10, "preference_affinity": 0.10,
+    }  # fmt: skip
+    tables = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "discovery_settings" not in tables:
+        return
+    stored = {
+        str(r[0])[len("weights."):]: r[1]
+        for r in conn.execute("SELECT key, value FROM discovery_settings WHERE key LIKE 'weights.%'")
+    }
+    try:
+        untouched = all(abs(float(stored[key]) - value) < 1e-9 for key, value in previous.items())
+    except (KeyError, TypeError, ValueError):
+        return  # missing or unparseable: not the old defaults
+    if not untouched:
+        return
+    for key, value in DEFAULT_SIGNAL_WEIGHTS.items():
+        conn.execute("UPDATE discovery_settings SET value = ? WHERE key = ?", (str(value), f"weights.{key}"))
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1588,6 +1621,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
     (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
     (40, "semantic_partition", _m_0040_semantic_partition),
+    (41, "fitted_default_signal_weights", _m_0041_fitted_default_signal_weights),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
