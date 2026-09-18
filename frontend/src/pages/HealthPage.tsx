@@ -91,12 +91,14 @@ export function HealthPage() {
     queryKey: SNAPSHOT_KEY,
     queryFn: getHealthSnapshot,
     staleTime: 30_000,
+    refetchInterval: query => query.state.data && !query.state.data.generated_at ? 1500 : false,
     retry: 1,
   })
   const operationsQuery = useQuery({
     queryKey: OPERATIONS_KEY,
     queryFn: getHealthOperations,
     staleTime: 30_000,
+    refetchInterval: query => query.state.data && !query.state.data.generated_at ? 1500 : false,
     retry: 1,
   })
   const networkPolicyMutation = useMutation({

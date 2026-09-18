@@ -117,16 +117,6 @@ async def lifespan(app: FastAPI):
 
     init_db_schema()
 
-    # Health endpoints are stored reads only. Build their dependency chain
-    # during startup so even the first request receives a complete snapshot;
-    # the scheduler then owns periodic and debounced refreshes.
-    try:
-        from alma.services.health_snapshots import rebuild_all as rebuild_health_snapshots
-
-        rebuild_health_snapshots()
-    except Exception as e:
-        logger.warning("Initial Health snapshot build skipped: %s", e)
-
     logger.info(
         "Integration plugins: %s",
         ", ".join(get_plugin_registry().ids()),
@@ -135,6 +125,12 @@ async def lifespan(app: FastAPI):
     # Start scheduler with periodic alert evaluation and author refresh jobs
     try:
         setup_scheduler()
+        # Serve persisted snapshots immediately. A corpus-wide assessment must
+        # not hold application startup (and every HTTP request) behind its work.
+        # Reuse the same background coordinator as mutation/periodic refreshes.
+        from alma.services.health_snapshots import request_refresh
+
+        request_refresh(delay_seconds=0)
     except Exception as e:
         logger.warning(f"Failed to start scheduler: {e}")
 
