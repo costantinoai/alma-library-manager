@@ -69,6 +69,8 @@ ENDPOINT_FIELDS: dict[str, frozenset[str]] = {
     "recommendations.papers": _NO_TLDR_OR_VECTOR,
     "recommendations.forpaper": _NO_TLDR_OR_VECTOR,
     "author.batch": frozenset(AUTHOR_FIELDS.split(",")),
+    # Single-paper lookup, used for the open-access PDF link only.
+    "paper.single": frozenset({"title", "year", "externalIds", "isOpenAccess", "openAccessPdf"}),
 }
 
 
@@ -565,6 +567,27 @@ def fetch_vectors_for_identifiers(
         retryable_ids=frozenset(retryable),
         request_count=requests_made,
     )
+
+
+def fetch_open_access_pdf(paper_id: str) -> dict | None:
+    """S2's ``openAccessPdf`` (``{url, status, license}``) for ONE paper, or None.
+
+    ``paper_id`` is an S2 lookup id (``DOI:…``, ``ARXIV:…``, ``CorpusId:…`` or
+    a paperId). S2's link is often empty or a landing page, so callers treat
+    it as one low-priority candidate. A 404 is "unknown paper"; any other
+    failure raises for the caller to record.
+    """
+    fields = project_fields("paper.single", "openAccessPdf,isOpenAccess")
+    resp = get_source_http_client("semantic_scholar").get(
+        f"/paper/{paper_id}", params={"fields": fields}, timeout=20
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        _log_contract_error("paper.single", resp, context=paper_id)
+        resp.raise_for_status()
+    pdf = (resp.json() or {}).get("openAccessPdf") or {}
+    return pdf if str(pdf.get("url") or "").strip() else None
 
 
 def match_paper_by_title(title: str, *, fields: str | None = None) -> dict | None:

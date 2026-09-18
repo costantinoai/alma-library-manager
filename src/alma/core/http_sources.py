@@ -318,6 +318,18 @@ _POLICIES: dict[str, SourcePolicy] = {
         max_retries=3,
         default_headers=(("Accept", "application/json"),),
     ),
+    # PMC open-access article files on AWS (the PMC OA web service `oa.fcgi`
+    # was retired in Aug 2026; PMC/Europe PMC web PDFs sit behind captchas).
+    # Public, anonymous S3: list `metadata/PMC{id}.` for the latest version,
+    # then `PMC{id}.{ver}/PMC{id}.{ver}.pdf`.
+    "pmc_oa": SourcePolicy(
+        name="pmc_oa",
+        base_url="https://pmc-oa-opendata.s3.amazonaws.com",
+        min_interval_seconds=0.2,
+        max_concurrency=2,
+        max_retries=2,
+        default_headers=(("Accept", "*/*"),),
+    ),
     "publisher": SourcePolicy(
         name="publisher",
         base_url="",
