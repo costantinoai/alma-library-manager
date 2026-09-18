@@ -17,8 +17,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.gzip import GZipMiddleware
 
+from alma.api.compression import MediaAwareGZipMiddleware
 from alma.api.deps import get_plugin_registry, open_db_connection
 from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
@@ -243,9 +243,10 @@ app.add_middleware(
 # Graph JSON is the application's largest repeated response. The inner cache
 # middleware hashes the uncompressed representation and handles conditional
 # GETs; gzip wraps it so ready payloads travel compactly. Building envelopes
-# are tiny and marked no-store.
+# are tiny and marked no-store. Served files (PDFs) and 206 range answers pass
+# through uncompressed — see `alma.api.compression`.
 app.add_middleware(GraphHttpCacheMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
+app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 # Request logging middleware
