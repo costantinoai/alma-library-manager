@@ -36,6 +36,13 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"(?i)\b(api[_-]?key|token|access[_-]?token|password|secret)\s*:\s*([^\s,;]+)"),
         r"\1: " + _REDACTED,
     ),
+    # A bare ``key`` URL query parameter is a credential by convention (Anna's
+    # Archive member API, Google APIs). Only redacted inside a query string
+    # (``?key=`` / ``&key=``) so prose like "sort key=year" stays readable.
+    (
+        re.compile(r"(?i)([?&]key=)([^&\s#]+)"),
+        r"\1" + _REDACTED,
+    ),
     (
         re.compile(r"(?i)\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._\-+/=]+"),
         "Authorization: Bearer " + _REDACTED,
