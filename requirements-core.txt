@@ -36,6 +36,10 @@ slack-sdk>=3.20.0
 
 # --- Paper PDFs (verify a stored file is the paper it claims to be) ---
 pypdf>=6.0
+# Shadow-libraries PDF plugin only (opt-in): browser-TLS transport for mirrors
+# behind DDoS-Guard. Wheels for x86_64 and aarch64; the plugin reports itself
+# unavailable where it cannot be installed (armv7).
+curl_cffi>=0.7; platform_machine == "x86_64" or platform_machine == "aarch64"
 
 # --- Library imports (BibTeX / Zotero) ---
 bibtexparser>=1.4.0

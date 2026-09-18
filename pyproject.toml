@@ -86,6 +86,11 @@ dev = [
     "ruff>=0.1.6",
     "mypy>=1.7.0",
 ]
+# Shadow-libraries PDF plugin (opt-in): TLS-impersonating transport for
+# mirrors that refuse plain requests. Baked into the Docker image.
+shadow = [
+    "curl_cffi>=0.7",
+]
 # Documentation site (mkdocs material + plugins)
 docs = [
     "mkdocs-material>=9.5.0",

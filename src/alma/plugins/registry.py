@@ -9,12 +9,14 @@ from alma.application.pdf_schema import TIER_ORDER, PdfSource
 from alma.plugins.email import EMAIL_PLUGIN
 from alma.plugins.manifest import PDF_SOURCE, RECEIVE, SEND, Capability, PluginManifest
 from alma.plugins.open_access import OPEN_ACCESS_PLUGIN
+from alma.plugins.shadow_libraries import SHADOW_LIBRARIES_PLUGIN
 from alma.plugins.slack import SLACK_PLUGIN
 
 PLUGINS: tuple[PluginManifest, ...] = (
     SLACK_PLUGIN,
     EMAIL_PLUGIN,
     OPEN_ACCESS_PLUGIN,
+    SHADOW_LIBRARIES_PLUGIN,
 )
 
 
