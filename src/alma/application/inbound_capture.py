@@ -36,7 +36,7 @@ from alma.application.inbox_schema import (
     ExtractedIdentifiers,
     InboundMessage,
 )
-from alma.core.resolution import extract_arxiv_id, extract_biorxiv_doi
+from alma.core.resolution import arxiv_doi, extract_arxiv_id, extract_biorxiv_doi
 from alma.core.time import utcnow
 from alma.core.utils import find_dois_in_text, normalize_openalex_id
 
@@ -59,14 +59,22 @@ def extract_identifiers(message: InboundMessage) -> ExtractedIdentifiers:
     Searches the message text AND the channel's pre-parsed `urls`. The channel's
     own links matter: Slack sends `<https://doi.org/10.1/x|the paper>`, where a
     naive regex over display text would capture the label too.
+    """
+    return identifiers_in_text(message.text or "", urls=tuple(message.urls or ()))
+
+
+def identifiers_in_text(text: str, *, urls: tuple[str, ...] = ()) -> ExtractedIdentifiers:
+    """Every resolvable identifier in free text — the one text reader.
+
+    Transport-free: Inbox messages come through :func:`extract_identifiers`,
+    a PDF's first page and filename through the PDF importer. ``urls`` are
+    links the transport already parsed (preferred for the URL fallback).
 
     An arXiv id becomes its registered DOI (``10.48550/arXiv.<id>``), because
     OpenAlex indexes preprints under that and a DOI is a far stronger lookup key
     than a URL.
     """
-    haystack = " ".join(
-        [message.text or "", *(message.urls or ())]
-    ).strip()
+    haystack = " ".join([text or "", *urls]).strip()
     if not haystack:
         return ExtractedIdentifiers()
 
@@ -82,7 +90,7 @@ def extract_identifiers(message: InboundMessage) -> ExtractedIdentifiers:
         if biorxiv_doi:
             doi = biorxiv_doi
         elif arxiv_id:
-            doi = f"10.48550/arXiv.{arxiv_id}"
+            doi = arxiv_doi(arxiv_id)
 
     openalex_id: str | None = None
     oa_match = _OPENALEX_IN_TEXT.search(haystack)
@@ -92,7 +100,7 @@ def extract_identifiers(message: InboundMessage) -> ExtractedIdentifiers:
     # First URL, channel-supplied links first — the fallback when there is no
     # identifier at all. OpenAlex can sometimes resolve a landing page.
     url: str | None = None
-    for candidate_url in (*(message.urls or ()), *_URL_IN_TEXT.findall(haystack)):
+    for candidate_url in (*urls, *_URL_IN_TEXT.findall(haystack)):
         cleaned = str(candidate_url or "").strip().rstrip(_DOI_TRAILING_JUNK)
         if cleaned:
             url = cleaned

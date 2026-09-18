@@ -12,6 +12,7 @@ from alma.application import paper_actions
 from alma.application.feed import _upsert_candidate_paper
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_write import run_write_unit
+from alma.core.resolution import arxiv_doi
 from alma.core.time import utcnow
 from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
@@ -100,7 +101,7 @@ def _extract_arxiv_doi(text: str) -> str | None:
     arxiv_id = m.group(1)
     if not arxiv_id:
         return None
-    return f"10.48550/arXiv.{arxiv_id}"
+    return arxiv_doi(arxiv_id)
 
 
 def _seed_sibling_resolve_cache(work: dict, resp) -> None:

@@ -18,6 +18,7 @@ from typing import Any
 from alma.core.components import resolve_component
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
 from alma.core.paper_groups import settle_new_paper_group
+from alma.core.resolution import arxiv_doi
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
@@ -831,7 +832,7 @@ def _doi_from_text(text: str) -> str:
         if "arxiv.org" in raw_l:
             match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", raw, flags=re.IGNORECASE)
             if match:
-                return _normalize_doi_value(f"10.48550/arXiv.{match.group(1)}")
+                return _normalize_doi_value(arxiv_doi(match.group(1)))
         if "biorxiv.org" in raw_l or "medrxiv.org" in raw_l:
             match = re.search(r"(10\.1101/[^\s/\"'<>]+)", raw, flags=re.IGNORECASE)
             if match:
@@ -845,7 +846,7 @@ def _doi_from_text(text: str) -> str:
     if "arxiv" in raw_l:
         match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", raw, flags=re.IGNORECASE)
         if match:
-            return _normalize_doi_value(f"10.48550/arXiv.{match.group(1)}")
+            return _normalize_doi_value(arxiv_doi(match.group(1)))
     if "10.1101/" in raw_l:
         match = re.search(r"(10\.1101/[^\s/\"'<>]+)", raw, flags=re.IGNORECASE)
         if match:

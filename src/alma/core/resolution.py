@@ -751,6 +751,17 @@ def extract_arxiv_id(text: str) -> str | None:
     return None
 
 
+def arxiv_doi(arxiv_id: str) -> str:
+    """The DataCite DOI arXiv registers for an id: ``10.48550/arXiv.<id>``.
+
+    The DOI names the paper, not a version, so a version suffix (``v2``) is
+    dropped — ``10.48550/arXiv.2401.00001v2`` resolves nowhere. THE one
+    builder; every caller that turns an arXiv id into a DOI goes through it.
+    """
+    bare = re.sub(r"v\d+$", "", (arxiv_id or "").strip(), flags=re.IGNORECASE)
+    return f"10.48550/arXiv.{bare}"
+
+
 def extract_biorxiv_doi(text: str) -> str | None:
     """First bioRxiv DOI (``10.1101/...``) in *text*, normalized, or None.
 

@@ -22,6 +22,7 @@ from alma.core.author_names import parse_author_names as _parse_author_names
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import (
+    arxiv_doi,
     extract_arxiv_id,
     extract_biorxiv_doi,
     resolve_paper_openalex_work,
@@ -134,7 +135,7 @@ def _preprint_hints(pub: dict) -> dict:
     )
     synthetic_dois: list[str] = []
     if arxiv_id:
-        synthetic_dois.append(f"10.48550/arXiv.{arxiv_id}")
+        synthetic_dois.append(arxiv_doi(arxiv_id))
     if biorxiv_doi:
         synthetic_dois.append(biorxiv_doi)
     return {
