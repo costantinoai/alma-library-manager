@@ -3,20 +3,26 @@
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
-from alma.api.helpers import raise_internal, row_to_paper_response
+from alma.api.helpers import raise_internal, row_to_paper_response, stage_pdf_upload
 from alma.api.models import ErrorResponse, PaperResponse
 from alma.application import authors as authors_app
 from alma.application import library as library_app
+from alma.application.pdfs import jobs as pdf_jobs
+from alma.application.pdfs import service as pdf_service
+from alma.application.pdfs import store as pdf_store
 from alma.core.db_write import run_write_unit
+from alma.core.operations.activity import record_foreground_action
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
 from alma.core.time import utcnow
@@ -922,7 +928,127 @@ def get_paper_details(
         (root_id,),
     ).fetchall()
     paper["preprint_versions"] = [dict(r) for r in preprint_rows]
+
+    # The kept PDF (task 81): file meta + per-source attempts, a pure read.
+    paper["pdf"] = pdf_service.pdf_status(db, root_id)
     return paper
+
+
+# ---------------------------------------------------------------------------
+# Paper PDFs (task 81). Thin handlers: bytes are staged, rows are read, files
+# are served here; every PDF operation itself runs as an Activity job in
+# `alma.application.pdfs` and the route returns its envelope.
+# ---------------------------------------------------------------------------
+
+
+def _pdf_root_or_404(db: sqlite3.Connection, paper_id: str) -> tuple[str, str]:
+    """The paper's root id and title, or 404 (a PDF belongs to the root)."""
+    root_id = resolve_action_paper_id(db, paper_id)
+    row = db.execute("SELECT title FROM papers WHERE id = ?", (root_id,)).fetchone() if root_id else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    return str(root_id), str(row["title"] or "")
+
+
+@router.get(
+    "/{paper_id}/pdf",
+    summary="Serve the paper's stored PDF",
+    description=(
+        "Streams the kept PDF inline (the browser's own viewer opens it). "
+        "Supports Range requests and conditional GETs (ETag = the file's sha256). "
+        "404 when no PDF is stored or its file is missing."
+    ),
+    response_class=FileResponse,
+)
+def get_paper_pdf(
+    paper_id: str,
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    root_id, _title = _pdf_root_or_404(db, paper_id)
+    record = pdf_store.read_pdf(db, root_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="No PDF stored for this paper")
+    try:
+        path = pdf_store.absolute_path(record.rel_path)
+        stat_result = os.stat(path)
+    except (OSError, pdf_store.UnsafeStorePathError) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="The stored PDF file is missing — fetch or attach it again",
+        ) from exc
+    etag = f'"{record.sha256}"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=record.filename,
+        content_disposition_type="inline",
+        stat_result=stat_result,
+        headers=headers,
+    )
+
+
+@router.post(
+    "/{paper_id}/pdf",
+    summary="Attach a PDF to this paper (queued Activity job)",
+    description=(
+        "The request body IS the PDF (`Content-Type: application/pdf`). It is "
+        "staged, then a `pdf.attach` job verifies it against the paper and "
+        "stores it (replacing any previous file). Returns the Activity envelope."
+    ),
+    status_code=202,
+)
+async def upload_paper_pdf(
+    paper_id: str,
+    request: Request,
+    filename: str = Query("", max_length=300, description="Original file name"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    root_id, title = _pdf_root_or_404(db, paper_id)
+    staged = await stage_pdf_upload(request)
+    return pdf_jobs.request_attach(paper_id=root_id, title=title, staged=staged, filename=filename)
+
+
+@router.delete(
+    "/{paper_id}/pdf",
+    summary="Remove the paper's stored PDF",
+    description=(
+        "`reject=true` also remembers this exact file as wrong for the paper, "
+        "so a later fetch never stores it again."
+    ),
+)
+def delete_paper_pdf(
+    paper_id: str,
+    reject: bool = Query(False),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    root_id, title = _pdf_root_or_404(db, paper_id)
+
+    def _unit():
+        record = pdf_store.delete_pdf(db, root_id)
+        if record is not None and reject:
+            pdf_store.reject_sha(db, root_id, record.sha256)
+        return record
+
+    record = run_write_unit(db, _unit, label="pdf.remove")
+    if record is None:
+        raise HTTPException(status_code=404, detail="No PDF stored for this paper")
+    if not pdf_store.is_referenced(db, record.rel_path):
+        pdf_store.unlink_quietly(record.rel_path)
+    verb = "Marked the PDF as wrong and removed it" if reject else "Removed the PDF"
+    job_id = record_foreground_action(
+        db,
+        operation_key=f"pdf.remove:{root_id}",
+        message=f"{verb} for “{title}”",
+        result={"paper_id": root_id, "rejected": reject, "filename": record.filename},
+    )
+    return {"status": "removed", "paper_id": root_id, "rejected": reject, "job_id": job_id}
 
 
 @router.post(

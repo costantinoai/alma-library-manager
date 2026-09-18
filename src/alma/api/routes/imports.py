@@ -13,12 +13,12 @@ import logging
 import sqlite3
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
-from alma.api.helpers import background_mode_requested
+from alma.api.helpers import background_mode_requested, stage_pdf_upload
 from alma.api.models import (
     BibtexTextImportRequest,
     ImportResultResponse,
@@ -29,6 +29,8 @@ from alma.api.models import (
 from alma.application import import_preflight
 from alma.application import imports as imports_app
 from alma.application import library as library_app
+from alma.application.pdfs import jobs as pdf_jobs
+from alma.application.pdfs import store as pdf_store
 from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
@@ -1243,6 +1245,73 @@ def online_source_search_stream(
             conn.close()
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
+# ---------------------------------------------------------------------------
+# PDF-first import (task 81): the body IS the PDF. The job identifies the
+# paper (an existing one first — never a duplicate), saves it to the Library
+# (D4, added_from='import') and attaches the file.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/import/pdf",
+    summary="Import a PDF: find its paper, save it to the Library, attach the file",
+    description=(
+        "Send the PDF itself as the body (`Content-Type: application/pdf`, "
+        "`?filename=`). A queued `pdf.import` job reads the file's DOI / arXiv "
+        "id / title, matches an EXISTING paper first (never creating a "
+        "duplicate), otherwise resolves it online, saves it to the Library and "
+        "stores the PDF. When the paper cannot be identified the job result "
+        "carries an `upload_id` for `/import/pdf/uploads/{upload_id}`."
+    ),
+    status_code=202,
+)
+async def import_pdf_endpoint(
+    request: Request,
+    filename: str = Query("", max_length=300, description="Original file name"),
+):
+    staged = await stage_pdf_upload(request)
+    return pdf_jobs.request_import(staged=staged, filename=filename)
+
+
+class PdfImportHint(BaseModel):
+    """What the user knows about a PDF ALMa could not identify."""
+
+    doi: str | None = Field(None, max_length=300, description="DOI, doi.org link or arXiv id")
+    title: str | None = Field(None, max_length=500)
+
+
+@router.post(
+    "/import/pdf/uploads/{upload_id}",
+    summary="Retry a PDF import with a DOI or title you provide",
+    description=(
+        "Re-runs the import job for a kept upload, trying your DOI/arXiv id "
+        "or title before anything read from the file. 404 once the upload "
+        "has expired (a day)."
+    ),
+    status_code=202,
+)
+def retry_pdf_import_endpoint(upload_id: str, body: PdfImportHint):
+    from alma.application.inbound_capture import identifiers_in_text
+    from alma.application.pdfs.identify import IdentityHint
+
+    loaded = pdf_store.load_staged(upload_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="That upload has expired — drop the PDF again")
+    staged, filename = loaded
+    typed = identifiers_in_text(body.doi or "") if (body.doi or "").strip() else None
+    title = (body.title or "").strip() or None
+    if not (typed and (typed.doi or typed.openalex_id)) and not title:
+        raise HTTPException(status_code=422, detail="Give a DOI, arXiv id or title")
+    hint = IdentityHint(
+        source="user",
+        doi=typed.doi if typed else None,
+        arxiv_id=typed.arxiv_id if typed else None,
+        openalex_id=typed.openalex_id if typed else None,
+        title=title if not (typed and (typed.doi or typed.openalex_id)) else None,
+    )
+    return pdf_jobs.request_import(staged=staged, filename=filename, user_hint=hint)
 
 
 @router.post(

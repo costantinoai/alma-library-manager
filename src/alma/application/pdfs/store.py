@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -79,6 +80,8 @@ DDL: tuple[str, ...] = (
 INCOMING_DIRNAME = ".incoming"
 UNDATED_DIRNAME = "undated"
 _TITLE_MAX_CHARS = 90
+#: Largest PDF ALMa accepts from any source (download, upload, import).
+MAX_PDF_BYTES = 100 * 1024 * 1024
 
 
 class PdfTooLargeError(Exception):
@@ -176,31 +179,99 @@ def new_staging_path() -> Path:
     return store_root() / INCOMING_DIRNAME / f"{uuid.uuid4().hex}.part"
 
 
-def stage_chunks(chunks: Iterable[bytes], *, max_bytes: int) -> StagedFile:
-    """Write ``chunks`` into a fresh staging file, hashing as it goes.
+class StagingWriter:
+    """Incrementally write one body into ``.incoming``, hashing as it goes.
 
     Staging lives INSIDE the store (never ``/tmp``, a 128 MB tmpfs in the
-    Docker image) so placement is a same-filesystem link. Raises
-    :class:`PdfTooLargeError` — after removing the partial file — once the body
-    passes ``max_bytes``.
+    Docker image) so placement is a same-filesystem link. The one writer for
+    every source of bytes: a streamed download (:func:`stage_chunks`) and a
+    streamed request body (an upload route feeds it ``await``-ed chunks).
     """
-    path = new_staging_path()
-    digest = hashlib.sha256()
-    written = 0
+
+    def __init__(self, *, max_bytes: int = MAX_PDF_BYTES) -> None:
+        self.max_bytes = int(max_bytes)
+        self.path = new_staging_path()
+        self._fh = self.path.open("wb")
+        self._digest = hashlib.sha256()
+        self._written = 0
+
+    def write(self, chunk: bytes) -> None:
+        """Append ``chunk``; past the cap, remove the partial file and raise."""
+        if not chunk:
+            return
+        self._written += len(chunk)
+        if self._written > self.max_bytes:
+            self.abort()
+            raise PdfTooLargeError(f"PDF exceeds the {self.max_bytes // (1024 * 1024)} MB limit")
+        self._digest.update(chunk)
+        self._fh.write(chunk)
+
+    def finish(self) -> StagedFile:
+        self._fh.close()
+        return StagedFile(path=self.path, sha256=self._digest.hexdigest(), bytes=self._written)
+
+    def abort(self) -> None:
+        if not self._fh.closed:
+            self._fh.close()
+        self.path.unlink(missing_ok=True)
+
+
+def stage_chunks(chunks: Iterable[bytes], *, max_bytes: int = MAX_PDF_BYTES) -> StagedFile:
+    """Stage an iterable of chunks (a streamed download). See :class:`StagingWriter`.
+
+    Raises :class:`PdfTooLargeError` — after removing the partial file — once
+    the body passes ``max_bytes``.
+    """
+    writer = StagingWriter(max_bytes=max_bytes)
     try:
-        with path.open("wb") as fh:
-            for chunk in chunks:
-                if not chunk:
-                    continue
-                written += len(chunk)
-                if written > max_bytes:
-                    raise PdfTooLargeError(f"PDF exceeds the {max_bytes // (1024 * 1024)} MB limit")
-                digest.update(chunk)
-                fh.write(chunk)
+        for chunk in chunks:
+            writer.write(chunk)
     except BaseException:
-        path.unlink(missing_ok=True)
+        writer.abort()
         raise
-    return StagedFile(path=path, sha256=digest.hexdigest(), bytes=written)
+    return writer.finish()
+
+
+# A staged upload awaiting a decision (PDF-first import that could not be
+# identified yet) is addressed by its token: the staging file's uuid.
+_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def staged_token(staged: StagedFile) -> str:
+    return staged.path.stem
+
+
+def keep_staged(staged: StagedFile, *, filename: str) -> str:
+    """Record an upload's original filename beside it; return its token."""
+    meta = {"filename": filename, "sha256": staged.sha256, "bytes": staged.bytes}
+    staged.path.with_suffix(".json").write_text(json.dumps(meta))
+    return staged_token(staged)
+
+
+def load_staged(token: str) -> tuple[StagedFile, str] | None:
+    """The staged upload for ``token`` and its original filename, if it still exists.
+
+    Tokens are validated as bare hex, so a token can never address a path
+    outside ``.incoming``.
+    """
+    if not _TOKEN_RE.match(token or ""):
+        return None
+    base = store_root() / INCOMING_DIRNAME / token
+    part, meta_path = base.with_suffix(".part"), base.with_suffix(".json")
+    if not part.exists() or not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        return None
+    staged = StagedFile(path=part, sha256=str(meta.get("sha256") or ""), bytes=int(meta.get("bytes") or 0))
+    return staged, str(meta.get("filename") or "")
+
+
+def release_staged(staged: StagedFile) -> None:
+    """Drop a staged upload and its sidecar (after it was stored or given up)."""
+    staged.discard()
+    staged.path.with_suffix(".json").unlink(missing_ok=True)
 
 
 def read_head(path: Path, size: int = 1024) -> bytes:
@@ -363,6 +434,14 @@ def delete_pdf(conn: sqlite3.Connection, paper_id: str) -> StoredPdf | None:
     if previous is not None:
         conn.execute(f"DELETE FROM {PDFS_TABLE} WHERE paper_id = ?", (paper_id,))
     return previous
+
+
+def find_by_sha(conn: sqlite3.Connection, sha256: str) -> StoredPdf | None:
+    """The stored PDF with exactly these bytes, if any paper already has them."""
+    row = conn.execute(
+        f"SELECT {_PDF_COLUMNS} FROM {PDFS_TABLE} WHERE sha256 = ? LIMIT 1", (sha256,)
+    ).fetchone()
+    return _row_to_pdf(row) if row else None
 
 
 def is_referenced(conn: sqlite3.Connection, rel_path: str) -> bool:

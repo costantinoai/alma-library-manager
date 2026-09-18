@@ -241,6 +241,17 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             sources=("openalex", "semantic_scholar", "crossref"),
             max_concurrency=2,
         ),
+        # Paper PDFs: fetch on tap / attach an upload / import PDF-first. One
+        # paper per job, sequential sources, no fan-out.
+        _p(
+            "pdf",
+            JobClass.USER_PRODUCT,
+            10,
+            {_R.NETWORK, _R.DB_WRITER},
+            sources=("unpaywall", "openalex", "crossref", "europe_pmc", "arxiv", "semantic_scholar"),
+            max_concurrency=2,
+            fanout_budget=1,
+        ),
         _p(
             "imports",
             JobClass.USER_PRODUCT,
@@ -363,6 +374,7 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
         "application/followed_authors.py",
         "application/library.py",
         "application/materialized_views.py",
+        "application/pdfs/jobs.py",
         "application/feed.py",
         "application/discovery/__init__.py",
         "library/importer.py",

@@ -80,7 +80,7 @@ def _biorxiv_ref_from_url(url: str) -> tuple[str, str] | None:
     return (server, doi)
 
 
-def _arxiv_id_from_identifiers(doi: str | None, urls: list[str]) -> str | None:
+def arxiv_id_from_identifiers(doi: str | None, urls: list[str]) -> str | None:
     """First arXiv id found across the DOI and the OA URLs."""
     from_doi = _arxiv_id_from_doi(doi)
     if from_doi:
@@ -135,7 +135,7 @@ def recover_preprint_abstract(
     url_list = [str(u).strip() for u in (urls or []) if str(u or "").strip()]
 
     # 1. Direct arXiv id (DOI or OA URL) — structured `summary`, highest precision.
-    arxiv_id = _arxiv_id_from_identifiers(doi, url_list)
+    arxiv_id = arxiv_id_from_identifiers(doi, url_list)
     if arxiv_id:
         abstract = arxiv.fetch_abstract_by_id(arxiv_id)
         if _is_usable_recovered_abstract(abstract):

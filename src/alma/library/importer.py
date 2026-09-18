@@ -1403,7 +1403,7 @@ def _find_or_create_collection(
     )
 
 
-def _find_existing_paper(
+def find_existing_paper(
     conn: sqlite3.Connection,
     doi: str,
     openalex_id: str,
@@ -1766,7 +1766,7 @@ def _import_or_stage_paper(
     component_type, parent_paper_id = resolve_component(
         conn, doi=doi, work_type=work_type
     )
-    existing_id = _find_existing_paper(conn, doi, openalex_id, title, year)
+    existing_id = find_existing_paper(conn, doi, openalex_id, title, year)
     if component_type:
         from alma.application import library as library_app
 
@@ -1826,7 +1826,7 @@ def _import_or_stage_paper(
                 url=url,
                 openalex_id=openalex_id,
             )
-        paper_id, promoted = _promote_existing_import_target(
+        paper_id, promoted = promote_existing_import_target(
             conn,
             existing_id,
             added_from="import",
@@ -1899,7 +1899,7 @@ def _import_or_stage_paper(
             match.paper_id,
             reason=f"import_title_duplicate:{match.paper_id}",
         )
-        _promote_existing_import_target(conn, match.paper_id, added_from="import")
+        promote_existing_import_target(conn, match.paper_id, added_from="import")
         return twin_id, "linked_duplicate"
 
     paper_id = _create_library_paper(
@@ -2054,7 +2054,7 @@ def _create_library_paper(
     return paper_id
 
 
-def _promote_existing_import_target(
+def promote_existing_import_target(
     conn: sqlite3.Connection,
     paper_id: str,
     *,

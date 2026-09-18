@@ -97,6 +97,38 @@ def background_mode_requested(background: bool | None) -> bool:
     return _scheduler_enabled()
 
 
+async def stage_pdf_upload(request: Any):
+    """Stream a raw ``application/pdf`` request body into the PDF store's staging.
+
+    The one upload intake for every PDF route (attach to a paper, PDF-first
+    import). The body is the file itself — not multipart, whose parser spools
+    anything over 1 MB into ``/tmp`` (a 128 MB tmpfs in the Docker image).
+    Chunks go straight to ``pdfs/.incoming`` under the size cap; no database is
+    touched. Answers 413 past the cap and 415 when the bytes are not a PDF.
+    Returns the staged file; the caller hands it to a queued job.
+    """
+    from alma.application.pdfs import store
+    from alma.application.pdfs.verify import BodyKind, classify_head
+
+    writer = store.StagingWriter()
+    try:
+        async for chunk in request.stream():
+            writer.write(chunk)
+    except store.PdfTooLargeError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except BaseException:
+        writer.abort()
+        raise
+    staged = writer.finish()
+    if staged.bytes == 0 or classify_head(store.read_head(staged.path)) is not BodyKind.PDF:
+        store.release_staged(staged)
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="That file is not a PDF",
+        )
+    return staged
+
+
 class ActivityJobContext:
     """Minimal scheduler-backed progress logger with ``OperationContext`` parity."""
 
@@ -111,8 +143,14 @@ class ActivityJobContext:
         data: dict[str, Any] | None = None,
         processed: int | None = None,
         total: int | None = None,
+        level: str = "INFO",
     ) -> None:
-        """Persist progress into Activity for background jobs."""
+        """Persist progress into Activity for background jobs.
+
+        ``level`` marks a step that went wrong but did not end the job (a
+        source that was down, a candidate that was rejected) so it stands out
+        in the Activity log without failing the operation.
+        """
         if not self.job_id:
             return
         from alma.api.scheduler import add_job_log, set_job_status
@@ -123,4 +161,4 @@ class ActivityJobContext:
         if total is not None:
             payload["total"] = total
         set_job_status(self.job_id, **payload)
-        add_job_log(self.job_id, message, step=step, data=data)
+        add_job_log(self.job_id, message, level=level, step=step, data=data)

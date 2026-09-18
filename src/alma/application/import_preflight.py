@@ -134,7 +134,7 @@ def summarize_records(
         if doi and abstract and authors and year:
             rich_metadata += 1
 
-        existing = importer._find_existing_paper(conn, doi, "", title, year)
+        existing = importer.find_existing_paper(conn, doi, "", title, year)
         if existing:
             existing_matches += 1
             # An existing row is only truly *skipped* if it is already a saved
