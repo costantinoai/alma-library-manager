@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from alma.core.db_write import commit_unless_gated, run_write_unit
+from alma.core.db_write import commit_unless_gated, gate_held_by_current_thread, run_write_unit
 from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,9 @@ class View:
         Run background rebuilds in the graph worker process instead of an
         APScheduler thread. Graph clustering/projection sets this; ordinary
         lightweight materialized views keep the thread path.
+    fingerprint_extra:
+        Optional pure-read content digest appended to the SQL identity. Use
+        when aggregate counts cannot identify the actual inputs faithfully.
     """
 
     key: str
@@ -102,6 +105,9 @@ class View:
     build_fn: Callable[[sqlite3.Connection], dict]
     operation_key: str
     isolate_build: bool = False
+    fingerprint_extra: Callable[[sqlite3.Connection], str] | None = None
+    # Refreshed in dependency order by the background worker before this view.
+    dependencies: tuple[str, ...] = ()
 
 
 _REGISTRY: dict[str, View] = {}
@@ -133,18 +139,19 @@ def get_view(view_key: str) -> View:
 
 
 def _compute_fingerprint(conn: sqlite3.Connection, view: View) -> str:
-    """Hash the row returned by ``view.fingerprint_sql`` to a hex string.
+    """Hash the SQL identity and optional content digest to a hex string.
 
-    Returns the literal string ``"__error__:<msg>"`` if the fingerprint
-    SQL fails.  We never silently treat a failed fingerprint as "match"
+    Returns the literal string ``"__error__:<msg>"`` if the SQL or content
+    reader fails. We never silently treat a failed fingerprint as "match"
     — that would freeze the cache.  Instead the mismatch will trigger a
     rebuild on the next call, which will surface the underlying issue.
     """
     try:
         row = conn.execute(view.fingerprint_sql).fetchone()
+        extra = view.fingerprint_extra(conn) if view.fingerprint_extra else None
     except Exception as exc:  # noqa: BLE001 — surface root cause via fingerprint
         logger.warning(
-            "materialized_views: fingerprint SQL failed for %s: %s",
+            "materialized_views: fingerprint failed for %s: %s",
             view.key,
             exc,
         )
@@ -156,6 +163,8 @@ def _compute_fingerprint(conn: sqlite3.Connection, view: View) -> str:
     else:
         values = tuple("" if v is None else str(v) for v in tuple(row))
     blob = "|".join(values).encode("utf-8")
+    if extra is not None:
+        blob += b"\0" + extra.encode("utf-8")
     return hashlib.sha1(blob).hexdigest()
 
 
@@ -229,7 +238,7 @@ def _write_row(
     *,
     view_key: str,
     fingerprint: str,
-    payload: dict,
+    payload: dict | str,
     compute_ms: int,
     build_status: str = "ok",
     build_error: str | None = None,
@@ -253,7 +262,7 @@ def _write_row(
         (
             view_key,
             fingerprint,
-            json.dumps(payload, default=str),
+            payload if isinstance(payload, str) else json.dumps(payload, default=str),
             utcnow().isoformat(),
             int(compute_ms),
             build_status,
@@ -261,8 +270,7 @@ def _write_row(
             rebuild_job_id,
         ),
     )
-    # Caller-owns-transaction: the MV rebuild path may run this inside a gated
-    # unit; standalone callers (direct mv.get) commit immediately.
+    # Publication callers own the short write unit and pass pre-encoded JSON.
     commit_unless_gated(conn, label="materialized_views._write_row")
 
 
@@ -272,15 +280,13 @@ def _set_rebuild_job_id(
     job_id: str | None,
 ) -> None:
     """Record / clear the in-flight rebuild job id without disturbing payload."""
-    try:
+    def _persist() -> None:
         conn.execute(
             "UPDATE materialized_views SET rebuild_job_id = ? WHERE view_key = ?",
             (job_id, view_key),
         )
-        # Caller-owns-transaction (see _write_row).
-        commit_unless_gated(conn, label="materialized_views._set_rebuild_job_id")
-    except sqlite3.OperationalError:
-        pass
+
+    run_write_unit(conn, _persist, label="materialized_views.rebuild_marker")
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +383,7 @@ def get_stored(
     scheduled graph-layout maintenance job (drift is measured there, on the
     embedding set — see ``routes/graphs.py``). A GET is therefore a pure row
     read: return the stored envelope if a decodable row exists, else ``None``
-    (the route answers 202 and enqueues the first build). ``rebuilding``
+    (refresh scheduling belongs to mutation/background paths). ``rebuilding``
     normally reflects a live in-flight job; latency-critical stored-only
     surfaces may disable that durable Activity scan and overlay a local signal.
     """
@@ -451,24 +457,31 @@ def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
 
     Caller owns the transaction — this is designed to run inside the same
     ``run_write_unit`` as the input deletion, so evidence and derived
-    artifact vanish atomically. Standalone callers commit via the same
-    ``commit_unless_gated`` discipline as ``_write_row``. Unknown or
+    artifact vanish atomically. Standalone invalidations acquire the central
+    writer gate themselves. Unknown or
     never-built ``view_key`` is a no-op (idempotent); the key is still
     resolved through the registry so a typo fails loudly instead of
     silently no-opping forever.
     """
     get_view(view_key)  # loud KeyError on unregistered keys
-    try:
-        conn.execute("DELETE FROM materialized_views WHERE view_key = ?", (view_key,))
-    except sqlite3.Error as exc:
-        if _is_missing_table(exc):
-            # Table missing — nothing stored, nothing to invalidate.
-            return
-        # A failed invalidation must NOT look like a successful one: the caller
-        # is destroying this view's inputs, and a surviving payload would be
-        # served as current forever.
-        raise MaterializedViewReadError(view_key, exc) from exc
-    commit_unless_gated(conn, label="materialized_views.invalidate")
+
+    def _delete() -> None:
+        try:
+            conn.execute("DELETE FROM materialized_views WHERE view_key = ?", (view_key,))
+        except sqlite3.Error as exc:
+            if _is_missing_table(exc):
+                # Table missing — nothing stored, nothing to invalidate.
+                return
+            # A failed invalidation must NOT look like a successful one: the caller
+            # is destroying this view's inputs, and a surviving payload would be
+            # served as current forever.
+            raise MaterializedViewReadError(view_key, exc) from exc
+
+    if gate_held_by_current_thread():
+        _delete()
+        commit_unless_gated(conn, label="materialized_views.invalidate")
+    else:
+        run_write_unit(conn, _delete, label="materialized_views.invalidate")
 
 
 def stored_meta(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
@@ -481,6 +494,33 @@ def stored_meta(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | Non
         "computed_at": str(row.get("computed_at") or ""),
         "fingerprint": str(row.get("fingerprint") or ""),
     }
+
+
+def _dependency_order(view_key: str) -> list[str]:
+    """Topological order, rejecting cycles before any build starts."""
+    ordered: list[str] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key in visiting:
+            raise ValueError(f"Cyclic materialized-view dependency: {key}")
+        if key in visited:
+            return
+        visiting.add(key)
+        for dependency in get_view(key).dependencies:
+            visit(dependency)
+        visiting.remove(key)
+        visited.add(key)
+        ordered.append(key)
+
+    visit(view_key)
+    return ordered
+
+
+def _is_current(conn: sqlite3.Connection, view_key: str) -> bool:
+    stored = stored_version(conn, view_key)
+    return bool(stored and stored["fingerprint"] == _compute_fingerprint(conn, get_view(view_key)))
 
 
 def rebuild(
@@ -496,11 +536,47 @@ def rebuild(
     envelope) so the rebuild job's result message can mention size /
     timing.
     """
+    if conn.in_transaction or gate_held_by_current_thread():
+        raise RuntimeError("Materialized-view computation must run outside a write unit")
+    for dependency in _dependency_order(view_key)[:-1]:
+        if not _is_current(conn, dependency):
+            upstream = get_view(dependency)
+            _run_build(conn, upstream, fingerprint=_compute_fingerprint(conn, upstream), require_persist=True)
     view = get_view(view_key)
     fp = _compute_fingerprint(conn, view)
     # Persisting IS the job here — a rebuild that couldn't store its payload has
     # not rebuilt anything, and must not report that it did.
     return _run_build(conn, view, fingerprint=fp, build_fn=build_fn, require_persist=True)
+
+
+def request_refresh(conn: sqlite3.Connection, view_key: str, *, force: bool = False) -> str | None:
+    """Mutation-side freshness check; return an active/new job, or None if fresh.
+
+    GET callers use get_stored. Computation and publication stay with the
+    existing background worker; a scheduling failure must reach the caller.
+    """
+    from alma.api.scheduler import find_active_job
+
+    view = get_view(view_key)
+    active = find_active_job(view.operation_key)
+    if active:
+        return active["job_id"]
+    if not force and all(_is_current(conn, key) for key in _dependency_order(view_key)):
+        return None
+    job_id = enqueue_rebuild(view_key)
+    if job_id:
+        return job_id
+    active = find_active_job(view.operation_key)
+    if active:
+        return active["job_id"]
+    raise RuntimeError(f"Could not schedule {view_key} refresh")
+
+
+def enqueue_after_write(conn: sqlite3.Connection, view_key: str, *, label: str) -> None:
+    """Request an asynchronous rebuild after the caller releases its write lock."""
+    from alma.core.db_write import run_after_gate_release
+
+    run_after_gate_release(lambda: enqueue_rebuild(view_key), conn=conn, label=label)
 
 
 def enqueue_rebuild(view_key: str) -> str | None:
@@ -608,12 +684,14 @@ def get_or_build_variant(
     # the single commit. A persistent-lock failure is swallowed: the cache is an
     # optimisation, so the user still gets their graph (the response never blocks
     # on or 500s from a cache write).
+    encoded_payload = json.dumps(payload, default=str)
+
     def _persist() -> None:
         _write_row(
             conn,
             view_key=view_key,
             fingerprint=fingerprint,
-            payload=payload,
+            payload=encoded_payload,
             compute_ms=compute_ms,
         )
         _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
@@ -702,19 +780,10 @@ def get_or_enqueue_variant(
             compute_ms = int(round((perf_counter() - started) * 1000))
             fingerprint = make_fingerprint(runner_conn)
 
-            def _persist() -> None:
-                _write_row(
-                    runner_conn,
-                    view_key=view_key,
-                    fingerprint=fingerprint,
-                    payload=payload,
-                    compute_ms=compute_ms,
-                )
-                _prune_variant_rows(
-                    runner_conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE
-                )
-
-            run_write_unit(runner_conn, _persist, label=f"mv.variant:{view_key}")
+            persist_variant_payload(
+                runner_conn, view_key=view_key, fingerprint=fingerprint,
+                payload=payload, compute_ms=compute_ms,
+            )
             return {"view_key": view_key, "message": f"Built {job_label} ({compute_ms} ms)"}
         finally:
             try:
@@ -746,12 +815,14 @@ def persist_variant_payload(
     bounded prune.
     """
 
+    encoded_payload = json.dumps(payload, default=str)
+
     def _persist() -> None:
         _write_row(
             conn,
             view_key=view_key,
             fingerprint=fingerprint,
-            payload=payload,
+            payload=encoded_payload,
             compute_ms=compute_ms,
         )
         _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
@@ -851,6 +922,8 @@ def _run_build(
       "Rebuilt 1 view(s)" while the stored map was unchanged, indistinguishable
       from a real rebuild in Activity and in the logs.
     """
+    if conn.in_transaction or gate_held_by_current_thread():
+        raise RuntimeError("Materialized-view computation must run outside a write unit")
     started = perf_counter()
     payload = (build_fn or view.build_fn)(conn)
     if not isinstance(payload, dict):
@@ -858,17 +931,24 @@ def _run_build(
             f"build_fn for {view.key!r} returned {type(payload).__name__}, expected dict"
         )
     compute_ms = int(round((perf_counter() - started) * 1000))
-    try:
+    encoded_payload = json.dumps(payload, default=str)
+    if conn.in_transaction:
+        raise RuntimeError("Materialized-view builder left an ungated write transaction open")
+
+    def _persist() -> None:
         _write_row(
             conn,
             view_key=view.key,
             fingerprint=fingerprint,
-            payload=payload,
+            payload=encoded_payload,
             compute_ms=compute_ms,
             build_status="ok",
             build_error=None,
             rebuild_job_id=None,
         )
+
+    try:
+        run_write_unit(conn, _persist, label=f"mv.publish:{view.key}")
     except Exception:  # noqa: BLE001 — see `require_persist`
         logger.exception("materialized_views: failed to persist payload for %s", view.key)
         if require_persist:
@@ -967,6 +1047,7 @@ def _enqueue_rebuild_internal(
         schedule_immediate(job_id, _runner)
     except Exception:
         logger.exception("materialized_views: failed to schedule rebuild for %s", view.key)
+        set_job_status(job_id, status="failed", message=f"Could not schedule {view.key} refresh")
         _set_rebuild_job_id(conn, view.key, None)
         return None
     return job_id

@@ -18,7 +18,7 @@ from alma.core.db_write import run_write_unit
 # The two head constants live with the setting defaults (`alma.discovery.
 # defaults`) because the ranker reads them too; re-exported here so the feature's
 # own callers keep one import path.
-from alma.discovery.defaults import LAB_HEAD_DEFAULT_POINTS, LAB_HEAD_MAX_POINTS
+from alma.discovery.defaults import LAB_HEAD_DEFAULT_POINTS, LAB_HEAD_MAX_POINTS, lab_enabled
 
 __all__ = [
     "LAB_HEAD_DEFAULT_POINTS",
@@ -140,7 +140,7 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
 
     stored = read_settings(db)
     return SignalLabSettings(
-        enabled=stored[_KEYS["enabled"]].lower() == "true",
+        enabled=lab_enabled(stored),
         region_offset_points=float(stored[_KEYS["region_offset_points"]]),
         utility_points=float(stored[_KEYS["utility_points"]]),
         author_offset_points=float(stored[_KEYS["author_offset_points"]]),
@@ -193,9 +193,16 @@ def write(db: sqlite3.Connection, settings: SignalLabSettings) -> SignalLabSetti
         for field in FIT_INPUT_FIELDS
     ):
         enqueue_model_refit(db, label="signal_lab.settings refit")
+    if previous != validated:
+        from alma.application import materialized_views as mv
+        from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+
+        mv.enqueue_after_write(db, EVAL_VIEW_KEY, label="signal_lab.settings replay")
     return read(db)
 
 
 def is_enabled(db: sqlite3.Connection) -> bool:
     """The one shared consumption gate."""
-    return read(db).enabled
+    from alma.application.discovery.lens_crud import read_settings
+
+    return lab_enabled(read_settings(db))

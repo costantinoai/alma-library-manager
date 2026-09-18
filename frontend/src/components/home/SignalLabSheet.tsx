@@ -29,6 +29,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { invalidateAfterSignalLabMutation } from '@/lib/queryHelpers'
 import { BookOpen, Check, FlaskConical, RotateCcw, Split, X } from 'lucide-react'
 
 import {
@@ -348,7 +349,7 @@ export function SignalLabSheet() {
     onSuccess: async () => {
       setMarks(NO_MARKS)
       setProgress((prev) => ({ ...prev, [gameId]: (prev[gameId] ?? 0) + 1 }))
-      await queryClient.invalidateQueries({ queryKey: ['signal-lab', 'summary'] })
+      await invalidateAfterSignalLabMutation(queryClient)
     },
     onError: (error) =>
       errorToast('Signal Lab answer was not recorded', getApiErrorMessage(error)),

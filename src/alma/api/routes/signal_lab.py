@@ -329,15 +329,11 @@ def get_model(db: sqlite3.Connection = Depends(get_db)) -> dict:
 
 @router.get("/eval")
 def get_eval(db: sqlite3.Connection = Depends(get_db)) -> dict:
-    """Stage-1 promotion evidence: held-out accuracy + hypothetical churn.
-
-    Uses ``mv.get`` (fingerprint-driven): first call builds inline (bounded —
-    ≤200 recommendation vectors), later calls serve the cached row and refresh
-    in the background when rounds or the live list change.
-    """
+    """Stored holdout and runtime replay. Background jobs own all computation."""
     from alma.application.signal_lab.eval import EVAL_VIEW_KEY
 
-    return mv.get(db, EVAL_VIEW_KEY)["payload"]
+    stored = mv.get_stored(db, EVAL_VIEW_KEY)
+    return stored["payload"] if stored else {"ready": False}
 
 
 @router.post("/purge")

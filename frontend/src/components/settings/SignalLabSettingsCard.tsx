@@ -35,7 +35,7 @@ import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterSignalLabMutation } from '@/lib/queryHelpers'
 
 /** Mirrors the backend's default head bounds. Used only until the settings
  *  query lands; the served `limits` block replaces it and is the authority. */
@@ -135,13 +135,7 @@ export function SignalLabSettingsCard() {
     mutationFn: (next: SignalLabSettings) => updateSignalLabSettings(next),
     onSuccess: async (saved) => {
       setForm(saved)
-      await invalidateQueries(
-        queryClient,
-        ['signal-lab'],
-        ['home'],
-        ['home-brief'],
-        ['graphs'],
-      )
+      await invalidateAfterSignalLabMutation(queryClient, { resetDecks: true })
       toast({
         title: saved.enabled ? 'Signal Lab settings saved' : 'Signal Lab switched off',
         description: saved.enabled
@@ -156,7 +150,7 @@ export function SignalLabSettingsCard() {
     mutationFn: purgeSignalLab,
     onSuccess: async (result) => {
       setLastPurged(result.rounds_deleted)
-      await invalidateQueries(queryClient, ['signal-lab'], ['graphs'])
+      await invalidateAfterSignalLabMutation(queryClient, { resetDecks: true })
     },
     onError: (error) => errorToast('Signal Lab purge failed', getApiErrorMessage(error)),
   })

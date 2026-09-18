@@ -176,7 +176,9 @@ SUPER_REGION_VERSION = "2026.09-2"
 #            precisely the staleness this fixes.
 # 2026.09-2: prior = the feedback profile's Rocchio direction (one owner with
 #            Discovery); payload publishes `region_evidence` (wins/votes).
-SIGNAL_LAB_FIT_VERSION = "2026.09-2"
+# 2026.09-3: fingerprint active vector content and canonical prior membership;
+#            aggregate counts/ratings missed exchanged preferences and vectors.
+SIGNAL_LAB_FIT_VERSION = "2026.09-3"
 # Signal Lab eval (application/signal_lab/eval.py): the replay that reports
 # what the fitted heads DO to a live deck. Separate from the fit version because
 # a changed probe must rebuild the eval view without refitting the model.
@@ -185,12 +187,14 @@ SIGNAL_LAB_FIT_VERSION = "2026.09-2"
 #            replay of each lens's latest immutable ranking snapshots through
 #            the canonical ranker, at the actual settings; missing or pre-v4
 #            snapshots report as insufficient evidence instead of guessed inputs.
-SIGNAL_LAB_EVAL_VERSION = "2026.09-1"
+# 2026.09-2: disabled Lab has zero active points in the runtime replay too.
+SIGNAL_LAB_EVAL_VERSION = "2026.09-2"
 # v2: full-pool candidates, full-outcome EIG, true staleness, recent-query
 # cooldown, posterior edge priority, and deck-conditioned diversity.
 # 3: valence-aware allocation — regions by sign uncertainty of their fitted
 #    votes, boundary edges by the probability they separate liked from disliked.
-SIGNAL_LAB_POLICY_VERSION = 3
+# 4: incompatible retained posterior dimensions use cold-start acquisition.
+SIGNAL_LAB_POLICY_VERSION = 4
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding

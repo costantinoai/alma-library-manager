@@ -66,7 +66,7 @@ import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
-import { navigateTo } from '@/lib/hashRoute'
+import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
@@ -388,7 +388,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     <span key={`${name}-${idx}`} className="inline-flex items-center">
                       <AuthorHoverCard name={name}>
                         <a
-                          href={`#/authors?q=${encodeURIComponent(name)}`}
+                          href={buildHashRoute('authors', { q: name })}
                           className="rounded-sm px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
                           onClick={(e) => e.stopPropagation()}
                         >

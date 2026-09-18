@@ -35,6 +35,11 @@ step. There is nothing to promote: `load_lab_scoring_context` already
 early-returns when no usable model exists, so an unplayed install is unaffected,
 and the dampers make an under-evidenced one small on their own."""
 
+def lab_enabled(settings: Mapping[str, str] | None) -> bool:
+    """Shared consumption gate; disabling retains settings and learned evidence."""
+    return str((settings or {}).get("signal_lab.enabled", "true")).lower() == "true"
+
+
 def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
     """Read ONE Signal Lab head weight, in score points, from a settings map.
 
@@ -46,6 +51,8 @@ def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
     so a hand-edited row cannot exceed the ceiling the validator enforces.
     """
 
+    if not lab_enabled(settings):
+        return 0.0
     raw = (settings or {}).get(key, LAB_HEAD_DEFAULT_POINTS)
     try:
         value = float(raw)

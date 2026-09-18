@@ -22,6 +22,7 @@ from __future__ import annotations
 import itertools
 import math
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -196,16 +197,38 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
     return exp / np.maximum(exp.sum(axis=-1, keepdims=True), 1e-12)
 
 
+def _prediction_inputs(
+    paper_ids: Sequence[str],
+    vectors: dict[str, np.ndarray],
+    ensemble: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Align papers and posterior heads before any acquisition projection.
+
+    A retained fit can briefly use the previous embedding dimension during a
+    provider change. Treat that as unavailable evidence until refitting, rather
+    than crashing a pure queue GET or projecting incompatible vectors.
+    """
+    if len(ensemble) < 2 or not paper_ids or any(pid not in vectors for pid in paper_ids):
+        return None
+    shape = vectors[paper_ids[0]].shape
+    if len(shape) != 1 or not shape[0]:
+        return None
+    if any(vectors[pid].shape != shape for pid in paper_ids) or any(head.shape != shape for head in ensemble):
+        return None
+    return np.stack([vectors[pid] for pid in paper_ids]), np.stack(ensemble)
+
+
 def _maxdiff_predictions(
     triplet: tuple[str, str, str],
     vectors: dict[str, np.ndarray],
     ensemble: list[np.ndarray],
 ) -> np.ndarray | None:
     """K×6 probability matrix over ordered (best, worst) outcomes."""
-    if len(ensemble) < 2 or any(paper_id not in vectors for paper_id in triplet):
+    inputs = _prediction_inputs(triplet, vectors, ensemble)
+    if inputs is None:
         return None
-    stack = np.stack([vectors[paper_id] for paper_id in triplet])
-    utilities = np.stack([stack @ head for head in ensemble])
+    stack, heads = inputs
+    utilities = heads @ stack.T
     outcomes = [(best, worst) for best in range(3) for worst in range(3) if best != worst]
     logits = np.stack(
         [utilities[:, best] - utilities[:, worst] for best, worst in outcomes],
@@ -220,13 +243,12 @@ def _odd_predictions(
     ensemble: list[np.ndarray],
 ) -> np.ndarray | None:
     """K×3 probability matrix; outcome index identifies odd paper."""
-    if len(ensemble) < 2 or any(paper_id not in vectors for paper_id in triplet):
+    inputs = _prediction_inputs(triplet, vectors, ensemble)
+    if inputs is None:
         return None
-    stack = np.stack([vectors[paper_id] for paper_id in triplet])
+    stack, _ = inputs
     logits = np.empty((len(ensemble), 3), dtype=np.float64)
     for head_index, metric in enumerate(ensemble):
-        if metric.shape[0] != stack.shape[1]:
-            return None
         for odd in range(3):
             kept = [index for index in range(3) if index != odd]
             diff = stack[kept[0]] - stack[kept[1]]
@@ -277,10 +299,11 @@ def _ordering_goal_risk(
     derivative gives comparison ambiguity. High score means ordering error can
     still change in a direction this query observes.
     """
-    if len(ensemble) < 2 or any(paper_id not in vectors for paper_id in triplet):
+    inputs = _prediction_inputs(triplet, vectors, ensemble)
+    if inputs is None:
         return 0.0
-    stack = np.stack([vectors[paper_id] for paper_id in triplet])
-    utilities = np.stack([stack @ head for head in ensemble])
+    stack, heads = inputs
+    utilities = heads @ stack.T
     risks = []
     for left, right in itertools.combinations(range(3), 2):
         logits = utilities[:, left] - utilities[:, right]
@@ -481,8 +504,11 @@ def _region_posterior_factors(
         if len(sample) < 2:
             raw[region_id] = 0.0
             continue
-        stack = np.stack([vectors[paper_id] for paper_id in sample])
-        scores = np.stack([stack @ head for head in ensemble]).astype(np.float64)
+        inputs = _prediction_inputs(sample, vectors, ensemble)
+        if inputs is None:
+            return {region_id: 1.0 for region_id in pools}
+        stack, heads = inputs
+        scores = (heads @ stack.T).astype(np.float64)
         scores -= scores.mean(axis=1, keepdims=True)
         scores /= np.maximum(scores.std(axis=1, keepdims=True), 1e-6)
         raw[region_id] = float(np.mean(np.std(scores, axis=0)))

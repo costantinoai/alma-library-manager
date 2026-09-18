@@ -1343,8 +1343,7 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
     connection, so it is a writer like any other and must queue on the process
     writer gate rather than race the write lock via `busy_timeout`.
 
-    When this thread already holds the gate (the sweep is reachable from
-    `find_active_job`, which the scheduling path calls) the write is deferred
+    When this thread already holds the gate, the write is deferred
     past the caller's commit and this call reports 0 — honest, since nothing
     has been reaped *yet*. Callers use the count for logging only, and the
     sweep is idempotent: the next call closes whatever is still stale.
@@ -1607,6 +1606,18 @@ def setup_scheduler() -> None:
         ),
         enabled=signal_lab_model_hours > 0,
         interval_hours=signal_lab_model_hours,
+    )
+
+    # Evaluation GETs serve stored rows only. This independent lightweight
+    # owner follows deck/model/settings changes even when Lab consumption is off.
+    _register_interval_job(
+        sched,
+        job_id="signal_lab_eval_refresh",
+        func=signal_lab_eval_refresh_periodic,
+        name="Signal Lab evaluation freshness",
+        description="Refreshes stored Signal Lab replay when its inputs change.",
+        enabled=True,
+        interval_minutes=1,
     )
 
     # -- Citation graph maintenance (interval) -----------------------------
@@ -2394,6 +2405,23 @@ def signal_lab_model_refresh_periodic() -> None:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
         logger.warning("Signal Lab model freshness check failed: %s", exc)
+
+
+def signal_lab_eval_refresh_periodic() -> None:
+    """Keep replay current off the request path, without refitting the model."""
+    from alma.api.deps import open_db_connection
+    from alma.application import materialized_views as mv
+    from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+    from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+
+    conn = open_db_connection()
+    try:
+        if mv.stored_version(conn, MODEL_VIEW_KEY) is not None:
+            mv.get(conn, EVAL_VIEW_KEY)
+    except Exception as exc:  # noqa: BLE001 — advisory job, retried next tick
+        logger.warning("Signal Lab evaluation freshness check failed: %s", exc)
+    finally:
+        conn.close()
 
 
 def scoring_calibration_refresh_periodic() -> None:
@@ -3237,14 +3265,14 @@ def get_job_status(job_id: str) -> dict | None:
 
 
 def find_active_job(operation_key: str) -> dict | None:
-    """Find an active job by operation key.
+    """Read the latest active job by operation key without writing or scheduling.
 
     Active statuses are ``queued``, ``scheduled``, and ``running``.
-    Returns the most recently updated match.
+    Stale rows are excluded without changing them. Startup and the periodic
+    orphan sweep own cleanup; stored-data GETs also use this lookup.
     """
     if not operation_key:
         return None
-    reap_orphan_jobs()
     candidates: list[tuple[str, dict]] = []
     with _job_lock:
         candidates.extend(

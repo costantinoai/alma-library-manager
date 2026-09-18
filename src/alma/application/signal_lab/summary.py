@@ -15,8 +15,8 @@ from alma.application import materialized_views as mv
 from alma.application import super_regions as sr
 from alma.application.signal_lab.evidence import edge_key, load_ledger_evidence
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-from alma.application.signal_lab.map_terms import project_utility_to_regions
 from alma.application.signal_lab.settings import is_enabled
+from alma.application.signal_lab.utility import project_utility_to_regions
 
 
 def _all_edges(regions_payload: dict[str, Any]) -> set[tuple[int, int]]:
