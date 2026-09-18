@@ -518,6 +518,18 @@ def _dependency_order(view_key: str) -> list[str]:
     return ordered
 
 
+def is_current(conn: sqlite3.Connection, view_key: str) -> bool:
+    """Whether the stored artifact was built from today's inputs. One cheap
+    fingerprint SELECT; never enqueues — for a surface that serves the stored
+    row and must say when it describes an earlier state."""
+    return _is_current(conn, view_key)
+
+
+def is_rebuilding(view_key: str) -> bool:
+    """Whether a background rebuild of this view is in flight right now."""
+    return _has_active_job(get_view(view_key))
+
+
 def _is_current(conn: sqlite3.Connection, view_key: str) -> bool:
     stored = stored_version(conn, view_key)
     return bool(stored and stored["fingerprint"] == _compute_fingerprint(conn, get_view(view_key)))

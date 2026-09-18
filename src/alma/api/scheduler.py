@@ -2467,6 +2467,7 @@ def scoring_calibration_refresh_periodic() -> None:
         from alma.api.deps import open_db_connection
         from alma.application import materialized_views as mv
         from alma.application.discovery.calibration import CALIBRATION_VIEW_KEY
+        from alma.application.discovery.outcome_eval import request_outcome_eval_refresh
 
         conn = open_db_connection()
         try:
@@ -2479,6 +2480,12 @@ def scoring_calibration_refresh_periodic() -> None:
             envelope = mv.get(conn, CALIBRATION_VIEW_KEY)
             if envelope.get("stale") or envelope.get("rebuilding"):
                 logger.info("Scoring calibration inputs changed; rebuild enqueued")
+                return
+            # The outcome evaluation reads the ranker THROUGH the calibration,
+            # so it waits for a settled one: a run against tables about to be
+            # replaced would be redone on the next tick.
+            if request_outcome_eval_refresh(conn):
+                logger.info("Ranker outcome evaluation inputs changed; re-run enqueued")
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick

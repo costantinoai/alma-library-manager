@@ -3390,6 +3390,35 @@ export function updateDiscoverySettings(body: DiscoverySettings): Promise<Discov
   return api.put<DiscoverySettings>('/discovery/settings', body)
 }
 
+/** One bar of the ranker outcome evaluation: AUC of kept papers vs a group. */
+export interface RankerOutcomeBar {
+  auc: number
+  ci95: [number, number]
+  verdict: 'predicts' | 'anti_predicts' | 'inconclusive'
+  n_pos: number
+  n_neg: number
+}
+
+/** Stored summary of "does the ranker's order predict what you kept?". */
+export interface RankerOutcome {
+  state: 'not_built' | 'not_ready' | 'ready'
+  rebuilding: boolean
+  /** False when weights / Library / calibration moved since the stored run. */
+  current?: boolean
+  computed_at?: string | null
+  reason?: string | null
+  cutoff?: string | null
+  bars?: Partial<Record<'negative' | 'random_corpus', RankerOutcomeBar>>
+}
+
+export function getRankerOutcome(): Promise<RankerOutcome> {
+  return api.get<RankerOutcome>('/discovery/outcome-evaluation')
+}
+
+export function refreshRankerOutcome(force = false): Promise<{ job_id: string | null }> {
+  return api.post(`/discovery/outcome-evaluation/refresh?force=${force}`)
+}
+
 export function getAlertTemplates(): Promise<AlertAutomationTemplate[]> {
   return api.get<AlertAutomationTemplate[]>('/alerts/templates')
 }

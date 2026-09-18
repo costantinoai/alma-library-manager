@@ -22,6 +22,7 @@ import {
   OptionCard,
   ToggleRow,
 } from '@/components/settings/primitives'
+import { RANKER_OUTCOME_KEY, RankerOutcomeLine } from '@/components/settings/RankerOutcomeLine'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Form } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
@@ -47,7 +48,7 @@ const WEIGHT_LABELS: {
   /** The ranking families this slider drives (`ranker.FAMILY_SPECS.weight_setting`). */
   families: string[]
 }[] = [
-  { key: 'text_similarity', label: 'Semantic + Lexical', families: ['semantic', 'lexical'], description: 'Drives two families: embedding similarity to what you keep (70%) and terminology overlap (30%).' },
+  { key: 'text_similarity', label: 'Semantic + Lexical', families: ['semantic', 'lexical'], description: 'Drives two families: embedding similarity to what you keep (87%) and terminology overlap (13%).' },
   { key: 'topic_score', label: 'Topic', families: ['topic'], description: 'Overlap with the topics your rated papers cluster on.' },
   { key: 'source_relevance', label: 'Retrieval', families: ['retrieval'], description: 'How strongly the search channels surfaced it, and how many agreed.' },
   { key: 'author_affinity', label: 'Author', families: ['author'], description: 'Authors you follow or repeatedly save.' },
@@ -92,16 +93,18 @@ const RECOMMENDATION_MODES: Array<{ value: string; label: string; description: s
 // ---------------------------------------------------------------------------
 
 const DEFAULT_DISCOVERY: DiscoverySettings = {
+  // Placeholder until the API answers; the backend's DEFAULT_SIGNAL_WEIGHTS
+  // (fitted 2026-09-18) is the owner and the reset route serves it.
   weights: {
-    source_relevance: 0.15,
-    topic_score: 0.2,
-    text_similarity: 0.2,
-    author_affinity: 0.15,
+    source_relevance: 0.14,
+    topic_score: 0,
+    text_similarity: 0.51,
+    author_affinity: 0,
     journal_affinity: 0.05,
-    recency_boost: 0.1,
-    citation_quality: 0.05,
-    feedback_adj: 0.1,
-    preference_affinity: 0.1,
+    recency_boost: 0,
+    citation_quality: 0.12,
+    feedback_adj: 0.09,
+    preference_affinity: 0.09,
   },
   strategies: {
     related_works: true,
@@ -311,6 +314,8 @@ export function DiscoveryWeightsCard() {
     onSuccess: (data) => {
       const merged = mergeDiscoverySettings(data)
       queryClient.setQueryData(['discovery-settings'], merged)
+      // The backend re-measures after a weights change; show that, not the old number.
+      void queryClient.invalidateQueries({ queryKey: RANKER_OUTCOME_KEY })
       form.reset(merged)
       toast({ title: 'Saved', description: 'Discovery settings saved.' })
     },
@@ -322,6 +327,8 @@ export function DiscoveryWeightsCard() {
     onSuccess: (data) => {
       const merged = mergeDiscoverySettings(data)
       queryClient.setQueryData(['discovery-settings'], merged)
+      // The backend re-measures after a weights change; show that, not the old number.
+      void queryClient.invalidateQueries({ queryKey: RANKER_OUTCOME_KEY })
       form.reset(merged)
       toast({ title: 'Reset', description: 'Discovery settings restored to defaults.' })
     },
@@ -401,6 +408,7 @@ export function DiscoveryWeightsCard() {
 
             {/* Signal weights — sliders so the 0-1 budget is visual */}
             <SettingsSection title="Signal Weights" trailing={headerStat}>
+              <RankerOutcomeLine />
               <div className="grid gap-4 lg:grid-cols-2">
                 {WEIGHT_LABELS.map((item) => (
                   <WeightSlider
@@ -426,6 +434,13 @@ export function DiscoveryWeightsCard() {
                 Explore / Exploit modes multiply some of them on top. "Share" is what
                 each slider actually gets. Changes apply the next time a lens is
                 refreshed — already-ranked decks keep the scores they were given.
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                The defaults are fitted to outcomes: they are the weights that best
+                ranked papers later kept above papers rejected and above the rest of
+                the corpus. Topic, Author and Recency start at 0 because they did not
+                help there — most of a monitored corpus is already by authors you
+                follow. Raise them if your library behaves differently.
               </p>
             </SettingsSection>
 

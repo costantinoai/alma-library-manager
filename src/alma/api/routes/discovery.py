@@ -34,13 +34,17 @@ from alma.api.models import (
     SimilarityResultItem,
 )
 from alma.application import discovery as discovery_app
+from alma.application.discovery.outcome_eval import (
+    load_outcome_summary,
+    request_outcome_eval_refresh,
+)
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
-from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+from alma.discovery.defaults import DEFAULT_SIGNAL_WEIGHTS, DISCOVERY_SETTINGS_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +52,17 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
     responses={401: {"description": "Unauthorized"}},
 )
+
+
+def _reevaluate_after_weights_change(db: sqlite3.Connection) -> None:
+    """The stored outcome evaluation judged the PREVIOUS weights: ask for a
+    background re-run. Call AFTER the write unit closed (it schedules a job).
+    The save already succeeded, so a scheduling failure is logged, not raised;
+    the periodic scoring tick asks again."""
+    try:
+        request_outcome_eval_refresh(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not request the ranker outcome re-evaluation: %s", e)
 
 
 def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
@@ -59,17 +74,9 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
     return DiscoverySettingsResponse(
         effective_weights={k: round(v, 4) for k, v in resolve_family_weights(kv).items()},
         reference_score=round(typical_prior_score(kv, load_calibration(db)), 1),
-        weights=DiscoveryWeights(
-            source_relevance=float(kv.get("weights.source_relevance", "0.15")),
-            topic_score=float(kv.get("weights.topic_score", "0.20")),
-            text_similarity=float(kv.get("weights.text_similarity", "0.20")),
-            author_affinity=float(kv.get("weights.author_affinity", "0.15")),
-            journal_affinity=float(kv.get("weights.journal_affinity", "0.05")),
-            recency_boost=float(kv.get("weights.recency_boost", "0.10")),
-            citation_quality=float(kv.get("weights.citation_quality", "0.05")),
-            feedback_adj=float(kv.get("weights.feedback_adj", "0.10")),
-            preference_affinity=float(kv.get("weights.preference_affinity", "0.10")),
-        ),
+        # `read_settings` merges the defaults table, so every weight key is
+        # present: read them off the one owner instead of a second fallback map.
+        weights=DiscoveryWeights(**{name: float(kv[f"weights.{name}"]) for name in DEFAULT_SIGNAL_WEIGHTS}),
         strategies=DiscoveryStrategies(
             related_works=kv.get("strategies.related_works", "true").lower() == "true",
             topic_search=kv.get("strategies.topic_search", "true").lower() == "true",
@@ -236,6 +243,37 @@ def get_discovery_settings(
         raise_internal("Failed to read discovery settings", e)
 
 
+@router.get(
+    "/outcome-evaluation",
+    summary="Does the ranker's order predict what you kept? (stored result)",
+)
+def get_outcome_evaluation(
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Pure read of the stored evaluation summary; never computes."""
+    try:
+        return load_outcome_summary(db)
+    except Exception as e:
+        raise_internal("Failed to read the ranker outcome evaluation", e)
+
+
+@router.post(
+    "/outcome-evaluation/refresh",
+    status_code=202,
+    summary="Re-run the ranker outcome evaluation in the background",
+)
+def refresh_outcome_evaluation(
+    force: bool = Query(default=False),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Queue a re-evaluation when its inputs moved (always, with ``force``)."""
+    try:
+        return {"job_id": request_outcome_eval_refresh(db, force=force)}
+    except Exception as e:
+        raise_internal("Failed to queue the ranker outcome evaluation", e)
+
+
 @router.put(
     "/settings",
     response_model=DiscoverySettingsResponse,
@@ -252,15 +290,8 @@ def update_discovery_settings(
     def _apply_settings() -> None:
         if body.weights is not None:
             w = body.weights
-            _upsert_setting(db, "weights.source_relevance", str(w.source_relevance))
-            _upsert_setting(db, "weights.topic_score", str(w.topic_score))
-            _upsert_setting(db, "weights.text_similarity", str(w.text_similarity))
-            _upsert_setting(db, "weights.author_affinity", str(w.author_affinity))
-            _upsert_setting(db, "weights.journal_affinity", str(w.journal_affinity))
-            _upsert_setting(db, "weights.recency_boost", str(w.recency_boost))
-            _upsert_setting(db, "weights.citation_quality", str(w.citation_quality))
-            _upsert_setting(db, "weights.feedback_adj", str(w.feedback_adj))
-            _upsert_setting(db, "weights.preference_affinity", str(w.preference_affinity))
+            for name in DEFAULT_SIGNAL_WEIGHTS:
+                _upsert_setting(db, f"weights.{name}", str(getattr(w, name)))
         if body.strategies is not None:
             s = body.strategies
             _upsert_setting(db, "strategies.related_works", str(s.related_works).lower())
@@ -352,6 +383,8 @@ def update_discovery_settings(
                 reschedule_citation_graph_maintenance(int(graph_interval_row["value"]))
         except Exception as e:
             logger.debug("Could not reschedule discovery maintenance jobs: %s", e)
+        if body.weights is not None:
+            _reevaluate_after_weights_change(db)
         return _read_settings(db)
     except Exception as e:
         raise_internal("Failed to update discovery settings", e)
@@ -385,6 +418,7 @@ def reset_discovery_settings(
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
         )
+        _reevaluate_after_weights_change(db)
         return _read_settings(db)
     except Exception as e:
         raise_internal("Failed to reset discovery settings", e)
