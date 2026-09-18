@@ -32,8 +32,10 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from weakref import WeakValueDictionary
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -46,6 +48,30 @@ from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+_admission_registry_lock = threading.Lock()
+_admission_locks: WeakValueDictionary = WeakValueDictionary()
+
+
+@contextmanager
+def job_admission(operation_key: str) -> Iterator[None]:
+    """Serialize active lookup plus reservation for one operation in this process.
+
+    No build or scheduler submission belongs inside this section. Different
+    keys remain independent, and unused locks disappear from the registry.
+    Acquire before any writer gate to keep lock ordering consistent.
+    """
+    from alma.core.db_write import gate_held_by_current_thread
+
+    if gate_held_by_current_thread():
+        raise RuntimeError("Job admission must run after releasing the writer gate")
+    with _admission_registry_lock:
+        lock = _admission_locks.get(operation_key)
+        if lock is None:
+            lock = threading.Lock()
+            _admission_locks[operation_key] = lock
+    with lock:
+        yield
 
 # ---------------------------------------------------------------------------
 # Module-level state

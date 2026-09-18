@@ -729,29 +729,37 @@ def get_or_enqueue_variant(
     cannot start a second expensive fit beside a running one; the caller still
     answers 202 and the client's next poll enqueues once the machine is free.
     """
-    row = _read_row(conn, view_key)
-    if row is not None:
-        cached = _decode_payload(row.get("payload"))
-        if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
-            return cached
-
-    from alma.api.scheduler import find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        find_active_job,
+        job_admission,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = f"materialize.variant:{view_key}"
-    if find_active_job(operation_key) is not None:
-        return None  # already building — client keeps polling
-    if may_enqueue is not None and not may_enqueue():
-        return None  # something heavier is fitting; the next poll retries
+    if conn.in_transaction:
+        raise RuntimeError("Variant admission must run after committing the caller's transaction")
+    with job_admission(operation_key):
+        row = _read_row(conn, view_key)
+        if row is not None:
+            cached = _decode_payload(row.get("payload"))
+            if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
+                return cached
 
-    job_id = f"materialize_variant_{uuid.uuid4().hex[:8]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="auto:graph_variant",
-        started_at=utcnow().isoformat(),
-        message=f"Building {job_label}",
-    )
+        if find_active_job(operation_key) is not None:
+            return None  # already building — client keeps polling
+        if may_enqueue is not None and not may_enqueue():
+            return None  # something heavier is fitting; the next poll retries
+
+        job_id = f"materialize_variant_{uuid.uuid4().hex[:8]}"
+        set_job_status(
+            job_id,
+            status="queued",
+            operation_key=operation_key,
+            trigger_source="auto:graph_variant",
+            started_at=utcnow().isoformat(),
+            message=f"Building {job_label}",
+        )
 
     def _runner() -> dict:
         if process_spec is not None:
@@ -792,10 +800,20 @@ def get_or_enqueue_variant(
                 pass
 
     try:
-        schedule_immediate(job_id, _runner)
-    except Exception:
+        if schedule_immediate(job_id, _runner) is False:
+            raise RuntimeError("Scheduler rejected variant refresh")
+    except Exception as exc:
         logger.exception("materialized_views: failed to schedule variant build %s", view_key)
-        return None
+        # Release the shared active-job dedup key and expose a real failure to
+        # every caller. A queued row here would make retries wait on absent work.
+        set_job_status(
+            job_id,
+            status="failed",
+            finished_at=utcnow().isoformat(),
+            message=f"Could not schedule {job_label}",
+            error=str(exc),
+        )
+        raise
     return None
 
 
