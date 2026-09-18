@@ -41,8 +41,7 @@ from alma.application.signal_lab import rounds as lab_rounds
 from alma.application.signal_lab.fit import MODEL_VIEW_KEY
 from alma.application.signal_lab.settings import SignalLabSettings, SignalLabSettingsView
 from alma.application.signal_lab.spec import SKIP_OPTION
-from alma.core.db_write import run_write_unit
-from alma.core.time import utcnow
+from alma.core.operations.activity import record_foreground_action
 
 logger = logging.getLogger(__name__)
 
@@ -349,33 +348,14 @@ def purge_signal_lab(db: sqlite3.Connection = Depends(get_db)) -> dict:
     """
     result = lab_purge.purge(db)
 
-    # Activity row through the request's OWN gated connection — never the
-    # scheduler's second connection (lessons: "Activity/status rows for
-    # foreground actions go through the GATED connection").
-    try:
-        from alma.core.operations.activity import persist_operation_status
-        from alma.core.operations.models import OperationContext
-
-        now = utcnow().isoformat()
-        jid = f"signal_lab_purge_{uuid.uuid4().hex[:10]}"
-        ctx = OperationContext(
-            operation_key="signal_lab.purge",
-            trigger_source="user",
-            actor="api_user",
-            correlation_id=jid,
-            operation_id=jid,
-            started_at=now,
-            finished_at=now,
-            status="completed",
-            message=(f"Signal Lab purged — {result['rounds_deleted']} round(s) deleted"),
-            result=result,
-        )
-        run_write_unit(
-            db,
-            lambda: persist_operation_status(db, ctx),
-            label="signal_lab.purge.activity",
-        )
-    except Exception:  # noqa: BLE001 — best-effort logging, never fail the purge
-        logger.debug("signal lab purge activity log skipped", exc_info=True)
+    # Activity row through the request's OWN gated connection — the shared
+    # foreground-action writer (best-effort; never fails the purge).
+    record_foreground_action(
+        db,
+        operation_key="signal_lab.purge",
+        message=f"Signal Lab purged — {result['rounds_deleted']} round(s) deleted",
+        result=result,
+        job_id=f"signal_lab_purge_{uuid.uuid4().hex[:10]}",
+    )
 
     return {"status": "purged", **result}

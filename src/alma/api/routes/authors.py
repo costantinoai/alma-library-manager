@@ -112,33 +112,20 @@ def _log_author_action(
     a caller that already owns a job id (the merge route, whose per-alt audit
     lines the application layer logs under that id) reuse it so the status row
     and those logs form ONE Activity entry.
-    """
-    from alma.core.operations.activity import persist_operation_status
-    from alma.core.operations.models import OperationContext
 
-    now = utcnow().isoformat()
-    jid = job_id or f"author_action_{uuid.uuid4().hex[:10]}"
-    ctx = OperationContext(
+    The write itself is the shared foreground-action writer
+    (:func:`alma.core.operations.activity.record_foreground_action`); this
+    adapter only fixes the author key namespace and result shape.
+    """
+    from alma.core.operations.activity import record_foreground_action
+
+    record_foreground_action(
+        db,
         operation_key=f"authors.action.{action}",
-        trigger_source="user",
-        actor="api_user",
-        correlation_id=jid,
-        operation_id=jid,
-        started_at=now,
-        finished_at=now,
-        status="completed",
         message=message,
         result={"author_id": author_id, **(data or {})},
+        job_id=job_id or f"author_action_{uuid.uuid4().hex[:10]}",
     )
-
-    try:
-        run_write_unit(
-            db,
-            lambda: persist_operation_status(db, ctx),
-            label=f"log_author_action:{action}",
-        )
-    except Exception:
-        logger.debug("author action activity log skipped (%s)", action, exc_info=True)
 
 def _deep_refresh_max_workers_default() -> int:
     """Resolve the deep-refresh concurrency cap from the env, with a

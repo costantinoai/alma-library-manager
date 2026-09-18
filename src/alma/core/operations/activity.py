@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import uuid
 from typing import Any
 
 from alma.core.time import utcnow
 
 from .models import OperationContext
+
+logger = logging.getLogger(__name__)
 
 
 def _json_dumps(value: Any) -> str:
@@ -78,6 +82,65 @@ def persist_operation_status(
             metadata_json,
         ),
     )
+
+
+def record_foreground_action(
+    db: sqlite3.Connection,
+    *,
+    operation_key: str,
+    message: str,
+    result: dict[str, Any] | None = None,
+    job_id: str | None = None,
+    status: str = "completed",
+) -> str:
+    """Record ONE Activity entry for a synchronous foreground action.
+
+    A user action that runs inside the request (no background-job envelope —
+    an author "…"-menu action, a Signal Lab purge, attaching a PDF) still has
+    to be visible and auditable in Activity. This writes a single finished
+    ``operation_status`` row; ``list_all_job_statuses`` merges that table into
+    the Activity list, so its ``message`` and structured ``result`` show up.
+
+    Written through the request's OWN gated ``db`` connection inside a short
+    ``run_write_unit`` — never the scheduler's second connection, whose plain
+    ``BEGIN DEFERRED`` loses the read→write upgrade race under a burst of
+    near-simultaneous actions and silently drops the row (lessons:
+    "Activity/status rows for foreground actions go through the GATED
+    connection").
+
+    Call it AFTER the action's own write unit has returned: it commits as its
+    own independent unit, and it is best-effort — a logging failure is logged
+    at debug and never reaches the user's action. Returns the job id, so a
+    caller can hand it back to the client. ``job_id`` lets a caller that
+    already owns one (its application layer logged lines under it) make the
+    status row and those lines ONE Activity entry.
+    """
+    from alma.core.db_write import run_write_unit
+
+    now = utcnow().isoformat()
+    namespace = operation_key.split(".", 1)[0].split(":", 1)[0] or "action"
+    jid = job_id or f"{namespace}_action_{uuid.uuid4().hex[:10]}"
+    ctx = OperationContext(
+        operation_key=operation_key,
+        trigger_source="user",
+        actor="api_user",
+        correlation_id=jid,
+        operation_id=jid,
+        started_at=now,
+        finished_at=now,
+        status=status,
+        message=message,
+        result=result,
+    )
+    try:
+        run_write_unit(
+            db,
+            lambda: persist_operation_status(db, ctx),
+            label=f"activity:{operation_key}",
+        )
+    except Exception:  # noqa: BLE001 — best-effort logging, never fail the action
+        logger.debug("foreground activity row skipped (%s)", operation_key, exc_info=True)
+    return jid
 
 
 def last_completed_finished_at(
