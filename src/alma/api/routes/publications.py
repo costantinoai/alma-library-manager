@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from alma.api.deps import get_current_user, get_db
+from alma.api.deps import get_current_user, get_db, get_plugin_registry
 from alma.api.helpers import raise_internal, row_to_paper_response, stage_pdf_upload
 from alma.api.models import ErrorResponse, PaperResponse
 from alma.application import authors as authors_app
@@ -1012,6 +1012,31 @@ async def upload_paper_pdf(
     root_id, title = _pdf_root_or_404(db, paper_id)
     staged = await stage_pdf_upload(request)
     return pdf_jobs.request_attach(paper_id=root_id, title=title, staged=staged, filename=filename)
+
+
+@router.post(
+    "/{paper_id}/pdf/fetch",
+    summary="Find this paper's PDF through the enabled sources (queued Activity job)",
+    description=(
+        "Queues a `pdf.fetch` job that tries every enabled PDF-source plugin in "
+        "run order (open-access first, shadow libraries last) and stores the "
+        "first file that verifies as this paper. 409 when no source is on."
+    ),
+    status_code=202,
+)
+def fetch_paper_pdf(
+    paper_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    registry=Depends(get_plugin_registry),
+):
+    root_id, title = _pdf_root_or_404(db, paper_id)
+    if not registry.pdf_fetch_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Switch on a PDF source in Settings → Plugins",
+        )
+    return pdf_jobs.request_fetch(paper_id=root_id, title=title)
 
 
 @router.delete(

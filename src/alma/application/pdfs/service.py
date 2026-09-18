@@ -1,4 +1,4 @@
-"""Paper PDFs — the use cases: attach an upload, import PDF-first, (fetch).
+"""Paper PDFs — the use cases: fetch on tap, attach an upload, import PDF-first.
 
 Each use case is the BODY of one background Activity job (see ``jobs``); it
 receives its own DB connection and a step logger, and it follows the SQLite
@@ -14,8 +14,16 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from alma.application.pdf_schema import Origin, PaperRef, Verification
+from alma.application.pdf_schema import (
+    Origin,
+    Outcome,
+    PaperRef,
+    PdfSource,
+    SourceSkippedError,
+    Verification,
+)
 from alma.application.pdfs import store
+from alma.application.pdfs.download import DownloadResult, download_candidate
 from alma.application.pdfs.identify import IdentityHint, identify
 from alma.application.pdfs.verify import (
     BodyKind,
@@ -206,6 +214,152 @@ def inspect_staged(staged: store.StagedFile) -> PdfFacts:
     if not facts.readable:
         raise NotAPdfError("That PDF cannot be opened (damaged or not a real PDF)")
     return facts
+
+
+# ---------------------------------------------------------------------------
+# Fetch on tap — the source chain
+# ---------------------------------------------------------------------------
+
+_OUTCOME_WORDS = {
+    Outcome.NO_CANDIDATE: "no copy listed",
+    Outcome.NOT_PDF: "not a PDF",
+    Outcome.BLOCKED: "blocked by a bot check",
+    Outcome.HTTP_ERROR: "server refused",
+    Outcome.TOO_LARGE: "file too large",
+    Outcome.MISMATCH: "a different paper's PDF",
+    Outcome.REJECTED: "the file you marked wrong",
+    Outcome.SKIPPED: "not set up",
+    Outcome.ERROR: "unreachable",
+}
+
+
+class FetchUnavailableError(RuntimeError):
+    """Fetching cannot start (no source plugin on, network off, paper gone)."""
+
+
+def _record_attempt(conn: sqlite3.Connection, **fields) -> None:
+    with write_section(conn, label="pdf.attempt"):
+        store.record_attempt(conn, **fields)
+
+
+def fetch_for_paper(
+    conn: sqlite3.Connection,
+    *,
+    paper_id: str,
+    job_id: str | None = None,
+    log: StepLog = _no_log,
+    sources: list[tuple[str, PdfSource]] | None = None,
+) -> dict:
+    """Try every enabled PDF source, in run order, until one yields THIS paper.
+
+    ``sources`` — ``(plugin_id, PdfSource)`` pairs in run order — defaults to
+    the plugin registry's enabled sources; callers with their own set (tests,
+    a future "try this source only") pass it explicitly.
+
+    Per source: ask for candidates (network, no DB), download each (validated
+    by its bytes), skip a file the user rejected before, verify the rest
+    against the paper (DOI, then title) — a file naming another paper is a
+    ``mismatch`` and the next candidate is tried. The first verified file is
+    stored and ends the job; each source's outcome is recorded in its own
+    short write section so the detail panel can say what was tried.
+    """
+    from alma.core.network_policy import network_access_enabled
+    from alma.plugins.registry import get_plugin_registry
+
+    ref = build_paper_ref(conn, paper_id)
+    if ref is None:
+        raise FetchUnavailableError("That paper no longer exists")
+    if not network_access_enabled():
+        raise FetchUnavailableError("Network access is switched off (Settings)")
+    if sources is None:
+        sources = [(manifest.id, source) for manifest, source in get_plugin_registry().pdf_sources()]
+    pairs = list(sources)
+    if not pairs:
+        raise FetchUnavailableError("Switch on a PDF source in Settings → Plugins")
+
+    rejected = store.rejected_shas(conn, ref.paper_id)
+    dois = paper_dois(ref)
+    tried: list[str] = []
+    for index, (plugin_id, source) in enumerate(pairs, start=1):
+        log("source", f"Asking {source.label}…", processed=index - 1, total=len(pairs))
+        tried.append(source.label)
+        attempt = {"paper_id": ref.paper_id, "source_id": source.id, "job_id": job_id}
+        try:
+            candidates = source.candidates(ref)
+        except SourceSkippedError as exc:
+            _record_attempt(conn, **attempt, outcome=Outcome.SKIPPED, detail=str(exc))
+            log("source", f"{source.label}: skipped — {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001 — one source down must not end the chain
+            _record_attempt(conn, **attempt, outcome=Outcome.ERROR, detail=str(exc))
+            log("source", f"{source.label}: unreachable — {exc}", level="WARNING")
+            continue
+        if not candidates:
+            _record_attempt(conn, **attempt, outcome=Outcome.NO_CANDIDATE)
+            log("source", f"{source.label}: no copy listed")
+            continue
+
+        last: DownloadResult | None = None
+        for candidate in candidates:
+            result = download_candidate(candidate)
+            if result.outcome is not Outcome.FOUND:
+                last = result
+                continue
+            staged = result.staged
+            if staged.sha256 in rejected:
+                staged.discard()
+                last = DownloadResult(Outcome.REJECTED, http_status=result.http_status, final_url=result.final_url)
+                continue
+            facts = read_facts(staged.path)
+            if not facts.readable:
+                staged.discard()
+                last = DownloadResult(Outcome.NOT_PDF, detail="Unreadable PDF", final_url=result.final_url)
+                continue
+            verification = verify_identity(facts, dois=dois, title=ref.title)
+            if verification is Verification.MISMATCH:
+                staged.discard()
+                last = DownloadResult(Outcome.MISMATCH, http_status=result.http_status, final_url=result.final_url)
+                continue
+
+            def _found(c: sqlite3.Connection, _r: DownloadResult = result, _v: Verification = verification) -> None:
+                store.record_attempt(
+                    c, **attempt, outcome=Outcome.FOUND, http_status=_r.http_status,
+                    detail=str(_v), candidate_url=_r.safe_url,
+                )
+
+            outcome = store_file(
+                conn,
+                staged=staged,
+                ref=ref,
+                facts=facts,
+                origin=Origin.FETCHED,
+                verification=verification,
+                source_id=source.id,
+                source_plugin=plugin_id,
+                source_url=result.safe_url,
+                version=candidate.version,
+                license=candidate.license,
+                extra_writes=_found,
+            )
+            log("store", f"{source.label}: stored {outcome.record.filename} ({verification})",
+                processed=index, total=len(pairs))
+            return {
+                "found": True,
+                "paper_id": ref.paper_id,
+                "title": ref.title,
+                "source": source.label,
+                "verification": str(verification),
+                "filename": outcome.record.filename,
+            }
+
+        _record_attempt(
+            conn, **attempt, outcome=last.outcome, http_status=last.http_status,
+            detail=last.detail or None, candidate_url=last.safe_url or None,
+        )
+        log("source", f"{source.label}: {_OUTCOME_WORDS.get(last.outcome, str(last.outcome))}",
+            level="WARNING" if last.outcome in (Outcome.ERROR, Outcome.BLOCKED) else "INFO")
+
+    return {"found": False, "paper_id": ref.paper_id, "title": ref.title, "tried": tried}
 
 
 # ---------------------------------------------------------------------------

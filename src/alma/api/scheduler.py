@@ -2911,6 +2911,15 @@ def run_db_housekeeping(conn: sqlite3.Connection) -> dict[str, object]:
     except sqlite3.OperationalError as exc:
         logger.warning("operation_logs prune skipped: %s", exc)
 
+    # Paper PDF files no row points at any more (a deleted paper, a merge that
+    # kept the root's own file, an abandoned upload). Files only — no writes.
+    try:
+        from alma.application.pdfs.store import prune_orphan_files
+
+        summary["pdf_files_pruned"] = prune_orphan_files(conn)
+    except Exception as exc:  # noqa: BLE001 — housekeeping must not fail on it
+        logger.warning("PDF orphan prune skipped: %s", exc)
+
     # Incremental vacuum runs in autocommit and releases all currently-free
     # pages. Cheap when there's little to free.
     try:

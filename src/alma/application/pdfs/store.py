@@ -316,6 +316,45 @@ def place(staged: StagedFile, rel_path: str, *, paper_id: str) -> str:
     raise FileExistsError(f"No free file name for {rel_path!r}")
 
 
+#: A tree file younger than this is never pruned (a job may be about to
+#: commit the row that points at it).
+ORPHAN_GRACE_SECONDS = 3600
+#: A staged upload awaiting a retry is kept this long.
+STAGING_TTL_SECONDS = 24 * 3600
+
+
+def prune_orphan_files(conn: sqlite3.Connection, *, now: float | None = None) -> int:
+    """Remove store files no row points at; return how many were removed.
+
+    Two kinds of leftovers: tree PDFs whose row is gone (a paper deleted, a
+    merge that kept the root's own file, a crash between placing and
+    committing) — older than :data:`ORPHAN_GRACE_SECONDS`; and staging files
+    (abandoned uploads, unresolved imports never retried) — older than
+    :data:`STAGING_TTL_SECONDS`. Reads rows, never writes them.
+    """
+    import time
+
+    root = store_root(create=False)
+    if not root.is_dir():
+        return 0
+    referenced = {str(row[0]) for row in conn.execute(f"SELECT rel_path FROM {PDFS_TABLE}")}
+    clock = time.time() if now is None else now
+    removed = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        age = clock - path.stat().st_mtime
+        if rel.startswith(f"{INCOMING_DIRNAME}/"):
+            stale = age > STAGING_TTL_SECONDS
+        else:
+            stale = path.suffix.lower() == ".pdf" and rel not in referenced and age > ORPHAN_GRACE_SECONDS
+        if stale:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def unlink_quietly(rel_path: str | None) -> None:
     """Remove a stored file if present. Used only AFTER the row change commits."""
     if not rel_path:

@@ -117,6 +117,39 @@ def _queue(
 
 
 # ---------------------------------------------------------------------------
+# Fetch on tap
+# ---------------------------------------------------------------------------
+
+
+def request_fetch(*, paper_id: str, title: str) -> dict:
+    """Queue ``pdf.fetch:<paper_id>``: try every enabled PDF source in order."""
+    from alma.application.pdfs import service
+
+    job_ref: dict[str, str] = {}
+
+    def body(conn: sqlite3.Connection, log: Callable[..., None]) -> dict:
+        try:
+            result = service.fetch_for_paper(conn, paper_id=paper_id, job_id=job_ref.get("id"), log=log)
+        except service.FetchUnavailableError as exc:
+            raise JobRefusedError(str(exc)) from exc
+        if result["found"]:
+            message = f"PDF found via {result['source']} for “{result['title']}”"
+        else:
+            message = f"No PDF found for “{result['title']}” — tried {', '.join(result['tried'])}"
+        return {**result, "message": message}
+
+    envelope = _queue(
+        operation_key=f"pdf.fetch:{paper_id}",
+        job_id_prefix="pdf_fetch",
+        queued_message=f"Finding a PDF for “{title}”",
+        body=body,
+        extra={"paper_id": paper_id},
+    )
+    job_ref["id"] = envelope["job_id"]
+    return envelope
+
+
+# ---------------------------------------------------------------------------
 # Attach an uploaded PDF to a paper
 # ---------------------------------------------------------------------------
 
