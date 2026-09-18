@@ -1000,33 +1000,21 @@ def _fetch_html_abstract(url: str) -> str:
 
 
 def _unpaywall_urls_for_doi(doi: str) -> list[str]:
-    from alma.config import get_contact_email
-    from alma.core.http_sources import get_source_http_client
+    """Every URL Unpaywall lists for ``doi`` (landing, url, pdf), best first.
 
-    if not get_contact_email():
-        return []
+    A projection of the shared adapter; abstract recovery is best-effort, so
+    an Unpaywall outage is logged and reads as "no URLs".
+    """
+    from alma.discovery.unpaywall import fetch_oa_locations
+
     try:
-        resp = get_source_http_client("unpaywall").get(f"/{doi}", timeout=20)
+        locations = fetch_oa_locations(doi)
     except Exception as exc:
         logger.debug("Unpaywall lookup failed for %s: %s", doi, exc)
         return []
-    if resp.status_code != 200:
-        return []
-    try:
-        payload = resp.json() or {}
-    except Exception:
-        return []
-
     urls: list[str] = []
-    locations = []
-    best = payload.get("best_oa_location")
-    if isinstance(best, dict):
-        locations.append(best)
-    if isinstance(payload.get("oa_locations"), list):
-        locations.extend(loc for loc in payload["oa_locations"] if isinstance(loc, dict))
     for loc in locations:
-        for key in ("url_for_landing_page", "url", "url_for_pdf"):
-            value = str(loc.get(key) or "").strip()
+        for value in (loc.url_for_landing_page, loc.url, loc.url_for_pdf):
             if value and value not in urls:
                 urls.append(value)
     return urls
