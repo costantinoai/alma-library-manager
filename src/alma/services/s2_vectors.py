@@ -305,18 +305,29 @@ def _fetch_lookup_ids_resilient(
         # Back off once so the next chunk does not walk straight into the same
         # congestion window.
         time.sleep(2)
-    for lookup_id in sorted(outcome.terminal_ids):
+    if outcome.not_found_ids:
         add_job_log(
             job_id,
-            "S2/SPECTER2 lookup id failed",
+            f"Semantic Scholar has no matching record for {len(outcome.not_found_ids)} lookup id(s)",
+            level="INFO",
+            step="lookup_no_match",
+            data={"batch": batch_label, "count": len(outcome.not_found_ids),
+                  "lookup_ids": sorted(outcome.not_found_ids)},
+        )
+    rejected = outcome.terminal_ids - outcome.not_found_ids
+    if rejected:
+        add_job_log(
+            job_id,
+            f"Semantic Scholar rejected {len(rejected)} lookup id(s)",
             level="WARNING",
             step="lookup_error",
-            data={"batch": batch_label, "lookup_id": lookup_id},
+            data={"batch": batch_label, "count": len(rejected), "lookup_ids": sorted(rejected)},
         )
 
     return (
         dict(outcome.papers_by_requested_id),
-        {lookup_id: "rejected by Semantic Scholar" for lookup_id in outcome.terminal_ids},
+        {lookup_id: ("not found in Semantic Scholar" if lookup_id in outcome.not_found_ids
+                     else "rejected by Semantic Scholar") for lookup_id in outcome.terminal_ids},
         {lookup_id: "deferred by Semantic Scholar" for lookup_id in outcome.retryable_ids},
     )
 

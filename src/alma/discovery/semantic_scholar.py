@@ -229,9 +229,9 @@ def plan_paper_batch(
 class IdentifierFetchOutcome:
     """Result of a batched lookup, keyed by the id the CALLER asked for.
 
-    `terminal_ids` are ids the API rejected on their own merits (a 4xx that
-    survived splitting down to one id) — the caller may stamp them as a
-    permanent miss. `retryable_ids` hit congestion or a 5xx and MUST stay
+    `terminal_ids` include rejected ids and successful lookups with no match.
+    `not_found_ids` identifies the latter so callers need not report normal
+    coverage gaps as transport failures. `retryable_ids` hit congestion or a 5xx and MUST stay
     eligible; collapsing the two is what turned transient rate limits into
     permanent `terminal_no_match` stamps.
     """
@@ -240,6 +240,7 @@ class IdentifierFetchOutcome:
     terminal_ids: frozenset[str]
     retryable_ids: frozenset[str]
     request_count: int
+    not_found_ids: frozenset[str] = frozenset()
 
 
 def _chunked(items: list[str], size: int) -> list[list[str]]:
@@ -496,6 +497,7 @@ def fetch_vectors_for_identifiers(
 
     rows: dict[str, dict] = {}
     terminal: set[str] = set()
+    not_found: set[str] = set()
     retryable: set[str] = set()
     requests_made = 0
 
@@ -528,11 +530,13 @@ def fetch_vectors_for_identifiers(
                     enriched["specter2_embedding"] = vector
                     enriched["specter2_model"] = S2_SPECTER2_MODEL
                 rows[requested_id] = enriched
-            terminal.update(
+            missing = {
                 requested_id
                 for idx, requested_id in enumerate(chunk)
                 if idx not in resolved_positions
-            )
+            }
+            not_found.update(missing)
+            terminal.update(missing)
             return
 
         # Oversized response: the ids are fine, split regardless of size.
@@ -564,6 +568,7 @@ def fetch_vectors_for_identifiers(
         terminal_ids=frozenset(terminal),
         retryable_ids=frozenset(retryable),
         request_count=requests_made,
+        not_found_ids=frozenset(not_found),
     )
 
 
