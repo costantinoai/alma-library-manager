@@ -17,6 +17,8 @@ from difflib import SequenceMatcher
 import requests
 
 from alma.config import get_api_call_delay
+from alma.core.author_names import is_name_suffix as _is_name_suffix
+from alma.core.author_names import parse_author_names as _parse_author_names
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import (
@@ -1149,62 +1151,6 @@ def _find_author_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | N
     if top_score < 60:
         return None
     return scored[0][1]
-
-
-def _is_name_suffix(value: str) -> bool:
-    token = re.sub(r"[^a-z0-9]+", "", (value or "").lower())
-    if not token:
-        return False
-    suffixes = {
-        "jr",
-        "sr",
-        "ii",
-        "iii",
-        "iv",
-        "v",
-        "phd",
-        "md",
-        "msc",
-        "ms",
-        "ma",
-    }
-    return token in suffixes
-
-
-def _parse_author_names(authors: str) -> list[str]:
-    text = (authors or "").strip()
-    if not text:
-        return []
-
-    if " and " in text.lower():
-        parts = [p.strip() for p in re.split(r"\band\b", text, flags=re.IGNORECASE) if p.strip()]
-        return parts
-
-    if ";" in text:
-        return [p.strip() for p in text.split(";") if p.strip()]
-
-    comma_parts = [p.strip() for p in text.split(",") if p.strip()]
-    # Legacy imports may have comma-joined "First Last, First Last, ...".
-    if len(comma_parts) >= 2 and all(" " in p for p in comma_parts):
-        return comma_parts
-
-    # Common BibTeX style: "Last, First[, Suffix], Last, First[, Suffix], ..."
-    if len(comma_parts) >= 4:
-        paired: list[str] = []
-        idx = 0
-        while idx + 1 < len(comma_parts):
-            last = comma_parts[idx]
-            first = comma_parts[idx + 1]
-            idx += 2
-            candidate = f"{first} {last}".strip()
-            if idx < len(comma_parts) and _is_name_suffix(comma_parts[idx]):
-                candidate = f"{candidate} {comma_parts[idx]}".strip()
-                idx += 1
-            paired.append(candidate)
-        if idx == len(comma_parts) and len(paired) >= 2:
-            return paired
-
-    return [text]
 
 
 def _upsert_publication_authorships(
