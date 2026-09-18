@@ -21,14 +21,17 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from alma.application.inbox_schema import InboundChannel
+from alma.application.pdf_schema import PdfSource
 
 logger = logging.getLogger(__name__)
 
 PluginKind = Literal["integration"]
-Capability = Literal["send", "receive"]
+Capability = Literal["send", "receive", "pdf_source"]
 
 SEND: Capability = "send"
 RECEIVE: Capability = "receive"
+#: Provides PDF candidates to the core paper-PDF feature (``pdf_schema``).
+PDF_SOURCE: Capability = "pdf_source"
 
 ConfigReader = Callable[[sqlite3.Connection | None], BaseModel]
 ConfigWriter = Callable[[sqlite3.Connection | None, BaseModel], None]
@@ -36,6 +39,7 @@ StatusFactory = Callable[[sqlite3.Connection | None], dict[str, Any]]
 InboundFactory = Callable[[], InboundChannel | None]
 AlertSender = Callable[[list[dict[str, Any]], str], Awaitable[bool]]
 ConnectionTester = Callable[[], Awaitable[dict[str, Any]]]
+PdfSourceFactory = Callable[[], list[PdfSource]]
 
 
 def activation_setting_key(plugin_id: str) -> str:
@@ -61,6 +65,7 @@ class PluginManifest:
     inbound_factory: InboundFactory | None = None
     alert_sender: AlertSender | None = None
     connection_tester: ConnectionTester | None = None
+    pdf_source_factory: PdfSourceFactory | None = None
     action_ids: tuple[str, ...] = field(default_factory=tuple)
 
     def can(self, capability: Capability) -> bool:
@@ -97,6 +102,7 @@ class PluginManifest:
                 "configured": False,
                 "can_send": False,
                 "can_receive": False,
+                "can_fetch": False,
                 "error": "status unavailable",
             }
 
@@ -120,6 +126,16 @@ class PluginManifest:
             logger.warning("Plugin %s inbound adapter unavailable: %s", self.id, exc)
             return None
 
+    def pdf_sources(self) -> list[PdfSource]:
+        """This plugin's PDF sources, built from current config (never cached)."""
+        if self.pdf_source_factory is None:
+            return []
+        try:
+            return list(self.pdf_source_factory())
+        except Exception as exc:
+            logger.warning("Plugin %s PDF sources unavailable: %s", self.id, exc)
+            return []
+
     def describe(self, db: sqlite3.Connection | None = None) -> dict[str, Any]:
         status = self.status(db)
         return {
@@ -134,6 +150,7 @@ class PluginManifest:
             "configured": bool(status.get("configured")),
             "can_send": bool(status.get("can_send")),
             "can_receive": bool(status.get("can_receive")),
+            "can_fetch": bool(status.get("can_fetch")),
             "status": status,
             "actions": list(self.action_ids),
             "docs_path": self.docs_path,

@@ -46,9 +46,16 @@ _PROJECT_ROOT_MARKERS = ("settings.json", "pyproject.toml", "docker-compose.yml"
 DEFAULT_SETTINGS: dict[str, Any] = {
     # Forward-only settings schema. Startup runs the matching migrator and
     # validator before any plugin can be consumed.
-    "settings_schema_version": 2,
+    "settings_schema_version": 3,
     "plugins.slack.enabled": False,
     "plugins.email.enabled": False,
+    # Paper-PDF sources (task 81). Off until the user switches them on; the
+    # shadow libraries are a separate, explicit opt-in.
+    "plugins.open_access.enabled": False,
+    "plugins.open_access.use_openalex_content": False,
+    "plugins.shadow_libraries.enabled": False,
+    "plugins.shadow_libraries.scihub_mirrors": "",
+    "plugins.shadow_libraries.annas_archive_domains": "",
     # One enforced switch for every outbound transport. Environment may force
     # this off with ALMA_DISABLE_NETWORK=1, but cannot force it on.
     "network_access_enabled": True,
@@ -483,7 +490,9 @@ def migrate_settings_schema() -> None:
 
     Version 1 introduces explicit external-integration activation. Version 2
     adds global outbound-network policy. Existing installs migrate enabled so
-    upgrading does not silently change connectivity.
+    upgrading does not silently change connectivity. Version 3 adds the
+    paper-PDF source plugins, OFF — a new capability is never switched on by
+    an upgrade.
     """
     raw = get_all_settings()
     try:
@@ -533,6 +542,24 @@ def migrate_settings_schema() -> None:
                 "network_access_enabled": True,
             }
         )
+        version = 2
+    if version == 2:
+        update_settings(
+            {
+                "settings_schema_version": 3,
+                "plugins.open_access.enabled": False,
+                "plugins.shadow_libraries.enabled": False,
+            }
+        )
+
+
+def plugin_activation_keys() -> list[str]:
+    """Every ``plugins.<id>.enabled`` key the current schema defines."""
+    return [
+        key
+        for key in DEFAULT_SETTINGS
+        if key.startswith("plugins.") and key.endswith(".enabled") and key.count(".") == 2
+    ]
 
 
 def validate_settings_schema() -> None:
@@ -544,8 +571,9 @@ def validate_settings_schema() -> None:
             "settings.json schema migration incomplete: "
             f"expected {expected}, got {raw.get('settings_schema_version')!r}"
         )
-    for plugin_id in ("slack", "email"):
-        key = f"plugins.{plugin_id}.enabled"
+    # Derived from the defaults, so a new plugin cannot be registered with an
+    # activation flag the validator never checks.
+    for key in plugin_activation_keys():
         if not isinstance(raw.get(key), bool):
             raise RuntimeError(f"settings.json key {key!r} must be boolean")
     if not isinstance(raw.get("network_access_enabled"), bool):

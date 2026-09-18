@@ -5,8 +5,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from alma.application.pdf_schema import TIER_ORDER, PdfSource
 from alma.plugins.email import EMAIL_PLUGIN
-from alma.plugins.manifest import RECEIVE, SEND, Capability, PluginManifest
+from alma.plugins.manifest import PDF_SOURCE, RECEIVE, SEND, Capability, PluginManifest
 from alma.plugins.slack import SLACK_PLUGIN
 
 PLUGINS: tuple[PluginManifest, ...] = (
@@ -70,6 +71,26 @@ class PluginRegistry:
             for manifest in self.with_capability(SEND)
             if manifest.is_enabled() and manifest.status().get("can_send")
         ]
+
+    def pdf_fetch_enabled(self) -> bool:
+        """True when at least one PDF-source plugin is switched on."""
+        return any(manifest.is_enabled() for manifest in self.with_capability(PDF_SOURCE))
+
+    def pdf_sources(self) -> list[tuple[PluginManifest, PdfSource]]:
+        """Every enabled plugin's PDF sources, in run order.
+
+        Open-tier sources come before any shadow-tier source whatever plugin
+        contributes them; within a tier, plugin order then each plugin's own
+        source order is kept (a stable sort). Built from current config on
+        every call, like the other seams.
+        """
+        pairs = [
+            (manifest, source)
+            for manifest in self.with_capability(PDF_SOURCE)
+            if manifest.is_enabled()
+            for source in manifest.pdf_sources()
+        ]
+        return sorted(pairs, key=lambda pair: TIER_ORDER.get(pair[1].tier, len(TIER_ORDER)))
 
 
 _registry: PluginRegistry | None = None

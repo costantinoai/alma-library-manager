@@ -1189,11 +1189,12 @@ class PluginInfo(BaseModel):
     description: str
     kind: Literal["integration"]
     config_schema: dict
-    capabilities: list[Literal["send", "receive"]] = Field(default_factory=list)
+    capabilities: list[Literal["send", "receive", "pdf_source"]] = Field(default_factory=list)
     enabled: bool
     configured: bool
     can_send: bool = False
     can_receive: bool = False
+    can_fetch: bool = False
     status: dict = Field(default_factory=dict)
     actions: list[str] = Field(default_factory=list)
     docs_path: str
