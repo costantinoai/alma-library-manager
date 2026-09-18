@@ -14,7 +14,6 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable
 from datetime import timedelta
-from html.parser import HTMLParser
 from typing import Any
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
@@ -934,27 +933,15 @@ def _run_crossref_abstract_phase(
     return fallback_summary
 
 
-class _AbstractMetaParser(HTMLParser):
-    _META_NAMES = {
-        "citation_abstract",
-        "dc.description",
-        "dcterms.description",
-        "description",
-        "og:description",
-    }
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.abstracts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "meta":
-            return
-        attr_map = {str(k).lower(): (v or "") for k, v in attrs}
-        name = (attr_map.get("name") or attr_map.get("property") or "").strip().lower()
-        content = html.unescape(attr_map.get("content") or "").strip()
-        if name in self._META_NAMES and _is_usable_recovered_abstract(content):
-            self.abstracts.append(_clean_recovered_abstract(content))
+# Page metas that carry an abstract, most specific first (page order decides
+# among them, as before).
+_ABSTRACT_META_NAMES = (
+    "citation_abstract",
+    "dc.description",
+    "dcterms.description",
+    "description",
+    "og:description",
+)
 
 
 def _clean_recovered_abstract(text: str) -> str:
@@ -972,12 +959,13 @@ def _is_usable_recovered_abstract(text: str) -> bool:
 
 
 def _extract_abstract_from_html(text: str) -> str:
-    parser = _AbstractMetaParser()
-    try:
-        parser.feed(text or "")
-    except Exception:
-        return ""
-    return parser.abstracts[0] if parser.abstracts else ""
+    """First usable abstract advertised in the page's ``<meta>`` tags."""
+    from alma.core.html_meta import meta_values, parse_html
+
+    for content in meta_values(parse_html(text), _ABSTRACT_META_NAMES):
+        if _is_usable_recovered_abstract(content):
+            return _clean_recovered_abstract(content)
+    return ""
 
 
 # Cap on how much publisher HTML we parse for one meta-tag abstract. Landing
