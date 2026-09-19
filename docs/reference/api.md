@@ -178,6 +178,7 @@ rest.
 | `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config; `GET` also serves `effective_weights` (what the ranker uses after rescaling + mode) and `reference_score` (the all-average paper's score) |
 | `GET` | `/discovery/outcome-evaluation` | Stored answer to "does the ranker's order predict what you kept?": `state` (`not_built` / `not_ready` / `ready`), AUC + 95% interval + verdict for kept-vs-rejected and kept-vs-random-corpus, `current` (false when weights / Library / calibration moved since), `rebuilding`, and `lab`: what the Signal Lab heads change versus no Lab on the same papers (paired AUC difference, interval, verdict, rounds answered). Pure read; never computes |
 | `POST` | `/discovery/outcome-evaluation/refresh[?force=true]` | 202 + `job_id`; queues the background evaluation when its inputs moved (always with `force`). Also requested by a weights save / reset and by the periodic scoring tick |
+| `GET` | `/discovery/channel-yield` | Stored per-channel yield: `enabled`, and per channel `surfaced`, `kept`, `rate`, `shrunk_rate`, `multiplier` (what the lens weight is scaled by at refresh). `channels` is null until a lens refresh has built it. Pure read |
 | `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
 | `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
 | `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |

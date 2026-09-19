@@ -34,6 +34,10 @@ from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
+from .channel_yield import (  # registers discovery:channel_yield
+    apply_channel_multipliers,
+    channel_multipliers,
+)
 from .citation_fabric import build_citation_fabric_maps
 from .exploration import build_slate
 from .features import FEATURE_SCHEMA_VERSION
@@ -344,9 +348,24 @@ def _refresh_lens_recommendations(
     _log("seeds", f"Lens '{lens_name}': loaded {len(seeds)} seed papers", data={"seeds": len(seeds)})
 
     weights = lens.get("weights") or default_channel_weights(lens["context_type"])
-    channel_weights = _normalize_channel_weights(weights)
+    base_channel_weights = _normalize_channel_weights(weights)
 
     scoring_settings = load_scoring_settings(db)
+    # The lens's weights are the prior; each channel is then scaled by how often
+    # the papers it surfaced were kept (1.0 everywhere until the data says the
+    # channels differ). Retrieval only — exposure never enters the score.
+    yield_multipliers = channel_multipliers(db, scoring_settings)
+    channel_weights = apply_channel_multipliers(base_channel_weights, yield_multipliers)
+    if yield_multipliers:
+        _log(
+            "channel_yield",
+            f"Lens '{lens_name}': channel weights scaled by what you keep — "
+            + ", ".join(
+                f"{channel} {base_channel_weights.get(channel, 0.0):.2f}→{weight:.2f}"
+                for channel, weight in channel_weights.items()
+            ),
+            data={"base": base_channel_weights, "multipliers": yield_multipliers, "effective": channel_weights},
+        )
     # Every lens computes its taste (preference profile + the scoring
     # positive/negative documents) from its OWN context papers — exactly the way
     # the library lens is scoped to the Library. The seeds already ARE that
@@ -1307,6 +1326,8 @@ def _refresh_lens_recommendations(
         "graph_cache": graph_summary,
         "external_lanes": external_lane_counts,
         "weights": channel_weights,
+        "base_weights": base_channel_weights,
+        "channel_yield_multipliers": yield_multipliers,
         "taste_profile": external_summary.get("taste_profile") or {},
         "negative_profile": external_summary.get("negative_profile") or {},
         "budgets": external_summary.get("budgets") or {},

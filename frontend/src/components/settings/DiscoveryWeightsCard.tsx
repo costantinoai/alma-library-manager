@@ -71,6 +71,7 @@ const STRATEGY_LABELS: { key: keyof DiscoveryStrategies; label: string; descript
   { key: 'taste_authors', label: 'Favorite Author Lanes', description: 'Retrieve from preferred authors.' },
   { key: 'taste_venues', label: 'Favorite Venue Lanes', description: 'Retrieve from preferred venues and journals.' },
   { key: 'recent_wins', label: 'Recent Win Lanes', description: 'Reuse recent strong interactions as query seeds.' },
+  { key: 'adaptive_channels', label: 'Adaptive Channel Weights', description: 'Scale each lens channel (lexical, vector, graph, external) by how often the papers it surfaced were kept. Bounded to ×0.5–×1.5; shown in each lens’s weights.' },
 ]
 
 const SOURCE_LABELS: Array<{ key: keyof DiscoverySettings['sources']; label: string; description: string }> = [
@@ -118,6 +119,7 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
     taste_authors: true,
     taste_venues: true,
     recent_wins: true,
+    adaptive_channels: true,
   },
   limits: {
     max_results: 50,
@@ -234,6 +236,7 @@ const discoverySchema = z.object({
     taste_authors: z.boolean(),
     taste_venues: z.boolean(),
     recent_wins: z.boolean(),
+    adaptive_channels: z.boolean(),
   }),
   limits: z.object({
     max_results: z.number().int().min(10).max(200),

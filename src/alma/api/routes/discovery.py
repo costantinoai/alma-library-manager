@@ -34,6 +34,7 @@ from alma.api.models import (
     SimilarityResultItem,
 )
 from alma.application import discovery as discovery_app
+from alma.application.discovery.channel_yield import adaptive_channels_enabled, load_channel_yield
 from alma.application.discovery.outcome_eval import (
     load_outcome_summary,
     request_outcome_eval_refresh,
@@ -89,6 +90,7 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
             taste_authors=kv.get("strategies.taste_authors", "true").lower() == "true",
             taste_venues=kv.get("strategies.taste_venues", "true").lower() == "true",
             recent_wins=kv.get("strategies.recent_wins", "true").lower() == "true",
+            adaptive_channels=kv.get("strategies.adaptive_channels", "true").lower() == "true",
         ),
         limits=DiscoveryLimits(
             max_results=int(kv.get("limits.max_results", "50")),
@@ -257,6 +259,25 @@ def get_outcome_evaluation(
         raise_internal("Failed to read the ranker outcome evaluation", e)
 
 
+@router.get(
+    "/channel-yield",
+    summary="Which retrieval channels surface papers you keep (stored result)",
+)
+def get_channel_yield(
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Pure read: per channel surfaced / kept / shrunk rate / weight multiplier,
+    and whether the adaptation is switched on. ``channels`` is null until a
+    lens refresh has built it."""
+    try:
+        return {
+            "enabled": adaptive_channels_enabled(discovery_app.read_settings(db)),
+            **(load_channel_yield(db) or {"channels": None}),
+        }
+    except Exception as e:
+        raise_internal("Failed to read the channel yield", e)
+
+
 @router.post(
     "/outcome-evaluation/refresh",
     status_code=202,
@@ -305,6 +326,7 @@ def update_discovery_settings(
             _upsert_setting(db, "strategies.taste_authors", str(s.taste_authors).lower())
             _upsert_setting(db, "strategies.taste_venues", str(s.taste_venues).lower())
             _upsert_setting(db, "strategies.recent_wins", str(s.recent_wins).lower())
+            _upsert_setting(db, "strategies.adaptive_channels", str(s.adaptive_channels).lower())
         if body.limits is not None:
             lim = body.limits
             _upsert_setting(db, "limits.max_results", str(lim.max_results))

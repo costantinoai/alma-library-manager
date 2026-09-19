@@ -485,35 +485,52 @@ Range: 0…1. Requires `preference_profiles` to have entries; no embeddings need
 retrieval phase, before ranking. They shape which candidates exist, not what
 they score.
 
-## Outcome calibration
+## Channel yield: outcomes scale retrieval, never the score
 
-After consensus, every candidate's `source_relevance` is multiplied
-by an outcome-derived calibration multiplier. The multiplier is the
-composition of three independent axes:
+How a paper reached you is *exposure*, and exposure stays out of the reward
+model. So outcomes feed back into **what is retrieved**, not into a score
+multiplier (the per-source `source_calibration_multiplier` left the scoring
+path on 2026-07-27 and its code was removed on 2026-09-19; old stored
+breakdowns may still carry the key).
 
-| Axis | Grouping key | Source |
-|---|---|---|
-| `source_api` | The API that surfaced the candidate (`openalex` / `semantic_scholar` / …) | `recommendations.source_api` × `feedback_events` |
-| `branch_mode` | The retrieval lane (`core` / `explore` / `safe`) | `recommendations.branch_mode` |
-| `branch_id` | The specific branch within the lens | `recommendations.branch_id` |
+`application/discovery/channel_yield.py`, stored view `discovery:channel_yield`:
 
-Each axis runs the same Beta-Bernoulli posterior over a 180-day
-window with a 60-day half-life decay:
+* **Data.** Every refresh records, for each candidate it *surfaced*
+  (`discovery_ranking_candidates.selected = 1`), which retrieval families found
+  it (`retrieval_hits`). Joined to the outcome owner
+  (`recommendation_outcomes.build_paper_outcome_map`), each channel gets
+  `kept / surfaced`. A paper found by several channels counts for each.
+  Surfaced-and-ignored is the denominator: explicit rejections are too rare to
+  estimate anything from.
+* **Estimator.** Rates are shrunk toward the pooled rate by a strength *derived
+  from the data* — the beta-binomial method-of-moments estimate of how much the
+  channels vary beyond their sample sizes
+  (`core/scoring_math.empirical_bayes_rates`). When they do not, every
+  multiplier is exactly 1.0. No tuned constant.
+* **Effect.** `multiplier = shrunk rate / pooled rate`, clamped to
+  `outcome_calibration.MULTIPLIER_BAND` (`[0.5, 1.5]`). At refresh the lens's
+  channel weights (the prior: the user's sliders or the context-type defaults)
+  are multiplied and renormalised, and the Activity log states base → effective.
+* **Family → channel** has one owner, `retrieval/_common.CHANNEL_BY_FAMILY`
+  (semantic → `vector`, citation → `graph`, taste → `external`), read by the
+  fusion and by the yield.
+* **Surface.** The lens's **Tune this lens → Lens Weights** prints, per
+  channel, "k of n surfaced papers kept → ×m, used as w". Switch:
+  Settings → Discovery → Retrieval Strategies → *Adaptive Channel Weights*
+  (`strategies.adaptive_channels`, default on). `GET /discovery/channel-yield`
+  is a row read.
 
-$$
-\text{quality}(k) = \frac{\text{positives}(k) + \alpha}{\text{positives}(k) + \text{negatives}(k) + \alpha + \beta}
-$$
+Measured 2026-09-19 — prod snapshot: lexical 3/36 → ×0.85, vector 15/68 →
+×1.13, graph 10/62 → ×0.98 (external: nothing surfaced, ×1.00). Dev: lexical
+0/35 → ×0.68, vector 4/62 → ×1.50 (the band's ceiling), graph 2/55 → ×1.08,
+external 0/44 → ×0.62. Both installs order the channels the same way. The band's
+floor keeps every channel in play, and the slate's randomized exploration
+slots (`exploration.py`) are filled after fusion, so a down-weighted channel
+keeps producing the outcomes that could lift it again.
 
-with $\alpha = \beta = 2$. A fresh DB returns 0.5 → multiplier 1.0
-(no behavior change). A source where saves dominate climbs toward
-1.5×; one where explicit negative preference dominates falls toward 0.5×. The three
-axes compose multiplicatively in log space, then the composite is
-clamped back to `[0.5, 1.5]` so three independent positive axes
-can't push past the per-axis ceiling.
-
-Per-candidate breakdown carries the composite as
-`source_calibration_multiplier` and the per-axis components as
-`source_calibration_components.{source_api, branch_mode, branch_id}`.
+Branch-level outcome weighting is separate and unchanged: a branch's
+`auto_weight` (`lens_crud._compute_branch_auto_weight`) shapes its retrieval
+budget from its own save / dismiss history.
 The full snapshot — quality, multipliers, raw counts, impressions —
 also lives on `retrieval_summary.calibration.{source_api, branch_mode,
 branch_id}`.

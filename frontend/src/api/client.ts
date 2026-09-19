@@ -2137,6 +2137,8 @@ export interface DiscoveryStrategies {
   taste_authors: boolean
   taste_venues: boolean
   recent_wins: boolean
+  /** Scale lens channel weights by how often what each channel surfaced was kept. */
+  adaptive_channels: boolean
 }
 
 export interface DiscoveryLimits {
@@ -3424,6 +3426,30 @@ export interface RankerOutcomeDelta {
   verdict: 'improves' | 'worsens' | 'no_measurable_effect' | 'no_data'
   n_pos: number
   n_neg: number
+}
+
+/** One lens channel's yield: of the papers it helped surface, how many were kept. */
+export interface ChannelYieldRow {
+  surfaced: number
+  kept: number
+  rate: number | null
+  shrunk_rate: number | null
+  /** What the lens weight is multiplied by at refresh (1 = no opinion). */
+  multiplier: number
+}
+
+export interface ChannelYield {
+  enabled: boolean
+  /** null until a lens refresh has built it. */
+  channels: Record<'lexical' | 'vector' | 'graph' | 'external', ChannelYieldRow> | null
+  papers_surfaced?: number
+  pooled_rate?: number
+  /** null = the channels do not differ beyond sampling noise. */
+  shrinkage_strength?: number | null
+}
+
+export function getChannelYield(): Promise<ChannelYield> {
+  return api.get<ChannelYield>('/discovery/channel-yield')
 }
 
 export function getRankerOutcome(): Promise<RankerOutcome> {

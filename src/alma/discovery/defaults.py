@@ -167,6 +167,9 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "strategies.taste_authors": "true",
     "strategies.taste_venues": "true",
     "strategies.recent_wins": "true",
+    # Scale each lens channel by how often what it surfaced was kept
+    # (`application/discovery/channel_yield.py`).
+    "strategies.adaptive_channels": "true",
     "limits.max_results": "50",
     # Minimum recommendation score (0-100 scale, matching the emitted
     # `score`). Recommendations scoring below this are dropped at staging time

@@ -299,3 +299,41 @@ def calibrate_similarity_score(
     if not points:
         return score
     return float(max(0.0, min(1.0, interpolate_calibration(score, points))))
+
+
+def shrink_toward(total: float, n: float, grand_mean: float, strength: float) -> float:
+    """A group's mean pulled toward the grand mean by ``strength``
+    pseudo-observations. THE shrinkage expression: Signal Lab's categorical
+    heads and the retrieval channel yield both go through it, so they differ in
+    what they count and how hard they shrink, never in the maths."""
+    return (total + strength * grand_mean) / (n + strength)
+
+
+def empirical_bayes_rates(
+    counts: Mapping[str, tuple[float, float]],
+) -> tuple[float, float | None, dict[str, float]]:
+    """Shrink per-group success rates by a strength DERIVED from the data.
+
+    ``counts`` maps group -> ``(successes, trials)``. Returns ``(grand rate,
+    strength, {group: shrunk rate})``. The strength is the beta-binomial
+    method-of-moments estimate: how much the groups' rates vary BEYOND what
+    their sample sizes alone would produce. When they do not (or there are
+    fewer than two groups), the strength is ``None`` — infinite — and every
+    group gets the grand rate: the data does not say the groups differ, so
+    nothing is allowed to act as if they did. No tuned constant anywhere.
+    """
+    groups = {k: (float(s), float(n)) for k, (s, n) in counts.items() if n > 0}
+    trials = sum(n for _, n in groups.values())
+    if not groups or trials <= 0:
+        return 0.0, None, {}
+    grand = sum(s for s, _ in groups.values()) / trials
+    noise = grand * (1.0 - grand)
+    spread_room = trials - sum(n * n for _, n in groups.values()) / trials
+    between = 0.0
+    if len(groups) >= 2 and noise > 0 and spread_room > 0:
+        observed = sum(n * ((s / n) - grand) ** 2 for s, n in groups.values())
+        between = max(0.0, (observed - (len(groups) - 1) * noise) / spread_room)
+    if between <= 0.0:
+        return grand, None, {k: grand for k in groups}
+    strength = max(0.0, noise / between - 1.0)
+    return grand, strength, {k: shrink_toward(s, n, grand, strength) for k, (s, n) in groups.items()}

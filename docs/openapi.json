@@ -22225,6 +22225,62 @@
           }
         }
       }
+    },
+    "/api/v1/discovery/channel-yield": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Which retrieval channels surface papers you keep (stored result)",
+        "description": "Pure read: per channel surfaced / kept / shrunk rate / weight multiplier,\nand whether the adaptation is switched on. ``channels`` is null until a\nlens refresh has built it.",
+        "operationId": "get_channel_yield_api_v1_discovery_channel_yield_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -25070,6 +25126,11 @@
           "recent_wins": {
             "type": "boolean",
             "title": "Recent Wins",
+            "default": true
+          },
+          "adaptive_channels": {
+            "type": "boolean",
+            "title": "Adaptive Channels",
             "default": true
           }
         },

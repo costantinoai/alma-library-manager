@@ -68,6 +68,7 @@ from alma.ai.graph_versions import (
 from alma.application import materialized_views as mv
 from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import MiniGame, Pref, RegionVote, RoundRow, Sim
+from alma.core.scoring_math import shrink_toward
 from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
@@ -451,7 +452,7 @@ def shrunk_win_rates(
         return {}
     grand_mean = sum(sums.values()) / sum(counts.values())
     return {
-        entity: (sums[entity] + shrinkage * grand_mean) / (n + shrinkage)
+        entity: shrink_toward(sums[entity], n, grand_mean, shrinkage)
         for entity, n in counts.items()
         if n >= min_observations
     }

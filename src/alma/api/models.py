@@ -633,6 +633,7 @@ class DiscoveryStrategies(BaseModel):
     taste_authors: bool = True
     taste_venues: bool = True
     recent_wins: bool = True
+    adaptive_channels: bool = True
 
 
 class DiscoveryLimits(BaseModel):
