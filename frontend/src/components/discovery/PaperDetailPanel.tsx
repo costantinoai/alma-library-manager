@@ -66,6 +66,7 @@ import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
@@ -206,7 +207,8 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
       updateSavedPaper(paperId, { notes }),
     onSuccess: (_updated, vars) => {
       setDetails((prev) => (prev ? { ...prev, notes: vars.notes } : prev))
-      invalidateQueries(queryClient, ['likes'], ['papers'], ['library-workflow'])
+      void invalidateAfterPaperMutation(queryClient)
+      void invalidateQueries(queryClient, ['likes'])
       toast({ title: 'Notes saved', description: 'Your notes have been updated.' })
     },
     onError: () => {
@@ -245,7 +247,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
       updateSavedPaper(p!.id, body),
     onSuccess: (updated) => {
       setDetails((prev) => (prev ? { ...prev, ...updated } as PaperDetails : updated as PaperDetails))
-      invalidateQueries(queryClient, ['papers'], ['library-saved'], ['library-workflow'])
+      void invalidateAfterPaperMutation(queryClient)
       toast({ title: 'Paper updated' })
       setEditMode(null)
     },
@@ -256,11 +258,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
     mutationFn: () => removeFromLibrary(p!.id),
     onSuccess: () => {
       void invalidateAfterPaperMutation(queryClient)
-      invalidateQueries(
-        queryClient,
-        ['library-workflow'],
-        ['library-info'],
-      )
+      void invalidateQueries(queryClient, ['library-info'])
       toast({ title: 'Removed', description: 'Paper soft-removed from Library.' })
       setRemoveConfirmOpen(false)
       onOpenChange(false)
@@ -281,7 +279,8 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
           .then((data) => setDetails(data))
           .catch(() => {})
       }
-      invalidateQueries(queryClient, ['papers'], ['library-saved'], ['library-workflow'], ['library-info'])
+      void invalidateAfterPaperMutation(queryClient)
+      void invalidateQueries(queryClient, ['library-info'])
       toast({
         title: result.was_component ? 'Detached' : 'Split out',
         description: result.was_component
@@ -305,7 +304,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
         background: false,
       }),
     onSuccess: () => {
-      invalidateQueries(queryClient, ['papers'], ['library-saved'], ['library-workflow'])
+      void invalidateAfterPaperMutation(queryClient)
       toast({
         title: 'Re-fetch queued',
         description: 'OpenAlex enrichment will run for this paper.',
@@ -1029,13 +1028,7 @@ function RelatedWorkRow({
   // Per-row reaction + saved state. The backend response from
   // onlineImportSave is authoritative — we mirror its `status`
   // (library vs other) and the reaction from the action that fired.
-  const ratingToReaction = (rating?: number | null): PaperReaction => {
-    if (rating === 4) return 'like'
-    if (rating === 5) return 'love'
-    if (rating === 1) return 'dislike'
-    return null
-  }
-  const [reaction, setReaction] = useState<PaperReaction>(ratingToReaction(work.rating))
+  const [reaction, setReaction] = useState<PaperReaction>(reactionFromRating(work.rating))
   const [isSaved, setIsSaved] = useState<boolean>(!!work.paper_id && work.rating != null)
   const [readingStatus, setReadingStatus] = useState<string>('__none__')
   const hasLocal = !!work.paper_id
@@ -1069,12 +1062,7 @@ function RelatedWorkRow({
       setIsSaved(resp.status === 'library')
       setReaction(action === 'add' ? null : action)
       void invalidateAfterPaperMutation(queryClient)
-      invalidateQueries(
-        queryClient,
-        ['library-workflow'],
-        ['paper-prior-works'],
-        ['paper-derivative-works'],
-      )
+      void invalidateQueries(queryClient, ['paper-prior-works'], ['paper-derivative-works'])
       toast({
         title:
           action === 'dislike'

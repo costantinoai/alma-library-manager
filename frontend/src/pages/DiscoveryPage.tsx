@@ -77,6 +77,7 @@ import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { useDiscoveryImpressions } from '@/hooks/useDiscoveryImpressions'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
@@ -104,11 +105,7 @@ function deriveDiscoveryReaction(rec: LensRecommendation): PaperReaction {
   if (rec.user_action === 'like' || rec.user_action === 'love' || rec.user_action === 'dislike') {
     return rec.user_action
   }
-  const rating = Number(rec.paper?.rating ?? 0)
-  if (rating >= 5) return 'love'
-  if (rating >= 4) return 'like'
-  if (rating > 0 && rating <= 2) return 'dislike'
-  return null
+  return reactionFromRating(rec.paper?.rating)
 }
 
 type RecommendationCacheSnapshot = Array<

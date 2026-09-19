@@ -1066,10 +1066,6 @@ export function listSavedPapers(params?: {
   return api.get<Publication[]>(`/library/saved${q ? `?${q}` : ''}`)
 }
 
-export function addToLibrary(paperId: string, rating = 0): Promise<Publication> {
-  return api.post<Publication>('/library/saved', { paper_id: paperId, rating })
-}
-
 export function removeFromLibrary(paperId: string): Promise<void> {
   return api.delete<void>(`/library/saved/${paperId}`)
 }
@@ -1384,14 +1380,6 @@ export function listAuthorOpenAlexWorks(
   return api.get<AuthorOpenAlexWorksPage>(
     `/authors/${encodeURIComponent(authorId)}/openalex-works?${qs.toString()}`,
   )
-}
-
-export function saveOpenAlexWork(body: {
-  openalex_id?: string | null
-  doi?: string | null
-  action: 'add' | 'like' | 'love' | 'dislike'
-}): Promise<{ paper_id?: string; rating?: number; status?: string }> {
-  return api.post('/library/import/search/save', body)
 }
 
 export function lookupAuthorByName(name: string): Promise<Author> {

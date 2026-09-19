@@ -16,13 +16,14 @@ import {
 } from 'lucide-react'
 
 import {
-  addToLibrary,
   api,
+  applyPaperAction,
   followAuthor,
+  getApiErrorMessage,
   getAuthorDetail,
   listAuthorOpenAlexWorks,
   rejectAuthorSuggestion,
-  saveOpenAlexWork,
+  onlineImportSave,
   softRemoveAuthor,
   unfollowAuthor,
   updateReadingStatus,
@@ -62,6 +63,7 @@ import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifie
 import { useToast, errorToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
 import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
 import { formatPercent, formatYearMonth } from '@/lib/format'
@@ -108,6 +110,13 @@ function MetricCard({
   )
 }
 
+/** Toast title after an Add / Like / Love lands — local-row and OpenAlex saves alike. */
+const SAVED_ACTION_LABELS: Record<'add' | 'like' | 'love', string> = {
+  add: 'Saved to Library',
+  like: 'Liked',
+  love: 'Loved',
+}
+
 function scopeDescription(scope: Scope): string {
   if (scope === 'library') return 'Curated library papers only.'
   if (scope === 'background') return 'Tracked background corpus outside the curated library.'
@@ -116,29 +125,19 @@ function scopeDescription(scope: Scope): string {
   return 'All papers in your local DB for this author.'
 }
 
-function ratingToReaction(rating: number | null | undefined): PaperReaction {
-  // Mirror the canonical add/like/love/dislike → 3/4/5/1 contract. Rating 3
-  // ("add") is the baseline save state and does not light up a reaction
-  // pill.
-  if (rating === 4) return 'like'
-  if (rating === 5) return 'love'
-  if (rating === 1) return 'dislike'
-  return null
-}
-
 function PublicationRow({
   publication,
-  onRate,
+  onAction,
   onReading,
   onUndo,
 }: {
   publication: Publication
-  onRate: (paperId: string, rating: number) => void
+  onAction: (paperId: string, action: 'add' | 'like' | 'love') => void
   onReading: (paperId: string, status: 'reading' | 'done' | 'excluded' | null) => void
   onUndo: (paperId: string, aspect: 'membership' | 'rating' | 'reading') => void
 }) {
   const isSaved = publication.status === 'library'
-  const reaction = ratingToReaction(publication.rating)
+  const reaction = reactionFromRating(publication.rating)
   const cardPaper: PaperCardPaper = {
     id: publication.id,
     title: publication.title,
@@ -183,9 +182,9 @@ function PublicationRow({
       isSaved={isSaved}
       reaction={reaction}
       readingStatusSlot={readingStatusSlot}
-      onAdd={() => onRate(publication.id, 3)}
-      onLike={() => onRate(publication.id, 4)}
-      onLove={() => onRate(publication.id, 5)}
+      onAdd={() => onAction(publication.id, 'add')}
+      onLike={() => onAction(publication.id, 'like')}
+      onLove={() => onAction(publication.id, 'love')}
       onUndo={(aspect) => onUndo(publication.id, aspect)}
     />
   )
@@ -201,7 +200,7 @@ function OpenAlexWorkRow({
   pending: boolean
 }) {
   const savedReaction: PaperReaction = work.already_in_db
-    ? ratingToReaction(work.local_rating)
+    ? reactionFromRating(work.local_rating)
     : null
   const savedInLibrary = work.already_in_db && work.local_status === 'library'
 
@@ -444,21 +443,20 @@ export function AuthorDetailPanel({
     onError: () => errorToast('Error', 'Failed to remove author.'),
   })
 
-  const rateMutation = useMutation({
-    mutationFn: ({ paperId, rating }: { paperId: string; rating: number }) =>
-      addToLibrary(paperId, rating),
-    onSuccess: (_data, { rating }) => {
-      void invalidateQueries(
-        queryClient,
-        ['author-publications', resolved?.id],
-        ['papers'],
-        ['likes'],
-        ['library-workflow'],
-      )
-      const label = rating === 5 ? 'Loved' : rating === 4 ? 'Liked' : 'Saved to Library'
-      toast({ title: label })
+  // Add / Like / Love on an author's paper: the ONE paper-action route, so it
+  // means what it means everywhere — rating per the backend contract AND the
+  // feedback signal. It used `POST /library/saved` with a hand-picked star
+  // value, which set a rating but recorded no signal: a Like here never reached
+  // Discovery.
+  const paperActionMutation = useMutation({
+    mutationFn: ({ paperId, action }: { paperId: string; action: 'add' | 'like' | 'love' }) =>
+      applyPaperAction(paperId, action, { surface: 'papers' }),
+    onSuccess: (_data, { action }) => {
+      void invalidateAfterPaperMutation(queryClient)
+      void invalidateQueries(queryClient, ['author-publications', resolved?.id], ['likes'])
+      toast({ title: SAVED_ACTION_LABELS[action] })
     },
-    onError: () => errorToast('Error', 'Failed to update rating.'),
+    onError: (err) => errorToast('Could not save the paper', getApiErrorMessage(err)),
   })
 
   const saveOpenAlexMutation = useMutation({
@@ -469,22 +467,20 @@ export function AuthorDetailPanel({
       work: OpenAlexWork
       action: 'add' | 'like' | 'love'
     }) =>
-      saveOpenAlexWork({
-        openalex_id: work.openalex_id ?? work.id ?? null,
-        doi: work.doi ?? null,
+      onlineImportSave({
         action,
+        openalex_id: work.openalex_id ?? work.id ?? undefined,
+        doi: work.doi ?? undefined,
       }),
     onSuccess: (_data, { action }) => {
+      void invalidateAfterPaperMutation(queryClient)
       void invalidateQueries(
         queryClient,
         ['author-openalex-works', resolved?.id],
         ['author-publications', resolved?.id],
-        ['papers'],
         ['likes'],
-        ['library-workflow'],
       )
-      const label = action === 'love' ? 'Loved' : action === 'like' ? 'Liked' : 'Saved to Library'
-      toast({ title: label })
+      toast({ title: SAVED_ACTION_LABELS[action] })
     },
     onError: () => errorToast('Error', 'Failed to save from OpenAlex.'),
   })
@@ -822,7 +818,7 @@ export function AuthorDetailPanel({
                   <PublicationRow
                     key={pub.id}
                     publication={pub}
-                    onRate={(paperId, rating) => rateMutation.mutate({ paperId, rating })}
+                    onAction={(paperId, action) => paperActionMutation.mutate({ paperId, action })}
                     onReading={(paperId, status) => readingMutation.mutate({ paperId, status })}
                     onUndo={(paperId, aspect) => undoMutation.mutate({ paperId, aspect })}
                   />
