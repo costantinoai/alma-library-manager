@@ -55,9 +55,11 @@ DDL: tuple[str, ...] = (
         original_filename TEXT,
         version TEXT,
         license TEXT,
-        stored_at TEXT NOT NULL
+        stored_at TEXT NOT NULL,
+        source_sha256 TEXT NOT NULL
     )""",
     f"CREATE INDEX IF NOT EXISTS idx_{PDFS_TABLE}_sha256 ON {PDFS_TABLE}(sha256)",
+    f"CREATE INDEX IF NOT EXISTS idx_{PDFS_TABLE}_source_sha256 ON {PDFS_TABLE}(source_sha256)",
     f"""CREATE TABLE IF NOT EXISTS {ATTEMPTS_TABLE} (
         paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
         source_id TEXT NOT NULL,
@@ -214,6 +216,17 @@ class StagingWriter:
         if not self._fh.closed:
             self._fh.close()
         self.path.unlink(missing_ok=True)
+
+
+def adopt_staged(path: Path) -> StagedFile:
+    """A file already written into ``.incoming`` (the sandbox's cleaned copy), hashed."""
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return StagedFile(path=path, sha256=digest.hexdigest(), bytes=size)
 
 
 def stage_chunks(chunks: Iterable[bytes], *, max_bytes: int = MAX_PDF_BYTES) -> StagedFile:
@@ -388,6 +401,10 @@ class StoredPdf:
     version: str | None = None
     license: str | None = None
     stored_at: str = ""
+    #: sha256 of the bytes as they arrived. Differs from ``sha256`` only when
+    #: a fetched file was rewritten without active content; rejections and
+    #: "same file" lookups match either, so a cleaned copy stays recognisable.
+    source_sha256: str = ""
 
     @property
     def filename(self) -> str:
@@ -412,7 +429,7 @@ class StoredPdf:
 
 _PDF_COLUMNS = (
     "paper_id, rel_path, sha256, bytes, pages, origin, verification, source_id, "
-    "source_plugin, source_url, original_filename, version, license, stored_at"
+    "source_plugin, source_url, original_filename, version, license, stored_at, source_sha256"
 )
 
 
@@ -435,7 +452,7 @@ def upsert_pdf(conn: sqlite3.Connection, record: StoredPdf) -> StoredPdf | None:
     previous = read_pdf(conn, record.paper_id)
     conn.execute(
         f"""INSERT INTO {PDFS_TABLE} ({_PDF_COLUMNS})
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET
               rel_path = excluded.rel_path, sha256 = excluded.sha256,
               bytes = excluded.bytes, pages = excluded.pages,
@@ -444,7 +461,7 @@ def upsert_pdf(conn: sqlite3.Connection, record: StoredPdf) -> StoredPdf | None:
               source_url = excluded.source_url,
               original_filename = excluded.original_filename,
               version = excluded.version, license = excluded.license,
-              stored_at = excluded.stored_at""",
+              stored_at = excluded.stored_at, source_sha256 = excluded.source_sha256""",
         (
             record.paper_id,
             record.rel_path,
@@ -460,6 +477,7 @@ def upsert_pdf(conn: sqlite3.Connection, record: StoredPdf) -> StoredPdf | None:
             record.version,
             record.license,
             record.stored_at or utcnow().isoformat(),
+            record.source_sha256 or record.sha256,
         ),
     )
     if previous is not None and previous.rel_path == record.rel_path:
@@ -476,9 +494,10 @@ def delete_pdf(conn: sqlite3.Connection, paper_id: str) -> StoredPdf | None:
 
 
 def find_by_sha(conn: sqlite3.Connection, sha256: str) -> StoredPdf | None:
-    """The stored PDF with exactly these bytes, if any paper already has them."""
+    """The stored PDF with exactly these bytes — as kept or as they arrived — if any."""
     row = conn.execute(
-        f"SELECT {_PDF_COLUMNS} FROM {PDFS_TABLE} WHERE sha256 = ? LIMIT 1", (sha256,)
+        f"SELECT {_PDF_COLUMNS} FROM {PDFS_TABLE} WHERE sha256 = ? OR source_sha256 = ? LIMIT 1",
+        (sha256, sha256),
     ).fetchone()
     return _row_to_pdf(row) if row else None
 
@@ -499,7 +518,17 @@ def record_attempt(
     candidate_url: str | None = None,
     job_id: str | None = None,
 ) -> None:
-    """Upsert the latest outcome of ``source_id`` for ``paper_id``."""
+    """Upsert the latest outcome of ``source_id`` for ``paper_id``.
+
+    The last gate before the ledger: ``detail`` loses control and bidi
+    characters (it may quote a remote server), and ``candidate_url`` is kept
+    only when it is a bounded http(s) URL.
+    """
+    from alma.core.url_safety import MAX_URL_CHARS, clean_remote_text
+
+    url = str(candidate_url or "")
+    if len(url) > MAX_URL_CHARS or not url.lower().startswith(("http://", "https://")):
+        url = ""
     conn.execute(
         f"""INSERT INTO {ATTEMPTS_TABLE}
               (paper_id, source_id, outcome, http_status, detail, candidate_url, job_id, attempted_at)
@@ -513,8 +542,8 @@ def record_attempt(
             source_id,
             str(outcome),
             http_status,
-            (detail or "")[:500] or None,
-            candidate_url,
+            clean_remote_text(detail, 500, keep_semicolons=True) or None,
+            url or None,
             job_id,
             utcnow().isoformat(),
         ),
@@ -536,6 +565,12 @@ def reject_sha(conn: sqlite3.Connection, paper_id: str, sha256: str) -> None:
         f"INSERT OR IGNORE INTO {REJECTIONS_TABLE} (paper_id, sha256, rejected_at) VALUES (?, ?, ?)",
         (paper_id, sha256, utcnow().isoformat()),
     )
+
+
+def reject_pdf(conn: sqlite3.Connection, record: StoredPdf) -> None:
+    """Remember ``record``'s file as wrong for its paper — as kept AND as it arrived."""
+    for sha in {record.sha256, record.source_sha256 or record.sha256}:
+        reject_sha(conn, record.paper_id, sha)
 
 
 def rejected_shas(conn: sqlite3.Connection, paper_id: str) -> set[str]:

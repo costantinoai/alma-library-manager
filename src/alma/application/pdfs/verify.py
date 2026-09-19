@@ -6,8 +6,9 @@ Two questions, answered from the bytes, never from what a server claims:
    arrives as ``binary/octet-stream``; a captcha wall arrives as HTTP 200
    ``text/html``), so :func:`classify_head` sniffs the first KB and
    :func:`is_bot_wall` / :func:`looks_like_challenge` recognise bot walls.
-2. **Which paper is it?** :func:`read_facts` opens the file with ``pypdf`` and
-   reads pages 1–2; :func:`verify_identity` looks for the paper's DOI there,
+2. **Which paper is it?** :func:`read_facts` has ``pypdf`` — in the sandboxed
+   worker (``pdfs.sandbox``), never in this process — read page count,
+   metadata and pages 1–2; :func:`verify_identity` looks for the paper's DOI there,
    then its title. A file whose text names a different paper is a
    ``MISMATCH``; a file with no extractable text (a scan) is ``UNVERIFIED``.
 """
@@ -31,9 +32,6 @@ from alma.core.utils import (
 )
 
 logger = logging.getLogger(__name__)
-# pypdf reports every malformed-but-readable object at WARNING; that is noise
-# for a reader that only needs page count and a little text.
-logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 #: A real article PDF is never this small; anything below is an error page,
 #: a stub or a login redirect that happens to start with ``%PDF-``.
@@ -78,7 +76,10 @@ _WALL_PHRASES: tuple[str, ...] = (
     "access denied",
 )
 _SHORT_PAGE_CHARS = 20_000
-_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title", re.IGNORECASE | re.DOTALL)
+# A wall names itself early; a hostile page must not make the title search
+# slow, so it is bounded both in where it looks and in how far each match runs.
+_WALL_SCAN_CHARS = 65_536
+_TITLE_RE = re.compile(r"<title[^>]{0,200}>([^<]{0,300})", re.IGNORECASE)
 
 
 class BodyKind(StrEnum):
@@ -110,7 +111,7 @@ def is_bot_wall(text: str) -> bool:
     Strict on purpose — it runs on the first KB of EVERY body, including real
     landing pages — so only a wall's own scripts/widgets or its <title> count.
     """
-    lowered = (text or "").lower()
+    lowered = (text or "")[:_WALL_SCAN_CHARS].lower()
     if any(signature in lowered for signature in _WALL_SIGNATURES):
         return True
     title = _TITLE_RE.search(lowered)
@@ -143,58 +144,29 @@ class PdfFacts:
 
 
 def read_facts(path: Path, *, pages: int = VERIFY_PAGES) -> PdfFacts:
-    """Open ``path`` and read page count, metadata and the first pages' text.
+    """Page count, metadata and the first pages' text of ``path`` — read in the sandbox.
 
-    Never raises: a file ``pypdf`` cannot open at all is ``readable=False``
-    (the caller treats it as not a PDF); a page whose text cannot be extracted
-    contributes nothing. An encrypted file that the empty password does not
-    open keeps its page count but has no text (→ ``UNVERIFIED``).
+    ``pypdf`` never runs in this process (``pdfs.sandbox``). Never raises: a
+    file that cannot be opened (or read safely) is ``readable=False``; a
+    password-protected one too. An encrypted file that opens with the empty
+    password (owner-only protection) is read normally.
     """
-    from pypdf import PdfReader
+    from alma.application.pdfs.sandbox import inspect_pdf
 
-    try:
-        reader = PdfReader(str(path), strict=False)
-        encrypted = bool(reader.is_encrypted)
-        if encrypted:
-            try:
-                reader.decrypt("")
-            except Exception:  # noqa: BLE001 — AES without `cryptography`, or a real password
-                pass
-        page_count = len(reader.pages)
-    except Exception as exc:  # noqa: BLE001 — any parse failure means "not a usable PDF"
-        logger.debug("pypdf could not open %s: %s", path.name, exc)
-        return PdfFacts(readable=False)
+    return facts_from(inspect_pdf(path, pages=pages))
 
-    chunks: list[str] = []
-    for index in range(min(pages, page_count)):
-        try:
-            chunks.append(reader.pages[index].extract_text() or "")
-        except Exception:  # noqa: BLE001 — one bad page must not sink the rest
-            continue
-    text = unicodedata.normalize("NFKC", "\n".join(chunks))[:_TEXT_CAP]
 
-    meta_title = ""
-    meta_text: list[str] = []
-    try:
-        meta = reader.metadata or {}
-        meta_title = str(meta.get("/Title") or "").strip()
-        meta_text.extend(str(value) for value in meta.values() if value)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        xmp = reader.xmp_metadata
-        if xmp is not None and xmp.dc_identifier:
-            meta_text.append(str(xmp.dc_identifier))
-    except Exception:  # noqa: BLE001
-        pass
-
+def facts_from(inspection) -> PdfFacts:
+    """The identity facts in a sandbox ``PdfInspection`` (text NFKC-normalised here)."""
+    if not inspection.readable or inspection.locked:
+        return PdfFacts(readable=False, encrypted=inspection.encrypted)
     return PdfFacts(
         readable=True,
-        pages=page_count,
-        text=text,
-        metadata_title=unicodedata.normalize("NFKC", meta_title),
-        metadata_dois=tuple(find_dois_in_text(" ".join(meta_text))),
-        encrypted=encrypted,
+        pages=inspection.pages,
+        text=unicodedata.normalize("NFKC", inspection.text)[:_TEXT_CAP],
+        metadata_title=unicodedata.normalize("NFKC", inspection.metadata_title).strip(),
+        metadata_dois=tuple(find_dois_in_text(" ".join(inspection.metadata_strings))),
+        encrypted=inspection.encrypted,
     )
 
 

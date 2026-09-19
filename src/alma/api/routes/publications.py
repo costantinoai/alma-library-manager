@@ -979,7 +979,16 @@ def get_paper_pdf(
             detail="The stored PDF file is missing — fetch or attach it again",
         ) from exc
     etag = f'"{record.sha256}"'
-    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "private, no-cache",
+        # The body is a PDF and nothing else (no content sniffing), a link
+        # tapped inside it does not leak this address or the paper id, and no
+        # other origin may embed it.
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Resource-Policy": "same-origin",
+    }
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return FileResponse(
@@ -1058,7 +1067,7 @@ def delete_paper_pdf(
     def _unit():
         record = pdf_store.delete_pdf(db, root_id)
         if record is not None and reject:
-            pdf_store.reject_sha(db, root_id, record.sha256)
+            pdf_store.reject_pdf(db, record)
         return record
 
     record = run_write_unit(db, _unit, label="pdf.remove")

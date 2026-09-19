@@ -36,6 +36,8 @@ slack-sdk>=3.20.0
 
 # --- Paper PDFs (verify a stored file is the paper it claims to be) ---
 pypdf>=6.0
+# AES-encrypted PDFs (common in publisher files): read and clean them
+cryptography>=42
 # Shadow-libraries PDF plugin only (opt-in): browser-TLS transport for mirrors
 # behind DDoS-Guard. Wheels for x86_64 and aarch64; the plugin reports itself
 # unavailable where it cannot be installed (armv7).

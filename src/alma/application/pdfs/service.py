@@ -9,7 +9,6 @@ the row that points at it commits, and a replaced file is unlinked only AFTER.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -28,16 +27,18 @@ from alma.application.pdf_schema import (
 from alma.application.pdfs import store
 from alma.application.pdfs.download import DownloadResult, download_candidate
 from alma.application.pdfs.identify import IdentityHint, identify
+from alma.application.pdfs.sandbox import inspect_pdf
 from alma.application.pdfs.verify import (
     BodyKind,
     PdfFacts,
     classify_head,
-    read_facts,
+    facts_from,
     verify_identity,
 )
 from alma.core.db_write import write_section
 from alma.core.http_sources import describe_transport_error
 from alma.core.time import utcnow
+from alma.core.url_safety import clean_remote_text
 from alma.core.utils import canonical_lookup_doi
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,7 @@ def store_file(
     original_filename: str | None = None,
     version: str | None = None,
     license: str | None = None,
+    source_sha256: str | None = None,
     extra_writes: Callable[[sqlite3.Connection], None] | None = None,
 ) -> StoreOutcome:
     """Place ``staged`` in the tree as ``ref``'s PDF and point its row at it.
@@ -191,6 +193,7 @@ def store_file(
         version=version or None,
         license=license or None,
         stored_at=utcnow().isoformat(),
+        source_sha256=source_sha256 or staged.sha256,
     )
     try:
         with write_section(conn, label="pdf.store"):
@@ -209,14 +212,25 @@ class NotAPdfError(ValueError):
     """The bytes are not a readable PDF (the staged file has been removed)."""
 
 
-def inspect_staged(staged: store.StagedFile) -> PdfFacts:
-    """Confirm a staged body is a readable PDF and read its facts (CPU only)."""
+def inspect_staged(staged: store.StagedFile, *, log: StepLog = _no_log) -> PdfFacts:
+    """Confirm a staged upload is a readable PDF and read its facts (in the sandbox).
+
+    The user's own file is kept as they gave it; if it carries active content
+    (scripts, launch actions, embedded files…) Activity says so.
+    """
     kind = classify_head(store.read_head(staged.path))
     if kind is not BodyKind.PDF or staged.bytes < 1024:
         raise NotAPdfError("That file is not a PDF")
-    facts = read_facts(staged.path)
+    inspection = inspect_pdf(staged.path)
+    facts = facts_from(inspection)
     if not facts.readable:
-        raise NotAPdfError("That PDF cannot be opened (damaged or not a real PDF)")
+        raise NotAPdfError(
+            "That PDF is password-protected" if inspection.locked
+            else inspection.error or "That PDF cannot be opened (damaged or not a real PDF)"
+        )
+    if inspection.active:
+        log("inspect", f"This PDF contains active content ({', '.join(inspection.active)}); kept as you gave it",
+            level="WARNING")
     return facts
 
 
@@ -262,27 +276,67 @@ def _miss_words(result: DownloadResult) -> str:
 
 
 def _host(url: str) -> str:
-    return urlsplit(url or "").hostname or "?"
+    """The host a miss came from, as safe text (a hostile URL may not even parse)."""
+    try:
+        host = urlsplit(url or "").hostname
+    except ValueError:
+        host = None
+    return clean_remote_text(host, 80) if host else "(invalid address)"
 
 
-def summarize_misses(misses: list[DownloadResult]) -> DownloadResult:
-    """One attempt row for a source whose candidates all missed.
+def summarize_misses(misses: list[DownloadResult]) -> tuple[DownloadResult, str]:
+    """The attempt row for a source whose candidates all missed: ``(lead, detail)``.
 
     A single miss is recorded as is. Several (one per mirror, or per listed
     location) keep the most telling outcome and say what each host answered,
-    so a walled mirror is not hidden behind the last one's "no PDF".
+    so a walled mirror is not hidden behind the last one's "no PDF". Each
+    part is already clean (a host via :func:`_host`, a detail via
+    ``DownloadResult``), so no part can carry the ``"; "`` that separates them.
     """
     if len(misses) == 1:
-        return misses[0]
+        return misses[0], misses[0].detail
     rank = {outcome: index for index, outcome in enumerate(_MISS_PRIORITY)}
     lead = min(misses, key=lambda miss: rank.get(miss.outcome, len(rank)))
     detail = "; ".join(f"{_host(miss.final_url)}: {_miss_words(miss)}" for miss in misses)
-    return dataclasses.replace(lead, detail=detail[:_MISS_DETAIL_CHARS])
+    return lead, detail[:_MISS_DETAIL_CHARS]
 
 
 def _record_attempt(conn: sqlite3.Connection, **fields) -> None:
     with write_section(conn, label="pdf.attempt"):
         store.record_attempt(conn, **fields)
+
+
+def _take_candidate(candidate, *, rejected: set[str], dois, title: str):
+    """Download one candidate, then read (and clean) it in the sandbox.
+
+    Returns a miss (:class:`DownloadResult`) or ``(result, staged, facts,
+    verification, inspection)``, where ``staged`` is the file to keep — the
+    cleaned copy when the original carried active content. Network and a
+    child process only; never the database.
+    """
+    result = download_candidate(candidate)
+    if result.outcome is not Outcome.FOUND:
+        return result
+    original = result.staged
+    if original.sha256 in rejected:
+        original.discard()
+        return DownloadResult(Outcome.REJECTED, http_status=result.http_status, final_url=result.final_url)
+    clean_path = store.new_staging_path()
+    inspection = inspect_pdf(original.path, clean_to=clean_path)
+    facts = facts_from(inspection)
+    if not facts.readable or inspection.error:
+        original.discard()
+        detail = "Password-protected" if inspection.locked else inspection.error or "Unreadable PDF"
+        return DownloadResult(Outcome.NOT_PDF, detail=detail, final_url=result.final_url)
+    kept = store.adopt_staged(clean_path) if inspection.cleaned else original
+    verification = verify_identity(facts, dois=dois, title=title)
+    if verification is Verification.MISMATCH or kept.sha256 in rejected:
+        original.discard()
+        if kept is not original:
+            kept.discard()
+        outcome = Outcome.MISMATCH if verification is Verification.MISMATCH else Outcome.REJECTED
+        return DownloadResult(outcome, http_status=result.http_status, final_url=result.final_url)
+    return result, kept, facts, verification, inspection
 
 
 def fetch_for_paper(
@@ -356,25 +410,18 @@ def fetch_for_paper(
                     level="WARNING" if miss.outcome in (Outcome.ERROR, Outcome.BLOCKED) else "INFO")
 
         for candidate in candidates:
-            result = download_candidate(candidate)
-            if result.outcome is not Outcome.FOUND:
-                _missed(result)
+            try:
+                taken = _take_candidate(candidate, rejected=rejected, dois=dois, title=ref.title)
+            except Exception as exc:  # noqa: BLE001 — one bad answer must not end the chain
+                logger.warning("PDF candidate from %s failed: %s", source.id, describe_transport_error(exc))
+                taken = DownloadResult(Outcome.ERROR, detail=describe_transport_error(exc))
+            if isinstance(taken, DownloadResult):
+                _missed(taken)
                 continue
-            staged = result.staged
-            if staged.sha256 in rejected:
-                staged.discard()
-                _missed(DownloadResult(Outcome.REJECTED, http_status=result.http_status, final_url=result.final_url))
-                continue
-            facts = read_facts(staged.path)
-            if not facts.readable:
-                staged.discard()
-                _missed(DownloadResult(Outcome.NOT_PDF, detail="Unreadable PDF", final_url=result.final_url))
-                continue
-            verification = verify_identity(facts, dois=dois, title=ref.title)
-            if verification is Verification.MISMATCH:
-                staged.discard()
-                _missed(DownloadResult(Outcome.MISMATCH, http_status=result.http_status, final_url=result.final_url))
-                continue
+            result, staged, facts, verification, inspection = taken
+            if inspection.cleaned:
+                log("clean", f"{source.label}: removed active content — {', '.join(inspection.active)}",
+                    level="WARNING")
 
             def _found(c: sqlite3.Connection, _r: DownloadResult = result, _v: Verification = verification) -> None:
                 store.record_attempt(
@@ -394,8 +441,11 @@ def fetch_for_paper(
                 source_url=result.safe_url,
                 version=candidate.version,
                 license=candidate.license,
+                source_sha256=result.staged.sha256,
                 extra_writes=_found,
             )
+            if staged is not result.staged:
+                result.staged.discard()  # the file as it arrived; its cleaned copy was kept
             via = f" · {_host(candidate.url)}" if len(candidates) > 1 else ""  # which mirror / location won
             log("store", f"{source.label}{via}: stored {outcome.record.filename} ({verification})",
                 processed=index, total=len(pairs))
@@ -408,10 +458,10 @@ def fetch_for_paper(
                 "filename": outcome.record.filename,
             }
 
-        last = summarize_misses(misses)
+        last, detail = summarize_misses(misses)
         _record_attempt(
             conn, **attempt, outcome=last.outcome, http_status=last.http_status,
-            detail=last.detail or None, candidate_url=last.safe_url or None,
+            detail=detail or None, candidate_url=last.safe_url or None,
         )
         log("source", f"{source.label}: {_OUTCOME_WORDS.get(last.outcome, str(last.outcome))}",
             level="WARNING" if last.outcome in (Outcome.ERROR, Outcome.BLOCKED) else "INFO")
@@ -441,7 +491,7 @@ def attach_upload(
     if ref is None:
         store.release_staged(staged)
         raise LookupError("That paper no longer exists")
-    facts = inspect_staged(staged)
+    facts = inspect_staged(staged, log=log)
     log("inspect", f"Read {facts.pages} page(s) from {filename or 'the upload'}", data={"pages": facts.pages})
     verification = verify_identity(facts, dois=paper_dois(ref), title=ref.title)
     log("verify", f"Checked the file against the paper: {verification}", data={"verification": str(verification)})
@@ -527,7 +577,7 @@ def import_upload(
     matched → ``unresolved``: the staged file is KEPT for a retry with a
     typed DOI or title.
     """
-    facts = inspect_staged(staged)
+    facts = inspect_staged(staged, log=log)
     log("inspect", f"Read {facts.pages} page(s) from {filename or 'the upload'}", data={"pages": facts.pages})
 
     same = store.find_by_sha(conn, staged.sha256)
