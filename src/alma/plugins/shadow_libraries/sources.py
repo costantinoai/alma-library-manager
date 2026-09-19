@@ -18,10 +18,18 @@ from __future__ import annotations
 import functools
 import re
 
-from alma.application.pdf_schema import PaperRef, PdfCandidate, SourceSkippedError
+from alma.application.pdf_schema import (
+    PaperRef,
+    PdfCandidate,
+    SourceBlockedError,
+    SourceSkippedError,
+)
 
 POLICY_NAME = "shadow_libraries"
 _MD5_RE = re.compile(r"/md5/([0-9a-f]{32})")
+# Sci-Hub's "not in my database" page (it links Sci-Net instead of a PDF),
+# as titled on sci-hub.su on 2026-09-19.
+_SCIHUB_ABSENT_TITLES = ("not available through sci-hub",)
 
 
 def curl_available() -> bool:
@@ -90,12 +98,23 @@ class SciHubSource:
         # One candidate per mirror, in the user's order: the core tries the
         # next mirror when one is down, walled, or lacks the paper.
         return [
-            PdfCandidate(url=f"{mirror}/{ref.doi}", source_id=self.id, referer=f"{mirror}/", transport=client)
+            PdfCandidate(url=f"{mirror}/{ref.doi}", source_id=self.id, referer=f"{mirror}/", transport=client,
+                         absent_titles=_SCIHUB_ABSENT_TITLES)
             for mirror in self.mirrors
         ]
 
 
 class AnnasArchiveSource:
+    """Anna's Archive SciDB: ``{domain}/scidb/{doi}`` shows the paper's PDF.
+
+    SciDB sits behind a browser check that a script cannot pass unless it is
+    logged in as a member. With a member key the source logs in first (the
+    client's session is per thread, so the core's download reuses the
+    cookie), reads the paper's md5 from the SciDB page and asks the member API
+    for a direct link; the SciDB page itself follows as a fallback. Without a
+    key the SciDB page is the candidate, and the core reports the wall.
+    """
+
     id = "annas_archive"
     label = "Anna's Archive"
     tier = "shadow"
@@ -105,37 +124,60 @@ class AnnasArchiveSource:
         self.member_key = member_key
 
     def candidates(self, ref: PaperRef) -> list[PdfCandidate]:
-        from alma.application.pdfs.download import check_public_url
-
         if not ref.doi:
             return []
         if not self.domains:
             raise SourceSkippedError("no address yet — add one in Settings → Plugins")
         client = transport()
+        if not self.member_key:
+            return [
+                PdfCandidate(url=f"{domain}/scidb/{ref.doi}", source_id=self.id, referer=f"{domain}/",
+                             transport=client)
+                for domain in self.domains
+            ]
         out: list[PdfCandidate] = []
         failures: list[Exception] = []
         for domain in self.domains:
-            page_url = f"{domain}/scidb/{ref.doi}"
-            if not self.member_key:
-                # The SciDB page links or embeds the file; the core follows it.
-                out.append(PdfCandidate(url=page_url, source_id=self.id, referer=f"{domain}/", transport=client))
-                continue
             try:
-                check_public_url(page_url)
-                page = client.get(page_url, headers={"Accept": "text/html"}, timeout=30)
-                match = _MD5_RE.search(page.text or "") if page.status_code == 200 else None
-                if not match:
-                    continue
-                api = client.get(
-                    f"{domain}/dyn/api/fast_download.json",
-                    params={"md5": match.group(1), "key": self.member_key},
-                    timeout=30,
-                )
-                url = str((api.json() or {}).get("download_url") or "") if api.status_code == 200 else ""
-                if url:
-                    out.append(PdfCandidate(url=url, source_id=self.id, referer=f"{domain}/", transport=client))
+                out.extend(self._member_candidates(client, domain, ref.doi))
             except Exception as exc:  # noqa: BLE001 — one dead domain must not hide the next
                 failures.append(exc)
         if not out and failures:
             raise failures[-1]
         return out
+
+    def _member_candidates(self, client, domain: str, doi: str) -> list[PdfCandidate]:
+        """Log in, read the SciDB page's md5, ask the member API for a download link."""
+        from alma.application.pdfs.download import check_public_url
+        from alma.application.pdfs.verify import is_bot_wall
+
+        page_url = f"{domain}/scidb/{doi}"
+        check_public_url(page_url)
+        # The login form posts the secret key as ``key``; the reply sets the
+        # member cookie on this thread's session.
+        client.post(f"{domain}/account/", data={"key": self.member_key}, timeout=30)
+        page = client.get(page_url, headers={"Accept": "text/html"}, timeout=30)
+        if is_bot_wall(page.text or ""):
+            raise SourceBlockedError(
+                f"{domain} still asked for a browser check after logging in — check the member key"
+            )
+        if page.status_code != 200:
+            return []
+        page_candidate = PdfCandidate(url=page_url, source_id=self.id, referer=f"{domain}/", transport=client)
+        match = _MD5_RE.search(page.text or "")
+        if not match:
+            return [page_candidate]
+        api = client.get(
+            f"{domain}/dyn/api/fast_download.json",
+            params={"md5": match.group(1), "key": self.member_key},
+            timeout=30,
+        )
+        payload = api.json() or {}
+        url = str(payload.get("download_url") or "")
+        if not url:
+            # "Invalid secret key", "Not a member", "No downloads left" … — say which.
+            raise RuntimeError(f"member download refused: {payload.get('error') or f'HTTP {api.status_code}'}")
+        return [
+            PdfCandidate(url=url, source_id=self.id, referer=f"{domain}/", transport=client),
+            page_candidate,
+        ]
