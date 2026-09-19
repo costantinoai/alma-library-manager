@@ -44,7 +44,7 @@ import numpy as np
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 
-EVAL_VERSION = "2026.09-1"
+EVAL_VERSION = "2026.09-2"  # -2: Signal Lab head evidence block
 MIN_PROFILE = 20  # profile papers needed before the cutoff
 MIN_GROUP = 15  # papers per side before a comparison is reported as a result
 RANDOM_SAMPLE = 600
@@ -82,6 +82,39 @@ def auc_with_interval(
     else:
         verdict = "predicts" if value > 0.5 else "anti_predicts"
     return {**out, "auc": round(value, 4), "ci95": [round(low, 4), round(high, 4)], "verdict": verdict}
+
+
+def auc_delta_with_interval(
+    base: tuple[list[float], list[float]], alt: tuple[list[float], list[float]], *, seed: int = 0
+) -> dict[str, Any]:
+    """``AUC(alt) − AUC(base)`` over the SAME papers, with a paired bootstrap.
+
+    Two AUC intervals that overlap say nothing about their difference: both
+    rankings are scored on the same papers, so most of their noise is shared.
+    Resampling the papers once per draw and scoring both rankings on that draw
+    keeps the shared part out of the interval. ``base[i]`` and ``alt[i]`` must
+    be the same paper under two rankings. The verdict is ``improves`` /
+    ``worsens`` only when the interval excludes 0.
+    """
+    (base_pos, base_neg), (alt_pos, alt_neg) = base, alt
+    if len(base_pos) != len(alt_pos) or len(base_neg) != len(alt_neg):
+        raise ValueError("paired comparison needs the same papers under both rankings")
+    before, after = auc(base_pos, base_neg), auc(alt_pos, alt_neg)
+    out: dict[str, Any] = {"n_pos": len(base_pos), "n_neg": len(base_neg)}
+    if before is None or after is None:
+        return {**out, "delta": None, "verdict": "no_data"}
+    bp, bn, ap, an = (np.asarray(x, dtype=np.float64) for x in (base_pos, base_neg, alt_pos, alt_neg))
+    rng = np.random.default_rng(seed)
+    draws = []
+    for _ in range(BOOTSTRAP_DRAWS):
+        i, j = rng.integers(0, bp.size, bp.size), rng.integers(0, bn.size, bn.size)
+        draws.append(auc(list(ap[i]), list(an[j])) - auc(list(bp[i]), list(bn[j])))
+    low, high = (float(x) for x in np.percentile(draws, [2.5, 97.5]))
+    if min(bp.size, bn.size) < MIN_GROUP or low <= 0.0 <= high:
+        verdict = "no_measurable_effect"
+    else:
+        verdict = "improves" if after > before else "worsens"
+    return {**out, "delta": round(after - before, 4), "ci95": [round(low, 4), round(high, 4)], "verdict": verdict}
 
 
 FIT_FOLDS = 5
@@ -252,6 +285,7 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
     )
     from alma.application.discovery.ranker import (
         FAMILY_SPECS,
+        LAB_ADJUSTMENTS,
         _family_reading,
         repaired_prior_score,
         resolve_family_weights,
@@ -262,6 +296,7 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
         build_recommendation_outcomes,
     )
     from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
+    from alma.discovery.defaults import LAB_HEAD_MAX_POINTS
 
     holdout = _holdout_profile(conn)
     if holdout is None:
@@ -302,7 +337,13 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
     groups["random_corpus"] = corpus[:RANDOM_SAMPLE]
 
     calibration = load_calibration(conn)
-    lab_ctx = load_lab_scoring_context(conn, inputs.settings)
+    # The Lab's RAW inputs are measured even on an install whose heads sit at 0
+    # points (the context loader returns nothing when every head is off), so
+    # "what would the Lab add here?" has an answer before anyone turns it on.
+    # The configured points still decide the full score below.
+    lab_ctx = load_lab_scoring_context(
+        conn, {**inputs.settings, **{spec.weight_setting: str(LAB_HEAD_MAX_POINTS) for spec in LAB_ADJUSTMENTS}}
+    )
     weights = resolve_family_weights(inputs.settings)
     lab_points = resolve_lab_points(inputs.settings)
     no_lab = {key: 0.0 for key in lab_points}
@@ -390,9 +431,20 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
         "shipped_defaults": resolve_family_weights(None),
     }
 
+    lab = _lab_evidence(
+        conn,
+        groups=groups,
+        rewards=rewards,
+        rank=lambda ids, points: scores(ids, w=weights, lab=points),
+        configured=lab_points,
+        max_points=LAB_HEAD_MAX_POINTS,
+        adjustments=LAB_ADJUSTMENTS,
+    )
+
     return {
         "ready": True,
         "version": EVAL_VERSION,
+        "lab": lab,
         "what_if": {name: what_if(w) for name, w in scenarios.items()},
         "fit": fit,
         "cutoff": cutoff,
@@ -406,6 +458,74 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
             "leak_prone_families": list(LEAK_PRONE),
             "position_bias": "not corrected",
         },
+    }
+
+
+def _lab_evidence(
+    conn: sqlite3.Connection,
+    *,
+    groups: dict[str, list[str]],
+    rewards: dict[str, dict],
+    rank,
+    configured: dict[str, float],
+    max_points: float,
+    adjustments,
+) -> dict[str, Any]:
+    """Do the Signal Lab heads improve the order — and could they, yet?
+
+    Each additive head is re-ranked alone and together, at its configured
+    points and at the ceiling, over the same measurements. Two honesty rules:
+
+    * a test paper that was SHOWN in a Lab round is left out — the head was
+      fitted on the user's answer about that very paper;
+    * ``reach`` says how many test papers a head moves at all. A head that
+      touches a handful of papers cannot change an AUC, and that is a fact
+      about how much has been played, not about whether the head works.
+
+    The categorical heads (author, venue) are not re-ranked here: they fold
+    into their family's affinity before measurement, so their reach into the
+    score is that family's weight — reported by the caller's family table.
+    """
+    from alma.application.discovery.ranker import _signed_reading
+    from alma.application.signal_lab.rounds import load_rounds
+
+    rounds = load_rounds(conn)
+    answered = [r for r in rounds if r.answer is not None and not r.skipped]
+    shown = {pid for r in rounds for pid in r.shown}
+    clean = {name: [p for p in ids if p in rewards and p not in shown] for name, ids in groups.items()}
+    heads = {spec.key: spec.atom_key for spec in adjustments}
+    off = {key: 0.0 for key in heads}
+
+    judged = sorted({p for ids in clean.values() for p in ids})
+    reach = {
+        key: round(sum(1 for p in judged if abs(_signed_reading(rewards[p], atom)[0]) > 1e-9) / len(judged), 4)
+        if judged
+        else 0.0
+        for key, atom in heads.items()
+    }
+
+    scenarios: dict[str, dict[str, float]] = {"off": off, "as_configured": dict(configured)}
+    for key in heads:
+        scenarios[f"{key}_only_max"] = {**off, key: max_points}
+    scenarios["all_max"] = {key: max_points for key in heads}
+
+    bars: dict[str, Any] = {}
+    for against in ("negative", "random_corpus"):
+        pos, neg = clean["positive"], clean[against]
+        ranked = {name: (rank(pos, pts), rank(neg, pts)) for name, pts in scenarios.items()}
+        bars[against] = {name: auc_with_interval(*pair) for name, pair in ranked.items()}
+        # The question a reader has: versus no Lab at all, on the same papers.
+        bars[against]["vs_off"] = {
+            name: auc_delta_with_interval(ranked["off"], ranked[name]) for name in ("as_configured", "all_max")
+        }
+
+    return {
+        "rounds_answered": len(answered),
+        "rounds_by_game": {g: sum(1 for r in answered if r.game_id == g) for g in sorted({r.game_id for r in answered})},
+        "test_papers_excluded_as_shown": len({p for ids in groups.values() for p in ids if p in shown}),
+        "configured_points": {k: float(v) for k, v in configured.items()},
+        "reach": reach,
+        "bars": bars,
     }
 
 
@@ -489,4 +609,16 @@ def load_outcome_summary(conn: sqlite3.Connection) -> dict[str, Any]:
             for bar in SUMMARY_BARS
             if (comparisons.get(bar) or {}).get("full_score")
         },
+        "lab": _lab_summary(payload.get("lab")),
+    }
+
+
+def _lab_summary(lab: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What the Signal Lab card states: played how much, changed the order how."""
+    if not lab:
+        return None
+    return {
+        "rounds_answered": lab.get("rounds_answered"),
+        "configured_points": lab.get("configured_points"),
+        "vs_off": {bar: ((lab.get("bars") or {}).get(bar) or {}).get("vs_off") for bar in SUMMARY_BARS},
     }

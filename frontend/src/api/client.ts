@@ -3409,6 +3409,21 @@ export interface RankerOutcome {
   reason?: string | null
   cutoff?: string | null
   bars?: Partial<Record<'negative' | 'random_corpus', RankerOutcomeBar>>
+  /** What the Signal Lab heads change, versus no Lab, on the same papers. */
+  lab?: {
+    rounds_answered: number
+    configured_points: Record<string, number>
+    vs_off: Partial<Record<'negative' | 'random_corpus', Partial<Record<'as_configured' | 'all_max', RankerOutcomeDelta>>>>
+  } | null
+}
+
+/** Paired AUC difference with its bootstrap interval. */
+export interface RankerOutcomeDelta {
+  delta: number | null
+  ci95?: [number, number]
+  verdict: 'improves' | 'worsens' | 'no_measurable_effect' | 'no_data'
+  n_pos: number
+  n_neg: number
 }
 
 export function getRankerOutcome(): Promise<RankerOutcome> {
@@ -5268,6 +5283,9 @@ export interface SignalLabSettings {
 export interface SignalLabHeadLimits {
   head_points_max: number
   head_points_default: number
+  /** Points the author / venue head can really move at the ceiling, under the
+   *  current Discovery weights. 0 when that family's weight is 0. */
+  categorical_reach_points?: Partial<Record<'author' | 'venue', number>>
 }
 
 /** What `GET /signal-lab/settings` serves: the settings plus their limits. */

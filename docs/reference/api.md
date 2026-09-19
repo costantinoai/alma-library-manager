@@ -176,7 +176,7 @@ rest.
 | `GET` | `/discovery/status` | Refresh status |
 | `GET` | `/discovery/stats` | Engagement counters |
 | `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config; `GET` also serves `effective_weights` (what the ranker uses after rescaling + mode) and `reference_score` (the all-average paper's score) |
-| `GET` | `/discovery/outcome-evaluation` | Stored answer to "does the ranker's order predict what you kept?": `state` (`not_built` / `not_ready` / `ready`), AUC + 95% interval + verdict for kept-vs-rejected and kept-vs-random-corpus, `current` (false when weights / Library / calibration moved since) and `rebuilding`. Pure read; never computes |
+| `GET` | `/discovery/outcome-evaluation` | Stored answer to "does the ranker's order predict what you kept?": `state` (`not_built` / `not_ready` / `ready`), AUC + 95% interval + verdict for kept-vs-rejected and kept-vs-random-corpus, `current` (false when weights / Library / calibration moved since), `rebuilding`, and `lab`: what the Signal Lab heads change versus no Lab on the same papers (paired AUC difference, interval, verdict, rounds answered). Pure read; never computes |
 | `POST` | `/discovery/outcome-evaluation/refresh[?force=true]` | 202 + `job_id`; queues the background evaluation when its inputs moved (always with `force`). Also requested by a weights save / reset and by the periodic scoring tick |
 | `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
 | `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
@@ -357,7 +357,7 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/signal-lab/{game}/queue?count=12` | At least ten signed, zero-write rounds for Home's game deck |
 | `POST` | `/signal-lab/{game}/round/answer` | Validate signature and persist exactly one answered round |
 | `GET` | `/signal-lab/summary` | Unique/duplicate ledger evidence, current-fit observations and constraints, freshness, structural region/edge coverage, and active effects |
-| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded head weights; `GET` also serves the read-only `limits` (ceiling + default) |
+| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded head weights; `GET` also serves the read-only `limits` (ceiling, default, and `categorical_reach_points`: what the author / venue heads can really move under the current Discovery weights) |
 | `GET` | `/signal-lab/model` | Current wholesale fit |
 | `GET` | `/signal-lab/eval` | Held-out metrics and the ranker replay (churn at current weights, parity, unassessable lenses) |
 | `POST` | `/signal-lab/purge` | Delete round history and invalidate the model; does not change activation/config |

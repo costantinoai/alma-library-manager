@@ -48,6 +48,30 @@ to be felt, never enough to replace what your Library said.
 """
 
 
+#: Categorical head → the ranking family whose affinity it folds into.
+CATEGORICAL_HEAD_FAMILY = {"author": "author", "venue": "venue"}
+
+
+def categorical_head_reach_points(settings: dict[str, str] | None) -> dict[str, float]:
+    """The most score points each categorical head can move, at its ceiling
+    setting, under the CURRENT Discovery weights.
+
+    A folded head does not own points the way the region and utility heads do:
+    it moves an affinity by at most :data:`CATEGORICAL_HEAD_MAX_AFFINITY`, and
+    that affinity then counts for its family's weight. So its reach is the
+    family weight's to give — and is 0 when that family's weight is 0. Served
+    with the Lab settings so the card states this number instead of promising
+    the ceiling (it promised "up to 10 points" for a head that could move 1.6).
+    """
+    from alma.application.discovery.ranker import resolve_family_weights
+
+    weights = resolve_family_weights(settings)
+    return {
+        head: round(100.0 * float(weights.get(family, 0.0)) * CATEGORICAL_HEAD_MAX_AFFINITY, 2)
+        for head, family in CATEGORICAL_HEAD_FAMILY.items()
+    }
+
+
 def fold_lab_offsets(
     conn: sqlite3.Connection,
     affinity: dict[str, float],

@@ -308,6 +308,15 @@ parsed by one function, `discovery.defaults.lab_head_points`, so the gate that
 decides whether to load the model and the ranker that weights it cannot
 disagree.
 
+A folded head therefore does **not** own its points. It moves an affinity by at
+most 0.35, and that affinity then counts for its family's Discovery weight, so
+its real reach is `100 × family weight × 0.35` — about 1.8 points for the venue
+head at the shipped Venue weight of 0.05, and **0 for the author head while the
+Author weight is 0** (the fitted default, see `docs/reference/scoring.md`).
+`scoring_terms.categorical_head_reach_points` computes it from the live weights
+and the settings payload serves it as `limits.categorical_reach_points`; the
+card states that number. It used to promise "up to 10 points" for both.
+
 The default Settings card shows the purpose, on/off switch and learning status.
 **Advanced settings and evidence** contains weights, sampler controls, held-out
 accuracies, replay evidence and reset. Unsaved advanced edits remain signposted
@@ -401,6 +410,35 @@ remains the last recorded state of the *model* number. Re-check when the
 holdout has ≥ 30 pairs and `utility_accuracy` beats `prior_accuracy` by a
 margin that survives a binomial test at that sample size. Play more rounds
 first; the map is two-thirds unvisited.
+
+## Do the heads improve the ranking? Measured on your own history
+
+Holdout accuracy says whether the model predicts your *Lab answers*. The
+question that matters to Discovery is different: do the heads put papers you
+later KEPT above papers you REJECTED? The ranker outcome evaluation
+(`application/discovery/outcome_eval.py`, stored view `scoring:outcome_eval`)
+answers it in its `lab` block:
+
+* the additive heads are re-ranked off / as configured / each alone at the
+  ceiling / all at the ceiling, over the same measured papers;
+* a test paper that was shown in a Lab round is left out (the head was fitted
+  on your answer about it);
+* the difference against "no Lab" comes from a **paired** bootstrap over the
+  same papers (`auc_delta_with_interval`), and is called *improves* or
+  *worsens* only when its 95% interval excludes 0 — otherwise "no measurable
+  effect";
+* the raw head inputs are measured even when an install has its heads at 0
+  points, so the question has an answer before anyone turns them on.
+
+The Signal Lab card prints that verdict in its Evidence section.
+
+Measured 2026-09-19: dev (54 answered rounds, 18 of them content rounds) −0.005
+against rejected papers [−0.014, +0.001], −0.002 against the corpus; the prod
+snapshot (25 rounds, heads forced to the ceiling) +0.001 / −0.005. The heads reach 92–100% of test papers, so this is
+not a coverage problem: with this few rounds the evidence dampers keep every
+head close to zero. **No measurable effect yet, in either direction** — the
+lever is answered rounds, not the point settings, so the defaults were left
+alone.
 
 ## Evaluation evidence
 

@@ -106,6 +106,9 @@ class SignalLabHeadLimits(BaseModel):
 
     head_points_max: float = LAB_HEAD_MAX_POINTS
     head_points_default: float = LAB_HEAD_DEFAULT_POINTS
+    #: What the author / venue heads can actually move at the ceiling setting,
+    #: under today's Discovery weights (`categorical_head_reach_points`).
+    categorical_reach_points: dict[str, float] = Field(default_factory=dict)
 
 
 class SignalLabSettingsView(SignalLabSettings):
@@ -158,7 +161,11 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
 def read_view(db: sqlite3.Connection) -> SignalLabSettingsView:
     """The settings as the UI needs them: values plus the head-weight limits."""
 
-    return SignalLabSettingsView(**read(db).model_dump())
+    from alma.application.discovery.lens_crud import read_settings
+    from alma.application.signal_lab.scoring_terms import categorical_head_reach_points
+
+    limits = SignalLabHeadLimits(categorical_reach_points=categorical_head_reach_points(read_settings(db)))
+    return SignalLabSettingsView(**read(db).model_dump(), limits=limits)
 
 
 #: The knobs `fit.build_signal_lab_model` actually consumes. Changing one makes

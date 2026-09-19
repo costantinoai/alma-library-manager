@@ -28934,6 +28934,13 @@
             "type": "number",
             "title": "Head Points Default",
             "default": 5.0
+          },
+          "categorical_reach_points": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Categorical Reach Points"
           }
         },
         "additionalProperties": false,
