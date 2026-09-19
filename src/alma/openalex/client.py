@@ -306,24 +306,33 @@ def fetch_works_page_for_author(
         ``{"results": [...], "next_cursor": str | None, "total": int | None}``
         where each result has the same normalized shape as
         ``fetch_works_for_author``.
+
+    Raises on ANY upstream or transport failure (HTTP error, timeout, network
+    switch off, quota exhausted). It used to swallow the error into an empty
+    page with an ``error`` key, which every caller that only read ``results``
+    took for "this author has no works": the works runner stamped such an
+    author fetched and fresh for 14 days, the suggestion rail counted zero
+    co-authors, and the works dialog showed an empty list — while two of those
+    callers already wrapped the call in ``try/except`` that could never fire.
+
+    An empty ``results`` list is therefore never an error — but it is not the
+    end of the catalogue either: works outside the type allowlist and
+    file-looking titles are dropped client-side, so a page can come back empty
+    while ``next_cursor`` still points at more. Only a ``None`` cursor ends a walk.
     """
-    try:
-        client = get_client()
-        oaid = _normalize_openalex_author_id(author_openalex_id)
-        filt = f"author.id:{oaid}"
-        params = {
-            "filter": filt,
-            "per-page": max(1, min(per_page, 100)),
-            "cursor": cursor or "*",
-            "sort": sort,
-            "select": _WORKS_SELECT_FIELDS,
-        }
-        resp = client.get("/works", params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json() or {}
-    except Exception as exc:
-        logger.error(f"OpenAlex page fetch failed for {author_openalex_id}: {exc}")
-        return {"results": [], "next_cursor": None, "total": None, "error": str(exc)}
+    client = get_client()
+    oaid = _normalize_openalex_author_id(author_openalex_id)
+    filt = f"author.id:{oaid}"
+    params = {
+        "filter": filt,
+        "per-page": max(1, min(per_page, 100)),
+        "cursor": cursor or "*",
+        "sort": sort,
+        "select": _WORKS_SELECT_FIELDS,
+    }
+    resp = client.get("/works", params=params, timeout=30)
+    resp.raise_for_status()
+    data = resp.json() or {}
 
     batch = data.get("results", []) or []
     results: list[dict] = []
