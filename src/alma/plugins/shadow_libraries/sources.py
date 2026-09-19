@@ -55,7 +55,7 @@ def transport():
     from alma.core.http_sources import client_for_policy
 
     if not curl_available():
-        raise SourceSkippedError("curl_cffi is not installed (needed for these mirrors)")
+        raise SourceSkippedError("curl_cffi is not installed — these mirrors need it")
     return client_for_policy(_policy())
 
 
@@ -85,7 +85,7 @@ class SciHubSource:
         if not ref.doi:
             return []
         if not self.mirrors:
-            raise SourceSkippedError("Add a Sci-Hub mirror address (Settings → Plugins)")
+            raise SourceSkippedError("no mirror address yet — add one in Settings → Plugins")
         client = transport()
         # One candidate per mirror, in the user's order: the core tries the
         # next mirror when one is down, walled, or lacks the paper.
@@ -110,7 +110,7 @@ class AnnasArchiveSource:
         if not ref.doi:
             return []
         if not self.domains:
-            raise SourceSkippedError("Add an Anna's Archive address (Settings → Plugins)")
+            raise SourceSkippedError("no address yet — add one in Settings → Plugins")
         client = transport()
         out: list[PdfCandidate] = []
         failures: list[Exception] = []

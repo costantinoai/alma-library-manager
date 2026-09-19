@@ -117,7 +117,7 @@ class UnpaywallSource:
         if not ref.doi:
             return []
         if not unpaywall_available():
-            raise SourceSkippedError("Unpaywall needs a contact email (Settings → Connections)")
+            raise SourceSkippedError("needs a contact email — add one in Settings → Connections")
         locations = fetch_oa_locations(ref.doi)
         pdfs = [loc for loc in locations if loc.url_for_pdf]
         # A repository landing page usually advertises its PDF; the core follows it.
@@ -182,7 +182,7 @@ class OpenAlexContentSource:
         from alma.openalex.http import get_client
 
         if not get_openalex_api_key():
-            raise SourceSkippedError("OpenAlex full text needs an OpenAlex API key")
+            raise SourceSkippedError("needs an OpenAlex API key — add one in Settings → Connections")
         client = get_client()
         work = _openalex_work(ref)
         if not work or not (work.get("has_content") or {}).get("pdf"):

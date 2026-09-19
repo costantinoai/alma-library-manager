@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, FileText, Loader2, Plus, Compass } from 'lucide-react'
+import { ChevronDown, ExternalLink, Loader2, Plus, Compass } from 'lucide-react'
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { SignalChip } from '@/components/shared/SignalChip'
@@ -15,12 +15,14 @@ import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
 import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/api/client'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
-import { buildReaderHref } from '@/lib/hashRoute'
 import { usePdfFetchEnabled } from '@/hooks/usePdfSources'
+import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 
-/** The card header's small round icon controls (PDF link, Discover similar). */
+/** The card header's small round icon controls (PDF link, Discover similar).
+ *  The PDF link renders only when a PDF source is on; `pdfFetchEnabled`
+ *  keeps the header slot from collapsing around it. */
 const HEADER_ICON_BUTTON = cn(
   'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-sm transition-colors duration-150',
   'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
@@ -450,23 +452,7 @@ export function PaperCard({
                   className="ml-auto order-last flex shrink-0 items-center gap-1.5"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {pdfFetchEnabled && (
-                    // A link, not a button: it opens the PDF handoff page in
-                    // a new tab from the tap itself (phones block tabs opened
-                    // after an async wait). That page opens the kept PDF at
-                    // once, or finds it first.
-                    <a
-                      href={buildReaderHref(paper.id)}
-                      target="_blank"
-                      rel="noopener"
-                      onClick={(e) => e.stopPropagation()}
-                      title="Open the PDF — ALMa finds it first if it has none yet"
-                      aria-label="Open PDF"
-                      className={HEADER_ICON_BUTTON}
-                    >
-                      <FileText className="h-3.5 w-3.5" aria-hidden />
-                    </a>
-                  )}
+                  <PaperPdfLink paperId={paper.id} className={HEADER_ICON_BUTTON} iconClassName="h-3.5 w-3.5" />
                   {onPivot && (
                     <button
                       type="button"

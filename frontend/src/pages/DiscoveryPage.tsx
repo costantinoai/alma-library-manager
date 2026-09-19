@@ -66,6 +66,7 @@ import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
+import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -1916,6 +1917,7 @@ function DiscoveryCompactTable({
             >
               {row.original.title}
             </span>
+            <PaperPdfLink paperId={row.original.paper?.id} className="shrink-0 text-slate-400 hover:text-alma-folio" />
             {row.original.paper?.url && (
               <a
                 href={row.original.paper.url}

@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { IdentityChip, PaperCard } from '@/components/shared'
+import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import {
   Dialog,
@@ -916,6 +917,7 @@ function SavedCompactTable({
           <span className="min-w-0 flex-1 truncate font-medium text-alma-800" title={row.original.title}>
             {row.original.title}
           </span>
+          <PaperPdfLink paperId={row.original.id} className="shrink-0 text-slate-400 hover:text-alma-600" />
           {row.original.url && (
             <a
               href={row.original.url}

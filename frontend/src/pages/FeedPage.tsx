@@ -43,6 +43,7 @@ import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { IdentityChip, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
@@ -1352,6 +1353,7 @@ function FeedCompactTable({
             <span className="min-w-0 flex-1 truncate font-medium text-alma-800" title={row.original.title}>
               {row.original.title}
             </span>
+            <PaperPdfLink paperId={row.original.paper?.id} className="shrink-0 text-slate-400 hover:text-alma-600" />
             {row.original.paper?.url && (
               <a
                 href={row.original.paper.url}

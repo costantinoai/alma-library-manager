@@ -58,8 +58,9 @@ describe('PDF vocabulary', () => {
     })
     expect(describeAttempt(attempt('no_candidate'))).toBe('Unpaywall: no copy listed')
     expect(describeAttempt(attempt('skipped', 'needs a contact email'))).toBe(
-      'Unpaywall: not set up (needs a contact email)',
+      'Unpaywall: needs a contact email',
     )
+    expect(describeAttempt(attempt('skipped'))).toBe('Unpaywall: not set up')
     expect(pdfSourceLabel('scihub')).toBe('Sci-Hub')
     expect(pdfSourceLabel(null)).toBe('your upload')
   })

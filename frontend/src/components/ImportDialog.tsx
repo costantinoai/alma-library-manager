@@ -67,8 +67,8 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
         <DialogHeader>
           <DialogTitle>Import Papers</DialogTitle>
           <DialogDescription>
-            Import from BibTeX or Zotero, or search across OpenAlex and triage
-            results directly into Saved Library.
+            Import from BibTeX, PDF files or Zotero, or search across OpenAlex
+            and triage results directly into Saved Library.
           </DialogDescription>
         </DialogHeader>
 

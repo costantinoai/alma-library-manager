@@ -39,11 +39,14 @@ export function pdfSourceLabel(sourceId: string | null | undefined): string {
   return SOURCE_LABELS[sourceId] ?? sourceId
 }
 
-/** "Unpaywall: no copy listed" for one attempt row. */
+/** "Unpaywall: no copy listed" for one attempt row. A skipped source says
+ *  why in its own words ("Unpaywall: needs a contact email — …"). */
 export function describeAttempt(attempt: PaperPdfAttempt): string {
-  const outcome = PDF_OUTCOME_LABELS[attempt.outcome] ?? attempt.outcome
-  const why = attempt.outcome === 'skipped' && attempt.detail ? ` (${attempt.detail})` : ''
-  return `${pdfSourceLabel(attempt.source_id)}: ${outcome}${why}`
+  const outcome =
+    attempt.outcome === 'skipped' && attempt.detail
+      ? attempt.detail
+      : (PDF_OUTCOME_LABELS[attempt.outcome] ?? attempt.outcome)
+  return `${pdfSourceLabel(attempt.source_id)}: ${outcome}`
 }
 
 /** The chip for a stored PDF: which kind, and its one-line label. */
