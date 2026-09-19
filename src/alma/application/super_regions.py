@@ -49,6 +49,7 @@ from alma.application.semantic_partition import (
     load_cluster_centroid_vectors,
     partition_fingerprint_sql,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
@@ -327,7 +328,7 @@ def compute_rings(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[int
         SELECT DISTINCT pc.cluster_id
         FROM {MEMBERS_TABLE} pc
         JOIN papers p ON p.id = pc.paper_id
-        WHERE pc.cluster_id >= 0 AND p.status = 'library'
+        WHERE pc.cluster_id >= 0 AND p.status = 'library' AND {standalone_paper_sql('p')}
         """
     ).fetchall()
     seeds = {cluster_to_region[int(r[0])] for r in rows if int(r[0]) in cluster_to_region}

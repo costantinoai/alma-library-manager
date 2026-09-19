@@ -184,7 +184,7 @@ export function LibraryManagementCard() {
   // Reconcile paper groups: published rows win over preprints, components point
   // at their root paper, and subordinate rows lose independent app sidecars.
   // Runs the SAME maintenance task as Health's "Reconcile paper groups" card —
-  // one operation, one route, one write transaction per phase. A private route
+  // one operation, one route, one short write transaction per group. A private route
   // used to run the whole pass in a single write transaction, stalling every
   // other write in the app until it finished.
   const reconcileGroupsMutation = useMutation({
@@ -283,6 +283,11 @@ export function LibraryManagementCard() {
                 Reconcile Paper Groups
               </AsyncButton>
             </div>
+
+            <p className="text-sm text-slate-500">
+              Paper-group repair keeps published versions together and removes child state.
+              Ambiguous matches stay separate. Follow progress and unresolved matches in Activity.
+            </p>
 
             {/* Existing backups */}
             <div className="space-y-2">

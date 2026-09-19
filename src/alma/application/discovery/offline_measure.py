@@ -20,6 +20,8 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from alma.core.sql_helpers import standalone_paper_sql
+
 
 @dataclass(frozen=True)
 class ProfileInputs:
@@ -99,7 +101,7 @@ def measure_corpus_papers(
         chunk = ids[start : start + 200]
         placeholders = ",".join("?" for _ in chunk)
         rows = conn.execute(
-            f"SELECT {LOCAL_PAPER_SELECT} FROM papers WHERE id IN ({placeholders})", chunk
+            f"SELECT {LOCAL_PAPER_SELECT} FROM papers WHERE {standalone_paper_sql('papers')} AND id IN ({placeholders})", chunk
         ).fetchall()
         vectors = {
             r["paper_id"]: decode_vector(r["embedding"])

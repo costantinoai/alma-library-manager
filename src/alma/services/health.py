@@ -504,6 +504,18 @@ _PAPER_GROUP_DEFECT_META: dict[str, tuple[str, str, str]] = {
         "fragment. Reconciliation links it to its parent, or purges its state when "
         "the parent isn't in the corpus.",
     ),
+    "ambiguous_preprints": (
+        "Ambiguous preprint matches",
+        "Multiple possible published versions",
+        "Title and year identify several plausible versions. These papers stay separate; "
+        "inspect their identifiers and versions before choosing a match. Automatic repair does not guess.",
+    ),
+    "subordinate_user_state": (
+        "Child rows still carrying Library state",
+        "Leftover Library state",
+        "Versions and components must not own saved membership, ratings, reading state or notes. "
+        "Reconcile transfers eligible preprint state to the published paper and clears child state.",
+    ),
     "subordinate_sidecars": (
         "Child rows still carrying sidecar state",
         "Leftover sidecar rows",
@@ -869,6 +881,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     group_terminal = max(
         0, int(group_integrity.get("orphan_components") or 0) - int(linkable_orphans or 0)
     )
+    group_terminal += int(group_integrity.get("ambiguous_preprints") or 0)
     group_fixable = max(0, group_defects - group_terminal)
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
@@ -942,8 +955,8 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         group_sev, _, group_reason = _assess_gap(group_fixable, papers_total, impact="integrity")
         if group_terminal:
             group_reason = (
-                f"{group_reason} {group_terminal} of {group_defects} defects are orphan "
-                "components with no parent in the corpus — terminal, no repair can clear them."
+                f"{group_reason} {group_terminal} of {group_defects} findings need a parent "
+                "or an unambiguous match — terminal for automatic repair; inspect the breakdown."
             )
         dims.append(
             _dimension(
@@ -1207,7 +1220,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # and exposes the paper_group_reconcile repair operation.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v12',
+      'health-logic-v13',
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),

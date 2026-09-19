@@ -46,6 +46,7 @@ from typing import Any
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 from alma.core.scoring_math import interpolate_calibration
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ CALIBRATION_VIEW_KEY = "scoring:calibration"
 # 2026.09-4: an unrated save counts as a positive in the profile the corpus is
 #            measured against (`split_preference_pubs`), so every similarity
 #            table and prior mean is read against a different Library.
-CALIBRATION_VERSION = "2026.09-4"
+CALIBRATION_VERSION = "2026.09-5"
 
 #: The quantile grid every CDF table is sampled on. Dense at the top because a
 #: Discovery deck is drawn from the top percent of the corpus.
@@ -210,8 +211,8 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
     ids = [
         r["id"]
         for r in conn.execute(
-            """SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
-               WHERE p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?""",
+            f"""SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
+               WHERE {standalone_paper_sql('p')} AND p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?""",
             (model,),
         )
     ]
@@ -307,11 +308,11 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
 # writes, feedback by 10 events, plus the model and the build version. A
 # rebuild is also deduped and served-stale-meanwhile by the view layer.
 _FINGERPRINT_SQL = with_version(
-    """
+    f"""
     SELECT (SELECT COUNT(*) / 250 FROM publication_embeddings),
            (SELECT COALESCE(SUBSTR(MAX(created_at), 1, 10), '') FROM publication_embeddings),
            (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
-           (SELECT COUNT(*) / 5 FROM papers WHERE status = 'library'),
+           (SELECT COUNT(*) / 5 FROM papers WHERE {standalone_paper_sql('papers')} AND status = 'library'),
            (SELECT COUNT(*) / 10 FROM feedback_events)
     """,
     CALIBRATION_VERSION,

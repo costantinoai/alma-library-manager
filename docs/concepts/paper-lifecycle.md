@@ -165,3 +165,17 @@ Reading transitions are completely orthogonal to the diagram above.
 * [Feed](feed.md) — the chronological inbox
 * [Discovery](discovery.md) — the recommender
 * [Vision & philosophy](../vision.md) — why the model is shaped this way
+
+### Repairing versions and components
+
+Health and Settings share **Reconcile paper groups**. A published paper receives
+its preprint's saved state, reading state, ratings and notes; the preprint remains
+as a version pointer. Components donate no user state. Child records cannot
+independently affect Library counts, calibration or recommendation evaluation.
+
+Title/year matches merge automatically only when each side has one plausible
+partner. Ambiguous matches remain separate and are listed in Activity with the
+relevant paper IDs. The repair reports actual merges, failures and remaining
+title matches. Its limit applies to new title matches; existing relationship
+repair scans the corpus. Each group commits independently, so Library actions
+remain available and a failed group does not undo successful repairs.

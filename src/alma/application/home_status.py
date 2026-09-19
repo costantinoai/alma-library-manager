@@ -29,6 +29,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from alma.core.sql_helpers import standalone_paper_sql
+
 logger = logging.getLogger(__name__)
 
 #: Job outcomes that PROVE something about a subsystem.
@@ -412,8 +414,9 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
 
     label = "SPECTER2" if local_ready else ("OpenAI embeddings" if hosted_ready else "Embeddings")
 
-    papers = int(_scalar(db, "SELECT COUNT(*) FROM papers") or 0)
-    embedded = int(_scalar(db, "SELECT COUNT(*) FROM publication_embeddings") or 0)
+    papers = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
+    embedded = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
+                           "AND EXISTS (SELECT 1 FROM publication_embeddings pe WHERE pe.paper_id = p.id)") or 0)
     coverage = round((embedded / papers) * 100, 1) if papers else 0.0
 
     if not local_ready and not hosted_ready:

@@ -1931,12 +1931,12 @@ def run_import_group_reconcile(conn: sqlite3.Connection) -> dict:
     (`paper_group_reconcile`), bounded by `_IMPORT_GROUP_RECONCILE_LIMIT` so a
     large import can't turn a post-import step into an unbounded corpus sweep.
     """
+    from alma.core.db_write import write_section
     from alma.services.paper_group_reconcile import reconcile_paper_groups
 
-    return run_write_unit(
-        conn,
-        lambda: reconcile_paper_groups(conn, limit=_IMPORT_GROUP_RECONCILE_LIMIT),
-        label="import paper-group reconcile",
+    return reconcile_paper_groups(
+        conn, limit=_IMPORT_GROUP_RECONCILE_LIMIT,
+        section=lambda unit: write_section(conn, label=f"import paper-group reconcile:{unit}"),
     )
 
 

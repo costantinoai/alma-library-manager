@@ -41,23 +41,13 @@ from typing import Any
 from alma.core.db_write import write_section
 from alma.core.paper_groups import (
     absorb_paper_group,
+    build_preprint_title_index,
     classify_preprint_source,
     resolve_paper_root_id,
 )
-from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
-from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
-
-
-# Year proximity allowed between preprint and published version.
-_YEAR_TOLERANCE = 2
-
-# Default title-key threshold. We use an exact match on the normalised
-# key by default — the key already collapses punctuation/whitespace, so
-# any non-match almost certainly means genuinely different works.
-_TITLE_EXACT = 1.0
 
 
 # -- detection ----------------------------------------------------------------
@@ -84,72 +74,12 @@ def find_preprint_twin_candidates(
     if scope not in {"library", "corpus"}:
         scope = "corpus"
 
-    sql = f"""
-        SELECT id, title, year, doi, status, canonical_paper_id,
-               preprint_source, work_type, component_type
-        FROM papers
-        WHERE {standalone_paper_sql('papers')}
-          AND COALESCE(title, '') <> ''
-          AND year IS NOT NULL
-          AND doi IS NOT NULL AND TRIM(doi) <> ''
-    """
-    rows = conn.execute(sql).fetchall()
-
-    preprint_rows: dict[str, list[sqlite3.Row]] = {}
-    canonical_rows: dict[str, list[sqlite3.Row]] = {}
-    for row in rows:
-        key = (normalize_title_key(row["title"]), int(row["year"]))
-        if not key[0]:
-            continue
-        source = classify_preprint_source(
-            row["doi"],
-            preprint_source=row["preprint_source"],
-            work_type=row["work_type"],
-        )
-        bucket = preprint_rows if source else canonical_rows
-        bucket.setdefault(key[0], []).append(row)
-
-    candidates: list[dict[str, Any]] = []
-    for tkey, preprints in preprint_rows.items():
-        for preprint in preprints:
-            best_canonical = None
-            best_year_delta = None
-            for candidate in canonical_rows.get(tkey, []):
-                delta = abs(int(candidate["year"]) - int(preprint["year"]))
-                if delta > _YEAR_TOLERANCE:
-                    continue
-                if best_year_delta is None or delta < best_year_delta:
-                    best_year_delta = delta
-                    best_canonical = candidate
-            if not best_canonical:
-                continue
-            # Library-scope filter: at least one side must be saved.
-            if scope == "library" and not (
-                str(preprint["status"] or "") == "library"
-                or str(best_canonical["status"] or "") == "library"
-            ):
-                continue
-            confidence = _TITLE_EXACT - (best_year_delta or 0) * 0.05
-            candidates.append(
-                {
-                    "preprint_id": preprint["id"],
-                    "canonical_id": best_canonical["id"],
-                    "preprint_doi": preprint["doi"],
-                    "canonical_doi": best_canonical["doi"],
-                    "preprint_source": classify_preprint_source(
-                        preprint["doi"],
-                        preprint_source=preprint["preprint_source"],
-                        work_type=preprint["work_type"],
-                    ),
-                    "title": str(preprint["title"] or "").strip()[:240],
-                    "year": int(preprint["year"]),
-                    "confidence": round(confidence, 3),
-                }
-            )
-    candidates.sort(key=lambda c: (-c["confidence"], c["year"]))
-    if limit is not None:
-        candidates = candidates[:limit]
-    return candidates
+    # `require_doi`: these candidates are merged by automatic repair, so both
+    # sides must carry a registered identifier — the bar this detector has always
+    # held. Pairs without one are left for a person to judge.
+    candidates = [p for p in build_preprint_title_index(conn).pairs(require_doi=True)
+                  if not p["ambiguous"] and (scope != "library" or p["library"])]
+    return candidates if limit is None else candidates[:limit]
 
 
 # -- merge --------------------------------------------------------------------

@@ -261,32 +261,29 @@ def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, para
 
 
 def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, params=None):
-    """Corpus-wide group reconciliation, one write transaction PER PHASE.
-
-    The whole pass used to run inside a single `write_section`, which pinned the
-    only SQLite writer for the pass's full duration (8 minutes on a ~11k-paper
-    corpus) — every other write in the process queued behind the gate and
-    cross-process writers took the busy_timeout → HTTP 503. Scoping the writer to
-    each phase lets the gate drain between them; the phases are independently
-    idempotent, so a partial pass is a valid state and the next run resumes it.
-    """
-    from alma.api.scheduler import add_job_log
+    """Use the shared reconciler with short atomic group writes and Activity logs."""
+    from alma.api.scheduler import add_job_log, set_job_status
     from alma.core.db_write import write_section
+    from alma.core.time import utcnow
     from alma.services.paper_group_reconcile import reconcile_paper_groups
 
-    with _maintenance_conn() as conn:
-        return reconcile_paper_groups(
-            conn,
-            limit=cap,
-            section=lambda phase: write_section(conn, label=f"papers.reconcile_groups:{phase}"),
-            # The pass is long and used to log nothing between start and finish.
-            on_phase=lambda phase, counts: add_job_log(
-                job_id,
-                f"Group reconcile phase '{phase}' done",
-                step=f"reconcile_{phase}",
-                data=dict(counts),
-            ),
+    def report(phase, counts):
+        message = counts.get("message") or (
+            f"Paper groups — {phase}: " + "; ".join(f"{key}={value}" for key, value in counts.items())
         )
+        add_job_log(job_id, message, step=f"reconcile_{phase}", data=dict(counts))
+        set_job_status(job_id, message=message)
+
+    with _maintenance_conn() as conn:
+        result = reconcile_paper_groups(
+            conn, limit=cap,
+            section=lambda unit: write_section(conn, label=f"papers.reconcile_groups:{unit}"),
+            on_phase=report,
+        )
+    if result["errors"]:
+        set_job_status(job_id, status="failed", finished_at=utcnow().isoformat(),
+                       message=result["message"], result=result)
+    return result
 
 
 def _run_collapse_duplicate_identity(job_id: str, cap: int, target_paper_ids=None, params=None):

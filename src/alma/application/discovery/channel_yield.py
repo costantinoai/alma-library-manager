@@ -32,11 +32,12 @@ from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 from alma.application.outcome_calibration import MULTIPLIER_BAND
 from alma.core.scoring_math import clamp, empirical_bayes_rates
+from alma.core.sql_helpers import standalone_paper_sql
 
 from .retrieval._common import CHANNEL_BY_FAMILY
 
 CHANNEL_YIELD_VIEW_KEY = "discovery:channel_yield"
-CHANNEL_YIELD_VERSION = "2026.09-1"
+CHANNEL_YIELD_VERSION = "2026.09-2"
 #: The switch, with the other retrieval strategies in Settings → Discovery.
 SETTING_KEY = "strategies.adaptive_channels"
 
@@ -47,9 +48,10 @@ def build_channel_yield(conn: sqlite3.Connection) -> dict[str, Any]:
 
     try:
         rows = conn.execute(
-            """
-            SELECT paper_id, retrieval_hits FROM discovery_ranking_candidates
-            WHERE selected = 1 AND paper_id IS NOT NULL
+            f"""
+            SELECT rc.paper_id, rc.retrieval_hits FROM discovery_ranking_candidates rc
+            JOIN papers p ON p.id = rc.paper_id
+            WHERE selected = 1 AND {standalone_paper_sql('p')}
             """
         ).fetchall()
     except sqlite3.OperationalError:  # fresh DB: no ranking snapshots yet
@@ -100,9 +102,9 @@ def build_channel_yield(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 _FINGERPRINT_SQL = with_version(
-    """
+    f"""
     SELECT (SELECT COUNT(*) FROM discovery_ranking_candidates WHERE selected = 1),
-           (SELECT COUNT(*) / 5 FROM papers WHERE status = 'library'),
+           (SELECT COUNT(*) / 5 FROM papers WHERE {standalone_paper_sql('papers')} AND status = 'library'),
            (SELECT COUNT(*) / 10 FROM feedback_events)
     """,
     CHANNEL_YIELD_VERSION,

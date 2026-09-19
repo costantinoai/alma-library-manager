@@ -43,8 +43,9 @@ import numpy as np
 
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
+from alma.core.sql_helpers import standalone_paper_sql
 
-EVAL_VERSION = "2026.09-2"  # -2: Signal Lab head evidence block
+EVAL_VERSION = "2026.09-3"  # -2: Signal Lab head evidence block
 MIN_PROFILE = 20  # profile papers needed before the cutoff
 MIN_GROUP = 15  # papers per side before a comparison is reported as a result
 RANDOM_SAMPLE = 600
@@ -326,8 +327,8 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
     corpus = [
         str(r[0])
         for r in conn.execute(
-            """SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
-               WHERE p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?
+            f"""SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
+               WHERE {standalone_paper_sql('p')} AND p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?
                ORDER BY p.id""",
             (inputs.model,),
         )
@@ -544,8 +545,8 @@ EVAL_VIEW_KEY = "scoring:outcome_eval"
 # through is rebuilt. The calibration row's own fingerprint stands in for the
 # embedding set and model.
 _FINGERPRINT_SQL = with_version(
-    """
-    SELECT (SELECT COUNT(*) / 5 FROM papers WHERE status = 'library'),
+    f"""
+    SELECT (SELECT COUNT(*) / 5 FROM papers WHERE {standalone_paper_sql('papers')} AND status = 'library'),
            (SELECT COUNT(*) / 10 FROM feedback_events),
            (SELECT COALESCE(GROUP_CONCAT(key || '=' || value, ';'), '')
               FROM (SELECT key, value FROM discovery_settings

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { invalidateAfterSignalLabMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateAfterSignalLabMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
@@ -26,6 +26,7 @@ const POLL_INTERVAL = 12000 // 12 seconds
 function operationToastTitle(operationKey: string | undefined, failed: boolean): string {
   const key = (operationKey ?? '').trim()
   const domain =
+    key === 'papers.reconcile_groups' ? 'Paper groups' :
     key.startsWith('discovery.') ? 'Discovery refresh' :
     key.startsWith('feed.') ? 'Feed refresh' :
     key.startsWith('authors.') ? 'Authors' :
@@ -42,6 +43,10 @@ function operationToastTitle(operationKey: string | undefined, failed: boolean):
 function rootsForOperation(operationKey?: string): string[] {
   const key = (operationKey ?? '').trim()
   if (!key) return []
+
+  if (key === 'papers.reconcile_groups') {
+    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights', 'signal-lab']
+  }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
     return [
@@ -226,6 +231,9 @@ export function useOperationToasts() {
       // Always refetch affected pages — background plumbing (cache
       // materialization, hydration) is precisely what pages need to pick up,
       // even though it never toasts.
+      if (op.operation_key === 'papers.reconcile_groups') {
+        void invalidateAfterPaperMutation(queryClient)
+      }
       const roots = rootsForOperation(op.operation_key)
       if (roots.length > 0) {
         void invalidateQueryRoots(queryClient, ...roots)
