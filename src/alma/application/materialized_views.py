@@ -590,6 +590,32 @@ def enqueue_after_write(conn: sqlite3.Connection, view_key: str, *, label: str) 
     run_after_gate_release(lambda: enqueue_rebuild(view_key), conn=conn, label=label)
 
 
+def request_refresh_after_write(conn: sqlite3.Connection, view_key: str, *, label: str) -> None:
+    """Like :func:`request_refresh`, but safe to call from inside a job that may
+    still hold the write lock: the freshness check AND the scheduling run once
+    this thread's lock is released, on a throwaway connection. Unlike
+    :func:`enqueue_after_write` it rebuilds only when the inputs moved, so a
+    caller can ask after every run without paying for a rebuild each time.
+    A failure is logged, never raised: the caller's own work already succeeded.
+    """
+    from alma.core.db_write import run_after_gate_release
+
+    def _request() -> None:
+        from alma.api.deps import open_db_connection
+
+        probe = open_db_connection()
+        try:
+            job_id = request_refresh(probe, view_key)
+            if job_id:
+                logger.info("materialized_views: %s requested a refresh of %s (%s)", label, view_key, job_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("materialized_views: %s could not request a refresh of %s: %s", label, view_key, exc)
+        finally:
+            probe.close()
+
+    run_after_gate_release(_request, conn=conn, label=label)
+
+
 def enqueue_rebuild(view_key: str) -> str | None:
     """Schedule a rebuild of ``view_key`` to run in the background.
 

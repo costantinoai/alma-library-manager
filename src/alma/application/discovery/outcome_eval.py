@@ -579,6 +579,13 @@ def request_outcome_eval_refresh(conn: sqlite3.Connection, *, force: bool = Fals
     return mv.request_refresh(conn, EVAL_VIEW_KEY, force=force)
 
 
+def request_outcome_eval_refresh_after_job(conn: sqlite3.Connection, *, label: str) -> None:
+    """For the end of a background job (a lens refresh): re-measure if the
+    Library, the verdicts, the weights or the calibration moved since the
+    stored run. Deferred past the job's write lock; never raises."""
+    mv.request_refresh_after_write(conn, EVAL_VIEW_KEY, label=label)
+
+
 def load_outcome_summary(conn: sqlite3.Connection) -> dict[str, Any]:
     """The stored evaluation, reduced to what a surface states. Pure row read.
 

@@ -113,6 +113,7 @@ from .observations import (
     ranking_candidate_rows,
     record_impressions,
 )
+from .outcome_eval import request_outcome_eval_refresh_after_job  # registers scoring:outcome_eval
 from .ranker import RANKER_VERSION, apply_repaired_prior, fit_shadow_ranker
 
 # --- D-9: re-exported from .retrieval (moved out of this god-module) ---
@@ -1609,6 +1610,11 @@ def _refresh_lens_recommendations(
             overall_start=overall_start,
         )
     inserted = len(rec_rows)
+    # A refresh is when the ranker's inputs are known to be settled, so it is
+    # also when "does this ranker predict what you keep?" is worth re-checking.
+    # Conditional (only when its inputs moved) and deferred past our write lock;
+    # the 12-hour tick alone never fires on a backend that restarts often.
+    request_outcome_eval_refresh_after_job(db, label="discovery.lens.refresh")
     _log(
         "done",
         f"Lens '{lens_name}': refresh complete with {inserted} retained recommendations",
