@@ -138,6 +138,7 @@ nav:
       - user-guide/index.md
       - Saving papers: user-guide/saving-papers.md
       - Reading workflow: user-guide/reading-workflow.md
+      - Reading PDFs: user-guide/reading-pdfs.md
       - Browser connector: user-guide/browser-connector.md
       - Connecting Slack: user-guide/connecting-slack.md
       - Capturing from your phone: user-guide/capturing-from-your-phone.md

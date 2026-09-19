@@ -126,6 +126,23 @@ parameters and response shapes.
 | `POST` | `/library/import/resolve-openalex` | Re-resolve unresolved imports |
 | `POST` | `/library/import/enrich` | Enrich resolved imports |
 | `GET` | `/library/import/unresolved` | Imports staging panel data |
+| `POST` | `/library/import/pdf?filename=` | Import a PDF (body = the file, `application/pdf`): match an existing paper first, else resolve online and save to Library, then keep the file. Activity envelope (`pdf.import:<upload_id>`) |
+| `POST` | `/library/import/pdf/uploads/{upload_id}` | Retry an unidentified PDF with `{doi}` or `{title}` (upload kept for a day) |
+
+### Paper PDFs
+
+Every paper can carry one kept PDF. Fetching, attaching and importing are
+Activity jobs (the response is the envelope; follow `/activity/{job_id}`);
+the PDF's state is the `pdf` block of `GET /papers/{id}/details`
+(`stored`, `file_missing`, `url`, `attempts`). Sources come from
+`pdf_source` plugins — see [Building an integration](../development/integrations.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/papers/{id}/pdf` | The kept PDF, inline, with `ETag` (its sha256), conditional GETs and `Range` support. 404 when none is kept |
+| `POST` | `/papers/{id}/pdf/fetch` | Try every enabled PDF source in order (`pdf.fetch:<paper>`); 409 when no source is switched on |
+| `POST` | `/papers/{id}/pdf?filename=` | Attach a PDF (body = the file, `application/pdf`; 413 over 100 MB, 415 if not a PDF) — `pdf.attach:<paper>` |
+| `DELETE` | `/papers/{id}/pdf?reject=` | Remove the kept PDF; `reject=true` also remembers the file as wrong for this paper |
 
 ### Library management
 
