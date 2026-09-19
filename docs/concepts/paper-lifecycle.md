@@ -57,7 +57,7 @@ Consequences worth knowing:
 ## Reading axis
 
 The `papers.reading_status` column holds one of four values
-(empty string = none):
+(`NULL` = none):
 
 | Value | Meaning |
 |---|---|
@@ -69,6 +69,13 @@ The `papers.reading_status` column holds one of four values
 The reading axis is **independent of membership**. A paper in your
 Reading list does not have to be in your Library — you can queue
 something for reading while still deciding whether to keep it.
+
+Every surface that changes it — Library's reading select, the Reading
+list, Feed and Discovery's Queue button, undo, and a capture "to the
+reading list" — goes through one writer,
+`paper_actions.set_reading_status`. It validates the value (the retired
+`queued` is accepted as `reading`), writes it on the paper-group root,
+and bumps `updated_at`.
 
 ## Why two axes
 

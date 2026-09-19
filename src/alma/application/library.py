@@ -870,17 +870,23 @@ def add_to_library(
         "notes = COALESCE(?, notes)",
         "added_at = COALESCE(added_at, ?)",
         added_from_clause,
-        """reading_status = CASE
-               WHEN ? IS NOT NULL AND (reading_status IS NULL OR TRIM(reading_status) = '') THEN ?
-               ELSE reading_status
-           END""",
         "updated_at = ?",
     ]
-    params = [rating, rating, notes, now, added_from, default_reading_status, default_reading_status, now]
+    params = [rating, rating, notes, now, added_from, now]
     cursor = db.execute(
         f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
         (*params, paper_id),
     )
+    # A capture "to the reading list" (extension, Find & Add) also puts the
+    # paper on the list — but never overrides a reading state it already has
+    # (a `done` paper re-saved stays `done`). The write goes through the one
+    # reading-state writer, which validates the value.
+    if cursor.rowcount > 0 and default_reading_status is not None:
+        current = db.execute(
+            "SELECT reading_status FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        if not str((current["reading_status"] if current else "") or "").strip():
+            paper_actions.set_reading_status(db, paper_id, default_reading_status)
     if cursor.rowcount > 0 and _needs_enrichment(db, paper_id):
         from alma.core.db_write import run_after_gate_release
 
@@ -1227,10 +1233,7 @@ def undo_paper_feedback(
         _delete_feedback_actions(db, paper_id, _RATING_ACTIONS)
 
     if aspect in ("reading", "all"):
-        db.execute(
-            "UPDATE papers SET reading_status = '', updated_at = ? WHERE id = ?",
-            (now, paper_id),
-        )
+        paper_actions.set_reading_status(db, paper_id, None)
 
     if aspect == "all":
         # Full clear: nuke any remaining events + lens signals.

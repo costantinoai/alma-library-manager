@@ -25,6 +25,7 @@ from alma.api.models import (
     TagResponse,
 )
 from alma.application import library as library_app
+from alma.application import paper_actions
 from alma.application.followed_authors import (
     apply_follow_state,
     ensure_followed_author_contract,
@@ -1704,44 +1705,25 @@ def update_reading_status(
 
     D2 lifecycle (post-2026-04-26): reading state ∈ {None, reading,
     done, excluded}. Membership of the reading list IS `reading` —
-    there's no separate `queued` step. The legacy `queued` value is
-    silently coerced to `reading` for back-compat with any client
-    still sending it.
+    there's no separate `queued` step. Validation, the legacy
+    `queued` → `reading` coercion and the group-root resolution all live
+    in `paper_actions.set_reading_status`, the one writer of the field.
     """
+    # Same shape as the canonical `POST /papers/{id}/action`: one gated write
+    # unit; a bad value is a 400; anything else propagates, so a transient
+    # lock reaches the app's 503 + Retry-After handler instead of becoming 500.
     try:
-        # Coerce legacy `queued` → `reading` for back-compat.
-        incoming = req.reading_status
-        if incoming == "queued":
-            incoming = "reading"
-
-        valid_statuses = [None, "reading", "done", "excluded"]
-        if incoming not in valid_statuses:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid reading status. Must be one of: {valid_statuses}"
-            )
-        root_id = resolve_action_paper_id(db, paper_id)
-        if not root_id:
-            raise HTTPException(status_code=404, detail="Paper not found")
-
-        # Update the paper
-        def _persist() -> int:
-            cursor = db.execute(
-                "UPDATE papers SET reading_status = ? WHERE id = ?",
-                (incoming, root_id),
-            )
-            return cursor.rowcount
-
-        if run_write_unit(db, _persist, label="reading_status_update") == 0:
-            raise HTTPException(status_code=404, detail="Paper not found")
-
-        # Return updated paper
-        row = db.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone()
-        return row_to_paper_response(row)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise_internal("Failed to update reading status", e)
+        root_id = run_write_unit(
+            db,
+            lambda: paper_actions.set_reading_status(db, paper_id, req.reading_status),
+            label="reading_status_update",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not root_id:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    row = db.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone()
+    return row_to_paper_response(row)
 
 
 class ReadingQueueResponse(BaseModel):

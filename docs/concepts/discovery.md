@@ -411,7 +411,7 @@ that one bad day kills a branch."
 | Action | What it does |
 |---|---|
 | **Save** | Transitions to `library` with the default rating. The current card stays visible; the next lens refresh excludes it. |
-| **Reading list** | Sets `reading_status='reading'` without saving it to Library. The current card stays visible; the next lens refresh excludes it. |
+| **Reading list** | Sets `reading_status='reading'` without saving it to Library. The current card stays visible and shows **Queued** while the paper is on the reading list — read from the paper itself, so taking it off the list anywhere (Library, Feed, undo) lets you queue it again from Discovery. The next lens refresh excludes it. |
 | **Like / Love** | Sets rating 4 / 5 and writes a positive feedback signal. The recommendation stays visible. |
 | **Dislike** | Sets rating 1 and writes a negative feedback signal. The recommendation stays visible. |
 | **Dismiss** | Hides this lens suggestion only. It changes no rating or preference signal; a per-lens cooldown controls re-entry. |
