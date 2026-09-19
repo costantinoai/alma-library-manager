@@ -146,6 +146,29 @@ retries, diagnostics and network switch. The client's session is per thread,
 so a login done in `candidates()` (a form `post(..., data=…)`) carries its
 cookie into the core's download of the same fetch.
 
+Everything a PDF source touches is untrusted input, and the rules are enforced
+by the core, not by each plugin:
+
+- **Guarded clients only.** The download step refuses a client whose policy
+  lacks `guard_addresses=True`. A guarded client passes every request and every
+  redirect hop through `core.url_safety.vet_url` (http(s), ports 80/443, no
+  credentials or disguised hosts, and a host that resolves to public addresses
+  only — never loopback, private, link-local or the tailnet), pins the
+  connection to the checked addresses (`GuardedAdapter` for `requests`,
+  `CURLOPT_RESOLVE` plus a peer check for curl), follows redirects itself
+  (never re-sending a POST body on 307/308), and caps a non-streamed body
+  (`max_body_bytes`). Give a curl session `trust_env=False` and
+  `PROTOCOLS_STR` / `REDIR_PROTOCOLS_STR` = `"http,https"`, and keep one session
+  per trust domain (a member login must not ride along to another site).
+- **Never parse a PDF yourself.** The core opens every file in
+  `pdfs.sandbox` — a child process with memory, CPU, file-size and time limits
+  — and rewrites a fetched file without its active content before keeping it.
+- **Mirror pages:** set `PdfCandidate.follow_anchors=False` so the landing hop
+  follows only the page's viewer element, not its advertising links.
+- **Remote text:** anything a server said that you put in an exception message
+  or a result passes through `core.url_safety.clean_remote_text` (control and
+  bidi characters out, bounded). The attempts ledger applies it again.
+
 A `pdf_source` plugin's connectivity test should run the real path: build a
 `PaperRef` for a well-known paper, take each address's candidate from the
 plugin's own sources and pass it to `alma.application.pdfs.download.download_candidate`,

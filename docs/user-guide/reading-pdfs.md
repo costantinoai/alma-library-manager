@@ -64,11 +64,50 @@ On 19 September 2026 these were the official addresses:
 * **Anna's Archive**: `https://annas-archive.gl`, `https://annas-archive.pk`,
   `https://annas-archive.gd`.
 
-!!! warning "Look-alike sites"
+### Alternative mirrors
+
+When the official mirrors are walled from your network, unofficial copies can
+still serve the file. On 19 September 2026 `https://sci-hub.ren`,
+`https://sci-hub.al` and `https://sci-hub.ee` served PDFs (their files come
+from `sci.bban.top`). They are **third-party sites** — their pages load pop-up
+and advertising scripts — so add them **after** the official ones: they are
+tried only when every official address has failed.
+
+!!! warning "Fraudulent look-alikes"
     Search results are full of sites that copy these names. Anna's Archive
-    itself lists `annas-archive.su` and `annas-archive.io` as fraudulent; the
-    `sci-hub.ren` / `.al` / `.ee` family is a third-party copy whose pages load
-    pop-up and advertising scripts. Add only addresses that SLUM or Wikipedia list.
+    itself lists `annas-archive.su` and `annas-archive.io` as fraudulent. Add
+    an address only when SLUM, Wikipedia or this page names it.
+
+### What ALMa does with a mirror's content
+
+ALMa treats every mirror — official or not — and every publisher page as
+hostile input. Nothing it sends is used before it has been checked:
+
+* **Addresses.** Every address a page, a redirect or an API hands back is
+  checked before ALMa connects: web addresses only, ports 80/443 only, no
+  embedded passwords, no disguised hosts — and the name must resolve to public
+  internet addresses only. Your own machines (`localhost`, your home network,
+  your tailnet's `100.x` addresses) can never be reached through a mirror,
+  and the connection is pinned to the addresses that were checked. Redirects
+  are followed one at a time, each checked the same way.
+* **Pages.** A mirror's page is read, never run: ALMa takes only the address
+  of its PDF viewer (never its advertising links), from a page capped at 2 MB,
+  in a safe character set, within a time limit.
+* **Files.** A downloaded file must really be a PDF, is capped at 100 MB and
+  three minutes, and is opened by the PDF reader in a separate, locked-down
+  process (limited memory, CPU time and files, no access to ALMa's settings or
+  keys). Anything in it that can act on its own when opened — scripts,
+  program launches, form submissions, embedded files, links to files on your
+  computer, data hidden before or after the PDF — is removed before the file
+  is kept; Activity names what was removed. Web links and the text stay.
+* **The paper check.** The file must then name *this* paper (its DOI, or its
+  title) on its first pages; otherwise it is thrown away and the next address
+  is tried.
+* **Serving.** Your devices get the file as a PDF and nothing else, and a link
+  tapped inside it does not reveal ALMa's address.
+
+A PDF you attach or import yourself is checked and read the same way, but
+kept exactly as you gave it; Activity warns if it contains active content.
 
 ### Add them
 
@@ -76,8 +115,8 @@ On 19 September 2026 these were the official addresses:
    page and the official list above.
 2. In **Sci-Hub mirrors**, type the addresses you want tried, in order,
    comma-separated — for example
-   `https://sci-net.xyz, https://sci-hub.ru, https://sci-hub.su, https://sci-hub.box`.
-   Put first the ones that work from your network.
+   `https://sci-net.xyz, https://sci-hub.ru, https://sci-hub.su, https://sci-hub.box, https://sci-hub.ren, https://sci-hub.al, https://sci-hub.ee`
+   (official ones first, [alternatives](#alternative-mirrors) last).
 3. In **Anna's Archive addresses**, add its addresses only if you have a
    [member key](#annas-archive-member-key): without one, its paper pages sit
    behind a browser check that ALMa cannot pass, and every fetch would spend a
@@ -101,16 +140,17 @@ opens when you tap its PDF icon) lists, under **Sci-Hub**, what each mirror
 answered, and **Activity** shows one line per mirror as it is tried.
 
 Setting it up without the browser, through the same API the Settings page
-uses (on the Docker install, from the machine itself):
+uses (on the Docker install, from the machine itself). Read the configuration
+first and send it back changed: the member key comes back masked (`****…`),
+and sending the masked value keeps it — an empty one would delete it.
 
 ```bash
-curl -X PUT http://127.0.0.1:8000/api/v1/plugins/shadow_libraries/config \
-  -H 'Content-Type: application/json' \
-  -d '{"scihub_mirrors": "https://sci-net.xyz, https://sci-hub.ru, https://sci-hub.su, https://sci-hub.box",
-       "annas_archive_domains": "", "member_key": ""}'
-curl -X PUT http://127.0.0.1:8000/api/v1/plugins/shadow_libraries/enabled \
-  -H 'Content-Type: application/json' -d '{"enabled": true}'
-curl -X POST http://127.0.0.1:8000/api/v1/plugins/shadow_libraries/test   # → an Activity job
+B=http://127.0.0.1:8000/api/v1/plugins/shadow_libraries
+curl -s $B/config \
+  | jq '.config + {scihub_mirrors: "https://sci-net.xyz, https://sci-hub.ru, https://sci-hub.su, https://sci-hub.box, https://sci-hub.ren, https://sci-hub.al, https://sci-hub.ee"}' \
+  | curl -s -X PUT $B/config -H 'Content-Type: application/json' -d @-
+curl -s -X PUT $B/enabled -H 'Content-Type: application/json' -d '{"enabled": true}'
+curl -s -X POST $B/test   # → an Activity job
 ```
 
 Follow the test with `GET /api/v1/activity/<job_id>`: its `result.results`
