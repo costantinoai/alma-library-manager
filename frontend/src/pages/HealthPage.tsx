@@ -53,6 +53,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { freshnessNote } from '@/components/health/healthFormat'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -185,26 +186,7 @@ export function HealthPage() {
         }
         return
       }
-      if (networkBlocked) {
-        toast({
-          title: 'External network access is off',
-          description: result.message ?? 'Enable network access in Settings → Connections.',
-        })
-      } else if (capSkipped) {
-        toast({
-          title: 'Daily API limit reached',
-          description:
-            result.message ??
-            'The provider daily API quota is exhausted — try again after it resets.',
-        })
-      } else if (!launched) {
-        toast({ title: 'Nothing to run', description: 'No provider or no eligible items.' })
-      } else {
-        toast({
-          title: 'Maintenance started',
-          description: `${result.key} queued (${result.job_id}). Track it in Activity.`,
-        })
-      }
+      toast(describeMaintenanceLaunch(result, 'Maintenance'))
     },
     onError: (err, variables) => {
       // A failed enqueue stops the sequence (don't loop on a broken step).

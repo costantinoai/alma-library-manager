@@ -39,6 +39,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { parseAlmaTimestamp } from '@/lib/utils'
 
 function formatBytes(bytes: number): string {
@@ -189,20 +190,7 @@ export function LibraryManagementCard() {
   const reconcileGroupsMutation = useMutation({
     mutationFn: () => runMaintenanceOperation('paper_group_reconcile', {}),
     onSuccess: (result) => {
-      if (result.job_id) {
-        toast({
-          title:
-            result.status === 'already_running'
-              ? 'Paper-group reconcile already running'
-              : 'Paper-group reconcile started',
-          description: `Job ${result.job_id} is visible in Activity.`,
-        })
-      } else {
-        toast({
-          title: 'Nothing to reconcile',
-          description: result.message ?? 'Every paper group is already consistent.',
-        })
-      }
+      toast(describeMaintenanceLaunch(result, 'Paper-group reconcile'))
       void invalidateQueries(queryClient, ['activity-operations'])
     },
     onError: (err) => errorToast('Failed to start paper-group reconcile', getApiErrorMessage(err)),
