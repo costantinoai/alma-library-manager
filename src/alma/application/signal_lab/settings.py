@@ -77,11 +77,6 @@ class SignalLabSettings(BaseModel):
             "ADDED to the venue signal your Library already produces."
         ),
     )
-    map_tint_strength: Annotated[float, Field(ge=0, le=1)] = Field(
-        0.45,
-        title="Map taste tint",
-        description="How strongly learned region preference bends terrain.",
-    )
     ring_decay: Annotated[float, Field(gt=0, le=1)] = Field(
         0.35,
         title="Ring decay",
@@ -128,7 +123,6 @@ _KEYS = {
     "utility_points": "weights.lab_utility",
     "author_offset_points": "weights.lab_author_offset",
     "venue_offset_points": "weights.lab_venue_offset",
-    "map_tint_strength": "signal_lab.map_tint_strength",
     "ring_decay": "signal_lab.gamma_start",
     "exploration_rate": "signal_lab.epsilon",
     "coverage_target": "signal_lab.coverage_target",
@@ -148,7 +142,6 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
         utility_points=float(stored[_KEYS["utility_points"]]),
         author_offset_points=float(stored[_KEYS["author_offset_points"]]),
         venue_offset_points=float(stored[_KEYS["venue_offset_points"]]),
-        map_tint_strength=float(stored[_KEYS["map_tint_strength"]]),
         ring_decay=float(stored[_KEYS["ring_decay"]]),
         exploration_rate=float(stored[_KEYS["exploration_rate"]]),
         coverage_target=int(float(stored[_KEYS["coverage_target"]])),

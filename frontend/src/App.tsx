@@ -5,7 +5,6 @@ import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PageReveal } from '@/components/ui/reveal'
 import { OnboardingGate } from '@/components/onboarding'
-import { prefetchMapPage } from '@/components/map/mapQueries'
 import { parseHashRoute, navigateTo, type HashRoute } from '@/lib/hashRoute'
 import { pageLoaders, preloadPage } from '@/lib/pageLoaders'
 import NotFoundPage from '@/pages/NotFoundPage'
@@ -14,7 +13,6 @@ const HomePage = lazy(pageLoaders.home)
 const FeedPage = lazy(pageLoaders.feed)
 const DiscoveryPage = lazy(pageLoaders.discovery)
 const AuthorsPage = lazy(pageLoaders.authors)
-const MapPage = lazy(pageLoaders.map)
 const LibraryPage = lazy(pageLoaders.library)
 // Insights retired into Library › Analytics (task 47 Phase 4); the page is now
 // a redirect shim so old #/insights?tab=… deep links still land correctly.
@@ -26,8 +24,6 @@ const SettingsPage = lazy(pageLoaders.settings)
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // General API rows stay fresh for one minute. Durable semantic-map
-      // layouts override this centrally in mapQueries.ts.
       staleTime: 60_000,
       gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
@@ -71,9 +67,7 @@ function AppContent() {
 
   const prefetch = useCallback((page: Page) => {
     void preloadPage(page)
-    if (page === 'map' || page === 'authors') {
-      void prefetchMapPage(queryClient, page)
-    }
+
   }, [])
 
   const renderPage = () => {
@@ -85,8 +79,6 @@ function AppContent() {
         return <FeedPage />
       case 'discovery':
         return <DiscoveryPage />
-      case 'map':
-        return <MapPage />
       case 'authors':
         return <AuthorsPage />
       case 'library':
@@ -114,7 +106,7 @@ function AppContent() {
       <Suspense fallback={<PageLoader />}>
         <PageReveal
           key={currentPage}
-          animate={!['discovery', 'map', 'authors'].includes(currentPage)}
+          animate={!['discovery', 'authors'].includes(currentPage)}
         >
           {renderPage()}
         </PageReveal>

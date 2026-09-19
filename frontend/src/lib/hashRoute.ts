@@ -9,7 +9,6 @@ const PAGE_ROUTES: Record<Page, true> = {
   home: true,
   feed: true,
   discovery: true,
-  map: true,
   authors: true,
   library: true,
   insights: true,
@@ -33,7 +32,7 @@ export function parseHashRoute(rawHash?: string): HashRoute {
   const normalized = withoutHash.startsWith('/') ? withoutHash.slice(1) : withoutHash
   const [pagePart, queryPart = ''] = normalized.split('?', 2)
   // An empty hash lands on Home (task 47 Phase 6); Feed stays one click away.
-  const pageCandidate = pagePart || 'home'
+  const pageCandidate = pagePart === 'map' ? 'discovery' : pagePart || 'home'
   const found = VALID_PAGES.includes(pageCandidate as Page)
   const page = found ? (pageCandidate as Page) : 'home'
   return {

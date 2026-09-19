@@ -1,4 +1,4 @@
-"""Algorithm/logic version stamps for graph & Insights materialized views.
+"""Algorithm/logic version stamps for semantic, learning & Insights materialized views.
 
 DRY primitive #2 for the Insights surface (task 04, finding I-4).
 
@@ -17,11 +17,10 @@ reports, and vice-versa.
 
 Usage — wrap a view's existing fingerprint SQL at registration time::
 
-    from alma.ai.graph_versions import with_version, CLUSTERING_ALGO_VERSION
+    from alma.ai.graph_versions import with_version, SUPER_REGION_VERSION
     mv.register(mv.View(
-        key="graph:paper_map:library",
-        fingerprint_sql=with_version(_PAPER_MAP_LIBRARY_FP_SQL,
-                                     CLUSTERING_ALGO_VERSION, PROJECTION_ALGO_VERSION),
+        key="semantic:regions",
+        fingerprint_sql=with_version(partition_fingerprint_sql(), SUPER_REGION_VERSION),
         ...
     ))
 """
@@ -29,80 +28,6 @@ Usage — wrap a view's existing fingerprint SQL at registration time::
 from __future__ import annotations
 
 # ── Version constants — bump the relevant one when its family's logic changes ──
-
-# 2-D projection / node-layout logic (ai/projections.py, the UMAP/static map)
-# AND the graph EDGE topology (the rendered paper-map structure).
-# 2026.07-2: Phase 3 / I-11 — typed edge layers (semantic mutual-kNN in 768-d,
-#            bibliographic coupling, co-authorship) replace intra-cluster cliques;
-#            retracted papers excluded from edges.
-# 2026.07-3: author network gets the same treatment — typed mutual-kNN/co-author/
-#            coupling layers (stats out of edge geometry) + honest eom clustering
-#            with retained outliers, replacing topic-TFIDF+stats + silhouette-kmeans.
-# 2026.07-4: corpus PERF — bibliographic coupling now uses a Python inverted index
-#            with a document-frequency cap that drops hub references cited by
-#            >50 papers (372s→<1s on the corpus). Hub-ref couplings (everyone
-#            cites the famous review) were non-discriminative noise anyway, so the
-#            corpus edge set changes slightly — the cached corpus map must rebuild.
-# 2026.07-5: corpus PERF (task #21) — the 2-D projection now runs through the
-#            alma.ai.accel dispatch (GPU when present; optimised CPU otherwise) with
-#            a bounded n_epochs (200 for the display layout, down from umap's <10k
-#            default of 500) and a kNN graph shared with the clustering fit. The
-#            shared graph is the same neighbour graph, but the bounded epochs +
-#            shared-SGD orientation shift the layout marginally, so the cached
-#            corpus map rebuilds once.
-# 2026.07-6: co-occurrence DRY (all four coupling/co-authorship layers now go
-#            through one alma.ai.cooccurrence primitive). The author co-authorship
-#            self-join became an inverted index WITH a mega-consortium df cap
-#            (papers with >100 authors no longer couple all their authors), so the
-#            author-network edge set changes — the cached author networks rebuild.
-#            Paper-map edges are unchanged (co-authorship has no cap; bib coupling
-#            logic is identical), but the shared version forces one idempotent
-#            paper-map rebuild too.
-# 2026.07-7: every node payload now carries an `in_library` flag (paper:
-#            status='library'; author: >=1 library paper) so the corpus-scope UI
-#            dims non-library nodes to half opacity. It's a new per-node field, so
-#            the cached graph payloads (paper map + author network, both scopes,
-#            default + variant caches — all keyed on this version) must rebuild to
-#            include it.
-# 2026.07-8: paper map gains a `co_citation` edge layer (papers cited together by
-#            ≥2 other papers) alongside semantic / bibliographic_coupling /
-#            co_authorship — a new default edge topology, so the cached paper maps
-#            must rebuild to carry the new edges + edge_layers count (task 47 §7).
-# 2026.07-9: task 50 M1 — structural edge layers are SPARSE by contract:
-#            co-authorship gains an author-df cap (50, mirroring the hub-ref and
-#            mega-consortium caps) and every coupling layer keeps only each
-#            node's ~10 strongest ties. The corpus map shipped 1.43M edges
-#            (200 MB JSON) before; the edge set changes, cached maps rebuild.
-# 2026.07-10: author map placement + payload. Authors with no embedded paper are
-#            OMITTED (and counted in metadata.omitted_unplaced) instead of being
-#            scattered on an invented radius-0.48 ring about the centre — a fake
-#            geometry that read as real structure. The author payload also ships
-#            no edges (coupling still shapes the layout; the map draws no link
-#            layer). Node set, coordinates and payload shape all change, so the
-#            cached author networks MUST rebuild. Paper-map layout is untouched —
-#            the shared version costs it one idempotent rebuild.
-PROJECTION_ALGO_VERSION = "2026.07-10"
-
-# Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
-# outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
-# 2026.07-2: HDBSCAN leaf→eom + removed the forced-K≥4 rescue (I-5).
-# 2026.07-3: retain density noise as an explicit Unclustered group instead of
-#            force-merging it to the nearest centroid; ClusteringResult carries
-#            per-point membership probability + coverage + stability (I-6).
-# 2026.07-5: corpus PERF (task #21) — the 5-D clustering substrate now runs
-#            through alma.ai.accel with a shared kNN and a bounded n_epochs (300
-#            for the substrate; chosen because a shared-kNN SGD needs ~300 epochs
-#            to recover the own-kNN/500 coverage — 0.741 on the corpus — whereas
-#            200 under-settles it to 0.723). Coverage is preserved; the layout
-#            shifts marginally, so the cached clustering rebuilds once.
-# 2026.07-6: task 50 M1 (50-G) — ONE corpus substrate. The library map no longer
-#            fits its own layout: it filters the corpus substrate (positions +
-#            cluster ids/labels change for the library view). Substrate cluster
-#            resolution is now 1.5 (graph_substrate.SUBSTRATE_CLUSTER_RESOLUTION,
-#            matching the frontend default — 1.0 merged a coherent single-user
-#            corpus into a few mega-clusters), so the corpus layout re-clusters
-#            once too.
-CLUSTERING_ALGO_VERSION = "2026.07-6"
 
 # Cluster-label generation (ai/clustering.py score_cluster_terms): c-TF-IDF
 # term selection + word clouds, and the label-signature content hash.

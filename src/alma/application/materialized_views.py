@@ -104,7 +104,6 @@ class View:
     fingerprint_sql: str
     build_fn: Callable[[sqlite3.Connection], dict]
     operation_key: str
-    isolate_build: bool = False
     fingerprint_extra: Callable[[sqlite3.Connection], str] | None = None
     # Refreshed in dependency order by the background worker before this view.
     dependencies: tuple[str, ...] = ()
@@ -723,7 +722,6 @@ def get_or_enqueue_variant(
     make_fingerprint: Callable[[sqlite3.Connection], str],
     is_fresh: Callable[[str], bool],
     job_label: str,
-    process_spec: dict[str, Any] | None = None,
     may_enqueue: Callable[[], bool] | None = None,
 ) -> dict | None:
     """Async twin of :func:`get_or_build_variant`: NEVER builds inline.
@@ -774,18 +772,6 @@ def get_or_enqueue_variant(
         )
 
     def _runner() -> dict:
-        if process_spec is not None:
-            from alma.application.graph_process import run_graph_process
-
-            return run_graph_process(
-                {
-                    **process_spec,
-                    "kind": "variant",
-                    "view_key": view_key,
-                },
-                job_id=job_id,
-            )
-
         from alma.api.deps import open_db_connection
 
         runner_conn = open_db_connection()
@@ -1028,27 +1014,6 @@ def _enqueue_rebuild_internal(
     _set_rebuild_job_id(conn, view.key, job_id)
 
     def _runner() -> dict:
-        if view.isolate_build:
-            from alma.api.deps import open_db_connection
-            from alma.application.graph_process import run_graph_process
-
-            result = run_graph_process(
-                {"kind": "registered_view", "view_key": view.key},
-                job_id=job_id,
-            )
-            # Clear the in-flight marker exactly like the thread path does. It
-            # used to be left set forever on this branch, so `rebuild_job_id`
-            # could not be trusted as evidence that a build was interrupted.
-            done_conn = open_db_connection()
-            try:
-                _set_rebuild_job_id(done_conn, view.key, None)
-            finally:
-                try:
-                    done_conn.close()
-                except Exception:
-                    pass
-            return result
-
         from alma.api.deps import open_db_connection
 
         runner_conn = open_db_connection()

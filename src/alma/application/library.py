@@ -831,10 +831,6 @@ def _invalidate_embedding_artifacts(db: sqlite3.Connection, paper_id: str) -> No
         db.execute("DELETE FROM publication_embeddings WHERE paper_id = ?", (paper_id,))
     except sqlite3.OperationalError:
         pass
-    try:
-        db.execute("DELETE FROM publication_clusters WHERE paper_id = ?", (paper_id,))
-    except sqlite3.OperationalError:
-        pass
     # The semantic membership is derived from the same vector (task 67 C2).
     from alma.application.semantic_partition import forget_members
 

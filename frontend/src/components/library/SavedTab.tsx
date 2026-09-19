@@ -61,7 +61,6 @@ import { navigateTo } from '@/lib/hashRoute'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import {
   invalidateAfterPaperMutation,
-  invalidatePaperSignalFields,
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -313,7 +312,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           ? invalidateQueries(queryClient, ['library-saved'])
           : Promise.all([
               invalidateQueries(queryClient, ['library-saved']),
-              invalidatePaperSignalFields(queryClient),
             ])
       )
       setEditingLike(null)
@@ -343,7 +341,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     onSuccess: (data) => {
       void Promise.all([
         invalidateQueries(queryClient, ['library-saved']),
-        invalidatePaperSignalFields(queryClient),
       ])
       clearSelection()
       toast({ title: 'Rating cleared', description: `${data.affected} paper(s) set to no rating.` })

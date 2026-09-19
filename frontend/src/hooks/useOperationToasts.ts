@@ -101,22 +101,8 @@ function rootsForOperation(operationKey?: string): string[] {
       'discovery-status',
       'discovery-seeded-similar',
       'discovery-explain',
-      'frontier',
       // Recommendation reactions change the space-owned preference field
       // independently of the durable layout payload.
-      'signal-field',
-      'author-field',
-      'insights-diagnostics',
-    ]
-  }
-
-  if (key.startsWith('graphs.')) {
-    return [
-      'graph',
-      'frontier',
-      'signal-field',
-      'author-field',
-      'authors',
       'insights-diagnostics',
     ]
   }
@@ -146,7 +132,6 @@ function rootsForOperation(operationKey?: string): string[] {
       'ai-status',
       'insights-diagnostics',
       'papers',
-      'graph',
     ]
   }
 
@@ -161,14 +146,8 @@ function rootsForOperation(operationKey?: string): string[] {
   if (key.startsWith('materialize.insights.')) {
     return ['insights']
   }
-  if (key.startsWith('materialize.graph.')) {
-    return ['graph', 'frontier', 'paper-map', 'author-network']
-  }
   if (key.startsWith('materialize.variant:discovery:branches:')) {
     return ['lens-branches']
-  }
-  if (key.startsWith('materialize.variant:')) {
-    return ['graph']
   }
 
   return []

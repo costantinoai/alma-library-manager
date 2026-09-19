@@ -784,12 +784,10 @@ def run_s2_vector_backfill(
                 # waiting for a full re-layout. Owns its own write windows;
                 # non-fatal (the maintenance tick catches anything missed).
                 try:
-                    from alma.application.graph_substrate import place_missing_papers
                     from alma.application.semantic_partition import assign_missing_members
 
                     # Core membership first (task 67 C2), map position second.
                     assign_missing_members(conn, batch_inserted_paper_ids)
-                    place_missing_papers(conn, batch_inserted_paper_ids)
                 except Exception:
                     logger.debug(
                         "substrate placement skipped after S2 batch", exc_info=True

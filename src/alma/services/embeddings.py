@@ -420,11 +420,9 @@ def run_embedding_computation(
                     # then a map position (the extension's concern; leaves core
                     # at C5). Non-fatal; the owners' ticks catch anything missed.
                     try:
-                        from alma.application.graph_substrate import place_missing_papers
                         from alma.application.semantic_partition import assign_missing_members
 
                         assign_missing_members(conn, inserted_paper_ids)
-                        place_missing_papers(conn, inserted_paper_ids)
                     except Exception:
                         logger.debug(
                             "substrate placement skipped after batch insert",

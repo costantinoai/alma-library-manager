@@ -77,7 +77,6 @@ const DEFAULTS: SignalLabSettings = {
   utility_points: FALLBACK_LIMITS.head_points_default,
   author_offset_points: FALLBACK_LIMITS.head_points_default,
   venue_offset_points: FALLBACK_LIMITS.head_points_default,
-  map_tint_strength: 0.45,
   ring_decay: 0.35,
   exploration_rate: 0.20,
   coverage_target: 20,
@@ -342,25 +341,6 @@ export function SignalLabSettingsCard() {
                   step={0.5}
                   description={`Folds into the venue signal your Library already produces. Fitted from same-region comparisons only. ${categoricalReach('venue', 'Venue', limits)}`}
                   onChange={(value) => update('venue_offset_points', value)}
-                />
-              </div>
-            </section>
-
-            {/* The tint is NOT a scoring weight — it never reaches a score. It
-                colours the map at read time, and geometry is corpus-intrinsic:
-                taste may tint what you see, never move where a paper sits. */}
-            <section className="space-y-3">
-              <EyebrowLabel tone="muted">Map</EyebrowLabel>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <NumberField
-                  id="lab-map-tint"
-                  label="Map taste tint"
-                  value={form.map_tint_strength}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  description="Read-time terrain colour only. Never moves a paper's position and never changes a score."
-                  onChange={(value) => update('map_tint_strength', value)}
                 />
               </div>
             </section>

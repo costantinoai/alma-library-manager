@@ -687,32 +687,6 @@ def _supplier_pills(db: sqlite3.Connection) -> list[dict[str, Any]]:
     return pills
 
 
-def _map_pill(db: sqlite3.Connection) -> dict[str, Any] | None:
-    """Papers that have a vector but no place on the map.
-
-    Keyed on the EMBEDDING set rather than `papers.updated_at`, per the semantic-
-    map rule: hydration touches most rows weekly, so a paper-timestamp gauge
-    would report the layout stale every week regardless of the truth.
-    """
-    embedded = int(_scalar(db, "SELECT COUNT(*) FROM publication_embeddings") or 0)
-    if embedded == 0:
-        return None
-    placed = int(_scalar(db, "SELECT COUNT(DISTINCT paper_id) FROM publication_clusters") or 0)
-    missing = max(0, embedded - placed)
-    if missing == 0 or (missing / embedded) * 100 <= MAP_GAP_TOLERANCE_PCT:
-        return None
-    return _pill(
-        key="maps",
-        label="Maps",
-        state="warning",
-        metric=f"{missing:,} papers unplaced",
-        detail=(
-            f"{missing:,} papers have a vector but no position in the layout, so "
-            "the map is missing them. Rebuild the layout from the Map page."
-        ),
-        tier="problem",
-        href="#/map",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -743,7 +717,4 @@ def assess(db: sqlite3.Connection, *, now: datetime | None = None) -> list[dict[
         _alerts_pill(db, now=moment),
         *_supplier_pills(db),
     ]
-    map_pill = _map_pill(db)
-    if map_pill is not None:
-        pills.append(map_pill)
     return pills

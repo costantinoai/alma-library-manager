@@ -366,37 +366,16 @@ def _run_author_seed_thin(job_id: str, cap: int, target_paper_ids=None, params=N
     )
 
 
-def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, int]:
-    """Under-covered suggested authors, split ``(fixable, exhausted, unvectorized)``.
+def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Return seedable and exhausted suggestions from source-paper coverage.
 
-    Counted over the SUGGESTION set rather than all authors on purpose: the
-    corpus is full of one-paper co-authors who are nobody's problem. An author
-    the engine is actively offering you, with no dot and no evidence, is.
-
-    The split is what lets the gap CONVERGE. An author OpenAlex holds fewer than
-    `SEED_TARGET_PAPERS` works for can never be placed, so counting them as
-    outstanding work means the Health row nags forever and every repair run
-    reports "Seeded 0 of N". `author_seed_status` records that verdict once
-    (terminal), exactly as `publication_embedding_fetch_status` does for papers
-    Semantic Scholar has no vector for.
-
-    ``unvectorized`` is the third, previously invisible, bucket: enough PAPERS to
-    clear the threshold but fewer than two of them embedded and placed in the
-    semantic partition, so the author has no semantic position. Seeding cannot
-    help them — they need vectors — but leaving them out let the Health row go
-    green while the author stayed absent (2026-07-26). The repair's `count_fn`
-    claims only ``fixable``; its dimension does too. Semantic-placement gaps are
-    observed separately.
-
-    Exceptions PROPAGATE. `_safe_assess` in `health.py` owns the error path and
-    renders `DIM_ERROR`; swallowing here returned a successful-looking zero and
-    painted a broken measurement green.
+    Vector and semantic-group readiness cannot block fetching missing papers.
+    Errors propagate to Health's unknown-state owner.
     """
     from alma.application.author_backfill import (
         SEED_STATUS_EXHAUSTED,
         SEED_TARGET_PAPERS,
         count_local_papers_for_author,
-        count_placed_papers_for_author,
     )
     from alma.application.authors import (
         SUGGESTION_REVIEW_WINDOW,
@@ -412,21 +391,18 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
         )
     }
 
-    fixable = exhausted = unvectorized = 0
+    fixable = exhausted = 0
     for suggestion in suggestions:
         openalex_id = str(suggestion.get("openalex_id") or "").strip()
         if not openalex_id:
             continue
         if count_local_papers_for_author(conn, openalex_id) >= SEED_TARGET_PAPERS:
-            # Enough papers — but placement needs them EMBEDDED and partitioned.
-            if count_placed_papers_for_author(conn, openalex_id) < SEED_TARGET_PAPERS:
-                unvectorized += 1
             continue
         if openalex_id.lower() in exhausted_ids:
             exhausted += 1
         else:
             fixable += 1
-    return fixable, exhausted, unvectorized
+    return fixable, exhausted
 
 
 def _count_thin_suggested_authors(conn: sqlite3.Connection, params=None) -> int:
@@ -550,59 +526,27 @@ def _run_reference_graph(job_id: str, cap: int, target_paper_ids=None, params=No
     return result
 
 
-def _count_graph_layouts(conn: sqlite3.Connection, params=None) -> int:
-    """Materialized layout views that are missing or stale — the repair pool.
 
-    Counts the four paper/author layout views plus ``semantic:regions``.
-    Super-regions is included because it is Signal Lab's ENTIRE substrate:
-    without it every game reports "not available" and Home drops the section,
-    with a full corpus sitting right there. It had no health surface at all, so
-    a prod instance ran for months with Signal Lab silently switched off and
-    nothing anywhere saying why (2026-07-28).
-    """
-    from alma.api.scheduler import _graph_view_staleness
+
+
+
+
+
+def _count_learning_partition(conn: sqlite3.Connection, params=None) -> int:
+    from alma.application.semantic_partition import read_state
+    from alma.application.signal_lab.settings import is_enabled
     from alma.application.super_regions import regions_ready
 
-    pending = len(_graph_view_staleness(conn))
-    if not regions_ready(conn):
-        pending += 1
-    return pending
+    if not is_enabled(conn):
+        return 0
+    return int(read_state(conn) is None or not regions_ready(conn))
 
 
-def _run_graph_layouts(job_id: str, cap: int, target_paper_ids=None, params=None):
-    """Rebuild whichever map layouts are missing or stale, super-regions first.
+def _run_learning_partition(job_id: str, cap: int, target_paper_ids=None, params=None):
+    from alma.application.signal_lab.partition_refresh import refresh_learning_partition
 
-    Delegates to the SAME pass the scheduler runs (`_graph_layout_pass`), so the
-    Health button and the background tick cannot drift into two different ideas
-    of "the maps are fresh".
-
-    The trigger source travels with the call — the same `get_job_trigger_source`
-    check the embedding chain uses. A `"user"` run skips the BACKGROUND idle
-    gate, which a click can never satisfy (the click is what makes the app
-    non-idle), and which silently no-op'd this button on prod.
-    """
-    from alma.api.scheduler import _graph_layout_pass, get_job_trigger_source
-
-    _graph_layout_pass(
-        job_id=job_id,
-        operation_key="graphs.rebuild_layouts",
-        message="Rebuilding map layouts and the Signal Lab substrate",
-        user_initiated=get_job_trigger_source(job_id) == "user",
-    )
     with _maintenance_conn() as conn:
-        return {"pending_after": _count_graph_layouts(conn)}
-
-
-def _run_cluster_labels(job_id: str, cap: int, target_paper_ids=None, params=None):
-    """Cluster-label refresh (step 10, derived): regenerate TF-IDF labels for the
-    library paper-map clusters and invalidate the cache so the next render is
-    fresh. One pass (unit = operation); `cap` is not a per-item budget here."""
-    from alma.api.routes.graphs import _cluster_label_refresh_impl
-
-    scope = str((params or {}).get("scope") or "library")
-    graph_type = str((params or {}).get("graph_type") or "paper_map")
-    with _maintenance_conn() as conn:
-        return _cluster_label_refresh_impl(conn, graph_type=graph_type, scope=scope, job_id=job_id)
+        return refresh_learning_partition(conn)
 
 
 def _run_topic_normalize(job_id: str, cap: int, target_paper_ids=None, params=None):
@@ -1423,61 +1367,16 @@ REGISTRY: dict[str, MaintenanceTask] = {
             sources=(SOURCE_OPENALEX,),
         ),
         MaintenanceTask(
-            key="graph_layouts",
-            label="Rebuild map layouts",
-            description=(
-                "Rebuild the paper/author map layouts and the super-region substrate "
-                "when they are missing or have drifted from the embedding set. "
-                "Signal Lab needs the super-regions view — without it every game "
-                "reports 'not available' no matter how large the corpus is."
-            ),
-            health_dimensions=(),
-            candidate_path="",
-            operation_key="graphs.rebuild_layouts",
-            job_id_prefix="maint_graph_layouts",
-            cost=COST_COMPUTE,
-            runner=_run_graph_layouts,
-            count_fn=_count_graph_layouts,
-            stage=MaintenanceStage.DERIVED,
-            # After embeddings (80) — a layout is fitted ON the embedding set —
-            # and before cluster labels (92), which label the clusters this
-            # produces.
-            order=88,
-            unit=MaintenanceUnit.OPERATION,
-            target_kind=TargetKind.NONE,
-            supports_targets=False,
-            prerequisites=("embedding",),
-            default_manual_limit=1,
-            max_manual_limit=1,
-            default_auto_daily_cap=1,
-            max_auto_daily_cap=1,
-            local_compute=True,
-        ),
-        MaintenanceTask(
-            key="cluster_labels",
-            label="Refresh cluster labels",
-            description=(
-                "Regenerate the deterministic TF-IDF top-term labels for the library "
-                "paper-map clusters and invalidate the graph cache so the next render "
-                "reflects current membership. One pass."
-            ),
-            health_dimensions=(),
-            candidate_path="",
-            operation_key="graphs.cluster_labels:paper_map:library",
-            job_id_prefix="maint_cluster_labels",
-            cost=COST_COMPUTE,
-            runner=_run_cluster_labels,
-            stage=MaintenanceStage.DERIVED,
-            order=92,
-            unit=MaintenanceUnit.OPERATION,
-            target_kind=TargetKind.NONE,
-            supports_targets=False,
-            prerequisites=("embedding",),
-            default_manual_limit=1,
-            max_manual_limit=1,
-            default_auto_daily_cap=1,
-            max_auto_daily_cap=1,
-            local_compute=True,
+            key="learning_partition",
+            label="Prepare learning groups",
+            description="Build semantic groups used by Signal Lab from existing vectors. Disabled Lab needs no repair.",
+            health_dimensions=(), candidate_path="",
+            operation_key="semantic.partition.refresh", job_id_prefix="maint_learning_partition",
+            cost=COST_COMPUTE, runner=_run_learning_partition, count_fn=_count_learning_partition,
+            stage=MaintenanceStage.DERIVED, order=88, unit=MaintenanceUnit.OPERATION,
+            target_kind=TargetKind.NONE, supports_targets=False, prerequisites=("embedding",),
+            default_manual_limit=1, max_manual_limit=1, default_auto_daily_cap=1,
+            max_auto_daily_cap=1, local_compute=True,
         ),
         MaintenanceTask(
             key="topic_normalize",

@@ -21,8 +21,12 @@ imports the eligibility and labelling loaders from the partition). The map's
 full rebuild now calls the same `partition_corpus` run and takes its cluster
 assignments from it — one clustering, the layout only projects. Health's
 suggested-author placement, region readiness/freshness and the embedding hooks
-read the partition and the regions owner. Still open: map-only Health
-dimensions and route/job removal (C5), after preservation (C4).
+read the partition and the regions owner. Closed 2026-09-19: the map is preserved on `feature/maps-plugin` (C4) and
+removed from this line (C5) — routes, jobs, layout modules, map hosts, the
+author-placement Health dimension and the map tint setting. The partition and
+its regions stay, refreshed by `semantic.partition.refresh`. Absence is guarded
+by `tests/test_core_map_extraction_contract.py`. The sections below are the
+historical audit that led here.
 
 Status: proposal and source audit, 2026-09-06. Not an edition decision or a claim
 that recommendation quality has been measured. Active implementation plan:

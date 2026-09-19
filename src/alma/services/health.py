@@ -1308,17 +1308,17 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         # silently clipped the count (and attention_total) at the cap.
         return len(list_affiliation_conflicts(conn, limit=None) or [])
 
-    def _count_thin_suggested() -> tuple[int, int, int]:
-        # One assessment, separate repair populations: missing papers are
-        # seedable; authors with enough papers need vector/layout work instead.
+    def _count_thin_suggested() -> tuple[int, int]:
+        # (seedable, exhausted): authors still missing papers, and authors the
+        # source has nothing more for. One owner, shared with the repair's count.
         from alma.services.maintenance import count_thin_suggested_authors
 
         return count_thin_suggested_authors(conn)
 
     merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
     thin_counts, thin_ok = _safe_assess("author_thin_suggested", _count_thin_suggested)
-    thin_fixable, thin_exhausted, thin_unvectorized = (
-        thin_counts if thin_ok else (None, None, None)
+    thin_fixable, thin_exhausted = (
+        thin_counts if thin_ok else (None, None)
     )
     affiliation_conflicts, affil_ok = _safe_assess(
         "author_affiliation_conflicts", _count_affiliation_conflicts
@@ -1424,35 +1424,9 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
                 else "Couldn't measure suggested-author coverage — see logs."
             ),
             impact=(
-                "Seeding adds source papers for judging these suggestions. Semantic "
-                "placement also requires usable vectors; fetching papers alone does not "
-                "guarantee a position."
+                "Seeding adds source papers so you can judge these author suggestions."
             ),
             repair_task="author_seed_thin",
-        ),
-        _dimension(
-            key="authors.unplaceable",
-            entity="author",
-            label="Suggested authors awaiting semantic placement",
-            count=thin_unvectorized if thin_ok else None,
-            total=total,
-            state=DIM_MEASURED if thin_ok else DIM_ERROR,
-            severity=("info" if thin_unvectorized else "ok") if thin_ok else "warning",
-            severity_reason=(
-                "These authors already have enough papers; seeding more cannot repair their semantic placement."
-                if thin_ok else "Could not measure suggested-author semantic placement. Re-assess Health to retry."
-            ),
-            explanation=(
-                f"{thin_unvectorized} suggested authors already have at least two papers, "
-                "but fewer than two are embedded and placed in the semantic partition."
-                if thin_ok else "Suggested-author semantic placement could not be measured."
-            ),
-            impact=(
-                "No more paper seeding is needed for these authors. Check the vector-fetch "
-                "and local-embedding steps above; once vectors exist, the semantic partition "
-                "refresh places them. If no usable vectors are available, the author can "
-                "remain absent without needing another seed run."
-            ),
         ),
         _dimension(
             key="authors.merge_conflicts",
@@ -1585,7 +1559,7 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 #             operation and its dimension describe exactly the same population.
 # 2026.09-2: "placed" means a row in the core semantic partition, not a map
 #             layout row (task 67 C2); copy says semantic placement.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-2"
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-3"
 
 mv.register(
     mv.View(

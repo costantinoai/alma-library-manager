@@ -938,41 +938,6 @@ def count_local_papers_for_author(conn: sqlite3.Connection, openalex_id: str) ->
     return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
 
 
-def count_placed_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -> int:
-    """How many of this author's papers sit in the semantic partition.
-
-    `count_local_papers_for_author` counts ROWS; a semantic position needs a
-    paper that is embedded AND partitioned (task 67 C2: the core-owned
-    `semantic_partition_members`, never the map's layout rows — a map dot
-    follows from membership, not the other way round).
-
-    The two counts differ exactly where the false green lived: seeding lands two
-    papers, the S2 vector fetch returns nothing for them, the row count reaches
-    `SEED_TARGET_PAPERS`, `authors.unplaceable` drops to zero — and the author
-    still has no position, no score and no way onto any semantic surface
-    (2026-07-26).
-    """
-    from alma.application.semantic_partition import MEMBERS_TABLE
-
-    oid = str(openalex_id or "").strip().lower()
-    if not oid:
-        return 0
-    # Health owns the unavailable/error state; do not invent a placement gap
-    # when the partition cannot be read.
-    row = conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT pa.paper_id) AS n
-        FROM publication_authors pa
-        JOIN papers p ON p.id = pa.paper_id
-        JOIN {MEMBERS_TABLE} m ON m.paper_id = pa.paper_id
-        WHERE lower(pa.openalex_id) = ?
-          AND {standalone_paper_sql('p')}
-        """,
-        (oid,),
-    ).fetchone()
-    return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
-
-
 def seed_papers_for_author(
     conn: sqlite3.Connection,
     author_openalex_id: str,

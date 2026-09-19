@@ -316,7 +316,7 @@ reference edges we already hold. On the dev corpus, 395,560 stored edges yield
 is already implied by the database.
 
 A frontier row is a **lead, not a corpus citizen**. It carries no membership
-state, so it never enters the map, Insights counts, dedup, or any preference
+state, so it never enters Insights counts, dedup, or any preference
 query. It is promoted into `papers` only when actually staged as a suggestion.
 
 **Building it.** `frontier.run_frontier_maintenance` is the single owner of the
@@ -377,7 +377,7 @@ either alone.
 ## 7. Signal Lab: where the game results actually go
 
 Signal Lab is the triad game — you answer "which of these is closer to what you
-want?" rounds over the map. Three distinct things are done with the answers.
+want?" rounds sampled from your corpus's semantic regions. Three distinct things are done with the answers.
 
 ### 7.1 What it fits
 
@@ -391,7 +391,7 @@ tick that catches every other input drifting; see
   corpus run hotter or colder than your baseline?
 - **`utility_delta`** — a vector head in embedding space for within-region
   preference.
-- **`lab_author_offset`** — the same idea over the author map, folded into the
+- **`lab_author_offset`** — the same idea per author, folded into the
   canonical author signal rather than scoring separately.
 - **`lab_venue_offset`** — per-venue win rates from *matched-pair* rounds (two
   papers, same region, different journal), folded into `journal_affinity`. The
@@ -474,8 +474,7 @@ a weighting problem.** Re-weighting it would have hidden the defect permanently.
 
 Move a coordinate. The locked geometry rule is that position encodes what the
 *literature* says a paper is about, never what you think of it. Signal Lab
-output may tint the map at read time (`signal_lab.map_tint_strength`) and may
-influence ranking; it may not enter layout, clustering, or community assignment.
+output may influence ranking; it may not enter clustering or region assignment.
 `tests/test_geometry_admission_contract.py` enforces this by import graph — the
 layout builders may not even import the lab model — so the rule survives
 refactors rather than depending on reviewer memory.
@@ -523,57 +522,6 @@ survives a binomial test.
 | OpenAlex query construction | `discovery/openalex_related.py` |
 | S2 transport + field contracts | `discovery/semantic_scholar.py` |
 | Signal Lab heads | `application/signal_lab/` |
-
-## 9. Terrain: the preference field over the map
-
-Terrain is a **read-time tint**, not part of ranking, and it is the one place a
-model predicts your preference over the whole corpus rather than over a
-candidate deck.
-
-Before 2026-07-27 it was a per-point lookup: each substrate point resolved its
-own signals through `core/signal_valence.py` and nothing else. On the dev corpus
-that left **9,437 of 9,736 points (96.9%) at exactly 0.0** — a scatter of labels
-rendered as if it were a landscape.
-
-`application/terrain.py` adds the spatial model:
-
-- **Gaussian-process regression over a cosine kernel**, fitted in 768-d SPECTER2
-  space. Not in the 2-D UMAP projection: UMAP distorts distance by construction,
-  so a model fitted on the picture learns the projection's artifacts. Render at
-  the 2-D position, infer in embedding space.
-- **Kernel, not plain ridge.** ~350 labels against 768 dimensions is p≫n, the
-  same trap the ranker is in, and a linear head cannot express "I like A and C
-  but not the B between them" — the ordinary shape of a research interest.
-- **Adaptive bandwidth**: the median cosine distance from a label to its 5th
-  nearest fellow label, clamped to `[0.02, 0.60]`. Read off the label geometry
-  rather than configured, so the field tightens by itself as the library grows.
-- **Heteroscedastic ridge** (`λ = 0.15`, divided by each label's weight), which
-  is how time decay and evidence strength enter: believe a stale or weak label
-  less without touching its value.
-- **Predictive variance is the point.** With `k(x,x) = 1` the posterior variance
-  is `1 − kᵀA k`, so the quadratic form *is* the fraction of prior variance the
-  labels explain — a confidence already on `[0, 1]`, for free from the same
-  inverse. Label propagation would have given a smoothed value with no
-  calibrated uncertainty, which is why it was skipped rather than shipped first.
-
-Below `MIN_LABELS_TO_FIT = 12` nothing is predicted and the payload states the
-reason. A missing table raises rather than returning an empty field — a schema
-fault must not render as "you have no opinions yet".
-
-`GET /graphs/signal-field` returns per point: `v` (value), `c` (confidence),
-`src` (`rating` / `library` / `engagement` / `removed` / `negative_action` /
-`engine` / `predicted` / `unknown`), plus a `model` block naming what was fitted.
-
-**Two exclusions, both deliberate.** Engine `rec_score` renders but does not
-train — ranking already feeds terrain through it, and fitting on it would close
-a loop on our own opinion. Author/venue/topic affinity are ranking signals, not
-geometry; a second recommender wearing a colour ramp is not a terrain.
-
-Measured on the dev corpus after the change: points at exactly 0.0 fall
-**9,437 → 15**, fitted from 188 user labels, bandwidth 0.067, median predicted
-confidence 0.18 — most of a corpus really is far from anything you have rated.
-
----
 
 ## See also
 

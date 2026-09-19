@@ -39,7 +39,7 @@ export function AnalyticsTab() {
     // Task 50 M3: the Map section left this tab — send its deep links to the
     // top-level Map page instead of silently landing on Overview.
     if (routeSection === 'map') {
-      window.location.hash = buildHashRoute('map')
+      window.location.hash = buildHashRoute('discovery')
       return
     }
     setSection((SECTIONS as readonly string[]).includes(routeSection) ? routeSection : 'overview')

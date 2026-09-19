@@ -1670,65 +1670,6 @@ def setup_scheduler() -> None:
             graph_maintenance_hours,
         )
 
-    # -- Graph layout maintenance (interval, task 50 M1) --------------------
-    # GETs on /graphs/* are pure stored reads; THIS job owns freshness:
-    # incremental substrate placement every tick, full MV rebuilds only on
-    # embedding-set drift / algo-version change / weekly age floor. Idle-gated
-    # inside the job, so a short interval only costs a cheap check.
-    layout_maintenance_hours = _discovery_schedule_interval_hours(
-        "schedule.graph_layout_interval_hours",
-        6,
-    )
-    if layout_maintenance_hours > 0:
-        sched.add_job(
-            graph_layout_maintenance_periodic,
-            trigger=IntervalTrigger(hours=layout_maintenance_hours),
-            id="graph_layout_maintenance",
-            name="Graph layout maintenance",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["graph_layout_maintenance"] = {
-                "action": "graph_layout_maintenance",
-                "name": "Graph layout maintenance",
-                "description": (
-                    f"Places new vectors on the semantic-map substrate and rebuilds stale "
-                    f"graph views every {layout_maintenance_hours}h (idle-gated)"
-                ),
-            }
-        logger.info(
-            "Registered graph_layout_maintenance job (interval=%dh)",
-            layout_maintenance_hours,
-        )
-
-        # One-shot warm-up: the maps should already exist when the user first
-        # opens Map / Authors / Discovery, not start fitting because they did.
-        # Delayed so it lands after bootstrap, migrations, and the first
-        # request burst; the pass itself is idle-gated and no-ops when every
-        # view is fresh.
-        sched.add_job(
-            graph_layout_warmup,
-            trigger=DateTrigger(
-                # Timezone-aware on purpose: `utcnow()` is naive UTC and
-                # APScheduler would localize it to the scheduler's timezone,
-                # firing the warm-up hours early or late.
-                run_date=datetime.now(timezone.utc) + timedelta(seconds=_GRAPH_WARMUP_DELAY_SECONDS)
-            ),
-            id="graph_layout_warmup",
-            name="Prepare semantic maps",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["graph_layout_warmup"] = {
-                "action": "graph_layout_warmup",
-                "name": "Prepare semantic maps",
-                "description": (
-                    "Builds any missing or overdue map layout shortly after "
-                    "startup so the first visit reads a finished one"
-                ),
-            }
-        logger.info("Registered graph_layout_warmup job (runs in %ds)", _GRAPH_WARMUP_DELAY_SECONDS)
-
     # -- DB maintenance (daily) -------------------------------------------
     # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
     # UTC — well after the daily author refresh at AUTHOR_REFRESH_HOUR
@@ -2493,61 +2434,66 @@ def scoring_calibration_refresh_periodic() -> None:
 
 
 def semantic_partition_refresh_periodic() -> None:
-    """Core freshness owner for what learning reads from the partition (task 67 C2).
+    """Periodic caller of the core-owned learning partition refresh.
 
-    Until now `semantic:regions` was refreshed only by the map's layout pass,
-    so without a map the Signal Lab would learn against stale regions with
-    nothing able to notice. This tick, gated on the Lab being enabled:
-
-    * assigns a bounded batch of vectored-but-unassigned papers a membership
-      (nearest admitted centroid, no coordinates);
-    * runs `mv.get` on `semantic:regions` — one fingerprint SELECT when
-      nothing moved, a deduped background rebuild when the partition did.
-
-    An unbuilt partition is built here (`build_partition`: the corpus's own
-    clustering run, no layout), so a core install with no map ever gets its
-    regions. A full re-partition of a built corpus stays a deliberate event —
-    a layout rebuild publishes one — while growth is absorbed incrementally.
+    Enveloped like every other tick: visible in Activity under the SAME
+    operation key as the manual Health repair (`learning_partition`), so the two
+    dedupe instead of clustering twice. A tick that changed nothing ends `noop`
+    and stays out of the way; a first build, an assignment or a prune says what
+    it did.
     """
-    job_id = "periodic_semantic_partition"
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.application import super_regions
-        from alma.application.semantic_partition import (
-            assign_missing_members,
-            build_partition,
-            prune_vectorless_members,
-            read_state,
-        )
-        from alma.application.signal_lab import settings as lab_settings
+    from alma.api.deps import open_db_connection
+    from alma.application.signal_lab.partition_refresh import refresh_learning_partition
 
+    job_id = "periodic_semantic_partition"
+    operation_key = "semantic.partition.refresh"
+    if find_active_job(operation_key) is not None:
+        logger.debug("%s skipped: a partition refresh is already running", job_id)
+        return
+    set_job_status(
+        job_id,
+        status="running",
+        trigger_source="scheduler",
+        operation_key=operation_key,
+        started_at=utcnow().isoformat(),
+        message="Checking semantic groups",
+    )
+    try:
         conn = open_db_connection()
         try:
-            if not lab_settings.is_enabled(conn):
-                logger.debug("%s skipped: Signal Lab disabled", job_id)
-                return
-            if read_state(conn) is None:
-                built = build_partition(conn)
-                if built is None:
-                    logger.info("%s: corpus too small to partition", job_id)
-                    return
-                logger.info("%s: built partition generation %d", job_id, built.generation)
-            prune_vectorless_members(conn)
-            assigned = assign_missing_members(conn)
-            if assigned.get("assigned") or assigned.get("outliers"):
-                logger.info(
-                    "%s: assigned %d paper(s) (%d unclustered)",
-                    job_id,
-                    assigned["assigned"] + assigned["outliers"],
-                    assigned["outliers"],
-                )
-            envelope = super_regions.ensure_regions_fresh(conn) or {}
-            if envelope.get("stale") or envelope.get("rebuilding"):
-                logger.info("Semantic regions inputs changed; rebuild enqueued")
+            result = refresh_learning_partition(conn) or {}
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
-        logger.warning("Semantic partition freshness check failed: %s", exc)
+        assigned = int(result.get("assigned") or 0)
+        pruned = int(result.get("pruned") or 0)
+        changed = bool(result.get("built")) or assigned > 0 or pruned > 0
+        message = (
+            ("Built semantic groups; " if result.get("built") else "")
+            + f"{assigned} paper(s) assigned, {pruned} stale membership(s) removed"
+            if changed
+            else str(result.get("message") or "Semantic groups are current")
+        )
+        set_job_status(
+            job_id,
+            status="completed" if changed else "noop",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=message,
+            result=result,
+        )
+        if changed:
+            logger.info("Semantic partition refresh: %s", message)
+    except Exception as exc:
+        logger.exception("Semantic partition refresh failed")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=f"Semantic partition refresh failed: {exc}",
+        )
 
 
 def refresh_feed_inbox_periodic() -> None:
@@ -2672,51 +2618,8 @@ def maintain_citation_graph_periodic() -> None:
         )
 
 
-def _graph_layout_views() -> list[tuple[object, str]]:
-    """The registered graph views ALMa keeps warm, in build order.
-
-    Corpus paper map FIRST: its build persists the substrate every other view
-    (and the frontier map) reads.
-    """
-    from alma.core.scope import Scope
-
-    return [
-        (Scope.corpus, Scope.corpus.view_key("paper_map")),
-        (Scope.library, Scope.library.view_key("paper_map")),
-        (Scope.library, Scope.library.view_key("author_network")),
-        (Scope.corpus, Scope.corpus.view_key("author_network")),
-    ]
 
 
-def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, str]]:
-    """``(scope, view_key, reason)`` for every graph view that needs a rebuild.
-
-    Pure reads. Computed BEFORE any gate so the pass can tell a routine
-    freshness top-up (yield freely) from "there is no map to serve at all"
-    (must happen, see `_URGENT_STALE_REASONS`).
-    """
-    from alma.api.routes.graphs import _paper_scope_gauge
-    from alma.application import materialized_views as mv
-    from alma.application.discovery.lens_crud import read_settings
-
-    settings = read_settings(conn)
-    stale: list[tuple[object, str, str]] = []
-    for scope, view_key in _graph_layout_views():
-        gauge = _paper_scope_gauge(conn, scope)
-        meta = mv.stored_meta(conn, view_key)
-        sig_kv = str(settings.get(f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}") or "")
-        if meta is None:
-            stale.append((scope, view_key, "never_built"))
-        elif not sig_kv or not gauge.is_fresh(conn, sig_kv, threshold=_LAYOUT_REBUILD_DRIFT):
-            stale.append((scope, view_key, "embedding_drift_or_version"))
-        else:
-            age_days = _iso_age_days(str(meta.get("computed_at") or ""))
-            if age_days is None or age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS * 2:
-                stale.append((scope, view_key, "age_overdue"))
-            elif age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
-                stale.append((scope, view_key, "age_floor"))
-
-    return stale
 
 
 # Staleness that the ordinary idle gate must not be allowed to postpone forever.
@@ -2727,199 +2630,10 @@ def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, s
 _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
-def _graph_layout_pass(
-    *, job_id: str, operation_key: str, message: str, user_initiated: bool = False
-) -> None:
-    """Place new vectors, then rebuild whichever graph views are stale.
-
-    Shared by the startup warm-up and the periodic maintenance tick, so
-    "the maps we serve exist and are fresh" has ONE implementation.
-
-    Task 50 M1 — GETs on /graphs/* are pure stored reads, so freshness is owned
-    HERE, on the embedding set (never ``papers.updated_at`` — hydration churns
-    it; see tasks/lessons.md "Semantic maps"):
-
-    1. **Incremental placement** (always, cheap): papers that gained a vector
-       since the last tick get nearest-centroid coords on the corpus substrate.
-    2. **Full MV rebuilds** (rare, deliberate): never-built, algo/model version
-       change, embedding drift ≥ :data:`_LAYOUT_REBUILD_DRIFT`, or older than
-       :data:`_LAYOUT_REBUILD_MAX_AGE_DAYS`.
-
-    Idle-gated, with the escalation in `_URGENT_STALE_REASONS`. At most one
-    layout fit runs at a time process-wide (`graph_build_in_flight`).
-
-    ``user_initiated`` — the user CLICKED "Rebuild map layouts". The background
-    idle gate does not apply to that run, and it must never end silently:
-
-    - The idle gate asks "may background work start?", and both
-      `admit_maintenance` and `admit_maintenance_continue` require `app_idle`.
-      The click itself is a user request, so it makes the app non-idle — a
-      human-triggered run could NEVER pass, returned before the `running`
-      status write, and the harness stamped it `completed` in 0.16 s with no
-      Activity line at all (prod, 2026-07-28). A deliberate click is not
-      background work; it does not consult the background admission policy.
-    - The "nothing to do" early return exists so a restart warm-up stays out of
-      Activity. For a click, "already fresh" is the ANSWER and has to be said
-      out loud, or the button reads as broken for the second time.
-    """
-    from alma.api.deps import open_db_connection
-
-    conn = open_db_connection()
-    try:
-        stale = _graph_view_staleness(conn)
-        urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
-
-        # Regions are the core partition owner's to build and keep fresh
-        # (`semantic_partition_refresh_periodic`); this pass only re-checks them
-        # after it places papers, below.
-        if not user_initiated:
-            gate = may_background_continue if urgent else may_background_run
-            ok, reason = gate(conn, exclude_operation_key=operation_key)
-            if not ok:
-                logger.debug("graph layout pass %s skipped: %s", job_id, reason)
-                return
-
-        from alma.application.discovery.lens_crud import upsert_setting
-        from alma.application.graph_process import graph_build_in_flight, run_graph_process
-        from alma.application.graph_substrate import place_missing_papers
-        from alma.application.super_regions import ensure_regions_fresh
-        from alma.core.db_write import write_section
-
-        def _mark_running() -> None:
-            set_job_status(
-                job_id,
-                status="running",
-                trigger_source="user" if user_initiated else "scheduler",
-                started_at=utcnow().isoformat(),
-                operation_key=operation_key,
-                message=message,
-            )
-
-        placement = place_missing_papers(conn)
-        ensure_regions_fresh(conn)
-        if not stale and not (placement.get("placed") or placement.get("outliers")):
-            # Nothing to do. A warm-up on every restart must stay out of Activity
-            # so it can't push real operations off the user's list — but a CLICK
-            # gets an answer, otherwise "already fresh" is indistinguishable from
-            # "the button is broken".
-            if user_initiated:
-                _mark_running()
-                add_job_log(
-                    job_id,
-                    "Every map layout is already current — nothing to rebuild.",
-                    step="uptodate",
-                )
-            return
-
-        _mark_running()
-        if placement.get("placed") or placement.get("outliers"):
-            add_job_log(
-                job_id, "Placed new vectors on the substrate", step="placement", data=placement
-            )
-
-        from alma.api.routes.graphs import _paper_scope_gauge
-        from alma.application.super_regions import OPERATION_KEY as _SUPER_REGIONS_OP
-
-        # Exclude the super-regions build THIS pass just enqueued a few lines up:
-        # counting it as "someone else is fitting a layout" made the pass defer
-        # every view on its own job ("placed 720, rebuilt 0 view(s)", prod
-        # 2026-07-28).
-        own_keys = (operation_key, _SUPER_REGIONS_OP)
-
-        rebuilt: list[str] = []
-        for scope, view_key, stale_reason in stale:
-            busy = graph_build_in_flight(conn, exclude_operation_key=own_keys)
-            if busy:
-                add_job_log(
-                    job_id,
-                    f"Deferring {view_key}: {busy} is already fitting a layout",
-                    step="defer",
-                )
-                break
-
-            add_job_log(job_id, f"Rebuilding {view_key} ({stale_reason})", step="rebuild")
-            try:
-                gauge = _paper_scope_gauge(conn, scope)
-                run_graph_process(
-                    {"kind": "registered_view", "view_key": view_key},
-                    job_id=job_id,
-                )
-                with write_section(conn, label="graph layout maintenance: signature"):
-                    upsert_setting(
-                        conn, f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}", gauge.signature(conn)
-                    )
-                rebuilt.append(view_key)
-            except Exception as exc:  # noqa: BLE001 — one view failing must not sink the rest
-                logger.warning("graph layout pass: rebuild failed for %s: %s", view_key, exc)
-                add_job_log(
-                    job_id, f"Rebuild failed for {view_key}: {exc}", step="rebuild", level="error"
-                )
-
-            # Re-check the gate between expensive rebuilds: yield the moment the
-            # user does anything (pull-based pause). Urgent work still yields —
-            # but only to the user, never to a background sibling.
-            ok, reason = gate(conn, exclude_operation_key=operation_key)
-            if not ok:
-                add_job_log(
-                    job_id, f"Yielding after {len(rebuilt)} rebuild(s): {reason}", step="yield"
-                )
-                break
-
-        set_job_status(
-            job_id,
-            status="completed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message=(
-                f"Graph layouts: placed {placement.get('placed', 0)}, "
-                f"rebuilt {len(rebuilt)} view(s)"
-            ),
-            result={"placement": placement, "rebuilt": rebuilt},
-        )
-    except Exception as exc:
-        logger.exception("Fatal error in graph layout pass %s", job_id)
-        # Always surface a real failure, including one that happened before the
-        # pass decided it had visible work — a placement crash is not a no-op.
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Graph layout maintenance failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
-def graph_layout_maintenance_periodic() -> None:
-    """Periodic freshness tick for the semantic-map substrate + graph MVs."""
-    _graph_layout_pass(
-        job_id="periodic_graph_layout_maintenance",
-        operation_key="graphs.layout_maintenance",
-        message="Graph layout maintenance (placement + freshness)",
-    )
 
 
-def graph_layout_warmup() -> None:
-    """Build the maps we serve BEFORE anyone asks for them.
-
-    Runs once shortly after startup. Without it, the first visit to Map /
-    Authors / Discovery after a fresh install, a schema-version bump, or a
-    restart that interrupted a build is what discovers the missing layout — and
-    the user then waits on a 202 plate for the whole fit. Same pass as the
-    periodic tick, so a view already fresh costs a handful of cheap reads.
-    """
-    _graph_layout_pass(
-        job_id="graph_layout_warmup_run",
-        operation_key="graphs.layout_warmup",
-        message="Preparing semantic maps",
-    )
 
 
 # Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set

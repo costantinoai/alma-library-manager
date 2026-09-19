@@ -18,7 +18,6 @@ import {
   LayoutGrid,
   LayoutList,
   Loader2,
-  Map as MapIcon,
   RefreshCw,
   Rows3,
   SlidersHorizontal,
@@ -44,7 +43,6 @@ import {
   markLensSeen,
   refreshLens,
   updateLens,
-  type CustomDirection,
   type Lens,
   type LensRecommendation,
   type Publication,
@@ -52,15 +50,12 @@ import {
 } from '@/api/client'
 import { JargonHint, MetricTile, SignalChip, type SignalKind } from '@/components/shared'
 import { DiscoverIcon } from '@/components/ui/brand-icons'
-import { ConceptCallout } from '@/components/ui/concept-callout'
 import {
   BranchExplorerPanel,
   LensManager,
   LensWeightsPanel,
   PaperDetailPanel,
 } from '@/components/discovery'
-import { FrontierMap } from '@/components/discovery/FrontierMap'
-import { MapPaperPopup } from '@/components/map/MapPaperPopup'
 import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
@@ -84,7 +79,6 @@ import { useDiscoveryImpressions } from '@/hooks/useDiscoveryImpressions'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
-  invalidatePaperSignalFields,
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
@@ -105,7 +99,6 @@ const LENS_REFRESH_LIMIT = 50
 
 // Persisted fold state for the Suggestions Map. Versioned — see the comment at
 // its `useState` for why a default flip has to retire the old key.
-const MAP_OPEN_KEY = 'alma.discovery.mapOpen.v2'
 
 function deriveDiscoveryReaction(rec: LensRecommendation): PaperReaction {
   if (rec.user_action === 'like' || rec.user_action === 'love' || rec.user_action === 'dislike') {
@@ -218,25 +211,6 @@ export function DiscoveryPage() {
     'discovery_compact',
     'custom',
   )
-  // Task 50 M4 (50-B): the frontier map is a PANEL above the rec list —
-  // selection flows down into it. FOLDED by default (user call 2026-07-27):
-  // it is a ~560px plate between the reader and the list they came for, and
-  // folding it also spares the frontier query on every page load. The choice
-  // persists once made.
-  //
-  // The key is versioned because the DEFAULT flipped. The old key was written
-  // on every toggle under the old open-by-default behaviour, so anyone who had
-  // ever touched the map carried a stale `true` and kept landing on an open
-  // map after the change (user report 2026-07-27). Changing the default of a
-  // persisted preference means retiring its key — otherwise the people most
-  // affected are exactly the ones who never see the fix.
-  const [mapOpen, setMapOpen] = useState(
-    () => localStorage.getItem(MAP_OPEN_KEY) === 'true',
-  )
-  const [mapFilterIds, setMapFilterIds] = useState<Set<string> | null>(null)
-  // Clicking a suggestion dot on the map jumps to its row: selected + a
-  // transient accent pulse (same idiom as the Health→Authors drilldown ring).
-  const [pulsePaperId, setPulsePaperId] = useState<string | null>(null)
   const [selectedRecIds, setSelectedRecIds] = useState<Set<string>>(new Set())
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
@@ -441,35 +415,6 @@ export function DiscoveryPage() {
   // (task 47 §8): merge it into branch_controls.custom_directions and refresh so
   // retrieval deepens toward it. Member IDS are stored (the backend recomputes
   // the centroid live), so the direction never goes stale.
-  const adoptDirectionMutation = useMutation({
-    mutationFn: async (dir: { label: string; terms: string[]; member_paper_ids: string[] }) => {
-      if (!selectedLensId || !selectedLens) throw new Error('No lens selected')
-      const controls = (selectedLens.branch_controls ?? {}) as NonNullable<Lens['branch_controls']>
-      const existing = controls.custom_directions ?? []
-      const direction: CustomDirection = {
-        id: crypto.randomUUID?.() ?? `dir-${Date.now()}`,
-        label: dir.label,
-        terms: dir.terms,
-        member_paper_ids: dir.member_paper_ids,
-        mode: 'boost',
-        created_at: new Date().toISOString(),
-      }
-      await updateLens(selectedLensId, {
-        branch_controls: { ...controls, custom_directions: [...existing, direction] },
-      })
-      return refreshLens(selectedLensId, 50)
-    },
-    onSuccess: async () => {
-      setDismissedIds(new Set())
-      await invalidateQueries(queryClient, ['lenses'], ['lens-branches', selectedLensId])
-      toast({
-        title: 'Exploring direction',
-        description: 'Refreshing suggestions toward the area you selected…',
-      })
-    },
-    onError: () => errorToast('Could not adopt direction', 'Please try again.'),
-  })
-
   const discoveryStatusQuery = useQuery({
     queryKey: ['discovery-status'],
     // Timer-driven poll → background so an open Discovery tab doesn't pin the
@@ -528,7 +473,6 @@ export function DiscoveryPage() {
     // the terrain and recommendation list refetched, making a successful
     // click look inert on slower corpora.
     void Promise.all([
-      invalidatePaperSignalFields(queryClient),
       invalidateQueries(
         queryClient,
         ['lens-recommendations', selectedLensId],
@@ -560,7 +504,6 @@ export function DiscoveryPage() {
     onSuccess: () => {
       toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
       void Promise.all([
-        invalidatePaperSignalFields(queryClient),
         invalidateQueries(
           queryClient,
           ['frontier'],
@@ -745,9 +688,7 @@ export function DiscoveryPage() {
     const visible = allRecommendations.filter(
       (rec) =>
         !dismissedIds.has(rec.id) &&
-        rec.user_action !== 'dismiss' &&
-        // 50-B map→list sync: an active map-region filter narrows the list.
-        (!mapFilterIds || mapFilterIds.has(rec.paper_id)),
+        rec.user_action !== 'dismiss',
     )
     if (sort === 'relevance') {
       return [...visible].sort((a, b) => {
@@ -776,12 +717,7 @@ export function DiscoveryPage() {
       if (!dateB) return -1
       return dateB.localeCompare(dateA)
     })
-  }, [allRecommendations, dismissedIds, sort, mapFilterIds])
-
-  // A map-region filter is lens-local — switching lens clears it.
-  useEffect(() => {
-    setMapFilterIds(null)
-  }, [selectedLensId])
+  }, [allRecommendations, dismissedIds, sort])
 
   // Bulk-selection helpers — mirror the Feed page so the affordance
   // feels identical between the two surfaces.
@@ -839,34 +775,6 @@ export function DiscoveryPage() {
     null
   const pendingUndoPaperId =
     (undoMutation.isPending && undoMutation.variables?.paperId) || null
-
-  const openPaperDetails = async (paperId: string) => {
-    try {
-      const paper = await getPaperById(paperId)
-      setSelectedPaper(paper)
-      setDetailOpen(true)
-    } catch {
-      /* A stale map id will disappear on the next frontier refresh. */
-    }
-  }
-
-  const goToRecommendation = (paperId: string) => {
-    // Make sure the row can be on screen: unhide the long tail and drop a
-    // region filter that would exclude it.
-    setShowAllRecs(true)
-    setMapFilterIds((filter) => (filter && !filter.has(paperId) ? null : filter))
-    const rec = recommendations.find((item) => item.paper_id === paperId)
-    if (rec) {
-      setSelectedRecIds((previous) => new Set(previous).add(rec.id))
-    }
-    setPulsePaperId(paperId)
-    window.setTimeout(() => setPulsePaperId(null), 2200)
-    window.setTimeout(() => {
-      document
-        .getElementById(`rec-card-${paperId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 80)
-  }
 
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
 
@@ -1460,146 +1368,6 @@ export function DiscoveryPage() {
             select-all] · [view mode]. Nothing here mutates data — all
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
-        {/* Task 50 M4 (50-B): frontier map panel ABOVE the list — the map is a
-            control surface for the deck, not an alternative to it. Collapsible,
-            persisted; lasso → adopt a Direction or filter the list below. */}
-        {selectedLensId && (
-          <PageSection
-            id="discovery-map-heading"
-            data-tour="discovery-map"
-            variant="banded"
-            collapsible
-            open={mapOpen}
-            onOpenChange={(next) => {
-              localStorage.setItem(MAP_OPEN_KEY, String(next))
-              setMapOpen(next)
-            }}
-            icon={MapIcon}
-            title="Suggestions Map"
-            description="Your library, this lens's suggestions, and the space between — click a suggestion to jump to its row, lasso a region to explore it as a Direction."
-            // The region filter stays reachable while the map is folded: it is
-            // still narrowing the list below, so hiding its only off-switch
-            // would leave the reader with a short list and no explanation.
-            action={
-              mapFilterIds && (
-                <button
-                  type="button"
-                  onClick={() => setMapFilterIds(null)}
-                  className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
-                  title="Clear the map-region filter"
-                >
-                  Map region · {recommendations.length} shown ×
-                </button>
-              )
-            }
-          >
-            {mapOpen && (
-              <ConceptCallout
-                eyebrow="How to read this map"
-                summary="Every paper in your corpus, placed by meaning — filled dots are yours, hollow dots are this lens's suggestions."
-              >
-                <p>
-                  Position comes from the shared corpus layout: papers that talk about the same
-                  things sit together, so a suggestion's neighbourhood tells you what it is before
-                  you read it. <strong>Filled dots</strong> are papers in your library,{' '}
-                  <strong>hollow dots</strong> are the lens's current suggestions (coloured by the
-                  branch that found them), and <strong>faint dots</strong> are papers surfaced in
-                  earlier refreshes you never acted on — your unworked frontier.
-                </p>
-                <p className="mt-2">
-                  <strong>Colour modes:</strong> Branches shows who found what; Clusters shows the
-                  corpus topics; Year is a recency ramp. <strong>Terrain is the preference
-                  field</strong> — an overlay you can combine with any colouring, built from ALL
-                  your signals (ratings, saves, removals, engine scores) over the whole space.
-                  It belongs to the space, not the view: hiding a layer never changes the terrain,
-                  so a red valley stays red even when its dots are hidden.
-                </p>
-                <p className="mt-2">
-                  <strong>Do with it:</strong> click any dot for its action card and to spotlight
-                  its cluster. A suggestion moves to its row below only when you choose{' '}
-                  <em>Go to paper</em> in that card (background click clears); drag with{' '}
-                  <em>Select a direction</em> to name a region and explore it as a Direction.
-                </p>
-              </ConceptCallout>
-            )}
-            {mapOpen && (
-              <FrontierMap
-                lensId={selectedLensId}
-                lens={selectedLens as Lens | null}
-                onSelectPaper={(paperId) => void openPaperDetails(paperId)}
-                renderRecommendationPopup={(node, close, neighbours) => {
-                  const rec = allRecommendations.find((item) => item.paper_id === node.paper_id)
-                  if (!rec) return null
-                  const paper = rec.paper
-                  const isSaved = selectedLensCollectionId
-                    ? !!rec.in_library
-                    : paper?.status === 'library'
-                  return (
-                    <MapPaperPopup
-                      paper={{
-                        id: node.paper_id,
-                        title: paper?.title || node.title || node.paper_id,
-                        authors: paper?.authors,
-                        tldr: paper?.tldr,
-                        year: paper?.year ?? node.year,
-                        journal: paper?.journal,
-                        citedByCount: paper?.cited_by_count,
-                        score: rec.score,
-                        statusLabel: 'Suggestion',
-                        branchLabel: node.branch_label || rec.branch_label,
-                        clusterLabel: node.cluster_label,
-                        neighbours,
-                      }}
-                      onClose={close}
-                      onOpenDetails={() => {
-                        close()
-                        void openPaperDetails(node.paper_id)
-                      }}
-                      onGoToPaper={() => {
-                        close()
-                        goToRecommendation(node.paper_id)
-                      }}
-                      onAdd={() => addMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
-                      onLike={() => likeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
-                      onLove={() => loveMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
-                      onDislike={() => dislikeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
-                      onQueue={() => queueMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
-                      onUndo={(aspect) =>
-                        undoMutation.mutate({ paperId: rec.paper_id, aspect })
-                      }
-                      onAddToCollections={async (collectionIds) => {
-                        await addToCollectionsMutation.mutateAsync({
-                          recId: rec.id,
-                          paperId: rec.paper_id,
-                          collectionIds,
-                        })
-                      }}
-                      defaultCollectionIds={
-                        selectedLensCollectionId ? [selectedLensCollectionId] : undefined
-                      }
-                      reaction={deriveDiscoveryReaction(rec)}
-                      isSaved={isSaved}
-                      isQueued={
-                        paper?.reading_status === 'reading' || rec.user_action === 'read'
-                      }
-                      savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
-                      savedLabel={
-                        selectedLensCollectionId && rec.in_library ? 'In library' : undefined
-                      }
-                      pending={
-                        pendingRecId === rec.id ||
-                        pendingUndoPaperId === rec.paper_id
-                      }
-                    />
-                  )
-                }}
-                onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
-                onFilterList={(ids) => setMapFilterIds(new Set(ids))}
-              />
-            )}
-          </PageSection>
-        )}
-
         <ListControlBar
           leading={
             <>
@@ -1725,13 +1493,7 @@ export function DiscoveryPage() {
                   key={rec.id}
                   ref={(element) => observeCardImpression(element, rec.id, recIdx + 1)}
                   id={`rec-card-${rec.paper_id}`}
-                  className={cn(
-                    'rounded-lg transition-shadow',
-                    // Transient landing ring for a map→list jump. Accent =
-                    // selected, as everywhere.
-                    pulsePaperId === rec.paper_id &&
-                      'ring-2 ring-alma-folio ring-offset-2 ring-offset-surface-0',
-                  )}
+                  className="rounded-lg transition-shadow"
                 >
                 <PaperCard
                   // The `compact` viewMode is handled in the earlier

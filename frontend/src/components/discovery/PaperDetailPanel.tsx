@@ -10,7 +10,6 @@ import {
   GitBranch,
   Image as ImageIcon,
   Loader2,
-  Map as MapIcon,
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
@@ -447,15 +446,6 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
 
             {/* External links */}
             <div className="flex flex-wrap items-center gap-3 text-xs">
-              <button
-                type="button"
-                onClick={() => navigateTo('map', { paper: p.id })}
-                className="inline-flex items-center gap-1 text-alma-700 hover:text-alma-800 hover:underline"
-                title="Jump to the Map page with this paper selected"
-              >
-                <MapIcon className="h-3 w-3" />
-                Show on map
-              </button>
               {p.url && (
                 <a
                   href={p.url}

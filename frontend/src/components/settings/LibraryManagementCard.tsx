@@ -160,8 +160,6 @@ export function LibraryManagementCard() {
         ['ai-status'],
         ['insights'],
         ['insights-diagnostics'],
-        ['graph-paper-map'],
-        ['graph-author-network'],
         ['activity-operations'],
       )
     },

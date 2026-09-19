@@ -34,7 +34,7 @@ An Inbox paper is an ordinary `papers` row. Concretely:
 - **It gets enriched.** `corpus_rehydrate`, the S2 vector fetch and the local
   SPECTER2 fill don't filter on status, so abstract recovery and embeddings
   happen while it sits there. By the time you triage it, it's complete.
-- **It appears on the semantic map** and in search, and participates in
+- **It appears in search** and participates in
   deduplication — so if the same paper later arrives via Feed, it is recognised
   as the one you already have.
 - **It does not affect Discovery.** Every preference query is scoped to

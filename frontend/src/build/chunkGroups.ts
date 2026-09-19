@@ -1,16 +1,5 @@
 const GROUPS: ReadonlyArray<readonly [chunk: string, packages: readonly string[]]> = [
   [
-    'vendor-graph',
-    [
-      'react-force-graph-2d',
-      'force-graph',
-      'float-tooltip',
-      'three',
-      'three-forcegraph',
-      'three-render-objects',
-    ],
-  ],
-  [
     'vendor-charts',
     [
       'recharts',

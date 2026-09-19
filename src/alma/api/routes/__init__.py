@@ -6,7 +6,6 @@ from .alerts import router as alerts_router
 from .authors import router as authors_router
 from .discovery import router as discovery_router
 from .feed import router as feed_router
-from .graphs import router as graphs_router
 from .imports import router as imports_router
 from .insights import router as insights_router
 from .lenses import router as lenses_router
@@ -27,7 +26,6 @@ __all__ = [
     "authors_router",
     "discovery_router",
     "feed_router",
-    "graphs_router",
     "imports_router",
     "insights_router",
     "library_router",

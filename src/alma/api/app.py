@@ -32,7 +32,6 @@ from alma.api.routes.discovery import router as discovery_router
 from alma.api.routes.extension import router as extension_router
 from alma.api.routes.feed import router as feed_router
 from alma.api.routes.feedback import router as feedback_router
-from alma.api.routes.graphs import router as graphs_router
 from alma.api.routes.health import router as health_router
 from alma.api.routes.home import router as home_router
 from alma.api.routes.imports import router as imports_router
@@ -568,7 +567,6 @@ app.include_router(library_mgmt_router, prefix="/api/v1/library-mgmt", tags=["li
 app.include_router(logs_router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])
 app.include_router(ai_router, prefix="/api/v1/ai", tags=["ai"])
-app.include_router(graphs_router, prefix="/api/v1/graphs", tags=["graphs"])
 app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
 app.include_router(topics_router, prefix="/api/v1/topics", tags=["topics"])
 app.include_router(feedback_router, prefix="/api/v1/feedback", tags=["feedback"])

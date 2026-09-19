@@ -994,7 +994,7 @@ def queue_unavailable_reason(conn: sqlite3.Connection) -> str:
     if mv.stored_meta(conn, sr.VIEW_KEY) is None:
         return (
             "The super-region substrate hasn't been built yet. "
-            "Health -> Rebuild map layouts builds it."
+            "Health -> Prepare learning groups builds it."
         )
     stored = mv.get_stored(conn, sr.VIEW_KEY)
     if stored is None or not (stored["payload"].get("regions") or []):

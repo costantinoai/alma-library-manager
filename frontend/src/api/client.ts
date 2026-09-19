@@ -3074,17 +3074,7 @@ export async function testPluginConnection(
 }
 
 export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {
-  return api.post('/graphs/reference-backfill?background=true')
-}
-
-export function refreshClusterLabels(body: {
-  graph_type: 'paper_map' | 'author_network'
-  scope?: 'library' | 'corpus'
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  return api.post('/graphs/cluster-labels/refresh', {
-    graph_type: body.graph_type,
-    scope: body.scope ?? 'library',
-  })
+  return api.post('/health/operations/reference_graph/run')
 }
 
 // Default scope is `followed` (~tens of authors). `followed_plus_library`
@@ -3622,97 +3612,6 @@ export interface AIConfig {
 
 // ── Graph types ──
 
-export interface GraphNode {
-  id: string
-  name: string
-  x: number
-  y: number
-  cluster_id?: number
-  color?: string
-  size: number
-  node_type?: string
-  // True when the node is in the Library (paper: status='library'; author:
-  // >=1 library paper). In a corpus-scope graph the map dims non-library
-  // nodes to half opacity; defaults true so a library-scope graph never dims.
-  in_library?: boolean
-  metadata: Record<string, unknown>
-}
-
-export interface GraphEdge {
-  source: string
-  target: string
-  weight: number
-  // Typed edge layer (Phase 3 / I-11): "semantic" (mutual-kNN in 768-d),
-  // "bibliographic_coupling" (shared refs), "co_authorship" (shared authors),
-  // or "topic" (paper↔topic overlay). The map filters by this.
-  edge_type?: string
-}
-
-export interface GraphData {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  metadata: Record<string, unknown>
-}
-
-// ── Frontier map (Discovery) ──
-export interface FrontierNode {
-  paper_id: string
-  x: number
-  y: number
-  in_library: boolean
-  layer: 'library' | 'rec' | 'seen'
-  branch_id?: string | null
-  branch_label?: string | null
-  score?: number | null
-  title?: string | null
-  year?: number | null
-  /** Corpus-cluster identity, for the map's "group by clusters" mode. */
-  cluster_id?: number | null
-  cluster_label?: string | null
-}
-export interface FrontierEdge {
-  source: string
-  target: string
-  weight: number
-  edge_type: 'bibliographic_coupling' | 'co_citation'
-}
-export interface FrontierResponse {
-  status: 'ready' | 'building'
-  nodes?: FrontierNode[]
-  edges?: FrontierEdge[]
-  counts?: {
-    library: number
-    recs: number
-    recs_unplaced: number
-    seen_shown: number
-    seen_total: number
-    edges?: number
-  }
-  /** Which centroid ranked the seen layer: the lens's own seeds, or the
-   *  whole library when the lens has none. The legend states it. */
-  seen_ranked_by?: 'lens' | 'library'
-  /** Cluster id → hue rank over the WHOLE corpus substrate. A cluster's colour
-   *  identifies which region of the space it is, so every host that draws a
-   *  subset of that space reads the same ranking instead of ranking its own
-   *  dots (which gave one cluster a different colour per surface). */
-  cluster_hues?: Record<string, number>
-  message?: string
-  job_id?: string
-}
-/** Layered semantic-map nodes for the Discovery frontier view. `seenLimit=0`
- * hides the seen layer; `includeEdges` also returns coupling + co-citation
- * edges between placed nodes; a 202 body carries `status:'building'`. */
-export function getFrontier(
-  lensId: string,
-  seenLimit: number,
-  includeEdges = false,
-): Promise<FrontierResponse> {
-  return api.get<FrontierResponse>(
-    `/graphs/frontier?lens_id=${encodeURIComponent(lensId)}&seen_limit=${seenLimit}` +
-      `&include_edges=${includeEdges}`,
-  )
-}
-
 /** An adopted map region on a lens (task 47 §8). Member IDS are stored, not
  * vectors, so the centroid is recomputed live at every refresh. */
 export interface CustomDirection {
@@ -3723,38 +3622,6 @@ export interface CustomDirection {
   mode: 'boost' | 'pin'
   created_at?: string
 }
-export interface RegionDescription {
-  label: string
-  top_terms: string[]
-  sample: string[]
-  counts: { library: number; recs: number; seen: number }
-  sufficient: boolean
-}
-/** Characterise an arbitrary set of papers (a selected map region) by its
- * dominant vocabulary — label, top terms, sample titles, membership counts.
- * POST because the body carries up to ~300 ids; it is a pure read. */
-export function describeRegion(paperIds: string[]): Promise<RegionDescription> {
-  return api.post<RegionDescription>('/graphs/region/describe', { paper_ids: paperIds })
-}
-
-export interface MapSelectionLensResult {
-  collection_id: string
-  lens_id: string
-  name: string
-  paper_count: number
-}
-
-/** One atomic action: save a visible map selection into a collection, then
- * create a collection-backed Discovery lens. Backend re-validates scope. */
-export function createLensFromMapSelection(body: {
-  name: string
-  selection_kind: 'papers' | 'authors'
-  ids: string[]
-  scope: 'library' | 'corpus'
-}): Promise<MapSelectionLensResult> {
-  return api.post<MapSelectionLensResult>('/graphs/selection/lens', body)
-}
-
 // ── Import types ──
 
 export interface ImportResult {
@@ -5012,7 +4879,6 @@ export type PaperActionSurface =
   | 'feed'
   | 'discovery'
   | 'inbox'
-  | 'map'
   | 'papers'
   | 'library'
   | 'onboarding'
@@ -5295,7 +5161,6 @@ export interface SignalLabSettings {
   utility_points: number
   author_offset_points: number
   venue_offset_points: number
-  map_tint_strength: number
   ring_decay: number
   exploration_rate: number
   coverage_target: number

@@ -146,14 +146,16 @@ class PartitionState:
 
 
 def read_state(conn: sqlite3.Connection) -> PartitionState | None:
-    """The active partition's state, or ``None`` when nothing was ever published."""
-    try:
-        row = conn.execute(
-            f"SELECT generation, revision, model, input_fingerprint, algorithm_version, "
-            f"computed_at, provenance FROM {STATE_TABLE} WHERE id = 1"
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return None
+    """The active partition's state, or ``None`` when nothing was ever published.
+
+    A failed read RAISES: the tables are created at bootstrap, so a missing
+    table is a broken schema, not "never built" — and answering ``None`` there
+    would send a caller off to cluster the whole corpus to repair it.
+    """
+    row = conn.execute(
+        f"SELECT generation, revision, model, input_fingerprint, algorithm_version, "
+        f"computed_at, provenance FROM {STATE_TABLE} WHERE id = 1"
+    ).fetchone()
     if row is None:
         return None
     return PartitionState(

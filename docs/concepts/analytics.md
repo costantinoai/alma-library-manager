@@ -5,8 +5,7 @@ description: Charts, geography, topics, journals, authors, and a clustered SPECT
 
 # Analytics
 
-**Library → Analytics** projects your data into charts, maps, and a 2D
-embedding graph. Read-only — Analytics is for understanding your corpus, not
+**Library → Analytics** projects your data into charts and reports. Read-only — Analytics is for understanding your corpus, not
 editing it.
 
 !!! note "It used to be its own page"
@@ -23,7 +22,7 @@ editing it.
     they plotted history nobody acted on. Rule of thumb: a chart you read →
     Analytics; something wrong you fix → Health.
 
-![Library Analytics with the Overview / Map / Reports tabs](../screenshots/desktop-library.png)
+![Library Analytics with the Overview / Reports tabs](../screenshots/desktop-library.png)
 
 ## Tabs
 
@@ -67,79 +66,6 @@ corpus, not the entire tracked set.
     **Settings → AI** rather than silently falling back. OpenAlex topics remain
     visible inside individual paper rows.
 
-### Graph
-
-A 2D projection of your Library's SPECTER2 vectors. Requires that
-embeddings have been computed (either pulled from Semantic Scholar
-or generated locally). When no embeddings are available the page
-falls back to a principled text-TF-IDF clustering on title +
-abstract; it never clusters on `publication_topics` (OpenAlex's
-coarse topic vocabulary), journal, or author names.
-
-#### Pipeline (BERTopic recipe)
-
-```
-SPECTER2 vectors (768-d)
-    │
-    ├─▶ L2-normalise rows (cosine geometry — what SPECTER2 was trained for)
-    │
-    ├─▶ UMAP n_components=5  (cosine, n_neighbors=15)   ── clustering substrate
-    │       │
-    │       └─▶ HDBSCAN(metric='euclidean', leaf)       ── density clusters
-    │
-    └─▶ UMAP n_components=2  (cosine)                   ── 2-d display layout
-```
-
-L2-normalising puts every vector on the unit sphere, so euclidean on
-the reduced space is rank-equivalent to cosine in the original 768-d
-space — letting HDBSCAN/UMAP/kmeans use their fast euclidean code
-paths without leaving the geometry SPECTER2 was trained for.
-UMAP-reducing to 5-d before HDBSCAN solves the curse of
-dimensionality: density estimates are unreliable in 768-d at our
-scale (50–500 papers) but tractable at 5-d. Both the clustering
-substrate and the display layout read the same L2-normalised input
-through cosine UMAP, so visual proximity and cluster boundaries
-agree by construction — neighbouring papers in the layout are also
-in the same cluster.
-
-#### Behaviour
-
-* **Auto-k clustering** — HDBSCAN with `cluster_selection_method='leaf'`
-  picks the cluster count automatically; no fiddling with `k`.
-  `min_cluster_size = max(3, min(12, ⌈√n × 0.5⌉))` so a 50-paper
-  library produces 5–8 well-balanced clusters and a 300-paper library
-  produces 15–25.
-* **Distinctive cluster labels** — class-based TF-IDF (the BERTopic
-  c-TF-IDF formula) over (1, 2)-grams of each cluster's member titles
-  + abstracts. An English + academic-domain stop-list (`study`,
-  `method`, `result`, …) is removed before scoring, and a bigram
-  absorbs its constituent unigrams in the final phrase so labels read
-  as topics (`"visual cortex, object recognition"`) rather than
-  bag-of-keywords. Labels persist in `graph_cluster_labels` keyed by
-  the cluster's member-set signature; the **Refresh cluster labels**
-  job recomputes them in the background and pushes the result
-  through the same materialised-view layer.
-* **Hover detail** — paper title, year, journal, rating.
-
-Graph data is cached server-side via the materialised-view layer
-(fingerprint-keyed, see [Performance](../operations/performance.md)).
-Re-clustering is opt-in via Settings → Operational status →
-**Rebuild graphs**.
-
-#### Fallbacks
-
-* **UMAP unavailable / N < 15** → cluster on the L2-normalised raw
-  vectors with HDBSCAN. Same geometry, just no dimensionality
-  reduction.
-* **HDBSCAN unavailable** → silhouette-driven `MiniBatchKMeans`
-  with `k ∈ [2, 30]` on the reduced space.
-* **HDBSCAN collapses to ≤ 3 clusters on N ≥ 18** → same kmeans
-  rescue so the paper map is never reduced to a few mega-clusters.
-* **No embeddings at all** → text-TF-IDF clustering on title +
-  abstract. Never `publication_topics`, never journal/authors as
-  topical features. Falls back to an unclustered grid when text is
-  too sparse.
-
 ### Reports
 
 Time-window summaries:
@@ -158,38 +84,6 @@ cache: each GET returns the previously-computed payload in <10 ms;
 when your data changes, the next page load serves the previous
 snapshot while a background job rebuilds it, then swaps silently.
 The **Refreshing…** pill in the header lights up during that window.
-
-**Maps (Paper Map / Author Map)** follow a stricter contract: the
-2-D layout is a durable artifact — ONE corpus-scope "substrate"
-(positions + clusters + labels), computed only by background jobs,
-never during a page load. Opening the map is a pure read of the
-stored payload (fast at any corpus size). Freshness is owned by the
-**graph layout maintenance** job (every 6 h, idle-gated):
-
-* a paper that gains a vector is placed **incrementally** at its
-  nearest cluster centroid, usually within minutes of the vector
-  arriving — no re-layout;
-* a **full re-layout** happens only when the embedding set drifts
-  ≥20 %, the algorithm/model version changes, or the layout is a
-  week old.
-
-The map header shows when the layout was built and how many new
-papers await the next fold-in. The Library map is a *filter* of the
-corpus substrate — there is no second layout, so the two views can
-never disagree about where a paper sits.
-
-Both maps also read membership on the **same three channels**: a
-**filled** dot is yours (a saved paper; an author you follow or have
-saved a paper from), a **hollow** dot is being suggested to you, and a
-**faint** dot is context. One common space, so "who is mine and who is
-new" reads identically wherever you meet it. Anything that cannot be
-placed is never faked into position: an author needs at least two papers
-already placed on the corpus substrate, so the Author Map omits thinner
-profiles and says how many in the legend. To force a fresh layout
-right now, the **Rebuild graphs** button still works; custom knob
-combinations (a different cluster detail, a fused layout) build in
-the background too — the map shows "Building this view…" and appears
-automatically when ready.
 
 ## Activity panel
 
@@ -210,7 +104,6 @@ envelope here; if it doesn't, that's a bug.
 
 ```
 GET /api/v1/insights                                      # full overview (Stats)
-GET /api/v1/graphs/paper-map                              # Graph (paper map)
 GET /api/v1/reports/weekly-brief
 GET /api/v1/reports/collection-intelligence
 GET /api/v1/reports/topic-drift

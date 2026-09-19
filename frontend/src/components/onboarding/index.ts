@@ -8,5 +8,4 @@ export {
   AUTHORS_TOUR,
   LIBRARY_TOUR,
   DISCOVERY_TOUR,
-  MAP_TOUR,
 } from './tours'

@@ -141,7 +141,6 @@ Lab** owns its strict native feature schema:
 | `weights.lab_utility` | `0…10`, default `5` | Maximum confidence-scaled utility-head points |
 | `weights.lab_author_offset` | `0…10`, default `5` | Author head, folded into `author_affinity` (converted to affinity units) |
 | `weights.lab_venue_offset` | `0…10`, default `5` | Venue head from matched-pair rounds, folded into `journal_affinity` |
-| `signal_lab.map_tint_strength` | `0…1`, default `0.45` | Read-time Terrain bend; never coordinates |
 | `signal_lab.gamma_start` / `signal_lab.epsilon` | `0…1` | Library-outward ring decay and protected ring-uniform exploration share |
 | `signal_lab.coverage_target` | `1…500` | Evidence scale used to reduce already-covered region/edge priority |
 | `signal_lab.refit_every_rounds` | `1…100` | Wholesale refit cadence |

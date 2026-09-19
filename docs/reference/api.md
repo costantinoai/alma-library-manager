@@ -256,14 +256,6 @@ rest.
 | `GET` | `/insights/diagnostics` | Composed payload — assembles all eight diagnostic sections from cache. Backwards-compatible with pre-split clients. |
 | `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
-| `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options are pure reads of the stored layout; custom options use a durable bounded variant cache and queue process-isolated computation on a miss. `prefetch=true` makes the read speculative: a cache miss reports `building` **without** enqueuing a layout build, so a sidebar hover can inspect cache state but never start work. Papers that gained a vector since the last full fit are placed by interpolation from their nearest already-placed neighbours; each node carries `metadata.placement` (`layout` / `interpolated` / `null`) and the payload counts them in `metadata.approximate_positions` and `metadata.unknown_placement`. |
-| `GET` | `/graphs/author-network` | The Author Map: each eligible author is placed at the centroid of at least two of their papers on the corpus substrate, then the 2D centroids are density-clustered into research communities. Cached and process-built; ships **no edges**. Authors without two placed papers are omitted and counted in `metadata.omitted_unplaced`. Accepts `prefetch=true` with the same read-only meaning as `/graphs/paper-map`. |
-| `GET` | `/graphs/signal-field` | Space-owned preference field over the corpus substrate: one valence per paper at its layout coordinates, plus its live 0–100 score. Feeds every paper map's Terrain overlay and Score colouring. Pure read. |
-| `GET` | `/graphs/author-field` | The Author Map's live field, keyed by author id: mean `paper_valence` over the papers of theirs you have a signal on (`v: null` when none), plus their mean live score. Same `signal_valence` weights as `/graphs/signal-field`. Pure read. |
-| `POST` | `/graphs/selection/lens` | Atomically create a collection, save a visible paper/author selection into it under the declared Library/Corpus scope, and create a collection-backed Discovery lens. |
-| `POST` | `/graphs/cluster-labels/refresh` | Re-label paper-map clusters. |
-| `POST` | `/graphs/rebuild` | Queue a process-isolated local rebuild for one scope. Keeps the last-good layout readable until replacement; does not perform remote reference enrichment. |
-| `POST` | `/graphs/reference-backfill` | Queue OpenAlex reference enrichment independently of layout recomputation. |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
 | `GET` | `/reports/topic-drift` | Topic drift report |
@@ -358,7 +350,7 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/signal-lab/{game}/queue?count=12` | At least ten signed, zero-write rounds for Home's game deck |
 | `POST` | `/signal-lab/{game}/round/answer` | Validate signature and persist exactly one answered round |
 | `GET` | `/signal-lab/summary` | Unique/duplicate ledger evidence, current-fit observations and constraints, freshness, structural region/edge coverage, and active effects |
-| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, Terrain tint, and bounded head weights; `GET` also serves the read-only `limits` (ceiling, default, and `categorical_reach_points`: what the author / venue heads can really move under the current Discovery weights) |
+| `GET` `PUT` | `/signal-lab/settings` | Native feature activation, sampler/refit, and bounded head weights; `GET` also serves the read-only `limits` (ceiling, default, and `categorical_reach_points`: what the author / venue heads can really move under the current Discovery weights) |
 | `GET` | `/signal-lab/model` | Current wholesale fit |
 | `GET` | `/signal-lab/eval` | Held-out metrics and the ranker replay (churn at current weights, parity, unassessable lenses) |
 | `POST` | `/signal-lab/purge` | Delete round history and invalidate the model; does not change activation/config |
@@ -368,7 +360,7 @@ remaining steps rendered as children inside one envelope.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/papers/{id}/details` | Paper detail |
-| `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Map, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
+| `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
