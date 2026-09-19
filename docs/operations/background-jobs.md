@@ -295,7 +295,16 @@ gate, `scheduler.scheduled_network_refusal`, and does not start when:
 
 Runners declare themselves with `@scheduled_network_job`; the hydration drain
 and the idle healer mix network and local work, so they ask the gate for their
-network branches only and keep doing local work. A refused run opens no
+network branches only and keep doing local work.
+
+Admission only answers "may this run start". For as long as a declared run
+lasts, the reserve is also **bound** to it
+(`provider_quota.background_reserve`), and the transport's hard stop adds it to
+what each call needs — including calls from fanned-out worker threads, which the
+shared pool republishes it into. So an unattended run stops while your headroom
+is intact instead of spending the pool to zero once it is under way. The
+metadata, title-resolution and S2 sweeps additionally yield mid-run through
+their cancel tripwire, which stops them at the same number. A refused run opens no
 Activity row: the reason is in the log, and Health's API budget card says when
 the profile holds scheduled network work. A guard test fails on any periodic
 job that is neither declared nor classified as local.

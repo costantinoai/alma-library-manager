@@ -24,7 +24,9 @@ Mechanism (forward-only, no shims):
 - The pool's worker `initializer` re-publishes the budget into each worker
   thread, because contextvars do NOT auto-propagate across threads — so a
   *nested* pool created inside a fanned-out task (feed refresh → per-monitor
-  search → multi-source search) still inherits the same ceiling.
+  search → multi-source search) still inherits the same ceiling. It carries the
+  unattended run's credit reserve (`provider_quota.background_reserve`) across
+  the same boundary, for the same reason.
 
 The durable win is the contract, not the (deliberately conservative) clamp:
 every fan-out site funnels through one greppable primitive, and a structural
@@ -85,11 +87,20 @@ def bounded_max_workers(requested: int) -> int:
     return max(1, min(requested, int(budget)))
 
 
-def _publish_budget(budget: int | None) -> None:
-    """`ThreadPoolExecutor` initializer: re-bind the captured budget in a worker
-    thread so a *nested* `bounded_thread_pool` created inside a fanned-out task
-    inherits the same ceiling (contextvars don't cross the thread boundary)."""
+def _publish_job_context(budget: int | None, reserve: int) -> None:
+    """`ThreadPoolExecutor` initializer: re-bind the job's context in a worker
+    thread, because contextvars don't cross the thread boundary.
+
+    Two values travel: the fan-out budget, so a *nested* `bounded_thread_pool`
+    created inside a fanned-out task inherits the same ceiling; and the
+    unattended run's credit reserve, so a worker's provider calls stop at the
+    same line the run itself would (task 85 — otherwise a fanned-out lane spends
+    the headroom its own run is protecting).
+    """
+    from alma.core.provider_quota import _background_reserve
+
     _job_fanout_budget.set(budget)
+    _background_reserve.set(reserve)
 
 
 def bounded_thread_pool(
@@ -99,12 +110,15 @@ def bounded_thread_pool(
     fan-out budget. Drop-in replacement for `ThreadPoolExecutor(max_workers=N)`
     at every nested fan-out site; a true no-op (full requested width) off the
     background-job path."""
+    from alma.core.provider_quota import active_background_reserve
+
     budget = _job_fanout_budget.get()
     workers = bounded_max_workers(requested_workers)
     return ThreadPoolExecutor(
         max_workers=workers,
         thread_name_prefix=thread_name_prefix or "alma-fanout",
-        # Propagate the budget so nested pools created by these workers stay capped.
-        initializer=_publish_budget,
-        initargs=(budget,),
+        # Propagate the job's context: the budget so nested pools stay capped,
+        # the reserve so fanned-out provider calls stop where the run would.
+        initializer=_publish_job_context,
+        initargs=(budget, active_background_reserve()),
     )

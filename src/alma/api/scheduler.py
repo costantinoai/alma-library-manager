@@ -8,7 +8,9 @@ by ONE gate, :func:`scheduled_network_refusal`: the profile must allow
 unattended network work (``core.network_policy.unattended_network_enabled``),
 outbound access must be on, and the provider must still hold the user's reserve.
 Runners declare it with :func:`scheduled_network_job`; dispatcher ticks that
-mix network and local work ask the gate per branch.
+mix network and local work ask the gate per branch. The reserve then stays BOUND
+for the length of the run (``core.provider_quota.background_reserve``), so the
+run stops at it mid-flight too, not only at admission.
 
 There is no nightly author refresh any more (task 85). It walked every author
 row with one OpenAlex call each, re-searched unresolved identities every night,
@@ -1178,6 +1180,9 @@ def scheduled_network_job(
 
     The decorated runner starts only when :func:`scheduled_network_refusal`
     admits it. Otherwise it logs why and returns before opening an Activity row.
+    While it runs, the user's credit reserve is BOUND
+    (`provider_quota.background_reserve`), so the run also stops at the reserve
+    mid-flight rather than spending the pool to zero once admitted.
     The gate travels with the function, so every registration of it (startup,
     a live settings change, a manual trigger of the scheduled job) is admitted
     the same way. ``tests/test_scheduled_network_admission.py`` fails on any
@@ -1188,10 +1193,13 @@ def scheduled_network_job(
         @functools.wraps(runner)
         def admitted(*args, **kwargs) -> None:
             from alma.api.deps import open_db_connection
+            from alma.core.provider_quota import background_reserve
+            from alma.services.background_settings import get_reserved_api_calls
 
             try:
                 conn = open_db_connection()
                 try:
+                    reserve = get_reserved_api_calls(conn) if budget_source else 0
                     refusal = scheduled_network_refusal(conn, budget_source=budget_source)
                 finally:
                     conn.close()
@@ -1203,7 +1211,12 @@ def scheduled_network_job(
             if refusal is not None:
                 log_scheduled_refusal(label, refusal)
                 return None
-            return runner(*args, **kwargs)
+            # Admission answered "may it start". The reserve stays BOUND for the
+            # whole run, so every paid call it makes — including from fanned-out
+            # workers — stops while the user's headroom is intact, instead of
+            # relying on each loop to re-ask (task 85).
+            with background_reserve(reserve):
+                return runner(*args, **kwargs)
 
         admitted.scheduled_network = True  # type: ignore[attr-defined]
         return admitted
