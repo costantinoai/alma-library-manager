@@ -1,17 +1,19 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState } from 'react'
 import {
   Upload,
   FileText,
+  FileUp,
   BookOpen,
   Loader2,
   CheckCircle,
   AlertCircle,
-  X,
   FolderOpen,
   Globe,
 } from 'lucide-react'
 
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
+import { PdfImportTab } from '@/components/pdf/PdfImportTab'
+import { FileDropZone } from '@/components/shared/FileDropZone'
 import {
   Dialog,
   DialogContent,
@@ -44,7 +46,7 @@ import {
 } from '@/api/client'
 import { CollectionNameField } from '@/components/shared/CollectionNameField'
 
-type TabId = 'bibtex' | 'zotero' | 'zotero-rdf' | 'online'
+type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
 interface ImportDialogProps {
   open: boolean
@@ -71,10 +73,14 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabId)}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="bibtex">
               <FileText />
               BibTeX
+            </TabsTrigger>
+            <TabsTrigger value="pdf">
+              <FileUp />
+              PDF files
             </TabsTrigger>
             <TabsTrigger value="zotero">
               <BookOpen />
@@ -90,6 +96,7 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
             </TabsTrigger>
           </TabsList>
           <TabsContent value="bibtex"><BibtexTab onImportComplete={onImportComplete} /></TabsContent>
+          <TabsContent value="pdf"><PdfImportTab onImportComplete={onImportComplete} /></TabsContent>
           <TabsContent value="zotero"><ZoteroTab onImportComplete={onImportComplete} /></TabsContent>
           <TabsContent value="zotero-rdf"><ZoteroRdfTab onImportComplete={onImportComplete} /></TabsContent>
           <TabsContent value="online"><OnlineSearchTab onImportComplete={onImportComplete} /></TabsContent>
@@ -114,27 +121,11 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [result, setResult] = useState<ImportResult | null>(null)
   const [queued, setQueued] = useState<ImportOperationEnvelope | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    const dropped = e.dataTransfer.files[0]
-    if (dropped && (dropped.name.endsWith('.bib') || dropped.type === 'application/x-bibtex')) {
-      setFile(dropped)
-      setPreflight(null)
-      setError(null)
-    } else {
-      setError('Please drop a .bib file')
-    }
-  }, [])
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0]
-    if (selected) {
-      setFile(selected)
-      setPreflight(null)
-      setError(null)
-    }
+  const chooseFile = (selected: File) => {
+    setFile(selected)
+    setPreflight(null)
+    setError(null)
   }
 
   const handleReview = async () => {
@@ -209,46 +200,20 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
       </ToggleGroup>
 
       {mode === 'file' ? (
-        <div
-          onDrop={handleDrop}
-          onDragOver={(e) => e.preventDefault()}
-          onClick={() => fileInputRef.current?.click()}
-          className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
-        >
-          <Upload className="h-8 w-8 text-slate-400" />
-          {file ? (
-            <div className="flex items-center gap-2">
-              <FileText className="h-4 w-4 text-alma-600" />
-              <span className="text-sm font-medium text-slate-700">{file.name}</span>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setFile(null)
-                  setPreflight(null)
-                }}
-                aria-label="Clear selected file"
-              >
-                <X className="size-3.5 text-slate-400" />
-              </Button>
-            </div>
-          ) : (
-            <>
-              <p className="text-sm font-medium text-slate-600">
-                Drop a .bib file here or click to browse
-              </p>
-              <p className="text-xs text-slate-400">Supports standard BibTeX format</p>
-            </>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".bib,application/x-bibtex"
-            className="hidden"
-            onChange={handleFileSelect}
-          />
-        </div>
+        <FileDropZone
+          accept=".bib,application/x-bibtex"
+          isAccepted={(f) => f.name.endsWith('.bib') || f.type === 'application/x-bibtex'}
+          onFiles={([selected]) => chooseFile(selected)}
+          onRejected={setError}
+          rejectMessage="Please drop a .bib file"
+          prompt="Drop a .bib file here or click to browse"
+          hint="Supports standard BibTeX format"
+          file={file}
+          onClear={() => {
+            setFile(null)
+            setPreflight(null)
+          }}
+        />
       ) : (
         <Textarea
           className="h-48 resize-y font-mono"
@@ -584,27 +549,11 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [result, setResult] = useState<ImportResult | null>(null)
   const [queued, setQueued] = useState<ImportOperationEnvelope | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    const dropped = e.dataTransfer.files[0]
-    if (dropped && dropped.name.toLowerCase().endsWith('.rdf')) {
-      setFile(dropped)
-      setPreflight(null)
-      setError(null)
-    } else {
-      setError('Please drop a .rdf file exported from Zotero')
-    }
-  }, [])
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0]
-    if (selected) {
-      setFile(selected)
-      setPreflight(null)
-      setError(null)
-    }
+  const chooseFile = (selected: File) => {
+    setFile(selected)
+    setPreflight(null)
+    setError(null)
   }
 
   const handleReview = async () => {
@@ -652,44 +601,20 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
   return (
     <div className="space-y-4">
-      <div
-        onDrop={handleDrop}
-        onDragOver={(e) => e.preventDefault()}
-        onClick={() => fileInputRef.current?.click()}
-        className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
-      >
-        <Upload className="h-8 w-8 text-slate-400" />
-        {file ? (
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-alma-600" />
-            <span className="text-sm font-medium text-slate-700">{file.name}</span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                setFile(null)
-                setPreflight(null)
-              }}
-              className="rounded p-0.5 hover:bg-control-quiet"
-            >
-              <X className="h-3.5 w-3.5 text-slate-400" />
-            </button>
-          </div>
-        ) : (
-          <>
-            <p className="text-sm font-medium text-slate-600">
-              Drop a Zotero RDF export here or click to browse
-            </p>
-            <p className="text-xs text-slate-400">File extension: .rdf</p>
-          </>
-        )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".rdf,application/rdf+xml,text/xml,application/xml"
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-      </div>
+      <FileDropZone
+        accept=".rdf,application/rdf+xml,text/xml,application/xml"
+        isAccepted={(f) => f.name.toLowerCase().endsWith('.rdf')}
+        onFiles={([selected]) => chooseFile(selected)}
+        onRejected={setError}
+        rejectMessage="Please drop a .rdf file exported from Zotero"
+        prompt="Drop a Zotero RDF export here or click to browse"
+        hint="File extension: .rdf"
+        file={file}
+        onClear={() => {
+          setFile(null)
+          setPreflight(null)
+        }}
+      />
 
       <CollectionNameField
         id="zotero-rdf-collection-name"
