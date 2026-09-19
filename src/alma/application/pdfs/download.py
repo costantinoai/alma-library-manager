@@ -10,7 +10,12 @@ A candidate URL comes from third-party metadata or HTML, so this module:
   switch), streamed under the byte cap into the store's staging area;
 * decides what came back from the bytes (:func:`verify.classify_head`): a PDF
   is staged; a bot wall is ``blocked``; an HTML page gets ONE hop to the PDF
-  it advertises (``citation_pdf_url`` & co., via ``core.html_meta``).
+  it advertises (``citation_pdf_url`` & co., via ``core.html_meta``). A page
+  that advertises none is a bot wall (``blocked``), a redirect to the site's
+  home page (the source does not have the paper: ``no_candidate``), or just
+  ``not_pdf``;
+* reports a connection failure in words (``describe_transport_error``), not
+  as a raw curl / urllib3 message.
 
 Network only — never the database. Returns a :class:`DownloadResult`; the
 caller verifies the staged file against the paper and stores it.
@@ -35,6 +40,7 @@ from alma.application.pdfs.verify import (
     looks_like_challenge,
 )
 from alma.core.html_meta import parse_html, pdf_urls
+from alma.core.http_sources import describe_transport_error
 from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -101,7 +107,7 @@ def download_candidate(
         try:
             response = candidate.opener()
         except Exception as exc:  # noqa: BLE001 — a transport failure is an outcome
-            return DownloadResult(Outcome.ERROR, detail=str(exc), final_url=candidate.url)
+            return DownloadResult(Outcome.ERROR, detail=describe_transport_error(exc), final_url=candidate.url)
         final_url = candidate.url
     else:
         opened = _open_following_redirects(candidate)
@@ -138,7 +144,7 @@ def _open_following_redirects(candidate: PdfCandidate):
                 max_retries=1,
             )
         except Exception as exc:  # noqa: BLE001 — transport failure is an outcome
-            return DownloadResult(Outcome.ERROR, detail=str(exc), final_url=url)
+            return DownloadResult(Outcome.ERROR, detail=describe_transport_error(exc), final_url=url)
         location = response.headers.get("Location") if response.status_code in _REDIRECT_STATUSES else None
         if not location:
             return response, url
@@ -162,6 +168,13 @@ def _consume(response, candidate: PdfCandidate, final_url: str, *, max_bytes: in
             return DownloadResult(Outcome.BLOCKED, http_status=status, detail="Bot check page", final_url=final_url)
         return DownloadResult(Outcome.HTTP_ERROR, http_status=status, detail=f"HTTP {status}", final_url=final_url)
 
+    # A 200 page that looks like a wall from its first KB still goes through
+    # the landing step when it may hop: a mirror page for a paper titled
+    # "Are you a robot?" is a paper page, and only its lack of a PDF link
+    # makes it a wall.
+    if kind is BodyKind.CHALLENGE and html_hops > 0:
+        kind = BodyKind.HTML
+
     if kind is BodyKind.PDF:
         try:
             staged = store.stage_chunks(itertools.chain([head], chunks), max_bytes=max_bytes)
@@ -182,20 +195,36 @@ def _consume(response, candidate: PdfCandidate, final_url: str, *, max_bytes: in
 
 
 def _follow_landing_page(response, head: bytes, chunks, candidate: PdfCandidate, page_url: str, *, max_bytes: int):
-    """Read an HTML page (capped) and try the PDF links it advertises — once."""
+    """Read an HTML page (capped) and try the PDF links it advertises — once.
+
+    Links come first: a page that links a PDF is not a wall, whatever words it
+    uses. Only a page with no PDF link is classified — a bot wall, a bounce to
+    the site's home page (this source does not have the paper), or a page
+    that simply has no PDF.
+    """
     body = bytearray(head)
     for chunk in chunks:
         body += chunk
         if len(body) >= HTML_MAX_BYTES:
             break
     text = bytes(body[:HTML_MAX_BYTES]).decode(response.encoding or "utf-8", errors="replace")
-    if looks_like_challenge(text):
-        return DownloadResult(Outcome.BLOCKED, http_status=response.status_code, detail="Bot check page", final_url=page_url)
-    links = [link for link in pdf_urls(parse_html(text), page_url) if link != page_url][:HTML_HOP_LINKS]
+    snapshot = parse_html(text)
+    links = [link for link in pdf_urls(snapshot, page_url) if link != page_url][:HTML_HOP_LINKS]
     if not links:
-        return DownloadResult(
-            Outcome.NOT_PDF, http_status=response.status_code, detail="Page advertises no PDF", final_url=page_url
-        )
+        status = response.status_code
+        if looks_like_challenge(text):
+            return DownloadResult(Outcome.BLOCKED, http_status=status, detail="Bot check page", final_url=page_url)
+        if _bounced_home(candidate.url, page_url):
+            return DownloadResult(
+                Outcome.NO_CANDIDATE, http_status=status,
+                detail="Sent to the site's home page — it does not have this paper", final_url=page_url,
+            )
+        if any(phrase in snapshot.title.lower() for phrase in candidate.absent_titles):
+            return DownloadResult(
+                Outcome.NO_CANDIDATE, http_status=status, detail="It says it does not have this paper",
+                final_url=page_url,
+            )
+        return DownloadResult(Outcome.NOT_PDF, http_status=status, detail="Page advertises no PDF", final_url=page_url)
     last: DownloadResult | None = None
     for link in links:
         hop = dataclasses.replace(candidate, url=link, referer=page_url, opener=None)
@@ -203,3 +232,11 @@ def _follow_landing_page(response, head: bytes, chunks, candidate: PdfCandidate,
         if last.outcome is Outcome.FOUND:
             return last
     return last
+
+
+def _bounced_home(requested_url: str, final_url: str) -> bool:
+    """True when a request for a specific page was redirected to the site root.
+
+    Mirrors and publishers answer "no such paper" by sending you home.
+    """
+    return urlsplit(final_url).path in ("", "/") and urlsplit(requested_url).path not in ("", "/")

@@ -115,6 +115,10 @@ class PdfCandidate:
     client: str = "publisher"
     transport: SourceHttpClient | None = None
     opener: Callable[[], requests.Response] | None = None
+    #: Lower-case phrases that, in a landing page's <title>, mean this source
+    #: does not have the paper (Sci-Hub: "not available through sci-hub"), so
+    #: the attempt reads "does not have it" rather than "no PDF on the page".
+    absent_titles: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -129,14 +133,19 @@ class PdfSource(Protocol):
         """Candidate URLs for ``ref``, best first; ``[]`` when none.
 
         Raise ``SourceSkippedError`` when the source cannot run at all (missing key,
-        email or mirror) so the attempt is recorded as skipped, not as a miss.
-        Transport errors propagate and are recorded as ``error``.
+        email or mirror) so the attempt is recorded as skipped, not as a miss,
+        and ``SourceBlockedError`` when its own lookup page is behind a bot
+        wall. Transport errors propagate and are recorded as ``error``.
         """
         ...
 
 
 class SourceSkippedError(Exception):
     """A source is not configured to run (no key / email / mirror)."""
+
+
+class SourceBlockedError(Exception):
+    """A source's own lookup was stopped by a bot wall (recorded as ``blocked``)."""
 
 
 __all__ = [
@@ -146,6 +155,7 @@ __all__ = [
     "PaperRef",
     "PdfCandidate",
     "PdfSource",
+    "SourceBlockedError",
     "SourceSkippedError",
     "SourceTier",
     "Verification",

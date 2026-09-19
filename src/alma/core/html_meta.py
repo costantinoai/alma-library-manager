@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 # Tags whose attributes the snapshot keeps. Anything else is skipped, so a
 # multi-megabyte page costs a single pass and a small result.
@@ -126,19 +126,34 @@ def absolute_url(raw: str, base_url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
 
 
+def _viewer_target(url: str) -> str:
+    """The PDF a pdf.js viewer URL displays (``…/viewer.html?file=<url>``), else ``""``.
+
+    Repositories and Anna's Archive wrap their PDF in Mozilla's pdf.js viewer;
+    the viewer page itself is HTML, the file it opens is the PDF.
+    """
+    parts = urlsplit(url)
+    if not parts.path.lower().endswith("/viewer.html"):
+        return ""
+    target = (parse_qs(parts.query).get("file") or [""])[0]
+    return absolute_url(target, url) if target else ""
+
+
 def pdf_urls(snapshot: HtmlSnapshot, base_url: str) -> list[str]:
     """Every URL the page advertises as its PDF, most authoritative first.
 
     Order: ``citation_pdf_url`` (the Google Scholar / Highwire convention),
     ``<link type="application/pdf">``, a PDF ``<object data>``, the viewer
     element ``#pdf`` (iframe/embed), any ``<embed>``/``<iframe>`` typed or
-    named as a PDF, then anchors whose target ends in ``.pdf``. Deduplicated,
-    absolute, fragment-free.
+    named as a PDF or wrapping one in a pdf.js viewer, then anchors whose
+    target ends in ``.pdf``. A pdf.js viewer URL is replaced by the file it
+    opens. Deduplicated, absolute, fragment-free.
     """
     ordered: list[str] = []
 
     def add(raw: str) -> None:
         url = absolute_url(raw, base_url)
+        url = _viewer_target(url) or url
         if url and url not in ordered:
             ordered.append(url)
 
@@ -157,7 +172,8 @@ def pdf_urls(snapshot: HtmlSnapshot, base_url: str) -> list[str]:
         src = attrs.get("src", "") or attrs.get("data", "")
         typed_pdf = attrs.get("type", "").lower() == "application/pdf"
         looks_pdf = urlsplit(src).path.lower().endswith(".pdf")
-        if tag in ("iframe", "embed", "object") and (typed_pdf or looks_pdf):
+        in_viewer = bool(_viewer_target(absolute_url(src, base_url)))
+        if tag in ("iframe", "embed", "object") and (typed_pdf or looks_pdf or in_viewer):
             add(src)
     for attrs in snapshot.anchors:
         href = attrs.get("href", "")

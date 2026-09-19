@@ -5,7 +5,7 @@ Two questions, answered from the bytes, never from what a server claims:
 1. **What kind of body is this?** Content-Type lies both ways (a PDF from S3
    arrives as ``binary/octet-stream``; a captcha wall arrives as HTTP 200
    ``text/html``), so :func:`classify_head` sniffs the first KB and
-   :func:`looks_like_challenge` recognises bot walls.
+   :func:`is_bot_wall` / :func:`looks_like_challenge` recognise bot walls.
 2. **Which paper is it?** :func:`read_facts` opens the file with ``pypdf`` and
    reads pages 1–2; :func:`verify_identity` looks for the paper's DOI there,
    then its title. A file whose text names a different paper is a
@@ -15,6 +15,7 @@ Two questions, answered from the bytes, never from what a server claims:
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -43,20 +44,41 @@ _TEXT_CAP = 40_000
 _TITLE_KEY_MIN = 12
 _TOKEN_CONTAINMENT = 0.8
 
-_CHALLENGE_MARKERS: tuple[str, ...] = (
+# Markup only a bot-wall interstitial carries: the challenge scripts and
+# widgets of DDoS-Guard, Cloudflare and ALTCHA. A content page never loads them.
+_WALL_SIGNATURES: tuple[str, ...] = (
+    "/.well-known/ddos-guard/js-challenge",
+    "/cdn-cgi/challenge-platform",
+    "cf-chl-",
+    "_cf_chl_opt",
+    "<altcha-widget",
+    "altcha.min.js",
+)
+# What a wall calls itself in its <title>. Matched in the title only: a paper
+# about CAPTCHAs, or a page that merely mentions its CDN ("for DDOS-GUARD
+# caching" sits in every Anna's Archive page), is not a wall.
+_WALL_TITLES: tuple[str, ...] = (
     "just a moment",
     "checking your browser",
-    "cf-chl",
-    "challenge-platform",
-    "g-recaptcha",
-    "recaptcha",
-    "hcaptcha",
-    "altcha",
     "ddos-guard",
+    "attention required",
+    "are you a robot",
+    "are you are robot",
+    "verify you are human",
+    "access denied",
+    "security check",
+)
+# Softer words, trusted only on a SHORT page that advertises no PDF (a wall
+# is a few KB; a real landing page is tens or hundreds).
+_WALL_PHRASES: tuple[str, ...] = (
     "captcha",
     "are you a robot",
+    "checking your browser",
+    "ddos-guard",
     "access denied",
 )
+_SHORT_PAGE_CHARS = 20_000
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title", re.IGNORECASE | re.DOTALL)
 
 
 class BodyKind(StrEnum):
@@ -75,17 +97,37 @@ def classify_head(head: bytes) -> BodyKind:
     if b"%PDF-" in head[:1024]:
         return BodyKind.PDF
     text = head[:4096].decode("utf-8", errors="ignore").lower()
-    if looks_like_challenge(text):
+    if is_bot_wall(text):
         return BodyKind.CHALLENGE
     if "<html" in text or "<!doctype html" in text or "<head" in text:
         return BodyKind.HTML
     return BodyKind.OTHER
 
 
-def looks_like_challenge(text: str) -> bool:
-    """True for a bot wall / captcha interstitial (checked on decoded HTML)."""
+def is_bot_wall(text: str) -> bool:
+    """True when ``text`` is certainly a bot-wall interstitial.
+
+    Strict on purpose — it runs on the first KB of EVERY body, including real
+    landing pages — so only a wall's own scripts/widgets or its <title> count.
+    """
     lowered = (text or "").lower()
-    return any(marker in lowered for marker in _CHALLENGE_MARKERS)
+    if any(signature in lowered for signature in _WALL_SIGNATURES):
+        return True
+    title = _TITLE_RE.search(lowered)
+    return bool(title) and any(phrase in title.group(1) for phrase in _WALL_TITLES)
+
+
+def looks_like_challenge(text: str) -> bool:
+    """True for a whole HTML page that is (probably) a bot wall.
+
+    For a page already known to advertise no PDF: :func:`is_bot_wall`, or a
+    short page using a wall's words. Never used to discard a page that links
+    a PDF — a wall has nothing to link.
+    """
+    if is_bot_wall(text):
+        return True
+    lowered = (text or "").lower()
+    return len(lowered) < _SHORT_PAGE_CHARS and any(phrase in lowered for phrase in _WALL_PHRASES)
 
 
 @dataclass(frozen=True)
