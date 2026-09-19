@@ -335,7 +335,7 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <SettingsSection id="plugins" title="Integration plugins" caption="Connect core Inbox and Alerts to external apps/channels through server-defined schemas. Deactivation keeps credentials and configuration.">
+          <SettingsSection id="plugins" title="Integration plugins" caption="Connect Inbox capture, Alert delivery and PDF finding to outside services through server-defined schemas. Deactivation keeps credentials and configuration.">
             <Anchor id="plugins"><PluginsSection /></Anchor>
           </SettingsSection>
 

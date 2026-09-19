@@ -14,12 +14,15 @@ import {
   type PluginSchemaProperty,
 } from '@/api/client'
 import { SettingsCard } from '@/components/settings/primitives'
+import { StatusRow } from '@/components/shared/StatusRow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { errorToast, useToast } from '@/hooks/useToast'
+import { docsUrl } from '@/lib/docs'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { cn } from '@/lib/utils'
 
 type ConfigValue = string | number | boolean | null
 
@@ -174,6 +177,19 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
           <span className="text-xs text-slate-500">
             {plugin.capabilities.map((capability) => CAPABILITY_LABELS[capability] ?? capability).join(' · ')} ·
             v{plugin.version}
+            {plugin.docs_path && (
+              <>
+                {' · '}
+                <a
+                  href={docsUrl(plugin.docs_path)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent hover:underline"
+                >
+                  Guide ↗
+                </a>
+              </>
+            )}
           </span>
           <Button
             size="sm"
@@ -228,6 +244,19 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
             </Button>
           )}
         </div>
+        {testMutation.data?.results && testMutation.data.results.length > 0 && (
+          <div className="space-y-1.5" aria-label={`${plugin.display_name} test results`}>
+            {testMutation.data.results.map((row) => (
+              <StatusRow
+                key={`${row.source ?? ''}:${row.address}`}
+                severity={row.severity}
+                label={row.address}
+                title={row.source}
+                metric={<span className="shrink-0 text-xs text-slate-500">{row.state}</span>}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </SettingsCard>
   )
@@ -250,7 +279,7 @@ function SchemaField({
       <div className="flex items-start justify-between gap-4">
         <div>
           <Label htmlFor={id}>{schema.title ?? name}</Label>
-          {schema.description && <p className="mt-1 text-xs text-slate-500">{schema.description}</p>}
+          <FieldHelp schema={schema} className="mt-1" />
         </div>
         <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} />
       </div>
@@ -279,7 +308,33 @@ function SchemaField({
           onChange(Number.isFinite(parsed) ? parsed : 0)
         }}
       />
-      {schema.description && <p className="text-xs text-slate-500">{schema.description}</p>}
+      <FieldHelp schema={schema} />
+    </div>
+  )
+}
+
+/** A field's description and its help links (`x-alma-links`), under the input. */
+function FieldHelp({ schema, className }: { schema: PluginSchemaProperty; className?: string }) {
+  const links = schema['x-alma-links'] ?? []
+  if (!schema.description && links.length === 0) return null
+  return (
+    <div className={cn('space-y-1 text-xs text-slate-500', className)}>
+      {schema.description && <p>{schema.description}</p>}
+      {links.length > 0 && (
+        <p className="flex flex-wrap gap-x-3 gap-y-1">
+          {links.map((link) => (
+            <a
+              key={link.url}
+              href={docsUrl(link.url)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:underline"
+            >
+              {link.label} ↗
+            </a>
+          ))}
+        </p>
+      )}
     </div>
   )
 }

@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { getBootstrap } from '@/api/client'
 import { BrandRule } from '@/components/ui/brand-rule'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { DOCS_BASE_URL } from '@/lib/docs'
 import { getNavBadgeCount } from './navBadgeCounts'
 import { SIDEBAR_RAIL_WIDTH, sidebarInset } from './sidebarMetrics'
 
@@ -314,7 +315,7 @@ export function Sidebar({
               </div>
               <div className="mt-0.5 text-[10px] text-alma-400">Another Library Manager</div>
               <a
-                href="https://costantinoai.github.io/alma-library-manager/"
+                href={DOCS_BASE_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-2 inline-flex items-center gap-1 text-[10px] text-alma-400 hover:text-alma-cream"

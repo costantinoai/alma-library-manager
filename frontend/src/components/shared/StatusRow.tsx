@@ -1,19 +1,15 @@
 /**
- * StatusRow — the Health page's one status-line primitive: a severity badge +
- * a label + an optional right-aligned metric, optionally clickable into a
- * drilldown ("view →"). Shared by the gaps inside a `RepairCard`, the
- * `DiagnosticsSection` rows, and the subsystem lines — so every status line on
- * Health reads identically. It sits on the ink ladder (`control-well` +
- * `control-edge`), so it looks the same at any elevation.
+ * StatusRow — the one status-line primitive: a severity badge + a label + an
+ * optional right-aligned metric, optionally clickable into a drilldown
+ * ("view →"). Used by Health (the gaps inside a `RepairCard`, the
+ * `DiagnosticsSection` rows, the subsystem lines) and by Settings → Plugins
+ * (one row per address a connection test tried) — so every status line reads
+ * identically. It sits on the ink ladder (`control-well` + `control-edge`),
+ * so it looks the same at any elevation.
  *
  * `metric` is a caller-supplied node (a count, a coverage bar, "2 degraded", …)
- * so each surface keeps its own metric shape without forking the row.
- *
- * It briefly lived in `components/shared/` for Home's needs-you panel; that
- * panel is a chip row by user direction, so the promotion had no second
- * consumer and was reverted rather than left as speculative generality. The
- * SEVERITY vocabulary it reads stays shared in `lib/severity.ts`, which Home
- * does use.
+ * so each surface keeps its own metric shape without forking the row. The
+ * SEVERITY vocabulary it reads is `lib/severity.ts`.
  */
 import { StatusBadge } from '@/components/ui/status-badge'
 import { cn } from '@/lib/utils'

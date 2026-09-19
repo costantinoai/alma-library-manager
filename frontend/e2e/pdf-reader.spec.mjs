@@ -8,12 +8,16 @@
  *   2. the handoff page for a paper with no PDF says what each source said and
  *      offers Try again / Attach — it does not silently re-fetch;
  *   3. the detail dialog shows the kept PDF (chip + Open);
- *   4. the Import dialog has a "PDF files" tab with a drop zone.
+ *   4. the Import dialog has a "PDF files" tab with a drop zone;
+ *   5. Settings → Plugins → Shadow libraries links where to find addresses
+ *      (status page, docs how-to) and, with SHADOW_LIVE=1, a real Test lists
+ *      every configured address with what it did.
  *
  * Needs a dev server with the Open-access PDFs plugin on and:
  *   PDF_PAPER     a paper id that HAS a kept PDF
  *   NO_PDF_PAPER  a paper id that was looked for and has none
  * Run:  ALMA_URL=http://127.0.0.1:5183 PDF_PAPER=… NO_PDF_PAPER=… npm run e2e:pdf
+ *       (add SHADOW_LIVE=1 to press Test against the real mirrors — slow)
  * Screenshots go to $SHOTS_DIR (default /tmp) — LOOK at them.
  */
 import { chromium, devices } from 'playwright'
@@ -118,6 +122,29 @@ if (await importButton.count()) {
 } else {
   check(false, 'no Import button on the Library page')
 }
+
+// ── 5. Settings → Plugins: where to find mirror addresses, and a real Test ──
+await desk.goto(`${BASE}/#/settings`, { waitUntil: 'networkidle' })
+await dismissTour(desk)
+const shadowCard = desk.locator('section, div').filter({ has: desk.getByText('Shadow libraries', { exact: true }) })
+  .filter({ has: desk.getByText('Sci-Hub mirrors') }).last()
+await shadowCard.scrollIntoViewIfNeeded()
+const statusLink = shadowCard.getByRole('link', { name: /which addresses are up now/i }).first()
+check((await statusLink.getAttribute('href')) === 'https://open-slum.org/scihub.html', 'Sci-Hub field links the live status page')
+const guideHref = await shadowCard.getByRole('link', { name: /how to add them/i }).first().getAttribute('href')
+check(
+  guideHref === 'https://costantinoai.github.io/alma-library-manager/user-guide/reading-pdfs/#shadow-libraries',
+  `the how-to link resolves to the docs site (${guideHref})`,
+)
+check((await shadowCard.getByRole('link', { name: /guide/i }).count()) > 0, 'the plugin card links its guide')
+if (process.env.SHADOW_LIVE === '1') {
+  // Real mirrors: the Test fetches one paper through every configured address.
+  await shadowCard.getByRole('button', { name: /test connection/i }).click()
+  const rows = shadowCard.getByLabel('Shadow libraries test results')
+  await rows.waitFor({ timeout: 180_000 })
+  check((await rows.locator(':scope > *').count()) > 0, 'the Test lists each address with its state')
+}
+await shadowCard.screenshot({ path: `${SHOTS}/pdf-shadow-settings-1440.png` })
 
 check(consoleErrors.length === 0, `no page errors (${consoleErrors.join(' | ')})`)
 await browser.close()

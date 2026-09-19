@@ -2984,6 +2984,8 @@ export interface IntegrationTestResult {
   message: string
   target?: string
   error?: string
+  /** One line per address the test tried (PDF sources); `severity` is lib/severity's. */
+  results?: { address: string; state: string; severity?: string; source?: string }[]
 }
 
 export interface PluginSchemaProperty {
@@ -2999,6 +3001,8 @@ export interface PluginSchemaProperty {
   'x-alma-order'?: number
   'x-alma-step'?: number
   'x-alma-advanced'?: boolean
+  /** Help links under the field; a `/…` url is a path on the docs site. */
+  'x-alma-links'?: { label: string; url: string }[]
 }
 
 export interface PluginInfo {
@@ -3068,7 +3072,9 @@ export async function testPluginConnection(
     if (resp.already_running === true) {
       return { ok: false, message: 'This integration test is already in progress; try again in a moment.' }
     }
-    return waitForJob<IntegrationTestResult>(resp.job_id, { timeoutMs: 30_000 })
+    // A PDF source's test fetches a real paper through every configured
+    // address at the mirrors' own pace, so it can take a couple of minutes.
+    return waitForJob<IntegrationTestResult>(resp.job_id, { timeoutMs: 180_000 })
   }
   return {
     ok: Boolean((resp as { success?: boolean }).success),
