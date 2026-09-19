@@ -98,6 +98,10 @@ Supported UI extensions are:
 | `x-alma-order` | Stable field order |
 | `x-alma-advanced` | Put behind advanced disclosure |
 | `x-alma-step` | Numeric input step |
+| `x-alma-links` | Help links under the field, `[{"label", "url"}]`. A `url` starting with `/` is a path on the documentation site (e.g. `/user-guide/reading-pdfs/#shadow-libraries`); anything else opens as given. Use it wherever a value has to be looked up elsewhere (addresses, keys) |
+
+The manifest's `docs_path` becomes the card's **Guide** link, on the same
+documentation site.
 
 ## Add capabilities
 
@@ -118,17 +122,37 @@ For `pdf_source`, set `pdf_source_factory` to a callable returning the plugin's
 network only, never the database. It returns the URLs it believes serve the
 paper's PDF, best first, or raises `SourceSkippedError` when it cannot run at
 all (no key, email or mirror address), so the attempt reads as *skipped*, not
-as a miss. The core owns everything after that: the download (every redirect
-hop checked against private and tailnet addresses, one HTML hop through
-`citation_pdf_url`), the byte cap, bot-wall detection, pypdf verification
-against the paper's DOI or title, the attempts ledger, storage and serving. The
-registry runs every `open` source of every enabled plugin before any `shadow`
-source, and a fetch runs only when the user asks for one paper's PDF.
+as a miss, and `SourceBlockedError` when its own lookup page is behind a bot
+wall, so it reads as *blocked*. The core owns everything after that: the
+download (every redirect hop checked against private and tailnet addresses,
+one HTML hop to the PDF a page advertises — `citation_pdf_url`, a `#pdf`
+viewer element, a pdf.js `viewer.html?file=`), the byte cap, bot-wall
+detection, pypdf verification against the paper's DOI or title, the attempts
+ledger (one row per source; when a source returned several candidates, its
+detail says what each host answered), storage and serving. The registry runs
+every `open` source of every enabled plugin before any `shadow` source, and a
+fetch runs only when the user asks for one paper's PDF.
+
+A source that knows how its site says "not here" declares it instead of
+parsing pages itself: `PdfCandidate.absent_titles` lists lower-case phrases
+that, in a landing page's `<title>`, turn "no PDF on the page" into "does not
+have this paper" (Sci-Hub: `"not available through sci-hub"`). A redirect to
+the site's home page reads the same way without any declaration.
 
 A source that needs its own transport (a browser TLS fingerprint, for example)
 wraps it in a `SourcePolicy` with a `session_factory` and passes the client from
 `client_for_policy()` as `PdfCandidate.transport`, so it keeps ALMa's pacing,
-retries, diagnostics and network switch.
+retries, diagnostics and network switch. The client's session is per thread,
+so a login done in `candidates()` (a form `post(..., data=…)`) carries its
+cookie into the core's download of the same fetch.
+
+A `pdf_source` plugin's connectivity test should run the real path: build a
+`PaperRef` for a well-known paper, take each address's candidate from the
+plugin's own sources and pass it to `alma.application.pdfs.download.download_candidate`,
+discarding the file. Return `results` rows `{source, address, state, severity}`
+(`severity` from `lib/severity`: `ok` / `warning` / `critical`); Settings lists
+them under the test button. A home page that loads proves nothing about a
+walled paper page.
 
 If both directions use the same external API, they must share one transport and
 credential owner.
