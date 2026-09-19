@@ -864,7 +864,11 @@ def _collect_preprint_presence_for_openalex(openalex_id: str) -> dict:
     biorxiv_count = 0
     try:
         works = fetch_works_for_author(oid, from_year=None)
-    except Exception:
+    except Exception as exc:
+        # Preprint presence is one input to an identity decision, not the whole
+        # of it: a refusal degrades to "no evidence seen", but it must SAY so
+        # rather than read as "this author has no preprints".
+        logger.warning("Preprint presence unknown for %s: %s", oid, exc)
         works = []
 
     for w in works or []:
@@ -927,8 +931,11 @@ def _auto_resolve_scholar_from_openalex(
             title = ((w or {}).get("title") or "").strip()
             if title:
                 sample_titles.append(title)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Titles only sharpen the Scholar match; without them the resolver falls
+        # back to name + affiliation. Logged so a silent quota refusal is not
+        # mistaken for an author with no works.
+        logger.warning("Sample titles unavailable for %s: %s", oid, exc)
 
     effective_orcid = (orcid or "").strip() or None
     if not effective_orcid:

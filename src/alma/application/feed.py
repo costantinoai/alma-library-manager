@@ -2333,11 +2333,38 @@ def refresh_feed_monitor(
 
             openalex_id = str(monitor.get("openalex_id") or "").strip()
             _log("refresh_author_monitor", f"Refreshing author monitor '{monitor['label']}'", data={"monitor_id": monitor["id"]})
-            works = batch_fetch_recent_works_for_authors(
-                [openalex_id],
-                from_year=from_year,
-                per_author_limit=author_per_refresh,
-            ).get(openalex_id) or []
+            try:
+                works = batch_fetch_recent_works_for_authors(
+                    [openalex_id],
+                    from_year=from_year,
+                    per_author_limit=author_per_refresh,
+                ).get(openalex_id) or []
+            except Exception as exc:
+                # The fetcher raises now (task 85), so record the monitor as
+                # FAILED — the same shape a bad query gets above. Letting it
+                # escape would surface the error on the operation but leave this
+                # monitor wearing its previous status, and Health counts broken
+                # monitors from that column.
+                error_text = str(exc)
+                logger.error("Author monitor %s fetch failed: %s", monitor["id"], error_text)
+                diag = {
+                    "monitor_id": monitor["id"],
+                    "monitor_type": monitor["monitor_type"],
+                    "label": monitor["label"],
+                    "status": "failed",
+                    "reason": error_text,
+                    "papers_found": 0,
+                    "items_created": 0,
+                }
+                monitor_app.update_feed_monitor_result(
+                    db,
+                    str(monitor["id"]),
+                    status="failed",
+                    result=diag,
+                    error=error_text,
+                )
+                commit_with_retry(db, label="feed refresh")
+                return diag
             found = 0
             items_created = 0
             for raw_work in works:

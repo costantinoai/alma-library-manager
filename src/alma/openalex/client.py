@@ -151,140 +151,36 @@ def fetch_works_for_author(
     from_year: int | None = None,
     mailto: str | None = None,
 ) -> list[dict]:
-    """Fetch all works for an OpenAlex author using cursor pagination.
+    """Every work of an OpenAlex author, walked with cursor pagination.
 
-    This uses the official Works endpoint with the `author.id:A...` filter,
-    `per-page=100`, and `cursor=*` to iterate through all of an author's works.
+    One page at a time through :func:`fetch_works_page_for_author`, so both
+    walks share ONE request builder, ONE type/title filter and ONE normalizer.
+    They did not: this function built its own request and normalized the
+    response by hand, and that second normalizer dropped the work's
+    ``openalex_id``, its type and its structured ``authorships``. Papers landed
+    through here therefore carried no OpenAlex id and no author links, and had
+    to be rescued later by title resolution (task 85).
 
-    Args:
-        author_openalex_id: The author's OpenAlex ID. Accepts full URL or bare key (e.g., "A123...").
-        from_year: Optional lower bound (inclusive) for publication year; if None, fetch full history.
-
-    Returns:
-        List of normalized work dicts with keys:
-        title, authors, abstract, year, num_citations, journal, pub_url, doi
+    It also swallowed every exception and returned the works collected so far,
+    so a 429, a disabled network switch or an exhausted quota read exactly like
+    "this author has no works". Failures now propagate; an empty list means the
+    author genuinely has no works of a type we accept.
     """
     works: list[dict] = []
-    try:
-        client = get_client()
-        # Use official works API filter: author.id:A... (recommended by OpenAlex)
-        oaid = _normalize_openalex_author_id(author_openalex_id)
-        filt = f"author.id:{oaid}"
-        if from_year:
-            # Use from_publication_date for year ranges per OpenAlex docs
-            filt = f"{filt},from_publication_date:{from_year}-01-01"
-        cursor = "*"
-        while True:
-            params = {
-                "filter": filt,
-                # Use dashed style per OpenAlex docs; underscore often works too
-                "per-page": 100,
-                "cursor": cursor,
-                # Sorting is optional but helps surface high-impact first if UI streams
-                "sort": "cited_by_count:desc",
-                "select": _WORKS_SELECT_FIELDS,
-            }
-            resp = client.get("/works", params=params, timeout=30)
-            # Raise for non-200 to surface proper logging and exit
-            resp.raise_for_status()
-            data = resp.json() or {}
-            batch = data.get("results", []) or []
-            for w in batch:
-                title = (w or {}).get("display_name") or ""
-                year = (w or {}).get("publication_year")
-                pub_date = (w or {}).get("publication_date") or None
-                wtype = (w or {}).get("type")
-                wtype_xref = None  # not selected; keep variable for backward-compat in checks
-                # Filter out datasets/components and file-like titles
-                if _looks_like_file_title(title):
-                    continue
-                # Accept either OpenAlex `type` or Crossref-style `type_crossref` (if present)
-                allowed_types = {
-                    # OpenAlex canonical types
-                    "journal-article", "proceedings-article", "book-chapter", "report", "book", "preprint", "posted-content",
-                    # Crossref style sometimes appears as `type`
-                    "article",
-                }
-                # Skip if both provided type indicators are not allowed; if only one present and not allowed, skip
-                if (wtype and wtype not in allowed_types) and (wtype_xref and wtype_xref not in allowed_types):
-                    continue
-                if (wtype and wtype not in allowed_types) and (not wtype_xref):
-                    continue
-                if (wtype_xref and wtype_xref not in allowed_types) and (not wtype):
-                    continue
-                abstract = _decode_abstract((w or {}).get("abstract_inverted_index"))
-                primary_location = (w or {}).get("primary_location") or {}
-                # Prefer landing page; fallback to PDF; else use the work's id (OpenAlex URL)
-                url = primary_location.get("landing_page_url") or primary_location.get("pdf_url") or (w or {}).get("id")
-                # Use primary_location.source.display_name as journal/source label
-                src = (primary_location.get("source") or {}) if isinstance(primary_location, dict) else {}
-                journal = src.get("display_name")
-                doi = _normalize_doi((w or {}).get("doi"))
-                cites = (w or {}).get("cited_by_count")
-                # Join authors
-                authorships = (w or {}).get("authorships") or []
-                auths = ", ".join([ (a.get("author") or {}).get("display_name", "") for a in authorships ])
-                # Extract institutions from authorships for geo stats
-                insts = []
-                try:
-                    for a in authorships:
-                        for inst in (a.get("institutions") or []):
-                            inst_id = (inst.get("id") or "").strip()
-                            inst_name = (inst.get("display_name") or "").strip()
-                            ccode = (inst.get("country_code") or "").strip().upper()
-                            if not inst_id and not inst_name and not ccode:
-                                continue
-                            insts.append({"id": inst_id, "name": inst_name, "country_code": ccode})
-                except Exception:
-                    insts = []
-                # Extract topics (prefer `topics`, fallback to `concepts`)
-                topics_list = []
-                try:
-                    raw_topics = (w or {}).get("topics") or []
-                    if isinstance(raw_topics, list) and raw_topics:
-                        topics_list = [
-                            {
-                                "term": (t.get("display_name") or "").strip(),
-                                "score": t.get("score"),
-                            }
-                            for t in raw_topics
-                            if isinstance(t, dict) and (t.get("display_name") or "").strip()
-                        ]
-                    elif isinstance((w or {}).get("concepts"), list):
-                        raw_concepts = (w or {}).get("concepts") or []
-                        topics_list = [
-                            {
-                                "term": (c.get("display_name") or "").strip(),
-                                "score": c.get("score"),
-                            }
-                            for c in raw_concepts
-                            if isinstance(c, dict) and (c.get("display_name") or "").strip()
-                        ]
-                except Exception:
-                    topics_list = []
-
-                works.append({
-                    "title": title,
-                    "authors": auths,
-                    "abstract": abstract or "",
-                    "year": year,
-                    "publication_date": pub_date,
-                    "num_citations": cites,
-                    "journal": journal or "",
-                    "pub_url": url or "",
-                    "doi": doi or "",
-                    "topics": topics_list,
-                    "institutions": insts,
-                })
-            cursor = data.get("meta", {}).get("next_cursor")
-            if not cursor:
-                break
-    except Exception as e:
-        logger.error(f"OpenAlex works fetch failed for {author_openalex_id}: {e}")
-    if not works:
-        logger.info("OpenAlex returned 0 works for author %s (from_year=%s)", author_openalex_id, from_year)
-    else:
-        logger.info("OpenAlex fetched %d works for author %s", len(works), author_openalex_id)
+    cursor: str | None = "*"
+    while cursor:
+        page = fetch_works_page_for_author(
+            author_openalex_id,
+            cursor=cursor,
+            per_page=100,
+            from_year=from_year,
+            mailto=mailto,
+        )
+        works.extend(page["results"])
+        # An empty page is not the end of the catalogue — client-side filtering
+        # can empty one — so only a None cursor ends the walk.
+        cursor = page["next_cursor"]
+    logger.info("OpenAlex fetched %d works for author %s", len(works), author_openalex_id)
     return works
 
 
@@ -294,6 +190,7 @@ def fetch_works_page_for_author(
     cursor: str = "*",
     per_page: int = 50,
     sort: str = "cited_by_count:desc",
+    from_year: int | None = None,
     mailto: str | None = None,
 ) -> dict:
     """Fetch one page of an author's works from OpenAlex.
@@ -323,6 +220,9 @@ def fetch_works_page_for_author(
     client = get_client()
     oaid = _normalize_openalex_author_id(author_openalex_id)
     filt = f"author.id:{oaid}"
+    if from_year:
+        # OpenAlex wants a date, not a year, as the lower bound.
+        filt = f"{filt},from_publication_date:{from_year}-01-01"
     params = {
         "filter": filt,
         "per-page": max(1, min(per_page, 100)),
@@ -1344,6 +1244,15 @@ def batch_fetch_recent_works_for_authors(
     Returns:
         Dict mapping normalized author ID -> list of raw OpenAlex work dicts.
         Authors with no works are omitted from the result.
+
+    Raises on ANY upstream or transport failure (HTTP error, timeout, network
+    switch off, quota exhausted). It used to log a warning, ``break`` out of the
+    chunk and return what it had, which every caller read as "these authors
+    published nothing recently": a Feed refresh that hit a 429 reported its
+    author monitors clean with zero new papers, and the ``try/except`` Feed
+    already wrapped this call in could never fire (task 85 — the same defect
+    `fetch_works_page_for_author` had). An author missing from the result means
+    we read the response and it held no works for them.
     """
     # Deduplicate and normalize IDs
     clean_ids: list[str] = []
@@ -1383,7 +1292,7 @@ def batch_fetch_recent_works_for_authors(
         "is_retracted"
     )
 
-    for chunk_idx, chunk_ids in enumerate(chunks):
+    for chunk_ids in chunks:
         # Build piped author filter
         author_filter = "author.id:" + "|".join(chunk_ids)
         filter_parts = [author_filter]
@@ -1397,81 +1306,65 @@ def batch_fetch_recent_works_for_authors(
         max_works = per_author_limit * len(chunk_ids) * 2  # generous upper bound
 
         while cursor:
-            try:
-                resp = client.get(
-                    "/works",
-                    params={
-                        "filter": filter_str,
-                        "sort": "publication_date:desc",
-                        "per-page": 100,
-                        "cursor": cursor,
-                        "select": discovery_select,
-                    },
-                    timeout=30,
-                )
-                if resp.status_code != 200:
-                    logger.warning(
-                        "Batch author works fetch returned %d for chunk %d (size=%d)",
-                        resp.status_code,
-                        chunk_idx,
-                        len(chunk_ids),
-                    )
-                    break
+            resp = client.get(
+                "/works",
+                params={
+                    "filter": filter_str,
+                    "sort": "publication_date:desc",
+                    "per-page": 100,
+                    "cursor": cursor,
+                    "select": discovery_select,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
 
-                op_stats = getattr(client, "_op_stats", None)
-                if op_stats is not None:
-                    op_stats.batch_requests += 1
-                    op_stats.batch_items += len(chunk_ids)
+            op_stats = getattr(client, "_op_stats", None)
+            if op_stats is not None:
+                op_stats.batch_requests += 1
+                op_stats.batch_items += len(chunk_ids)
 
-                data = resp.json() or {}
-                results = data.get("results") or []
+            data = resp.json() or {}
+            results = data.get("results") or []
 
-                if not results:
-                    break
+            if not results:
+                break
 
-                for work in results:
-                    # Map work to each author from this chunk that appears
-                    # in the work's authorships.
-                    authorships = work.get("authorships") or []
-                    matched_aids: set[str] = set()
-                    for authorship in authorships:
-                        author_obj = authorship.get("author") or {}
-                        work_aid_raw = (author_obj.get("id") or "").strip()
-                        if not work_aid_raw:
-                            continue
-                        work_aid = _normalize_openalex_author_id(work_aid_raw)
-                        if work_aid.lower() in seen and work_aid not in matched_aids:
-                            matched_aids.add(work_aid)
-                    for matched in matched_aids:
-                        # Find the canonical-cased ID from clean_ids
-                        canonical = matched
-                        for cid in chunk_ids:
-                            if cid.lower() == matched.lower():
-                                canonical = cid
-                                break
-                        if len(author_works.get(canonical, [])) < per_author_limit:
-                            author_works.setdefault(canonical, []).append(work)
+            for work in results:
+                # Map work to each author from this chunk that appears
+                # in the work's authorships.
+                authorships = work.get("authorships") or []
+                matched_aids: set[str] = set()
+                for authorship in authorships:
+                    author_obj = authorship.get("author") or {}
+                    work_aid_raw = (author_obj.get("id") or "").strip()
+                    if not work_aid_raw:
+                        continue
+                    work_aid = _normalize_openalex_author_id(work_aid_raw)
+                    if work_aid.lower() in seen and work_aid not in matched_aids:
+                        matched_aids.add(work_aid)
+                for matched in matched_aids:
+                    # Find the canonical-cased ID from clean_ids
+                    canonical = matched
+                    for cid in chunk_ids:
+                        if cid.lower() == matched.lower():
+                            canonical = cid
+                            break
+                    if len(author_works.get(canonical, [])) < per_author_limit:
+                        author_works.setdefault(canonical, []).append(work)
 
-                works_fetched += len(results)
-                cursor = (data.get("meta") or {}).get("next_cursor")
+            works_fetched += len(results)
+            cursor = (data.get("meta") or {}).get("next_cursor")
 
-                # Stop paginating if we have collected enough works or if
-                # all authors in this chunk already have per_author_limit.
-                if works_fetched >= max_works:
-                    break
-                all_full = all(
-                    len(author_works.get(cid, [])) >= per_author_limit
-                    for cid in chunk_ids
-                )
-                if all_full:
-                    break
-
-            except Exception as exc:
-                logger.warning(
-                    "Batch author works fetch failed for chunk %d: %s",
-                    chunk_idx,
-                    exc,
-                )
+            # Stop paginating if we have collected enough works or if
+            # all authors in this chunk already have per_author_limit.
+            if works_fetched >= max_works:
+                break
+            all_full = all(
+                len(author_works.get(cid, [])) >= per_author_limit
+                for cid in chunk_ids
+            )
+            if all_full:
                 break
 
     # Remove empty entries
