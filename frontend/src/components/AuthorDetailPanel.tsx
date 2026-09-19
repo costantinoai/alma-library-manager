@@ -63,6 +63,7 @@ import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifie
 import { useToast, errorToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
+import { describeJobLaunch } from '@/lib/activity'
 import { reactionFromRating } from '@/lib/reactions'
 import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
@@ -402,12 +403,7 @@ export function AuthorDetailPanel({
         ['author-publications', resolved.id],
         ['activity-operations'],
       )
-      toast({
-        title: data?.status === 'already_running' ? 'Refresh already running' : 'Refresh queued',
-        description: data?.job_id
-          ? `Job ${data.job_id} active for ${resolved.name}.`
-          : undefined,
-      })
+      toast(describeJobLaunch(data, `Refresh of ${resolved.name}`))
     },
     onError: () => errorToast('Error', 'Failed to start author refresh.'),
   })

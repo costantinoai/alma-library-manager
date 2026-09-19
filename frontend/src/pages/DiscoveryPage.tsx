@@ -76,6 +76,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { useDiscoveryImpressions } from '@/hooks/useDiscoveryImpressions'
+import { describeJobLaunch } from '@/lib/activity'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { reactionFromRating } from '@/lib/reactions'
 import {
@@ -401,10 +402,7 @@ export function DiscoveryPage() {
       // by stale state.
       setDismissedIds(new Set())
       if (envelope.status === 'already_running') {
-        toast({
-          title: 'Refresh already running',
-          description: 'Track progress in Activity — you’ll get a notification when it finishes.',
-        })
+        toast(describeJobLaunch(envelope, 'Lens refresh'))
       }
     },
     onError: () => errorToast('Refresh failed', 'Could not queue lens refresh.'),
