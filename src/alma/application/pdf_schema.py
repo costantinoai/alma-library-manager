@@ -119,6 +119,10 @@ class PdfCandidate:
     #: does not have the paper (Sci-Hub: "not available through sci-hub"), so
     #: the attempt reads "does not have it" rather than "no PDF on the page".
     absent_titles: tuple[str, ...] = ()
+    #: Whether the landing-page hop may follow plain ``<a href="….pdf">``
+    #: anchors. A mirror page's anchors are its advertising; its PDF is in the
+    #: viewer element, so mirror sources turn this off.
+    follow_anchors: bool = True
 
 
 @runtime_checkable

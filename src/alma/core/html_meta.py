@@ -22,8 +22,10 @@ from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 # Tags whose attributes the snapshot keeps. Anything else is skipped, so a
 # multi-megabyte page costs a single pass and a small result.
 _KEPT_TAGS = frozenset({"meta", "link", "iframe", "embed", "object", "a"})
-# Anchors are the noisiest tag on a page; keep only a bounded number.
+# A hostile page can carry any number of tags; keep bounded lists (anchors,
+# the noisiest, tighter still) so a 2 MB page costs one pass and a small result.
 _MAX_ANCHORS = 500
+_MAX_TAGS = 2000
 
 
 @dataclass(frozen=True)
@@ -64,14 +66,15 @@ class _Collector(HTMLParser):
             name = (
                 attr_map.get("name") or attr_map.get("property") or attr_map.get("http-equiv") or ""
             ).lower()
-            if name:
+            if name and len(self.metas) < _MAX_TAGS:
                 self.metas.append((name, attr_map.get("content", "")))
         elif tag == "link":
-            self.links.append(attr_map)
+            if len(self.links) < _MAX_TAGS:
+                self.links.append(attr_map)
         elif tag == "a":
             if len(self.anchors) < _MAX_ANCHORS and attr_map.get("href"):
                 self.anchors.append(attr_map)
-        else:
+        elif len(self.embeds) < _MAX_TAGS:
             self.embeds.append((tag, attr_map))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -114,14 +117,20 @@ def absolute_url(raw: str, base_url: str) -> str:
 
     Handles protocol-relative ``//host/x`` and relative paths, and drops the
     fragment (viewer hints like ``#view=FitH`` are not part of the resource).
-    Returns ``""`` for anything that is not http(s) after resolution.
+    Returns ``""`` — never raises — for anything that is not a plain http(s)
+    URL after resolution (malformed, credentials, backslashes). The fetch
+    itself vets the address again (``core.url_safety``).
     """
     value = (raw or "").strip()
-    if not value or value.lower().startswith(("javascript:", "data:", "mailto:")):
+    if not value or "\\" in value or value.lower().startswith(("javascript:", "data:", "mailto:")):
         return ""
-    resolved = urljoin(base_url, value) if base_url else value
-    parts = urlsplit(resolved)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
+    try:
+        resolved = urljoin(base_url, value) if base_url else value
+        parts = urlsplit(resolved)
+        parts.port  # noqa: B018 — raises ValueError on a malformed port
+    except ValueError:  # "http://[x", ":99999" — a hostile page's malformed link
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.netloc or "@" in parts.netloc:
         return ""
     return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
 
@@ -132,6 +141,8 @@ def _viewer_target(url: str) -> str:
     Repositories and Anna's Archive wrap their PDF in Mozilla's pdf.js viewer;
     the viewer page itself is HTML, the file it opens is the PDF.
     """
+    if not url:
+        return ""
     parts = urlsplit(url)
     if not parts.path.lower().endswith("/viewer.html"):
         return ""
@@ -139,7 +150,7 @@ def _viewer_target(url: str) -> str:
     return absolute_url(target, url) if target else ""
 
 
-def pdf_urls(snapshot: HtmlSnapshot, base_url: str) -> list[str]:
+def pdf_urls(snapshot: HtmlSnapshot, base_url: str, *, include_anchors: bool = True) -> list[str]:
     """Every URL the page advertises as its PDF, most authoritative first.
 
     Order: ``citation_pdf_url`` (the Google Scholar / Highwire convention),
@@ -147,7 +158,8 @@ def pdf_urls(snapshot: HtmlSnapshot, base_url: str) -> list[str]:
     element ``#pdf`` (iframe/embed), any ``<embed>``/``<iframe>`` typed or
     named as a PDF or wrapping one in a pdf.js viewer, then anchors whose
     target ends in ``.pdf``. A pdf.js viewer URL is replaced by the file it
-    opens. Deduplicated, absolute, fragment-free.
+    opens. Deduplicated, absolute, fragment-free. ``include_anchors=False``
+    skips the anchors (a mirror page's anchors are its advertising).
     """
     ordered: list[str] = []
 
@@ -171,12 +183,14 @@ def pdf_urls(snapshot: HtmlSnapshot, base_url: str) -> list[str]:
     for tag, attrs in snapshot.embeds:
         src = attrs.get("src", "") or attrs.get("data", "")
         typed_pdf = attrs.get("type", "").lower() == "application/pdf"
-        looks_pdf = urlsplit(src).path.lower().endswith(".pdf")
-        in_viewer = bool(_viewer_target(absolute_url(src, base_url)))
+        resolved = absolute_url(src, base_url)
+        looks_pdf = bool(resolved) and urlsplit(resolved).path.lower().endswith(".pdf")
+        in_viewer = bool(_viewer_target(resolved))
         if tag in ("iframe", "embed", "object") and (typed_pdf or looks_pdf or in_viewer):
             add(src)
-    for attrs in snapshot.anchors:
-        href = attrs.get("href", "")
-        if urlsplit(href).path.lower().endswith(".pdf"):
-            add(href)
+    if include_anchors:
+        for attrs in snapshot.anchors:
+            href = attrs.get("href", "")
+            if absolute_url(href, base_url) and urlsplit(href).path.lower().endswith(".pdf"):
+                add(href)
     return ordered
