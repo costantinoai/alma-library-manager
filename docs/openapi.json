@@ -836,89 +836,6 @@
         }
       }
     },
-    "/api/v1/authors/backfill-works": {
-      "post": {
-        "tags": [
-          "authors"
-        ],
-        "summary": "Backfill full works + SPECTER2 vectors for corpus authors (Activity-envelope)",
-        "description": "Fetches every OpenAlex work for the target author(s), upserts papers + publication_authors rows, batch-fetches missing SPECTER2 vectors from Semantic Scholar, then recomputes the author_centroids entry.",
-        "operationId": "backfill_author_works_api_v1_authors_backfill_works_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BackfillAuthorWorksRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/authors/follow-from-paper": {
       "post": {
         "tags": [
@@ -10016,7 +9933,7 @@
           "library"
         ],
         "summary": "Update paper reading status",
-        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
+        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. Validation, the legacy\n`queued` \u2192 `reading` coercion and the group-root resolution all live\nin `paper_actions.set_reading_status`, the one writer of the field.",
         "operationId": "update_reading_status_api_v1_library_papers__paper_id__reading_status_patch",
         "security": [
           {
@@ -23185,45 +23102,6 @@
           "author_type"
         ],
         "title": "AuthorTypeUpdateRequest"
-      },
-      "BackfillAuthorWorksRequest": {
-        "properties": {
-          "author_openalex_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Author Openalex Id",
-            "description": "Single author OpenAlex id, or null for the full batch"
-          },
-          "full_refetch": {
-            "type": "boolean",
-            "title": "Full Refetch",
-            "description": "Bypass the 'local paper count >= declared works_count' skip shortcut",
-            "default": false
-          },
-          "limit": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 10000.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit",
-            "description": "Batch runs only: cap the number of authors processed this job"
-          }
-        },
-        "type": "object",
-        "title": "BackfillAuthorWorksRequest",
-        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs \u2014 useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
       },
       "BibtexTextImportRequest": {
         "properties": {

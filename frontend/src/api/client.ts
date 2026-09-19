@@ -1299,23 +1299,6 @@ export function refreshAuthorSuggestionNetwork(
   )
 }
 
-/**
- * D12 Phase B — enqueue the corpus author works + SPECTER2 vector
- * backfill. `authorOpenalexId` null runs the batch variant (every
- * resolved author whose centroid is missing or older than 14 days).
- */
-export function backfillAuthorWorks(opts: {
-  authorOpenalexId?: string | null
-  fullRefetch?: boolean
-  limit?: number | null
-} = {}): Promise<JobEnvelope> {
-  return api.post<JobEnvelope>('/authors/backfill-works', {
-    author_openalex_id: opts.authorOpenalexId ?? null,
-    full_refetch: opts.fullRefetch ?? false,
-    limit: opts.limit ?? null,
-  })
-}
-
 /** One named contributor to an author's signal. `score` is the display
  *  magnitude (0..100); `tone` carries the sign so the bar renders length +
  *  colour without re-deriving either. Mirrors
