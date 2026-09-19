@@ -27,6 +27,7 @@ from alma.config import (
     get_semantic_scholar_api_key,
 )
 from alma.core.redaction import redact_sensitive_text
+from alma.core.url_safety import VettedUrl, clean_remote_text
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,161 @@ class SourcePolicy:
     # An impersonating transport must keep the browser User-Agent it forges;
     # every ordinary source identifies itself as ALMa.
     send_app_user_agent: bool = True
+    # A source that fetches URLs taken from third-party content (metadata,
+    # publisher pages, mirrors): every request and every redirect hop goes
+    # through ``core.url_safety.vet_url``, the connection is pinned to the
+    # addresses that were checked, the transport never follows a redirect on
+    # its own, and a non-streamed body is capped. See ``_send_guarded``.
+    guard_addresses: bool = False
+
+
+# --- Guarded transport (sources that fetch third-party-chosen URLs) ---------
+
+GUARDED_MAX_REDIRECTS = 5
+#: Cap on a NON-streamed guarded body (a landing page, a mirror's JSON API).
+#: Streamed downloads carry their own cap (the PDF store's).
+GUARDED_MAX_BODY_BYTES = 5_000_000
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_BODY_CHUNK = 64 * 1024
+
+
+class ResponseTooLargeError(requests.exceptions.RequestException):
+    """A guarded body passed its byte cap (the response is closed)."""
+
+
+def iter_body(response: Any) -> Iterator[bytes]:
+    """A response's body in chunks, for ``requests`` and ``curl_cffi`` alike.
+
+    ``requests`` defaults to 1-byte chunks; curl_cffi sizes its own chunks and
+    warns when given a size.
+    """
+    if isinstance(response, requests.Response):
+        return response.iter_content(_BODY_CHUNK)
+    return response.iter_content()
+
+
+def _read_capped(response: Any, max_bytes: int) -> Any:
+    """Read a streamed response into memory, refusing more than ``max_bytes``."""
+    body = bytearray()
+    try:
+        for chunk in iter_body(response):
+            body += chunk
+            if len(body) > max_bytes:
+                raise ResponseTooLargeError(f"Response larger than {max_bytes} bytes")
+    finally:
+        response.close()
+    if isinstance(response, requests.Response):
+        response._content = bytes(body)
+        response._content_consumed = True
+    else:  # curl_cffi: `content` is a plain attribute; `text` decodes it lazily
+        response.content = bytes(body)
+    return response
+
+
+@contextmanager
+def _pinned(session: Any, pin: VettedUrl | None) -> Iterator[None]:
+    """For this one request, make a curl session connect only to ``pin.addresses``.
+
+    ``CURLOPT_RESOLVE`` is set on the (thread-local) session's own options and
+    restored afterwards. Every request of a guarded curl session is pinned:
+    its persistent handle caches DNS and reuses connections by host name, so
+    one unpinned call could leave a rebound address behind. A ``requests``
+    session is pinned by its :class:`GuardedAdapter` instead.
+    """
+    if pin is None or not hasattr(session, "curl_options"):
+        yield
+        return
+    from curl_cffi import CurlOpt
+
+    addresses = ",".join(f"[{address}]" if ":" in address else address for address in pin.addresses)
+    saved = session.curl_options
+    session.curl_options = {**(saved or {}), CurlOpt.RESOLVE: [f"{pin.host}:{pin.port}:{addresses}"]}
+    try:
+        yield
+    finally:
+        session.curl_options = saved
+
+
+def _check_peer(response: Any, vetted: VettedUrl) -> None:
+    """Refuse a curl response whose connection went anywhere but a vetted address.
+
+    curl_cffi records the connected peer as ``primary_ip`` once headers are in;
+    a ``requests`` response has no such field — its :class:`GuardedAdapter`
+    connected to a checked address itself.
+    """
+    import ipaddress
+
+    from alma.core.url_safety import UnsafeUrlError
+
+    if not hasattr(response, "primary_ip"):
+        return
+    allowed = {ipaddress.ip_address(address) for address in vetted.addresses}
+    try:
+        ok = ipaddress.ip_address(str(response.primary_ip or "")) in allowed
+    except ValueError:
+        ok = False
+    if not ok:
+        response.close()
+        raise UnsafeUrlError("Refused: the connection went to an address that was not checked")
+
+
+def _guarded_connection(base: type) -> type:
+    """A urllib3 connection class that connects only to vetted public addresses."""
+    from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
+    from urllib3.util.connection import create_connection
+
+    class _Guarded(base):  # type: ignore[misc, valid-type]
+        def _new_conn(self):  # noqa: ANN202 — urllib3's own signature
+            from alma.core.url_safety import public_addresses
+
+            # Resolve, check EVERY address, connect to a checked one: no
+            # second lookup between the check and the connect. TLS still
+            # verifies the certificate against the host name.
+            addresses = public_addresses(self._dns_host)  # UnsafeUrlError propagates, un-retried
+            last: OSError | None = None
+            for address in addresses:
+                try:
+                    return create_connection(
+                        (address, self.port),
+                        self.timeout,
+                        source_address=self.source_address,
+                        socket_options=self.socket_options,
+                    )
+                except TimeoutError as exc:
+                    raise ConnectTimeoutError(self, f"Connection to {self.host} timed out") from exc
+                except OSError as exc:
+                    last = exc
+            raise NewConnectionError(self, f"Failed to establish a new connection: {last}")
+
+    _Guarded.__name__ = f"Guarded{base.__name__}"
+    return _Guarded
+
+
+class GuardedAdapter(requests.adapters.HTTPAdapter):
+    """A ``requests`` adapter whose every connection goes to a vetted public address.
+
+    Mounted on the sessions of ``guard_addresses`` policies. It never uses a
+    proxy: a proxy would make the connection check meaningless.
+    """
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        from urllib3.connection import HTTPConnection, HTTPSConnection
+        from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+
+        super().init_poolmanager(*args, **kwargs)
+
+        class _Http(HTTPConnectionPool):
+            ConnectionCls = _guarded_connection(HTTPConnection)
+
+        class _Https(HTTPSConnectionPool):
+            ConnectionCls = _guarded_connection(HTTPSConnection)
+
+        self.poolmanager.pool_classes_by_scheme = {"http": _Http, "https": _Https}
+
+    def proxy_manager_for(self, *args: Any, **kwargs: Any) -> Any:
+        from alma.core.url_safety import UnsafeUrlError
+
+        raise UnsafeUrlError("Refused: guarded fetches never go through a proxy")
 
 
 class SourceDiagnosticsCollector:
@@ -282,6 +438,7 @@ _POLICIES: dict[str, SourcePolicy] = {
     ),
     "arxiv": SourcePolicy(
         name="arxiv",
+        guard_addresses=True,
         base_url="https://export.arxiv.org",
         min_interval_seconds=3.1,
         max_concurrency=1,
@@ -325,6 +482,7 @@ _POLICIES: dict[str, SourcePolicy] = {
     # then `PMC{id}.{ver}/PMC{id}.{ver}.pdf`.
     "pmc_oa": SourcePolicy(
         name="pmc_oa",
+        guard_addresses=True,
         base_url="https://pmc-oa-opendata.s3.amazonaws.com",
         min_interval_seconds=0.2,
         max_concurrency=2,
@@ -333,6 +491,7 @@ _POLICIES: dict[str, SourcePolicy] = {
     ),
     "publisher": SourcePolicy(
         name="publisher",
+        guard_addresses=True,
         base_url="",
         min_interval_seconds=0.5,
         max_concurrency=1,
@@ -372,11 +531,23 @@ class SourceHttpClient:
         self._concurrency_cond = threading.Condition()
         self._active_requests = 0
 
+    @property
+    def guards_addresses(self) -> bool:
+        """True when every request is vetted and pinned (``SourcePolicy.guard_addresses``)."""
+        return self._policy.guard_addresses
+
     def _session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
         if session is None:
             factory = self._policy.session_factory
             session = factory() if factory is not None else requests.Session()
+            if self._policy.guard_addresses and isinstance(session, requests.Session):
+                # No environment proxies, and every connection vetted (a curl
+                # session is pinned per request in `_pinned` instead).
+                session.trust_env = False
+                adapter = GuardedAdapter()
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
             if self._policy.send_app_user_agent:
                 session.headers.update({"User-Agent": get_app_user_agent()})
             for key, value in self._policy.default_headers:
@@ -516,6 +687,7 @@ class SourceHttpClient:
         max_retries: int | None = None,
         stream: bool = False,
         allow_redirects: bool = True,
+        max_body_bytes: int | None = None,
     ) -> requests.Response:
         """Issue one rate-limited, retried request.
 
@@ -528,8 +700,12 @@ class SourceHttpClient:
         (a PDF) can be consumed chunk by chunk under a byte cap; the caller
         then owns the response and must ``close()`` it. A streamed response
         that is retried is closed here first so its connection returns to
-        the pool. ``allow_redirects=False`` hands 3xx back to the caller —
-        used when every redirect hop must be validated before it is followed.
+        the pool. ``allow_redirects=False`` hands 3xx back to the caller.
+
+        A policy with ``guard_addresses`` routes through :meth:`_send_guarded`:
+        the URL and every redirect hop are vetted and the connection pinned,
+        and a non-streamed body stops at ``max_body_bytes``
+        (default :data:`GUARDED_MAX_BODY_BYTES`).
         """
         from alma.core.network_policy import require_network_access
 
@@ -541,8 +717,43 @@ class SourceHttpClient:
         retry_budget = (
             max(0, int(max_retries)) if max_retries is not None else max(0, self._policy.max_retries)
         )
-        diagnostics = get_active_source_diagnostics()
         path_label = path_or_url if path_or_url.startswith("/") else url.replace(self._policy.base_url, "", 1) or "/"
+        send = dict(
+            params=request_params, headers=request_headers, json=json, data=data,
+            timeout_value=timeout_value, retry_budget=retry_budget, path_label=path_label,
+        )
+        if self._policy.guard_addresses:
+            return self._send_guarded(
+                method, url, stream=stream, allow_redirects=allow_redirects,
+                max_body_bytes=max_body_bytes, **send,
+            )
+        return self._send(method, url, stream=stream, allow_redirects=allow_redirects, **send)
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any],
+        headers: dict[str, str],
+        json: dict[str, Any] | None,
+        data: dict[str, Any] | None,
+        timeout_value: float,
+        retry_budget: int,
+        path_label: str,
+        stream: bool,
+        allow_redirects: bool,
+        pin: VettedUrl | None = None,
+    ) -> requests.Response:
+        """One request with pacing, retries and diagnostics (see :meth:`request`).
+
+        ``pin`` (guarded requests only) makes a curl session connect to the
+        vetted addresses and nothing else; a ``requests`` session is pinned by
+        its mounted :class:`GuardedAdapter` instead.
+        """
+        request_params = params
+        request_headers = headers
+        diagnostics = get_active_source_diagnostics()
         transport_errors = (requests.exceptions.RequestException, *self._policy.transport_errors)
 
         last_exc: Exception | None = None
@@ -552,17 +763,18 @@ class SourceHttpClient:
                 self._wait_for_slot()
                 started_at = time.monotonic()
                 try:
-                    response = self._session().request(
-                        method.upper(),
-                        url,
-                        params=request_params,
-                        headers=request_headers,
-                        json=json,
-                        data=data,
-                        timeout=timeout_value,
-                        stream=stream,
-                        allow_redirects=allow_redirects,
-                    )
+                    with _pinned(self._session(), pin):
+                        response = self._session().request(
+                            method.upper(),
+                            url,
+                            params=request_params,
+                            headers=request_headers,
+                            json=json,
+                            data=data,
+                            timeout=timeout_value,
+                            stream=stream,
+                            allow_redirects=allow_redirects,
+                        )
                     elapsed_ms = (time.monotonic() - started_at) * 1000.0
                     last_resp = response
                     if diagnostics is not None:
@@ -636,6 +848,47 @@ class SourceHttpClient:
             raise last_exc
         raise RuntimeError(f"Unreachable request failure for source {self._policy.name}")
 
+    def _send_guarded(
+        self,
+        method: str,
+        url: str,
+        *,
+        stream: bool,
+        allow_redirects: bool,
+        max_body_bytes: int | None,
+        **send: Any,
+    ) -> requests.Response:
+        """A request to an address taken from content we do not control.
+
+        Every hop — the first URL and each ``Location`` — passes
+        ``url_safety.vet_url`` and is sent as the canonical URL it returns,
+        pinned to the addresses that were checked; after the headers arrive a
+        curl connection's peer must be one of them. Redirects are followed
+        here (at most :data:`GUARDED_MAX_REDIRECTS`), never by the transport:
+        a POST that is redirected continues as a body-less GET, except a
+        307/308, which would re-send the body (a login key) elsewhere and is
+        refused. A non-streamed body is read under ``max_body_bytes``.
+        Raises ``UnsafeUrlError`` for a refused address.
+        """
+        from alma.core.url_safety import UnsafeUrlError, vet_url
+
+        current_method = method.upper()
+        for _hop in range(GUARDED_MAX_REDIRECTS + 1):
+            vetted = vet_url(url)
+            response = self._send(current_method, vetted.url, stream=True, allow_redirects=False, pin=vetted, **send)
+            _check_peer(response, vetted)
+            location = response.headers.get("Location") if response.status_code in _REDIRECT_STATUSES else None
+            if not location or not allow_redirects:
+                return response if stream else _read_capped(response, max_body_bytes or GUARDED_MAX_BODY_BYTES)
+            response.close()
+            url = vet_url(location, base=vetted.url, resolve=False).url  # resolved on the next pass
+            send["params"] = {}  # the query string belonged to the first request
+            if current_method not in ("GET", "HEAD"):
+                if response.status_code in (307, 308):
+                    raise UnsafeUrlError("Refused: a redirect that would re-send the request body")
+                current_method, send["json"], send["data"] = "GET", None, None
+        raise requests.exceptions.TooManyRedirects("Too many redirects")
+
     def get(
         self,
         path_or_url: str,
@@ -646,6 +899,7 @@ class SourceHttpClient:
         max_retries: int | None = None,
         stream: bool = False,
         allow_redirects: bool = True,
+        max_body_bytes: int | None = None,
     ) -> requests.Response:
         return self.request(
             "GET",
@@ -656,6 +910,7 @@ class SourceHttpClient:
             max_retries=max_retries,
             stream=stream,
             allow_redirects=allow_redirects,
+            max_body_bytes=max_body_bytes,
         )
 
     def post(
@@ -746,7 +1001,7 @@ def describe_transport_error(exc: BaseException) -> str:
     for needles, words in _TRANSPORT_FAILURES:
         if any(needle in lowered for needle in needles):
             return words
-    return raw[:200] or type(exc).__name__
+    return clean_remote_text(raw) or type(exc).__name__
 
 
 def openalex_usage_snapshot() -> dict[str, Any]:

@@ -992,8 +992,10 @@ def _fetch_html_abstract(url: str) -> str:
     if "pdf" in content_type:
         return ""
     try:
+        from alma.core.url_safety import safe_charset
+
         body = resp.content[:_HTML_ABSTRACT_MAX_BYTES]
-        text = body.decode(resp.encoding or "utf-8", errors="replace")
+        text = body.decode(safe_charset(resp.encoding), errors="replace")
         return _extract_abstract_from_html(text)
     except Exception:
         return ""
