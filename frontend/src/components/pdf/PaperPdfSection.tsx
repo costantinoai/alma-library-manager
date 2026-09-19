@@ -11,6 +11,7 @@ import {
   type PaperPdfState,
   type PdfFetchResult,
 } from '@/api/client'
+import { PdfAttemptItem } from '@/components/pdf/PdfAttemptItem'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { Button } from '@/components/ui/button'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
@@ -18,7 +19,7 @@ import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { usePdfFetchEnabled } from '@/hooks/usePdfSources'
 import { usePdfJob } from '@/hooks/usePdfJob'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { describeAttempt, pdfChip, pdfSourceLabel } from '@/lib/pdf'
+import { pdfChip, pdfSourceLabel } from '@/lib/pdf'
 
 interface PaperPdfSectionProps {
   paperId: string
@@ -168,7 +169,7 @@ export function PaperPdfSection({ paperId, pdf }: PaperPdfSectionProps) {
             {available && stored && <li>File: {stored.filename}</li>}
             {available && stored?.license && <li>Licence: {stored.license}</li>}
             {attempts.map((attempt) => (
-              <li key={attempt.source_id}>{describeAttempt(attempt)}</li>
+              <PdfAttemptItem key={attempt.source_id} attempt={attempt} />
             ))}
           </ul>
         </DisclosurePanel>

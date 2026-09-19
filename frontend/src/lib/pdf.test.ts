@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { PaperPdfAttempt, PaperPdfStored } from '@/api/client'
 
 import { buildReaderHref, parseHashRoute, parseReaderRoute } from './hashRoute'
-import { describeAttempt, pdfChip, pdfSourceLabel } from './pdf'
+import { attemptPlaces, describeAttempt, pdfChip, pdfSourceLabel } from './pdf'
 
 describe('PDF reader route', () => {
   it('round-trips a paper id and is not a page', () => {
@@ -63,5 +63,17 @@ describe('PDF vocabulary', () => {
     expect(describeAttempt(attempt('skipped'))).toBe('Unpaywall: not set up')
     expect(pdfSourceLabel('scihub')).toBe('Sci-Hub')
     expect(pdfSourceLabel(null)).toBe('your upload')
+
+    // A source that tried several mirrors lists what each said; one place does not.
+    const mirrors = attempt(
+      'blocked',
+      "sci-net.xyz: Sent to the site's home page — it does not have this paper; sci-hub.ru: Bot check page",
+    )
+    expect(attemptPlaces(mirrors)).toEqual([
+      "sci-net.xyz: Sent to the site's home page — it does not have this paper",
+      'sci-hub.ru: Bot check page',
+    ])
+    expect(attemptPlaces(attempt('not_pdf', 'Page advertises no PDF'))).toEqual([])
+    expect(attemptPlaces(attempt('skipped', 'a; b'))).toEqual([])
   })
 })

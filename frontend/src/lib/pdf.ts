@@ -49,6 +49,17 @@ export function describeAttempt(attempt: PaperPdfAttempt): string {
   return `${pdfSourceLabel(attempt.source_id)}: ${outcome}`
 }
 
+/**
+ * What each place said, for a source that tried several (one line per mirror
+ * or listed location: "sci-hub.ru: Bot check page"). The backend joins them
+ * as "host: words; host: words"; a single-place miss has none.
+ */
+export function attemptPlaces(attempt: PaperPdfAttempt): string[] {
+  if (attempt.outcome === 'skipped' || attempt.outcome === 'found' || !attempt.detail) return []
+  const places = attempt.detail.split('; ').filter(Boolean)
+  return places.length > 1 ? places : []
+}
+
 /** The chip for a stored PDF: which kind, and its one-line label. */
 export function pdfChip(stored: PaperPdfStored): { kind: SignalKind; label: string } {
   const kinds: Record<PdfVerification, SignalKind> = {

@@ -10,11 +10,11 @@ import {
   type PaperPdfState,
   type PdfFetchResult,
 } from '@/api/client'
+import { PdfAttemptItem } from '@/components/pdf/PdfAttemptItem'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SurfaceProvider } from '@/components/ui/surface'
 import { usePdfJob } from '@/hooks/usePdfJob'
-import { describeAttempt } from '@/lib/pdf'
 
 type Phase = 'loading' | 'opening' | 'working' | 'not-found' | 'no-source' | 'error'
 
@@ -124,7 +124,7 @@ export function PdfReaderPage({ paperId }: { paperId: string }) {
               {pdf && pdf.attempts.length > 0 && (
                 <ul className="space-y-0.5 text-xs text-slate-500">
                   {pdf.attempts.map((attempt) => (
-                    <li key={attempt.source_id}>{describeAttempt(attempt)}</li>
+                    <PdfAttemptItem key={attempt.source_id} attempt={attempt} />
                   ))}
                 </ul>
               )}
