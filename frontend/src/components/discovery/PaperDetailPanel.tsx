@@ -1097,7 +1097,7 @@ function RelatedWorkRow({
         status === '__none__' ? null : (status as 'reading' | 'done' | 'excluded'),
       ),
     onSuccess: () => {
-      invalidateQueries(queryClient, ['papers'], ['library-saved'], ['library-workflow'])
+      void invalidateAfterPaperMutation(queryClient)
     },
     onError: () => errorToast('Error', 'Could not update reading status'),
   })

@@ -280,9 +280,11 @@ export function DiscoveryPage() {
         hide_library: hideLibrary,
       }),
     enabled: Boolean(selectedLensId),
-    // Recommendations only change when the user refreshes the lens (an explicit
-    // mutation that invalidates this key). Without a staleTime every lens switch
-    // + window refocus refetched the full 200-rec list for no new data.
+    // The ranked list only changes on a lens refresh, but each rec embeds the
+    // live paper (membership, reading status, rating), which any surface can
+    // change — every such mutation goes through `invalidateAfterPaperMutation`,
+    // which invalidates this key. Without a staleTime every lens switch +
+    // window refocus refetched the full 200-rec list for no new data.
     staleTime: 60_000,
   })
 
@@ -1552,9 +1554,12 @@ export function DiscoveryPage() {
                   // source of truth) — NOT `rec.user_action`, which stays stamped
                   // 'save' even after an undo and would falsely read "Saved".
                   isSaved={selectedLensCollectionId ? !!rec.in_library : paper?.status === 'library'}
-                  // Reading-list membership. Reflects the "Queued" state on a card
-                  // that stays visible after Add to reading list.
-                  isQueued={paper?.reading_status === 'reading' || rec.user_action === 'read'}
+                  // Reading-list membership, read from the live paper — like
+                  // `isSaved` above and Feed's card. NOT `rec.user_action`: the
+                  // 'read' stamp outlives the paper leaving the reading list, and
+                  // a stale "Queued" routed the Queue click to undo, so the paper
+                  // could never be re-added from Discovery.
+                  isQueued={paper?.reading_status === 'reading'}
                   savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
                   savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
                   trailingHeader={rec.is_new ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}

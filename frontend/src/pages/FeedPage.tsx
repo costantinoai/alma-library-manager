@@ -406,15 +406,10 @@ export function FeedPage() {
   }
 
   const invalidateFeedWorkflowAction = () =>
-    invalidateQueries(
-      queryClient,
-      ['feed-inbox'],
-      ['feed-status'],
-      ['papers'],
-      ['library-saved'],
-      ['library-workflow-summary'],
-      ['reading-queue'],
-    )
+    Promise.all([
+      invalidateAfterPaperMutation(queryClient),
+      invalidateQueries(queryClient, ['feed-status']),
+    ])
 
   // Reverses a single dismiss (restores the card). Wired to the transient
   // "Undo" button on the dismiss toast.

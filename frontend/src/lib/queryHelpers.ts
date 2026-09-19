@@ -71,9 +71,15 @@ export function invalidateAfterSignalLabMutation(
 }
 
 /**
- * After a triage mutation on a paper (save / like / love / dismiss) that
- * touches both Library state and Feed / Discovery reconciliation. Optionally
- * scoped to a specific lens for Discovery-side recomputes.
+ * After ANY change to one paper's own state — membership, rating, reading
+ * status — from any surface. Every list that embeds that state must re-read
+ * it. Optionally scoped to a specific lens for Discovery-side recomputes.
+ *
+ * `lens-recommendations` is here because each recommendation carries the live
+ * paper (`rec.paper.status`, `.reading_status`, `.rating`) and the cache is
+ * kept 60 s. Without it, taking a paper off the reading list in Library left
+ * Discovery showing it "Queued" — and clicking that card ran UNDO, so the
+ * paper could not be put back from Discovery (2026-09-19).
  */
 export function invalidateAfterPaperMutation(
   qc: QueryClient,
@@ -85,6 +91,7 @@ export function invalidateAfterPaperMutation(
     ['feed-inbox'],
     ['library-workflow-summary'],
     ['reading-queue'],
+    ['lens-recommendations'],
   ]
   if (lensId) {
     return invalidateQueries(qc, ...keys, ['lens-signals', lensId])

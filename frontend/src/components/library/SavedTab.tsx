@@ -375,7 +375,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     mutationFn: ({ paperId, readingStatus }: { paperId: string; readingStatus: '' | 'reading' | 'done' | 'excluded' }) =>
       updateReadingStatus(paperId, readingStatus || null),
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['library-saved'], ['papers'], ['library-workflow-summary'], ['reading-queue'])
+      void invalidateAfterPaperMutation(queryClient)
     },
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })

@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { MetricTile, PaperCard, type PaperCardPaper } from '@/components/shared'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate } from '@/lib/utils'
 
 type ReadingStatusValue = 'clear' | 'reading' | 'done' | 'excluded'
@@ -85,7 +85,7 @@ export function ReadingListTab() {
     mutationFn: ({ paperId, nextStatus }: { paperId: string; nextStatus: Exclude<ReadingStatusValue, 'clear'> | null }) =>
       updateReadingStatus(paperId, nextStatus),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['reading-queue'], ['library-workflow-summary'], ['papers'], ['library-saved'])
+      await invalidateAfterPaperMutation(queryClient)
     },
     onError: () => {
       errorToast('Error', 'Failed to update reading status.')

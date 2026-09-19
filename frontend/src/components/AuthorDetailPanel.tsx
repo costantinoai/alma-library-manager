@@ -62,7 +62,7 @@ import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifie
 import { useToast, errorToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
 import { formatPercent, formatYearMonth } from '@/lib/format'
 
@@ -498,12 +498,8 @@ export function AuthorDetailPanel({
       status: 'reading' | 'done' | 'excluded' | null
     }) => updateReadingStatus(paperId, status),
     onSuccess: () => {
-      void invalidateQueries(
-        queryClient,
-        ['author-publications', resolved?.id],
-        ['papers'],
-        ['library-workflow'],
-      )
+      void invalidateAfterPaperMutation(queryClient)
+      void invalidateQueries(queryClient, ['author-publications', resolved?.id])
     },
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })
