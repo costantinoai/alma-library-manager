@@ -1294,8 +1294,11 @@ def backfill_all_resolved_authors(
                 db_path, oid, ctx=None, profile_cache=profile_cache
             )
         except Exception as exc:
+            # Recorded retryable by the runner; named in Activity so a failed
+            # author is visible in the job log, not only as a count.
             logger.warning("author backfill failed for %s: %s", oid, exc)
             summary["failures"] += 1
+            _log_batch_step(ctx, "author_failed", f"{oid}: {type(exc).__name__}: {exc}")
             continue
         summary["processed"] += 1
         if per.get("skipped"):
@@ -1306,6 +1309,9 @@ def backfill_all_resolved_authors(
             summary["centroids_updated"] += 1
         if per.get("centroid_error"):
             summary["centroid_failures"] += 1
+            _log_batch_step(
+                ctx, "centroid_failed", f"{oid}: works fetched, centroid not refreshed — {per['centroid_error']}"
+            )
         if ctx is not None:
             try:
                 ctx.log_step(
@@ -1320,6 +1326,16 @@ def backfill_all_resolved_authors(
 
 
 # -- helpers ---------------------------------------------------------
+
+def _log_batch_step(ctx: Any | None, step: str, message: str) -> None:
+    """Forward one batch event to the job's Activity log (no-op without a ctx)."""
+    if ctx is None:
+        return
+    try:
+        ctx.log_step(step, message=message)
+    except Exception:
+        logger.debug("ctx.log_step failed on %s", step, exc_info=True)
+
 
 def _upsert_work(
     conn: sqlite3.Connection, work: dict, *, now: str
