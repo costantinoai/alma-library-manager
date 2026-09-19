@@ -429,6 +429,17 @@ def _local_match(conn: sqlite3.Connection, hint: IdentityHint) -> str | None:
     return None
 
 
+def _arxiv_candidate(hint: IdentityHint) -> dict | None:
+    """The arXiv record behind a hint that names an arXiv paper, if any."""
+    from alma.core.resolution import extract_arxiv_id
+    from alma.discovery.arxiv import fetch_work_by_id
+
+    arxiv_id = hint.arxiv_id
+    if not arxiv_id and (hint.doi or "").lower().startswith("10.48550/arxiv."):
+        arxiv_id = extract_arxiv_id(hint.doi or "")
+    return fetch_work_by_id(arxiv_id) if arxiv_id else None
+
+
 def _accepts(facts: PdfFacts, *, dois: list[str], title: str) -> Verification | None:
     """The verification if the file plausibly IS this paper, else ``None``."""
     verification = verify_identity(facts, dois=dois, title=title)
@@ -501,23 +512,31 @@ def import_upload(
         except Exception as exc:  # upstream down: try the next hint, report at the end
             log("resolve", f"Lookup failed for {hint.describe()}: {exc}", level="WARNING")
             continue
-        if not work:
+        # OpenAlex often folds an arXiv preprint into its venue version and has
+        # no record under the arXiv DOI; the arXiv record itself is then the
+        # multi-source candidate the online-save path falls back on.
+        candidate = _arxiv_candidate(hint) if not work else None
+        if not work and candidate is None:
             log("resolve", f"No record found for {hint.describe()}")
             continue
-        work_title = str(work.get("title") or "")
-        verification = _accepts(facts, dois=[str(work.get("doi") or "")], title=work_title)
+        record = work or candidate
+        work_title = str(record.get("title") or "")
+        verification = _accepts(facts, dois=[str(record.get("doi") or "")], title=work_title)
         if verification is None and hint is not user_hint:
             log("resolve", f"Skipped “{work_title}” ({hint.describe()}): the file names another paper")
             continue
+        openalex_id = str((work or {}).get("openalex_id") or "") or None
         saved = save_online_search_result(
             conn,
-            openalex_id=str(work.get("openalex_id") or "") or None,
+            openalex_id=openalex_id,
             doi=hint.doi,
-            title=hint.title if not work.get("openalex_id") else None,
+            title=None if openalex_id else (work_title or hint.title),
+            candidate=candidate,
             action="add",
             added_from="import",
             override_added_from=True,
         )
+        source = source if work else "arXiv"
         ref = build_paper_ref(conn, str(saved["id"]))
         if ref is None:
             break

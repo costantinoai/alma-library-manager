@@ -121,24 +121,40 @@ def search_works(
     return out
 
 
+def fetch_work_by_id(arxiv_id: str) -> dict | None:
+    """The arXiv record for a known id, as an ALMa candidate — or None.
+
+    Bare or version-suffixed ids (`1706.03762`, `1706.03762v5`) both
+    resolve. The candidate always carries the paper's registered arXiv DOI
+    (``10.48550/arXiv.<id>``) unless arXiv lists a journal DOI, so a paper
+    landed from it dedups like every other row. Used where OpenAlex has no
+    record under the arXiv DOI (it often folds a preprint into its venue
+    version) — e.g. PDF-first import hands it to the online-save path as the
+    multi-source fallback.
+    """
+    from alma.core.resolution import arxiv_doi
+
+    arxiv_id = (arxiv_id or "").strip()
+    if not arxiv_id:
+        return None
+    for entry in _fetch_entries({"id_list": arxiv_id, "max_results": 1}):
+        candidate = _entry_to_candidate(entry, 1.0)
+        if candidate:
+            candidate["doi"] = candidate.get("doi") or arxiv_doi(arxiv_id)
+            return candidate
+    return None
+
+
 def fetch_abstract_by_id(arxiv_id: str) -> str:
     """Return the abstract for a known arXiv id via the `id_list` endpoint.
 
     Used by abstract recovery (task 05) when a paywalled paper's OA mirror
     points at an arXiv preprint twin: arXiv serves the abstract (Atom
-    `summary`) unconditionally, with no paywall and no HTML scraping. Bare
-    or version-suffixed ids (`1706.03762`, `1706.03762v5`) both resolve.
+    `summary`) unconditionally, with no paywall and no HTML scraping.
     Returns "" when the id is unknown or the response carries no summary.
     """
-    arxiv_id = (arxiv_id or "").strip()
-    if not arxiv_id:
-        return ""
-    entries = _fetch_entries({"id_list": arxiv_id, "max_results": 1})
-    for entry in entries:
-        candidate = _entry_to_candidate(entry, 0.0)
-        if candidate and str(candidate.get("abstract") or "").strip():
-            return str(candidate["abstract"]).strip()
-    return ""
+    candidate = fetch_work_by_id(arxiv_id)
+    return str((candidate or {}).get("abstract") or "").strip()
 
 
 def find_abstract_for_title(
