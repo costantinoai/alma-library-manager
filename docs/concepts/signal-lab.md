@@ -434,8 +434,10 @@ wholesale-fit primitives against stratified-random and margin baselines.
 and one seeded 768→64 Gaussian projection so repeated fits stay bounded;
 production always uses the full embeddings.
 
-The checked-in corpus report is `tasks/54_stage0_report.json`. At 200 answered
-rounds, EIG reached 0.6525 pairwise accuracy versus 0.6250 for
+`scripts/simulate_signal_lab.py --corpus` writes its report to
+`tasks/54_stage0_report.json`, in the local planning workspace (not part of
+the repository — rerun the script to regenerate it). At 200 answered rounds,
+EIG reached 0.6525 pairwise accuracy versus 0.6250 for
 stratified-random and passed the predeclared +2-point late gate; it did not beat
 random in the early checkpoints. That mixed result is kept visible: it
 supports posterior-aware acquisition as one component, not EIG-only selection.
