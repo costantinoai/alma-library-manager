@@ -4,9 +4,9 @@ import { chromium } from 'playwright'
 const base = process.env.ALMA_URL ?? 'http://127.0.0.1:5194'
 const api = process.env.ALMA_API ?? 'http://127.0.0.1:8022/api/v1'
 const shotDir = process.env.ALMA_SHOT_DIR ?? '/tmp'
-async function request(path, body) {
+async function request(path, body, method = 'POST') {
   const response = await fetch(`${api}${path}`, body === undefined ? {} : {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
   })
   assert.ok(response.ok, `${path}: ${response.status} ${await response.clone().text()}`)
   return response.json()
@@ -22,7 +22,8 @@ try {
   const nonce = Date.now()
   const title = `Paper group browser proof ${nonce}`
   const pre = await request('/library/saved', {title, doi:`10.1101/${nonce}`, year:2026, rating:5, notes:'Preserve this note'})
-  await request(`/papers/${pre.id}/action`, {action:'read', surface:'papers'})
+  // Reading state has ONE writer: PATCH /library/papers/{id}/reading-status.
+  await request(`/library/papers/${pre.id}/reading-status`, {reading_status:'reading'}, 'PATCH')
   const published = await request('/library/saved', {title, doi:`10.1000/${nonce}`, year:2026, rating:5})
   const list = await request(`/papers?search=${encodeURIComponent(title)}&scope=library`)
   assert.equal(list.length, 1, 'one logical paper in Library')
