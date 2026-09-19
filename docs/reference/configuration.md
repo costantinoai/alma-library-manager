@@ -91,7 +91,6 @@ port 465.
 |---|---|---|
 | `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. |
 | `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
-| `AUTHOR_REFRESH_HOUR` | `3` | Hour-of-day (UTC) for nightly author refresh. |
 | `ALERT_CHECK_INTERVAL_HOURS` | `1` | How often the alert dispatcher runs. |
 | `INBOX_SWEEP_INTERVAL_MINUTES` | `5` | How often ALMa polls your [Inbox](../concepts/inbox.md) capture channels. Minutes, not hours — this is the phone→ALMa loop, so latency is the experience. `0` disables the sweep. Costs one API call per configured channel per sweep, and returns immediately when no channel is set up. |
 | `ALMA_DEEP_REFRESH_WORKERS` | `4` | Concurrency for the per-author deep-refresh fan-out (clamped 1–16). |

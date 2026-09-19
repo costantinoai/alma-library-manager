@@ -223,7 +223,7 @@ construction, not by bookkeeping.
 
 | Job | Triggers |
 |---|---|
-| Author refresh-cache | Per-author manual + nightly scheduler. |
+| Author refresh-cache | Per-author manual. (There is no nightly author refresh: new works from followed authors arrive through the Feed's author monitors.) |
 | Author deep-refresh | Per-author manual; deep-refresh-all bulk. |
 | Feed refresh | Manual + scheduler (every few hours). |
 | Lens refresh | Manual per-lens. Default `LENS_REFRESH_LIMIT = 50` (post-filter target — the backend oversamples internally so 50 actually land); runs four retrieval lanes (lexical, vector, graph, external), each emitted as a **child Activity row** under the parent `lens_refresh_<id>` so per-lane status / duration / failure is visible in the Activity panel. The parent's log carries `lane.{name}.start` and `lane.{name}.completed` markers linking to the subtask via `subtask_job_id`. After retrieval the parent merges by candidate identity (so cross-lane hits accumulate `consensus_count`), measures every candidate then ranks with the one family prior (`ranker.apply_repaired_prior`), applies the diversity pass (per-author cap = 2, per-source-key cap ≈ 25 %), then stages survivors. Branches are rebuilt on every refresh and go through the auto-lifecycle pass (rotate when `auto_weight ≤ 0.65`, auto-mute when `≤ 0.55`) before the external lane fans out. |
@@ -272,7 +272,6 @@ Some jobs run on a schedule, not just on demand:
 
 | Job | Default schedule | Env var |
 |---|---|---|
-| Nightly author refresh | 3 AM UTC | `AUTHOR_REFRESH_HOUR` |
 | Alert evaluation | every hour (default) | `ALERT_CHECK_INTERVAL_HOURS` |
 | Feed refresh (per-monitor) | per-monitor interval | UI |
 | Inbox capture sweep | every 5 minutes | `INBOX_SWEEP_INTERVAL_MINUTES` |

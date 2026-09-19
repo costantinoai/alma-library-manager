@@ -8,20 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from alma.api.deps import (  # internal helpers for path resolution
     _data_dir,
     _db_path,
     get_current_user,
-    get_db,
     open_db_connection,
 )
-from alma.api.helpers import raise_internal
-from alma.api.models import JobCreate, JobResponse, SavePublicationsRequest
+from alma.api.models import SavePublicationsRequest
 from alma.api.scheduler import (
     activity_envelope,
-    add_cron_job,
     add_job_log,
     find_active_job,
     is_cancellation_requested,
@@ -47,88 +44,6 @@ router = APIRouter(
         500: {"description": "Internal Server Error"},
     },
 )
-
-
-def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = None) -> dict:
-    """Core function to refresh cache for all authors."""
-    cursor = authors_db.execute("SELECT id, name FROM authors")
-    authors = cursor.fetchall()
-    if not authors:
-        return {"success": True, "authors": 0, "refreshed": 0}
-
-    total_refreshed = 0
-    from_year = get_fetch_year()
-    processed = 0
-    failures: list[dict[str, str]] = []
-    for row in authors:
-        if job_id and is_cancellation_requested(job_id):
-            set_job_status(
-                job_id,
-                status="cancelled",
-                finished_at=datetime.now().isoformat(),
-                message="Refresh cancelled by user",
-                result={
-                    "success": False,
-                    "authors": len(authors),
-                    "refreshed": total_refreshed,
-                    "cancelled": True,
-                    "processed": processed,
-                },
-            )
-            add_job_log(
-                job_id,
-                f"Cancellation acknowledged at {processed}/{len(authors)} authors",
-                step="cancelled",
-            )
-            return {
-                "success": False,
-                "authors": len(authors),
-                "refreshed": total_refreshed,
-                "cancelled": True,
-                "processed": processed,
-            }
-
-        author_id = row["id"]
-        author_name = row["name"]
-        # One author must not take the whole sweep down. This runs unattended
-        # (authors.refresh_periodic at 01:00), where a single bad row used to
-        # abort every remaining author with one fatal error. Failures are LOUD
-        # (stack trace in the log) and counted into the result, so Activity
-        # shows "refreshed N, failed M" instead of a silent partial success.
-        try:
-            pubs = fetch_publications_by_id(
-                author_id,
-                output_folder=_data_dir(),
-                args=SimpleNamespace(update_cache=True, test_fetching=False),
-                from_year=from_year,
-            )
-            total_refreshed += len(pubs or [])
-        except Exception:
-            logger.exception("Cache refresh failed for author %s (%s)", author_name, author_id)
-            failures.append({"author_id": author_id, "author_name": author_name})
-        processed += 1
-        if job_id:
-            try:
-                set_job_status(job_id, status="running", processed=processed, total=len(authors), current_author=author_name)
-            except Exception:
-                pass
-
-    logger.info(
-        "Refreshed cache for %d author(s), %d pubs total, %d failed",
-        len(authors),
-        total_refreshed,
-        len(failures),
-    )
-    result = {
-        # Truthful status: a sweep that skipped authors is NOT a clean success.
-        "success": not failures,
-        "authors": len(authors),
-        "refreshed": total_refreshed,
-    }
-    if failures:
-        result["failed"] = len(failures)
-        result["failed_authors"] = [f["author_name"] for f in failures[:20]]
-    return result
 
 
 def _existing_author_source_ids(db: sqlite3.Connection, author_id: str) -> set[str]:
@@ -523,101 +438,6 @@ def hard_reset_publications_db(user: dict = Depends(get_current_user)):
     )
 
 
-@router.post("/refresh-cache", summary="Refresh cache for all authors (no send)")
-def refresh_cache_all(
-    background: bool = Query(True, description="Run in background and track in Activity"),
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Refresh cached publications for all authors without sending notifications."""
-    operation_key = "fetch.refresh_cache_all"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            str(existing.get("job_id") or ""),
-            status="already_running",
-            operation_key=operation_key,
-            message="Bulk refresh is already running",
-        )
-
-    if not background:
-        try:
-            return do_refresh_cache_all(db)
-        except Exception as e:
-            raise_internal("Failed to refresh cache for all authors", e)
-
-    job_id = f"refresh_all_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=datetime.now().isoformat(),
-        message="Refreshing cache for all authors",
-    )
-
-    def _runner():
-        conn = open_db_connection()
-        try:
-            return do_refresh_cache_all(conn, job_id=job_id)
-        finally:
-            conn.close()
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message="Queued bulk refresh",
-    )
-
-
-@router.post("/jobs", response_model=JobResponse, summary="Schedule a fetch job")
-def schedule_job(payload: JobCreate):
-    """Schedule a cron job for fetch operations."""
-    try:
-        # `fetch_and_notify` is gone with the plain-text digest pipeline it
-        # scheduled (task 55). Alert delivery is the alerts engine's job now,
-        # with its own schedules, rules and per-channel dedup.
-        if payload.action == "fetch":
-            def _job_refresh():
-                conn = open_db_connection()
-                try:
-                    return do_refresh_cache_all(conn)
-                finally:
-                    conn.close()
-            job_func = _job_refresh
-            name = payload.name or "Refresh Cache"
-        else:
-            raise HTTPException(status_code=400, detail="Invalid action")
-
-        job_suffix = uuid.uuid4().hex[:10]
-        job_id = f"job_{job_suffix}"
-        add_cron_job(job_id, payload.cron_expression, job_func, meta={
-            "action": payload.action,
-            "name": name,
-            "description": payload.description,
-        })
-        logger.info("Scheduled %s (%s) with cron %s", name, job_id, payload.cron_expression)
-        return JobResponse(
-            id=int(job_suffix, 16) & 0x7FFFFFFF,
-            name=name,
-            description=payload.description,
-            cron_expression=payload.cron_expression,
-            action=payload.action,
-            plugin_name=payload.plugin_name,
-            author_ids=payload.author_ids,
-            enabled=True,
-            next_run=None,
-            last_run=None,
-            created_at=datetime.now().isoformat(),
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise_internal("Failed to schedule job", e)
-
-
 @router.get("/jobs", summary="List scheduled jobs")
 def list_scheduled_jobs():
     return list_jobs()
@@ -635,48 +455,3 @@ def run_job_now(job_id: str):
     if not run_job(job_id):
         raise HTTPException(status_code=404, detail="Job not found or execution failed")
     return {"success": True, "job_id": job_id}
-
-
-@router.post("/run", summary="Run fetch action asynchronously")
-def run_async_action(payload: dict, user: dict = Depends(get_current_user)):
-    action = payload.get("action")
-    if action != "fetch":
-        raise HTTPException(status_code=400, detail="Invalid action")
-
-    operation_key = f"fetch.run_action:{action}"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            str(existing.get("job_id") or ""),
-            status="already_running",
-            operation_key=operation_key,
-            message=f"{action} action already running",
-        )
-    job_id = f"run_{action}_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="running",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=datetime.now().isoformat(),
-        message=f"Starting {action}",
-    )
-
-    def _runner():
-        try:
-            conn = open_db_connection()
-            try:
-                res = do_refresh_cache_all(conn, job_id=job_id)
-            finally:
-                conn.close()
-            set_job_status(job_id, status="completed", finished_at=datetime.now().isoformat(), result=res)
-        except Exception as e:  # pragma: no cover
-            set_job_status(job_id, status="failed", finished_at=datetime.now().isoformat(), error=str(e))
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message=f"{action} action queued",
-    )

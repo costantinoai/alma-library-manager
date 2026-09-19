@@ -1064,42 +1064,6 @@ class AlertTemplateApplyResponse(BaseModel):
 
 
 # ============================================================================
-# Job Models
-# ============================================================================
-
-
-class JobCreate(BaseModel):
-    """Request model for creating a scheduled job."""
-
-    name: str = Field(..., min_length=1, max_length=100)
-    description: str | None = Field(None, max_length=500)
-    cron_expression: str
-    # `notify` / `fetch_and_notify` retired with the plain-text digest they
-    # scheduled (task 55). Alert delivery is the alerts engine's, on its own
-    # rules and schedules.
-    action: str = Field(..., pattern="^(fetch)$")
-    plugin_name: str | None = None
-    author_ids: list[str] | None = None
-    enabled: bool = True
-
-
-class JobResponse(BaseModel):
-    """Response model for job data."""
-
-    id: int
-    name: str
-    description: str | None = None
-    cron_expression: str
-    action: str
-    plugin_name: str | None = None
-    author_ids: list[str] | None = None
-    enabled: bool
-    next_run: str | None = None
-    last_run: str | None = None
-    created_at: str
-
-
-# ============================================================================
 # Signal Lab Models
 # ============================================================================
 

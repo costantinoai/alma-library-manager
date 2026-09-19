@@ -83,7 +83,9 @@ new suggestion.
 Three refresh paths:
 
 * **Per-author refresh-cache** — incremental, pulls only new works
-  since the last refresh. Used by the nightly scheduler.
+  since the last refresh. Nothing runs it on a schedule: new works from the
+  authors you follow arrive through their Feed monitors (refresh the Feed, or
+  switch on Feed auto-refresh in Settings).
 * **Per-author deep refresh** — re-pulls the full bibliography.
   Use this after schema changes or if you suspect drift.
 * **Deep refresh all** — bulk equivalent of the above. Heavy; runs

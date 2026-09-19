@@ -44,9 +44,9 @@ CONCLUSIVE_STATUSES = ("completed", "noop", "failed")
 LOCAL_AI_MODULES = ("torch", "transformers", "adapters", "numpy")
 
 #: A Feed that has not refreshed in this long is stale enough to explain a zero.
-#: Two days rather than one: the nightly author refresh legitimately skips a day
-#: when nothing upstream changed, and crying wolf on that would train the user to
-#: ignore the pill.
+#: Two days rather than one: a Feed refreshed once a day, by hand or on its
+#: schedule, lands a little more than 24 h apart, and crying wolf on that would
+#: train the user to ignore the pill.
 FEED_STALE_AFTER = timedelta(days=2)
 #: Lenses are refreshed deliberately, not nightly, so the bar is a week.
 LENS_STALE_AFTER = timedelta(days=7)

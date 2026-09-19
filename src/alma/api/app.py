@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
         ", ".join(get_plugin_registry().ids()),
     )
 
-    # Start scheduler with periodic alert evaluation and author refresh jobs
+    # Start the scheduler and register its periodic jobs
     try:
         setup_scheduler()
         # Serve persisted snapshots immediately. A corpus-wide assessment must

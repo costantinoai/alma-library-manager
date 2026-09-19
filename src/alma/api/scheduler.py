@@ -1,24 +1,17 @@
-"""Background scheduler for periodic alert evaluation and author refresh.
+"""Background scheduler: the periodic jobs and the lifecycle every job reports through.
 
-Uses APScheduler's BackgroundScheduler to run jobs in background threads.
-The two core periodic jobs are:
+Uses APScheduler's BackgroundScheduler to run jobs in background threads. Every
+periodic job is registered in :func:`setup_scheduler`.
 
-1. **evaluate_scheduled_alerts** -- runs every ALERT_CHECK_INTERVAL_HOURS
-   (default: 1 hour).  For each enabled alert whose schedule is 'daily' or
-   'weekly', the function checks whether enough time has elapsed since
-   ``last_evaluated_at`` and, if so, evaluates the alert (matching rules,
-   filtering already-alerted papers, sending notifications, recording
-   history).
-
-2. **refresh_authors_periodic** -- runs daily at AUTHOR_REFRESH_HOUR
-   (default: 03:00 UTC).  Refreshes publication caches for all tracked
-   authors.
+There is no nightly author refresh any more (task 85). It walked every author
+row with one OpenAlex call each, re-searched unresolved identities every night,
+and burned the shared daily quota. New works from followed authors belong to the
+Feed's author monitors (``application.feed.refresh_feed_inbox``, batched).
 
 Environment variables
 ---------------------
 SCHEDULER_ENABLED           -- set to "false" to disable scheduler (default: true)
 ALERT_CHECK_INTERVAL_HOURS  -- interval between alert evaluation sweeps (default: 1)
-AUTHOR_REFRESH_HOUR         -- UTC hour for the daily author refresh cron (default: 3)
 ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
                             -- idle-gated suggestion-cache cadence (default: 6)
 """
@@ -811,13 +804,6 @@ def _inbox_sweep_interval_minutes() -> int:
         return 5
 
 
-def _author_refresh_hour() -> int:
-    try:
-        return int(os.getenv("AUTHOR_REFRESH_HOUR", "3")) % 24
-    except (ValueError, TypeError):
-        return 3
-
-
 def _discovery_schedule_interval_hours(key: str, default: int = 0) -> int:
     try:
         from alma.api.deps import open_db_connection
@@ -1471,27 +1457,6 @@ def setup_scheduler() -> None:
         interval_hours,
     )
 
-    # -- Daily author refresh (cron) ----------------------------------------
-    refresh_hour = _author_refresh_hour()
-    sched.add_job(
-        refresh_authors_periodic,
-        trigger=CronTrigger(hour=refresh_hour),
-        id="refresh_authors",
-        name="Daily author refresh",
-        replace_existing=True,
-    )
-    with _job_lock:
-        _job_meta["refresh_authors"] = {
-            "action": "refresh_authors",
-            "name": "Daily author refresh",
-            "description": f"Refreshes all authors daily at {refresh_hour:02d}:00 UTC",
-            "cron": f"0 {refresh_hour} * * *",
-        }
-    logger.info(
-        "Registered refresh_authors job (cron hour=%d)",
-        refresh_hour,
-    )
-
     # -- Author suggestion discovery (interval, background-owned) ----------
     # Page navigation is a pure read: opening Authors must never enqueue
     # OpenAlex/S2 expansion or thin-author seeding. This idle-gated tick checks
@@ -1672,8 +1637,7 @@ def setup_scheduler() -> None:
 
     # -- DB maintenance (daily) -------------------------------------------
     # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
-    # UTC — well after the daily author refresh at AUTHOR_REFRESH_HOUR
-    # (default 03:00) so the two never compete for the writer lock.
+    # UTC, a quiet hour for the single writer.
     sched.add_job(
         db_maintenance_periodic,
         trigger=CronTrigger(hour=4, minute=30),
@@ -1915,93 +1879,6 @@ def evaluate_scheduled_alerts() -> None:
             operation_key=operation_key,
             finished_at=utcnow().isoformat(),
             message="Scheduled alert evaluation failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        add_job_log(
-            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
-        )
-
-
-def refresh_authors_periodic() -> None:
-    """Refresh publication caches for all tracked authors.
-
-    Reuses the same logic as ``POST /api/v1/fetch/refresh-cache``.
-    Catches all exceptions so the scheduler job never crashes.
-    """
-    job_id = "periodic_author_refresh"
-    operation_key = "authors.refresh_periodic"
-    set_job_status(
-        job_id,
-        status="running",
-        trigger_source="scheduler",
-        operation_key=operation_key,
-        started_at=utcnow().isoformat(),
-        message="Refreshing authors (periodic)",
-    )
-    logger.info("Starting periodic author refresh")
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.api.routes.operations import do_refresh_cache_all
-
-        conn = open_db_connection()
-        try:
-            # Pass the job_id so Activity gets live processed/total + the current
-            # author name. This sweep walks EVERY tracked author with a network
-            # call each, so it can run for hours (the ~980 authors with no
-            # OpenAlex id now actually resolve, instead of the run dying in
-            # 0.8s) — without progress it just looks hung, and it becomes
-            # cancellable from Activity, which the no-job_id call never was.
-            result = do_refresh_cache_all(conn, job_id=job_id)
-            logger.info("Periodic author refresh complete: %s", result)
-
-            # Score new feed items by relevance after refresh
-            try:
-                from alma.application.feed import score_feed_items
-
-                scored = score_feed_items(conn)
-                if scored:
-                    logger.info("Scored %d feed items after author refresh", scored)
-            except Exception as score_exc:
-                logger.debug("Feed scoring after refresh failed: %s", score_exc)
-
-            # Now that the sweep is cancellable (job_id above), a user cancel
-            # already stamped `cancelled` — never overwrite that with a
-            # "completed" the run didn't earn.
-            if result.get("cancelled"):
-                logger.info("Periodic author refresh cancelled by user")
-            else:
-                # A sweep that skipped authors still finished, but Activity must
-                # say so — do_refresh_cache_all keeps going past a per-author
-                # failure and reports the count (stack traces are in the log).
-                failed = int(result.get("failed") or 0)
-                set_job_status(
-                    job_id,
-                    status="completed",
-                    trigger_source="scheduler",
-                    operation_key=operation_key,
-                    finished_at=utcnow().isoformat(),
-                    message=(
-                        f"Periodic author refresh complete — {failed} author(s) failed, see log"
-                        if failed
-                        else "Periodic author refresh complete"
-                    ),
-                    result=result,
-                )
-        finally:
-            conn.close()
-
-    except Exception as exc:
-        logger.exception("Fatal error in refresh_authors_periodic")
-        # Persist the WHY, not just the fact: the error column + a log line
-        # are what Health/Activity show the user — a bare "failed" message
-        # made the failure undiagnosable from the UI.
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Periodic author refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
         add_job_log(
