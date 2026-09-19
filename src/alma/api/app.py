@@ -54,6 +54,7 @@ from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 from alma.application.materialized_views import MaterializedViewReadError
 from alma.core.logging import setup_logging
+from alma.core.network_policy import ExternalAccessError
 from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
@@ -372,6 +373,28 @@ async def materialized_view_read_exception_handler(
             "error": "StoredViewUnavailable",
             "message": exc.message,
             "detail": f"{exc.recovery} Cause: {exc.cause}",
+        },
+    )
+
+
+@app.exception_handler(ExternalAccessError)
+async def external_access_exception_handler(request: Request, exc: ExternalAccessError):
+    """The network switch is off or a provider quota is spent: nothing was sent.
+
+    409, not 5xx: the server did not fail — the app's own state (a Settings
+    switch, a spent daily quota) conflicts with the request, and the message
+    says how to change it. Not 503 either: the frontend retries every 503, and
+    retrying cannot turn a switch back on.
+    """
+    logger.info(
+        f"External access blocked on {request.method} {request.url.path}: {exc}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": type(exc).__name__,
+            "message": str(exc),
+            "detail": str(exc),
         },
     )
 

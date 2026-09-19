@@ -24,7 +24,22 @@ def raise_internal(message: str, exc: Exception) -> None:
     the exception's ``str()`` — otherwise a 500 leaves nothing in the server
     log to debug from. The client still receives only ``message`` (the
     redacted summary), so we don't leak internals over HTTP.
+
+    Two conditions are NOT internal errors and pass through unchanged to the
+    app's own handlers (`api/app.py`): a transient SQLite lock (→ 503 +
+    Retry-After, SQLite write discipline rule 4) and an `ExternalAccessError`
+    — the network switch is off or a provider quota is spent, so nothing was
+    sent (→ 409 with the actionable message). Every route's catch-all ends
+    here, so converting them to a bare 500 made a retryable lock and a
+    user-fixable setting look like crashes on all ~100 routes at once.
     """
+    from alma.core.db_retry import is_transient_lock_error
+    from alma.core.network_policy import ExternalAccessError
+
+    if isinstance(exc, ExternalAccessError) or (
+        isinstance(exc, sqlite3.OperationalError) and is_transient_lock_error(exc)
+    ):
+        raise exc
     logger.error("%s: %s", message, redact_sensitive_text(str(exc)), exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
