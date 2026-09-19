@@ -9,16 +9,19 @@ the row that points at it commits, and a replaced file is unlinked only AFTER.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from alma.application.pdf_schema import (
     Origin,
     Outcome,
     PaperRef,
     PdfSource,
+    SourceBlockedError,
     SourceSkippedError,
     Verification,
 )
@@ -33,6 +36,7 @@ from alma.application.pdfs.verify import (
     verify_identity,
 )
 from alma.core.db_write import write_section
+from alma.core.http_sources import describe_transport_error
 from alma.core.time import utcnow
 from alma.core.utils import canonical_lookup_doi
 
@@ -233,8 +237,47 @@ _OUTCOME_WORDS = {
 }
 
 
+# When every candidate of a source missed, the attempt row carries the most
+# telling outcome (a wrong file beats a wall beats a refusal beats "no PDF")
+# and, for several candidates, what each one answered.
+_MISS_PRIORITY = (
+    Outcome.MISMATCH,
+    Outcome.REJECTED,
+    Outcome.TOO_LARGE,
+    Outcome.BLOCKED,
+    Outcome.HTTP_ERROR,
+    Outcome.ERROR,
+    Outcome.NOT_PDF,
+    Outcome.NO_CANDIDATE,
+)
+_MISS_DETAIL_CHARS = 500
+
+
 class FetchUnavailableError(RuntimeError):
     """Fetching cannot start (no source plugin on, network off, paper gone)."""
+
+
+def _miss_words(result: DownloadResult) -> str:
+    return result.detail or _OUTCOME_WORDS.get(result.outcome, str(result.outcome))
+
+
+def _host(url: str) -> str:
+    return urlsplit(url or "").hostname or "?"
+
+
+def summarize_misses(misses: list[DownloadResult]) -> DownloadResult:
+    """One attempt row for a source whose candidates all missed.
+
+    A single miss is recorded as is. Several (one per mirror, or per listed
+    location) keep the most telling outcome and say what each host answered,
+    so a walled mirror is not hidden behind the last one's "no PDF".
+    """
+    if len(misses) == 1:
+        return misses[0]
+    rank = {outcome: index for index, outcome in enumerate(_MISS_PRIORITY)}
+    lead = min(misses, key=lambda miss: rank.get(miss.outcome, len(rank)))
+    detail = "; ".join(f"{_host(miss.final_url)}: {_miss_words(miss)}" for miss in misses)
+    return dataclasses.replace(lead, detail=detail[:_MISS_DETAIL_CHARS])
 
 
 def _record_attempt(conn: sqlite3.Connection, **fields) -> None:
@@ -290,35 +333,47 @@ def fetch_for_paper(
             _record_attempt(conn, **attempt, outcome=Outcome.SKIPPED, detail=str(exc))
             log("source", f"{source.label}: skipped — {exc}")
             continue
+        except SourceBlockedError as exc:
+            _record_attempt(conn, **attempt, outcome=Outcome.BLOCKED, detail=str(exc))
+            log("source", f"{source.label}: blocked — {exc}", level="WARNING")
+            continue
         except Exception as exc:  # noqa: BLE001 — one source down must not end the chain
-            _record_attempt(conn, **attempt, outcome=Outcome.ERROR, detail=str(exc))
-            log("source", f"{source.label}: unreachable — {exc}", level="WARNING")
+            detail = describe_transport_error(exc)
+            _record_attempt(conn, **attempt, outcome=Outcome.ERROR, detail=detail)
+            log("source", f"{source.label}: unreachable — {detail}", level="WARNING")
             continue
         if not candidates:
             _record_attempt(conn, **attempt, outcome=Outcome.NO_CANDIDATE)
             log("source", f"{source.label}: no copy listed")
             continue
 
-        last: DownloadResult | None = None
+        misses: list[DownloadResult] = []
+
+        def _missed(miss: DownloadResult, *, _label: str = source.label, _many: bool = len(candidates) > 1) -> None:
+            misses.append(miss)
+            if _many:  # one line per mirror / location, so Activity shows each answer
+                log("source", f"{_label} · {_host(miss.final_url)}: {_miss_words(miss)}",
+                    level="WARNING" if miss.outcome in (Outcome.ERROR, Outcome.BLOCKED) else "INFO")
+
         for candidate in candidates:
             result = download_candidate(candidate)
             if result.outcome is not Outcome.FOUND:
-                last = result
+                _missed(result)
                 continue
             staged = result.staged
             if staged.sha256 in rejected:
                 staged.discard()
-                last = DownloadResult(Outcome.REJECTED, http_status=result.http_status, final_url=result.final_url)
+                _missed(DownloadResult(Outcome.REJECTED, http_status=result.http_status, final_url=result.final_url))
                 continue
             facts = read_facts(staged.path)
             if not facts.readable:
                 staged.discard()
-                last = DownloadResult(Outcome.NOT_PDF, detail="Unreadable PDF", final_url=result.final_url)
+                _missed(DownloadResult(Outcome.NOT_PDF, detail="Unreadable PDF", final_url=result.final_url))
                 continue
             verification = verify_identity(facts, dois=dois, title=ref.title)
             if verification is Verification.MISMATCH:
                 staged.discard()
-                last = DownloadResult(Outcome.MISMATCH, http_status=result.http_status, final_url=result.final_url)
+                _missed(DownloadResult(Outcome.MISMATCH, http_status=result.http_status, final_url=result.final_url))
                 continue
 
             def _found(c: sqlite3.Connection, _r: DownloadResult = result, _v: Verification = verification) -> None:
@@ -341,7 +396,8 @@ def fetch_for_paper(
                 license=candidate.license,
                 extra_writes=_found,
             )
-            log("store", f"{source.label}: stored {outcome.record.filename} ({verification})",
+            via = f" · {_host(candidate.url)}" if len(candidates) > 1 else ""  # which mirror / location won
+            log("store", f"{source.label}{via}: stored {outcome.record.filename} ({verification})",
                 processed=index, total=len(pairs))
             return {
                 "found": True,
@@ -352,6 +408,7 @@ def fetch_for_paper(
                 "filename": outcome.record.filename,
             }
 
+        last = summarize_misses(misses)
         _record_attempt(
             conn, **attempt, outcome=last.outcome, http_status=last.http_status,
             detail=last.detail or None, candidate_url=last.safe_url or None,
