@@ -2024,10 +2024,10 @@ export interface LensRecommendation {
    *  meaning "in the Library but not in this lens's collection". */
   in_library?: boolean
   score_breakdown?: ScoreBreakdown | null
-  /** HISTORY, not state: what was done to this row and when. It is never
-   *  cleared — undoing a save or leaving the reading list leaves it stamped.
-   *  Read live membership / reading state from `paper.status` and
-   *  `paper.reading_status`. */
+  /** HISTORY, not state: what was done to this row and when. Only an undo of
+   *  a save clears it; removing from the Library, leaving the reading list or
+   *  marking it done elsewhere leave it stamped. Read live membership /
+   *  reading state from `paper.status` and `paper.reading_status`. */
   user_action?: string | null
   action_at?: string | null
   source_type?: string | null
