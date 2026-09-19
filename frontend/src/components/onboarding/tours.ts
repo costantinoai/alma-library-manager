@@ -130,11 +130,6 @@ export const DISCOVERY_TOUR: TourStep[] = [
     body: 'ALMa clusters each lens into branches — its sub-themes. Pin, boost, or mute them in Branch Studio to steer where the next refresh spends its effort.',
   },
   {
-    target: '[data-tour="discovery-map"]',
-    title: 'See where the suggestions sit',
-    body: 'Your library, this lens’s suggestions, and the space between. Click a suggestion to jump to its row, or lasso a region to explore it as a Direction.',
-  },
-  {
     target: '[data-tour="discovery-card"]',
     title: 'Triage to teach',
     body: 'Save, dismiss, and react to recommendations — the more you triage, the sharper the next round.',
