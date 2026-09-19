@@ -226,7 +226,7 @@ SCOPED_SURFACES: frozenset[str] = frozenset({"feed", "discovery"})
 #: paper — the route rejects it — so a typo becomes a 400, not a silent
 #: mis-attributed feedback event.
 VALID_SURFACES: frozenset[str] = frozenset(
-    {"feed", "discovery", "inbox", "map", "papers", "library", "onboarding"}
+    {"feed", "discovery", "inbox", "papers", "library", "onboarding"}
 )
 
 #: `save` is Discovery's word for `add`. Normalised here so the wire contract

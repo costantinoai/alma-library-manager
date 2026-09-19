@@ -16,6 +16,7 @@ from alma.api.helpers import raise_internal, row_to_paper_response
 from alma.api.models import ErrorResponse, PaperResponse
 from alma.application import authors as authors_app
 from alma.application import library as library_app
+from alma.application.paper_actions import VALID_SURFACES
 from alma.core.db_write import run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
@@ -54,9 +55,9 @@ class PaperActionRequest(BaseModel):
         "add", "save", "like", "love", "dislike",
         "dismiss", "defer", "read", "seen", "undo",
     ]
-    surface: Literal[
-        "feed", "discovery", "inbox", "map", "papers", "library", "onboarding"
-    ] = "papers"
+    # The allowed surfaces have ONE owner, `paper_actions.VALID_SURFACES`; the
+    # wire enum is built from it so the route and the use-case cannot disagree.
+    surface: Literal[tuple(sorted(VALID_SURFACES))] = "papers"  # type: ignore[valid-type]
     #: The surface's OWN row id — feed item / recommendation. Required for
     #: `feed` and `discovery`, which settle that row rather than the paper
     #: globally; ignored elsewhere.
