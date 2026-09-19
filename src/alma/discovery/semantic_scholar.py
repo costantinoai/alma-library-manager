@@ -231,7 +231,8 @@ class IdentifierFetchOutcome:
 
     `terminal_ids` include rejected ids and successful lookups with no match.
     `not_found_ids` identifies the latter so callers need not report normal
-    coverage gaps as transport failures. `retryable_ids` hit congestion or a 5xx and MUST stay
+    coverage gaps as transport failures. `retryable_ids` hit provider/authentication
+    failures or congestion and MUST stay
     eligible; collapsing the two is what turned transient rate limits into
     permanent `terminal_no_match` stamps.
     """
@@ -483,8 +484,9 @@ def fetch_vectors_for_identifiers(
     also carries `_requested_id`, `specter2_embedding` and `specter2_model`.
 
     Failures are split down to single ids and classified: a 4xx that survives
-    to one id is terminal (that id is bad), while 429/5xx/transport errors are
-    retryable and the caller must leave those papers eligible.
+    to one id is terminal (that id is bad), while 401/403/429/5xx/transport errors
+    leave those papers eligible. Authentication failures stop further requests
+    in this fetch, including remaining siblings of an already-split batch.
     """
     deduped = [str(item or "").strip() for item in identifiers if str(item or "").strip()]
     deduped = list(dict.fromkeys(deduped))
@@ -500,9 +502,13 @@ def fetch_vectors_for_identifiers(
     not_found: set[str] = set()
     retryable: set[str] = set()
     requests_made = 0
+    authentication_failed = False
 
     def _run(chunk: list[str]) -> None:
-        nonlocal requests_made
+        nonlocal requests_made, authentication_failed
+        if authentication_failed:
+            retryable.update(chunk)
+            return
         try:
             resp = client.post(
                 "/paper/batch",
@@ -539,6 +545,17 @@ def fetch_vectors_for_identifiers(
             terminal.update(missing)
             return
 
+        status = int(resp.status_code)
+        if status in (401, 403):
+            authentication_failed = True
+            retryable.update(chunk)
+            logger.warning(
+                "Semantic Scholar batch access failed (HTTP %d); check API key/access. "
+                "Remaining lookups deferred; paper eligibility preserved.",
+                status,
+            )
+            return
+
         # Oversized response: the ids are fine, split regardless of size.
         if _is_response_too_large(resp) and len(chunk) > 1:
             midpoint = max(1, len(chunk) // 2)
@@ -546,12 +563,11 @@ def fetch_vectors_for_identifiers(
             _run(chunk[midpoint:])
             return
 
-        status = int(resp.status_code)
         if status == 429 or status >= 500:
             retryable.update(chunk)
             return
 
-        # Non-429 4xx: one of these ids is malformed. Split to find which.
+        # Remaining client errors may be identifier-specific. Isolate the id.
         if len(chunk) > 1:
             midpoint = max(1, len(chunk) // 2)
             _run(chunk[:midpoint])
