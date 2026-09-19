@@ -17701,65 +17701,6 @@
         }
       }
     },
-    "/api/v1/library-mgmt/backfill-components": {
-      "post": {
-        "tags": [
-          "library-management"
-        ],
-        "summary": "Reconcile paper groups (published papers / preprints / components)",
-        "description": "Run the corpus-wide parent/child reconciliation pass: published journal papers become the root when present, preprints and components point to that root, and child rows lose vectors / graph state / preference sidecars. Runs as a background job.",
-        "operationId": "backfill_components_route_api_v1_library_mgmt_backfill_components_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/logs": {
       "get": {
         "tags": [
@@ -21621,44 +21562,6 @@
           },
           "401": {
             "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/{full_path}": {
-      "get": {
-        "summary": "Serve Frontend",
-        "description": "Serve a real dist file if it exists, else 404.",
-        "operationId": "serve_frontend__full_path__get",
-        "parameters": [
-          {
-            "name": "full_path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Full Path"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
           },
           "422": {
             "description": "Validation Error",

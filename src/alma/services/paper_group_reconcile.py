@@ -260,11 +260,17 @@ def reconcile_paper_groups(
     """Run an idempotent corpus-wide paper group reconciliation pass.
 
     ``section`` is an optional per-phase write scope, given the phase name. A caller
-    that already owns an enclosing write transaction (the importer, the Settings
-    route) omits it and gets the historical single-transaction behaviour; the
+    that already owns an enclosing write transaction (the importer's bounded
+    post-import pass) omits it and gets the single-transaction behaviour; the
     background maintenance runner passes `write_section` so the writer gate is
     RELEASED between phases instead of being held for the whole pass. Write units
     never nest, so exactly one of the two owns the transaction.
+
+    A corpus-wide pass has exactly ONE entry point: the maintenance task
+    `paper_group_reconcile` (`POST /health/operations/paper_group_reconcile/run`),
+    which both Health and the Settings button call. Settings used to own a
+    second route that ran the whole pass inside one `write_section`, pinning
+    the writer for minutes — the exact problem the per-phase runner fixed.
 
     ``on_phase(name, counts)`` reports each phase as it finishes — this pass is long
     and used to log nothing at all between "started" and "completed".

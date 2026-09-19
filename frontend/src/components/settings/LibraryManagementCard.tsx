@@ -14,8 +14,10 @@ import {
 
 import {
   api,
+  getApiErrorMessage,
   resetEmbeddings,
   resetFeedbackLearning,
+  runMaintenanceOperation,
   type BackupInfo,
   type LibraryInfo,
 } from '@/api/client'
@@ -180,16 +182,30 @@ export function LibraryManagementCard() {
 
   // Reconcile paper groups: published rows win over preprints, components point
   // at their root paper, and subordinate rows lose independent app sidecars.
-  const backfillComponentsMutation = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>('/library-mgmt/backfill-components'),
-    onSuccess: (data) => {
-      toast({
-        title: 'Paper-group reconcile started',
-        description: `Job ${data.job_id} is now visible in Activity.`,
-      })
+  // Runs the SAME maintenance task as Health's "Reconcile paper groups" card —
+  // one operation, one route, one write transaction per phase. A private route
+  // used to run the whole pass in a single write transaction, stalling every
+  // other write in the app until it finished.
+  const reconcileGroupsMutation = useMutation({
+    mutationFn: () => runMaintenanceOperation('paper_group_reconcile', {}),
+    onSuccess: (result) => {
+      if (result.job_id) {
+        toast({
+          title:
+            result.status === 'already_running'
+              ? 'Paper-group reconcile already running'
+              : 'Paper-group reconcile started',
+          description: `Job ${result.job_id} is visible in Activity.`,
+        })
+      } else {
+        toast({
+          title: 'Nothing to reconcile',
+          description: result.message ?? 'Every paper group is already consistent.',
+        })
+      }
       void invalidateQueries(queryClient, ['activity-operations'])
     },
-    onError: () => errorToast('Error', 'Failed to start paper-group reconcile.'),
+    onError: (err) => errorToast('Failed to start paper-group reconcile', getApiErrorMessage(err)),
   })
 
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -273,8 +289,8 @@ export function LibraryManagementCard() {
               <AsyncButton
                 variant="outline"
                 icon={<Layers className="h-4 w-4" />}
-                pending={backfillComponentsMutation.isPending}
-                onClick={() => backfillComponentsMutation.mutate()}
+                pending={reconcileGroupsMutation.isPending}
+                onClick={() => reconcileGroupsMutation.mutate()}
               >
                 Reconcile Paper Groups
               </AsyncButton>
