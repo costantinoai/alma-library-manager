@@ -12,7 +12,6 @@ from .lenses import router as lenses_router
 from .library import router as library_router
 from .library_mgmt import router as library_mgmt_router
 from .logs import router as logs_router
-from .operations import router as operations_router
 from .plugins import router as plugins_router
 from .publications import router as papers_router
 from .scheduler import router as scheduler_router
@@ -32,7 +31,6 @@ __all__ = [
     "library_mgmt_router",
     "lenses_router",
     "logs_router",
-    "operations_router",
     "plugins_router",
     "papers_router",
     "scheduler_router",

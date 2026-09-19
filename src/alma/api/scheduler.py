@@ -2990,20 +2990,6 @@ def list_jobs() -> list[dict]:
     return jobs
 
 
-def remove_job(job_id: str) -> bool:
-    """Remove a scheduled job by ID."""
-    sched = get_scheduler()
-    try:
-        sched.remove_job(job_id)
-        with _job_lock:
-            _job_meta.pop(job_id, None)
-        logger.info("Removed job %s", job_id)
-        return True
-    except Exception as exc:
-        logger.warning("Failed to remove job %s: %s", job_id, exc)
-        return False
-
-
 def run_job(job_id: str) -> bool:
     """Trigger a job to run immediately."""
     sched = get_scheduler()

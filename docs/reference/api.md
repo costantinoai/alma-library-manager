@@ -373,7 +373,6 @@ remaining steps rendered as children inside one envelope.
 | `PUT` | `/plugins/{id}/config` | Strictly validate and replace integration configuration |
 | `PUT` | `/plugins/{id}/enabled` | Activate/deactivate while retaining config |
 | `POST` | `/plugins/{id}/test` | Run the manifest's production-transport test through Activity |
-| `GET` `POST` | `/fetch[/…]` | Fetch / bulk operation endpoints |
 
 ### Browser connector (extension)
 

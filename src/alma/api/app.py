@@ -43,7 +43,6 @@ from alma.api.routes.library_mgmt import router as library_mgmt_router
 from alma.api.routes.logs import install_log_handler
 from alma.api.routes.logs import router as logs_router
 from alma.api.routes.onboarding import router as onboarding_router
-from alma.api.routes.operations import router as operations_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
@@ -575,7 +574,6 @@ def get_statistics():
 app.include_router(authors_router, prefix="/api/v1")
 app.include_router(papers_router, prefix="/api/v1")
 app.include_router(plugins_router, prefix="/api/v1")
-app.include_router(operations_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(library_router, prefix="/api/v1/library", tags=["library"])
 app.include_router(imports_router, prefix="/api/v1/library", tags=["library-import"])
