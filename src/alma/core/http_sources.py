@@ -26,6 +26,7 @@ from alma.config import (
     get_crossref_mailto,
     get_semantic_scholar_api_key,
 )
+from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +511,7 @@ class SourceHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
         stream: bool = False,
@@ -556,6 +558,7 @@ class SourceHttpClient:
                         params=request_params,
                         headers=request_headers,
                         json=json,
+                        data=data,
                         timeout=timeout_value,
                         stream=stream,
                         allow_redirects=allow_redirects,
@@ -662,9 +665,13 @@ class SourceHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> requests.Response:
-        return self.request("POST", path_or_url, params=params, headers=headers, json=json, timeout=timeout)
+        """POST a JSON body (``json``) or a form (``data``, e.g. a login form)."""
+        return self.request(
+            "POST", path_or_url, params=params, headers=headers, json=json, data=data, timeout=timeout
+        )
 
 
 _CLIENTS: dict[str, SourceHttpClient] = {}
@@ -709,6 +716,37 @@ def client_for_policy(policy: SourcePolicy) -> SourceHttpClient:
         elif client._policy is not policy and client._policy != policy:
             raise ValueError(f"Source policy {key!r} is already registered with different settings")
         return client
+
+
+# Connection-level failures in words a reader can act on. Matched on the
+# exception text because ``requests`` and ``curl_cffi`` wrap the same
+# underlying failure in different classes (curl reports "(60) SSL
+# certificate problem", requests "CERTIFICATE_VERIFY_FAILED").
+_TRANSPORT_FAILURES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("certificate", "ssl", "tls"),
+     "secure connection refused — the address's certificate is invalid or expired, "
+     "or your network is blocking it"),
+    (("could not resolve", "name resolution", "nameresolution", "getaddrinfo", "name or service not known"),
+     "the address does not resolve — it is down, or your DNS blocks it"),
+    (("timed out", "timeout"), "timed out"),
+    (("connection refused", "failed to connect", "newconnectionerror", "connection reset", "remotedisconnected"),
+     "connection refused or dropped"),
+)
+
+
+def describe_transport_error(exc: BaseException) -> str:
+    """One readable line for a connection-level failure (``exc`` text kept as a hint).
+
+    Used wherever a transport error becomes user-visible text (an Activity log
+    line, a stored attempt), so every source reports the same failure the same
+    way instead of leaking a raw curl / urllib3 message.
+    """
+    raw = redact_sensitive_text(str(exc)).strip()
+    lowered = f"{type(exc).__name__} {raw}".lower()
+    for needles, words in _TRANSPORT_FAILURES:
+        if any(needle in lowered for needle in needles):
+            return words
+    return raw[:200] or type(exc).__name__
 
 
 def openalex_usage_snapshot() -> dict[str, Any]:
