@@ -2,9 +2,11 @@
 and retry logic.
 
 As of Feb 2026, OpenAlex requires an API key for all requests (the polite
-pool based on ``mailto`` has been discontinued).  Free tier provides
-100,000 credits/day.  Singleton GETs (e.g. ``/works/{id}``) cost 0 credits;
-list requests cost 1 credit each.
+pool based on ``mailto`` has been discontinued).  A free key gets 10,000
+credits/day (``X-RateLimit-Limit``, read live on 2026-09-19; resets at 00:00
+UTC), shared by every process that uses the key.  Singleton GETs (e.g.
+``/works/{id}``) cost 0 credits; list requests cost 1 credit each; ``?search=``
+requests cost ``SEARCH_COST_CREDITS``.
 
 Usage::
 

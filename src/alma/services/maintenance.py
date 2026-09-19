@@ -2665,17 +2665,32 @@ def maintenance_repair_periodic() -> None:
     drains first and the dependent becomes eligible on a later tick. This is the
     auto-side counterpart to the manual ``blocked_by`` warning: manual runs may
     proceed out of order (warned), auto runs wait.
+
+    **Network tasks** (any task with ``sources``) also need the scheduler's
+    admission, ``scheduled_network_refusal``: on a dev or worktree profile, or
+    with outbound access off, they are held and only local tasks run (task 85).
     """
     if str(os.getenv(ENV_DISABLE, "")).strip().lower() in {"1", "true", "yes", "on"}:
         logger.info("idle maintenance: disabled via %s", ENV_DISABLE)
         return
 
     from alma.api.deps import open_db_connection
-    from alma.api.scheduler import find_active_job
+    from alma.api.scheduler import (
+        find_active_job,
+        log_scheduled_refusal,
+        scheduled_network_refusal,
+    )
 
     conn = open_db_connection()
     try:
         payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+
+        # A task that calls an external source is network work the clock is
+        # starting, so it needs the scheduler's admission (profile + network
+        # switch). The provider budget is the plan's quota check further down.
+        # Asked once per tick; local tasks are unaffected by the answer.
+        network_refusal = scheduled_network_refusal(conn, budget_source=None)
+        network_held = False
 
         # Build the candidate set: enabled tasks with pending work, remaining
         # daily budget, and no run already in flight.
@@ -2688,6 +2703,9 @@ def maintenance_repair_periodic() -> None:
             if find_active_job(task.operation_key):
                 continue
             if not get_task_auto_enabled(conn, task):
+                continue
+            if task.sources and network_refusal is not None:
+                network_held = True
                 continue
             # A manual stop means "not now" — honour the cooldown before
             # spending a tick on work the user just walked away from.
@@ -2753,6 +2771,8 @@ def maintenance_repair_periodic() -> None:
             rank = _worst_severity_rank(payload, task.health_dimensions)
             candidates.append((rank, remaining, task))
 
+        if network_held:
+            log_scheduled_refusal("idle maintenance (network tasks)", network_refusal)
         if not candidates:
             logger.info("idle maintenance: nothing enabled with pending work")
             return

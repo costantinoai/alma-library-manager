@@ -952,6 +952,10 @@ export interface NetworkPolicyStatus {
   enabled: boolean
   settings_enabled: boolean
   forced_off_by_env: boolean
+  /** May the scheduler start network work on its own on this profile? Off by
+   *  default everywhere but prod: every profile shares one provider key. */
+  unattended_enabled: boolean
+  profile: string
 }
 
 export function getNetworkPolicy(): Promise<NetworkPolicyStatus> {

@@ -279,6 +279,27 @@ Some jobs run on a schedule, not just on demand:
 Scheduler health is at `GET /api/v1/scheduler/status` — shows next-run
 timestamps for each job and whether the scheduler is alive.
 
+### Scheduled network work: one admission gate
+
+Every run the clock starts that calls an external service is admitted by one
+gate, `scheduler.scheduled_network_refusal`, and does not start when:
+
+1. **the profile does not allow it**: only `prod` runs scheduled network work
+   by default (`ALMA_UNATTENDED_NETWORK` overrides). Every profile shares one
+   provider key, and on 2026-09-19 a worktree copy seeded from prod spent 74%
+   of the shared OpenAlex quota overnight on work prod was doing anyway;
+2. **outbound access is off** (Settings → Connections);
+3. **the provider is down to the reserve** kept for your own operations
+   (OpenAlex; 200 calls by default, set in Settings → Background Operations →
+   "Reserve API calls for you").
+
+Runners declare themselves with `@scheduled_network_job`; the hydration drain
+and the idle healer mix network and local work, so they ask the gate for their
+network branches only and keep doing local work. A refused run opens no
+Activity row: the reason is in the log, and Health's API budget card says when
+the profile holds scheduled network work. A guard test fails on any periodic
+job that is neither declared nor classified as local.
+
 ### Orphaned-sweep resume
 
 A backend restart doesn't survive its worker threads, so any job that was

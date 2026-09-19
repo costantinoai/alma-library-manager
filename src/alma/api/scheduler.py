@@ -3,6 +3,13 @@
 Uses APScheduler's BackgroundScheduler to run jobs in background threads. Every
 periodic job is registered in :func:`setup_scheduler`.
 
+Work the CLOCK starts and that spends an external provider's quota is admitted
+by ONE gate, :func:`scheduled_network_refusal`: the profile must allow
+unattended network work (``core.network_policy.unattended_network_enabled``),
+outbound access must be on, and the provider must still hold the user's reserve.
+Runners declare it with :func:`scheduled_network_job`; dispatcher ticks that
+mix network and local work ask the gate per branch.
+
 There is no nightly author refresh any more (task 85). It walked every author
 row with one OpenAlex call each, re-searched unresolved identities every night,
 and burned the shared daily quota. New works from followed authors belong to the
@@ -12,6 +19,8 @@ Environment variables
 ---------------------
 SCHEDULER_ENABLED           -- set to "false" to disable scheduler (default: true)
 ALERT_CHECK_INTERVAL_HOURS  -- interval between alert evaluation sweeps (default: 1)
+ALMA_UNATTENDED_NETWORK     -- may the scheduler start network work on its own
+                               (default: on for the prod profile, off otherwise)
 ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
                             -- idle-gated suggestion-cache cadence (default: 6)
 """
@@ -19,6 +28,7 @@ ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
 import asyncio
 import base64
 import collections
+import functools
 import json
 import logging
 import os
@@ -1077,17 +1087,128 @@ def background_yield_reason(
     ok, reason = gate(conn, exclude_operation_key=operation_key)
     if not ok:
         return (BG_PAUSED_FOR_USER, f"Paused for user activity ({reason}); will resume when idle")
+    refusal = _budget_refusal(conn, budget_source)
+    if refusal is not None:
+        return (refusal[0], f"Stopped: {refusal[1]}")
+    return None
+
+
+def _budget_refusal(conn: sqlite3.Connection, budget_source: str) -> tuple[str, str] | None:
+    """``(BG_CREDIT_LIMIT, why)`` when *budget_source* is down to the user's reserve.
+
+    The one reading of the background reserve, shared by the start gate
+    (`scheduled_network_refusal`) and the keep-going tripwire
+    (`background_yield_reason`), so both stop at the same number.
+    """
     from alma.core.http_sources import provider_budget_ok
     from alma.services.background_settings import get_reserved_api_calls
 
     reserve = get_reserved_api_calls(conn)
-    if not provider_budget_ok(budget_source, reserve=reserve):
+    if provider_budget_ok(budget_source, reserve=reserve):
+        return None
+    return (
+        BG_CREDIT_LIMIT,
+        f"{budget_source} quota near its limit "
+        f"(reserving {reserve} calls for your manual operations)",
+    )
+
+
+# Why the scheduler did not START a network run (task 85). The two yield reasons
+# above stop a sweep midway; these stop a run before it begins, so nothing is left
+# half-done and the next tick simply asks again.
+BG_UNATTENDED_OFF = "unattended_network_off"
+BG_NETWORK_OFF = "network_off"
+
+
+def scheduled_network_refusal(
+    conn: sqlite3.Connection, *, budget_source: str | None = "openalex"
+) -> tuple[str, str] | None:
+    """THE admission gate for network work the clock starts. ``None`` admits.
+
+    Every run a timer starts and that talks to an external service asks this,
+    in this order:
+
+    1. ``BG_UNATTENDED_OFF``: this profile may not start network work on its
+       own (`network_policy.unattended_network_enabled`). Only prod may by
+       default, because every profile shares one provider key.
+    2. ``BG_NETWORK_OFF``: outbound access is switched off. Starting anyway
+       would only fail each call at the transport.
+    3. ``BG_CREDIT_LIMIT``: *budget_source* is down to the reserve kept for the
+       user's own operations. Pass ``budget_source=None`` for runs whose spend
+       is the user's own (an Inbox capture they sent) or whose sub-jobs already
+       stop at the reserve themselves (the hydration drain's sweeps).
+
+    Work a user asked for never comes through here: a click is not unattended.
+    Runners declare themselves with :func:`scheduled_network_job`; dispatcher
+    ticks that mix network and local work call this per network branch.
+    """
+    from alma.core.network_policy import network_access_enabled, unattended_network_enabled
+
+    if not unattended_network_enabled():
+        from alma.config import get_env_profile
+
         return (
-            BG_CREDIT_LIMIT,
-            f"Stopped: {budget_source} quota near its limit "
-            f"(reserving {reserve} calls for your manual operations)",
+            BG_UNATTENDED_OFF,
+            f"scheduled network work is off for the '{get_env_profile()}' profile "
+            "(set ALMA_UNATTENDED_NETWORK=1 to allow it)",
         )
+    if not network_access_enabled():
+        return (BG_NETWORK_OFF, "external network access is disabled in Settings")
+    if budget_source:
+        return _budget_refusal(conn, budget_source)
     return None
+
+
+def log_scheduled_refusal(label: str, refusal: tuple[str, str]) -> None:
+    """Log why a scheduled network run did not start, at the right level.
+
+    The profile refusal is static for the life of the process and announced once
+    at startup (`setup_scheduler`), so repeating it every tick is DEBUG. The
+    other two change with the day and are worth reading in the log.
+    """
+    code, message = refusal
+    level = logging.DEBUG if code == BG_UNATTENDED_OFF else logging.INFO
+    logger.log(level, "%s not started: %s", label, message)
+
+
+def scheduled_network_job(
+    label: str, *, budget_source: str | None = "openalex"
+) -> Callable[[Callable[..., None]], Callable[..., None]]:
+    """Declare a clock-started runner that talks to an external service.
+
+    The decorated runner starts only when :func:`scheduled_network_refusal`
+    admits it. Otherwise it logs why and returns before opening an Activity row.
+    The gate travels with the function, so every registration of it (startup,
+    a live settings change, a manual trigger of the scheduled job) is admitted
+    the same way. ``tests/test_scheduled_network_admission.py`` fails on any
+    periodic job that is neither declared here nor classified as local.
+    """
+
+    def decorate(runner: Callable[..., None]) -> Callable[..., None]:
+        @functools.wraps(runner)
+        def admitted(*args, **kwargs) -> None:
+            from alma.api.deps import open_db_connection
+
+            try:
+                conn = open_db_connection()
+                try:
+                    refusal = scheduled_network_refusal(conn, budget_source=budget_source)
+                finally:
+                    conn.close()
+            except Exception:
+                # Unknown admission is not admission: an unattended run that
+                # cannot read its own reserve does not get to spend it.
+                logger.exception("%s not started: admission check failed", label)
+                return None
+            if refusal is not None:
+                log_scheduled_refusal(label, refusal)
+                return None
+            return runner(*args, **kwargs)
+
+        admitted.scheduled_network = True  # type: ignore[attr-defined]
+        return admitted
+
+    return decorate
 
 
 def make_background_cancel_check(
@@ -1391,6 +1512,21 @@ def setup_scheduler() -> None:
         logger.warning("Orphan job reap skipped: %s", exc)
 
     sched = get_scheduler()
+
+    # Say once whether this profile may start network work on its own (task 85).
+    # Each tick's refusal is only DEBUG, so this line is where a dev or worktree
+    # copy tells you why its background sweeps never run.
+    from alma.config import get_env_profile
+    from alma.core.network_policy import unattended_network_enabled
+
+    if unattended_network_enabled():
+        logger.info("Scheduled network work is ON for profile '%s'", get_env_profile())
+    else:
+        logger.info(
+            "Scheduled network work is OFF for profile '%s': periodic jobs that call "
+            "external services will not start. Set ALMA_UNATTENDED_NETWORK=1 to allow them.",
+            get_env_profile(),
+        )
 
     # -- Durable Health snapshots -----------------------------------------
     # Health routes are pure stored reads. Startup warms the three dependent
@@ -1886,6 +2022,7 @@ def evaluate_scheduled_alerts() -> None:
         )
 
 
+@scheduled_network_job("authors.suggestions_periodic")
 def refresh_author_suggestions_periodic() -> None:
     """Refresh stale author-suggestion sources while the app is idle.
 
@@ -2001,6 +2138,7 @@ def refresh_author_suggestions_periodic() -> None:
         conn.close()
 
 
+@scheduled_network_job("discovery.refresh_periodic")
 def refresh_recommendations_periodic() -> None:
     """Periodically refresh discovery recommendations via the lens system.
 
@@ -2127,6 +2265,10 @@ def refresh_recommendations_periodic() -> None:
         )
 
 
+# No budget gate: a capture is a paper YOU sent, so its lookup is your own spend,
+# which is what the reserve exists to protect. The profile and the network
+# switch still apply: a dev copy must not poll your real capture channel.
+@scheduled_network_job("inbox.capture_sweep", budget_source=None)
 def inbox_capture_sweep_periodic() -> None:
     """Poll every configured Inbox delivery channel (Slack today).
 
@@ -2373,6 +2515,7 @@ def semantic_partition_refresh_periodic() -> None:
         )
 
 
+@scheduled_network_job("feed.refresh_periodic")
 def refresh_feed_inbox_periodic() -> None:
     """Periodically refresh the feed inbox from active monitors.
 
@@ -2438,6 +2581,7 @@ def refresh_feed_inbox_periodic() -> None:
         )
 
 
+@scheduled_network_job("graphs.reference_backfill")
 def maintain_citation_graph_periodic() -> None:
     """Backfill citation edges, then rebuild and vectorize offline frontier."""
     job_id = "periodic_citation_graph_maintenance"
@@ -2650,6 +2794,10 @@ def drain_pending_hydration_periodic() -> None:
     `find_active_job`, so it never spawns a second dispatcher when one is live —
     whenever pending rows exist, guaranteeing one dispatcher resumes the durable
     queue. Cheap: two COUNT(*) reads, then at most two idempotent schedule calls.
+
+    The tick mixes network and local work, so it is not a `scheduled_network_job`
+    as a whole: its network branches (the two sweeps, the S2 re-arm) ask
+    `scheduled_network_refusal`, and the local-fill convergence runs regardless.
     """
     from alma.api.deps import open_db_connection
 
@@ -2697,8 +2845,19 @@ def drain_pending_hydration_periodic() -> None:
             metadata_work = bool(papers_pending) or count_corpus_metadata_candidates(conn) > 0
         except Exception:
             metadata_work = bool(papers_pending)
+        # The paper/author sweeps and the S2 re-arm below talk to providers; the
+        # local-fill convergence at the end does not. Ask the admission gate once
+        # for the network branches only. No budget here: each sweep already stops
+        # itself at the reserve (`make_background_cancel_check`).
+        network_refusal = scheduled_network_refusal(conn, budget_source=None)
     finally:
         conn.close()
+
+    if network_refusal is not None:
+        if metadata_work or authors_pending:
+            log_scheduled_refusal("hydration drain", network_refusal)
+        metadata_work = False
+        authors_pending = 0
 
     if metadata_work:
         try:
@@ -2734,7 +2893,7 @@ def drain_pending_hydration_periodic() -> None:
         conn2 = open_db_connection()
         try:
             ok, _reason = may_background_run(conn2)
-            if ok and is_post_hydration_chain_pending(conn2):
+            if ok and network_refusal is None and is_post_hydration_chain_pending(conn2):
                 chain = schedule_post_hydration_chain(conn2, trigger_reason="chain_rearm")
                 # Duty discharged when we armed the S2 fetch OR there is
                 # nothing left to chain — clear the marker either way.

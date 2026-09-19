@@ -44,9 +44,11 @@ metadata, citations, topics, institutions, and the works graph.
 * **API key — REQUIRED (since 2026-02-13)**: every request needs
   `OPENALEX_API_KEY`. OpenAlex retired the email "polite pool"; without a
   key you get 100 free credits/day and then **HTTP 409**. A free key
-  (openalex.org/settings/api) gives standard limits — 100,000 credits/day
-  (singleton GETs cost 0 credits, list requests 1 each), at a typical
-  ~10 req/s. Set it in `.env` or via
+  (openalex.org/settings/api) gives 10,000 credits/day, reset at 00:00 UTC
+  (singleton GETs cost 0 credits, list requests 1 each, `?search=` requests
+  10), at a typical ~10 req/s. Every ALMa instance using the same key draws on
+  that one pool, which is why only the prod profile runs scheduled network
+  work by default (`ALMA_UNATTENDED_NETWORK`). Set the key in `.env` or via
   **Settings → Connections → OpenAlex**.
 * **Contact email (optional)**: `OPENALEX_EMAIL` no longer affects rate
   limits (the polite pool is gone) but still sets a courteous User-Agent

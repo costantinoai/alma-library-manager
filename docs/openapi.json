@@ -25335,13 +25335,23 @@
           "forced_off_by_env": {
             "type": "boolean",
             "title": "Forced Off By Env"
+          },
+          "unattended_enabled": {
+            "type": "boolean",
+            "title": "Unattended Enabled"
+          },
+          "profile": {
+            "type": "string",
+            "title": "Profile"
           }
         },
         "type": "object",
         "required": [
           "enabled",
           "settings_enabled",
-          "forced_off_by_env"
+          "forced_off_by_env",
+          "unattended_enabled",
+          "profile"
         ],
         "title": "NetworkPolicyResponse"
       },
