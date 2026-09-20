@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Mail, MessageSquare, PlugZap, TestTube2 } from 'lucide-react'
+import { ExternalLink, Mail, MessageSquare, PlugZap, TestTube2 } from 'lucide-react'
 
 import {
   getApiErrorMessage,
@@ -11,29 +11,38 @@ import {
   testPluginConnection,
   updatePluginConfig,
   type PluginInfo,
-  type PluginSchemaProperty,
 } from '@/api/client'
 import { SettingsCard } from '@/components/settings/primitives'
+import { SchemaField } from '@/components/settings/PluginSchemaField'
+import { schemaFields, type ConfigValue } from '@/components/settings/pluginSchema'
+import { pluginState, type PluginState } from '@/components/settings/pluginState'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { errorToast, useToast } from '@/hooks/useToast'
+import { docsUrl } from '@/lib/docs'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
-type ConfigValue = string | number | boolean | null
-
+/** Identity glyph per plugin — which one it is, never how good it is. */
 const ICONS = {
   slack: MessageSquare,
   email: Mail,
 } as const
 
-function schemaFields(plugin: PluginInfo) {
-  return Object.entries(plugin.config_schema.properties ?? {}).sort(
-    ([, a], [, b]) => (a['x-alma-order'] ?? 999) - (b['x-alma-order'] ?? 999),
-  )
+const STATE_PILL: Record<PluginState, { label: string; tone: 'neutral' | 'warning' | 'positive' }> = {
+  off: { label: 'Off', tone: 'neutral' },
+  'needs-setup': { label: 'Needs setup', tone: 'warning' },
+  ready: { label: 'Ready', tone: 'positive' },
 }
 
+/**
+ * The plugin catalogue: everything ALMa can plug into, one row each.
+ *
+ * Every plugin ships switched OFF and reaches nothing until you switch it on
+ * — so a row is a name, what it does, its state and a switch. Its setup is
+ * mounted only once it is on, which is also why an inactive plugin's
+ * configuration is never even fetched.
+ */
 export function PluginsSection() {
   const pluginsQuery = useQuery({
     queryKey: ['plugins'],
@@ -51,30 +60,31 @@ export function PluginsSection() {
     )
   }
 
+  const plugins = pluginsQuery.data ?? []
+
   return (
-    <div className="space-y-5">
-      {(pluginsQuery.data ?? []).map((plugin) => (
-        <PluginCard key={plugin.id} plugin={plugin} />
-      ))}
-    </div>
+    <SettingsCard
+      icon={PlugZap}
+      title="Plugins"
+      description={
+        `Everything ALMa can plug into. All of them ship switched off — an inactive plugin ` +
+        `reaches nothing and is never asked to. Switch one on to set it up; switching it ` +
+        `off again keeps what you typed.`
+      }
+    >
+      <ul className="divide-y divide-[var(--color-border)]">
+        {plugins.map((plugin) => (
+          <PluginRow key={plugin.id} plugin={plugin} />
+        ))}
+      </ul>
+    </SettingsCard>
   )
 }
 
-function PluginCard({ plugin }: { plugin: PluginInfo }) {
+function PluginRow({ plugin }: { plugin: PluginInfo }) {
   const queryClient = useQueryClient()
-  const { toast } = useToast()
-  const [form, setForm] = useState<Record<string, ConfigValue>>({})
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-
-  const configQuery = useQuery({
-    queryKey: ['plugins', plugin.id, 'config'],
-    queryFn: () => getPluginConfig(plugin.id),
-  })
-  useEffect(() => {
-    if (configQuery.data) {
-      setForm(configQuery.data.config as Record<string, ConfigValue>)
-    }
-  }, [configQuery.data])
+  const Icon = ICONS[plugin.id as keyof typeof ICONS] ?? PlugZap
+  const pill = STATE_PILL[pluginState(plugin)]
 
   const activationMutation = useMutation({
     mutationFn: (enabled: boolean) => setPluginEnabled(plugin.id, enabled),
@@ -91,17 +101,53 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
     onError: (error) => errorToast('Could not change plugin state', getApiErrorMessage(error)),
   })
 
+  return (
+    <li className="py-3 first:pt-0 last:pb-0">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-control-quiet text-slate-500">
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-alma-900">{plugin.display_name}</p>
+          <p className="mt-0.5 text-xs text-slate-500">{plugin.description}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusBadge tone={pill.tone} size="sm">{pill.label}</StatusBadge>
+          <Switch
+            checked={plugin.enabled}
+            disabled={activationMutation.isPending}
+            onCheckedChange={(enabled) => activationMutation.mutate(enabled)}
+            aria-label={`${plugin.enabled ? 'Switch off' : 'Switch on'} ${plugin.display_name}`}
+          />
+        </div>
+      </div>
+      {plugin.enabled && <PluginSetup plugin={plugin} />}
+    </li>
+  )
+}
+
+/** Setup for a plugin that is ON. Never mounted otherwise — so never fetched. */
+function PluginSetup({ plugin }: { plugin: PluginInfo }) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [form, setForm] = useState<Record<string, ConfigValue>>({})
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+
+  const configQuery = useQuery({
+    queryKey: ['plugins', plugin.id, 'config'],
+    queryFn: () => getPluginConfig(plugin.id),
+  })
+  useEffect(() => {
+    if (configQuery.data) {
+      setForm(configQuery.data.config as Record<string, ConfigValue>)
+    }
+  }, [configQuery.data])
+
   const saveMutation = useMutation({
     mutationFn: () => updatePluginConfig(plugin.id, form),
     onSuccess: async (result) => {
       setForm(result.config as Record<string, ConfigValue>)
-      await invalidateQueries(
-        queryClient,
-        ['plugins'],
-        ['settings'],
-        ['home'],
-        ['home-brief'],
-      )
+      await invalidateQueries(queryClient, ['plugins'], ['settings'], ['home'], ['home-brief'])
       toast({ title: `${plugin.display_name} settings saved` })
     },
     onError: (error) => errorToast('Plugin settings were not saved', getApiErrorMessage(error)),
@@ -136,140 +182,73 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
   })
 
   const fields = useMemo(() => schemaFields(plugin), [plugin])
-  const visibleFields = fields.filter(([, schema]) => (
-    advancedOpen || !schema['x-alma-advanced']
-  ))
+  const visibleFields = fields.filter(([, schema]) => advancedOpen || !schema['x-alma-advanced'])
   const hasAdvanced = fields.some(([, schema]) => schema['x-alma-advanced'])
-  const Icon = ICONS[plugin.id as keyof typeof ICONS] ?? PlugZap
 
   return (
-    <SettingsCard
-      icon={Icon}
-      title={plugin.display_name}
-      description={plugin.description}
-      action={
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">
-            {plugin.enabled ? 'Active' : 'Inactive'}
-          </span>
-          <Switch
-            checked={plugin.enabled}
-            disabled={activationMutation.isPending}
-            onCheckedChange={(enabled) => activationMutation.mutate(enabled)}
-            aria-label={`${plugin.enabled ? 'Deactivate' : 'Activate'} ${plugin.display_name}`}
-          />
-        </div>
-      }
-      footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-slate-500">
-            {plugin.capabilities.join(' · ')} · v{plugin.version}
-          </span>
+    <div className="mt-3 ml-10 space-y-4 border-l border-[var(--color-border)] pl-4">
+      {configQuery.isError && (
+        <p className="text-xs text-critical-600">
+          Configuration unavailable: {getApiErrorMessage(configQuery.error)}
+        </p>
+      )}
+      {visibleFields.map(([name, schema]) => (
+        <SchemaField
+          key={name}
+          name={name}
+          schema={schema}
+          value={form[name] ?? (schema.default as ConfigValue) ?? ''}
+          onChange={(value) => setForm((current) => ({ ...current, [name]: value }))}
+        />
+      ))}
+      {hasAdvanced && (
+        <Button variant="ghost" size="sm" onClick={() => setAdvancedOpen((open) => !open)}>
+          {advancedOpen ? 'Hide advanced controls' : 'Show advanced controls'}
+        </Button>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          onClick={() => saveMutation.mutate()}
+          disabled={configQuery.isLoading || saveMutation.isPending}
+        >
+          {saveMutation.isPending ? 'Saving…' : 'Save plugin settings'}
+        </Button>
+        {plugin.actions.includes('test') && (
           <Button
+            variant="outline"
             size="sm"
-            onClick={() => saveMutation.mutate()}
-            disabled={configQuery.isLoading || saveMutation.isPending}
+            onClick={() => testMutation.mutate()}
+            disabled={testMutation.isPending}
           >
-            {saveMutation.isPending ? 'Saving…' : 'Save plugin settings'}
-          </Button>
-        </div>
-      }
-    >
-      <div className="space-y-4">
-        {configQuery.isError && (
-          <p className="text-xs text-critical-600">
-            Configuration unavailable: {getApiErrorMessage(configQuery.error)}
-          </p>
-        )}
-        {visibleFields.map(([name, schema]) => (
-          <SchemaField
-            key={name}
-            name={name}
-            schema={schema}
-            value={form[name] ?? (schema.default as ConfigValue) ?? ''}
-            onChange={(value) => setForm((current) => ({ ...current, [name]: value }))}
-          />
-        ))}
-        {hasAdvanced && (
-          <Button variant="ghost" size="sm" onClick={() => setAdvancedOpen((open) => !open)}>
-            {advancedOpen ? 'Hide advanced controls' : 'Show advanced controls'}
+            <TestTube2 className="h-4 w-4" />
+            {testMutation.isPending ? 'Testing…' : 'Test connection'}
           </Button>
         )}
-        <div className="flex flex-wrap gap-2 border-t border-edge-1 pt-3">
-          {plugin.actions.includes('test') && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => testMutation.mutate()}
-              disabled={testMutation.isPending}
+        {plugin.actions.includes('capture') && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => captureMutation.mutate()}
+            disabled={captureMutation.isPending}
+          >
+            {captureMutation.isPending ? 'Checking…' : 'Check capture now'}
+          </Button>
+        )}
+        <span className="ml-auto inline-flex items-center gap-3 text-xs text-slate-500">
+          <span>v{plugin.version}</span>
+          {plugin.docs_path && (
+            <a
+              className="inline-flex items-center gap-1 text-accent-700 hover:underline"
+              href={docsUrl(plugin.docs_path)}
+              target="_blank"
+              rel="noreferrer"
             >
-              <TestTube2 className="h-4 w-4" />
-              {testMutation.isPending ? 'Testing…' : 'Test connection'}
-            </Button>
+              Guide <ExternalLink className="h-3 w-3" aria-hidden />
+            </a>
           )}
-          {plugin.actions.includes('capture') && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => captureMutation.mutate()}
-              disabled={!plugin.enabled || captureMutation.isPending}
-            >
-              {captureMutation.isPending ? 'Checking…' : 'Check capture now'}
-            </Button>
-          )}
-        </div>
+        </span>
       </div>
-    </SettingsCard>
-  )
-}
-
-function SchemaField({
-  name,
-  schema,
-  value,
-  onChange,
-}: {
-  name: string
-  schema: PluginSchemaProperty
-  value: ConfigValue
-  onChange: (value: ConfigValue) => void
-}) {
-  const id = `plugin-field-${name}`
-  if (schema.type === 'boolean') {
-    return (
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Label htmlFor={id}>{schema.title ?? name}</Label>
-          {schema.description && <p className="mt-1 text-xs text-slate-500">{schema.description}</p>}
-        </div>
-        <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} />
-      </div>
-    )
-  }
-
-  const numeric = schema.type === 'number' || schema.type === 'integer'
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor={id}>{schema.title ?? name}</Label>
-      <Input
-        id={id}
-        type={schema['x-alma-secret'] ? 'password' : numeric ? 'number' : 'text'}
-        value={String(value ?? '')}
-        min={schema.minimum}
-        max={schema.maximum}
-        step={schema.type === 'integer' ? 1 : schema['x-alma-step']}
-        onChange={(event) => {
-          if (!numeric) {
-            onChange(event.target.value)
-            return
-          }
-          const parsed = schema.type === 'integer'
-            ? Number.parseInt(event.target.value, 10)
-            : Number.parseFloat(event.target.value)
-          onChange(Number.isFinite(parsed) ? parsed : 0)
-        }}
-      />
-      {schema.description && <p className="text-xs text-slate-500">{schema.description}</p>}
     </div>
   )
 }
