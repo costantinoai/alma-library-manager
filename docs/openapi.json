@@ -6426,7 +6426,7 @@
           "plugins"
         ],
         "summary": "Test an integration",
-        "description": "Runs the integration manifest's registered connectivity test through the Activity envelope and the same transport used in production.",
+        "description": "Runs the integration manifest's registered connectivity test through the Activity envelope and the same transport used in production. 409 when the plugin is switched off \u2014 the test really does reach the service (it posts a message, it sends mail), so it is not something a deactivated plugin may do.",
         "operationId": "test_plugin_connection_api_v1_plugins__plugin_id__test_post",
         "security": [
           {
