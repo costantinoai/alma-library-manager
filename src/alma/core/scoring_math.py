@@ -222,9 +222,9 @@ def rank_churn(
     * ``entered_top`` — how many candidates joined that top-``k``,
     * ``pool`` / ``top_n`` — the sizes those numbers are relative to.
 
-    One implementation for every "what would promoting this head DO" probe —
-    the Signal Lab eval replay and the shadow-ranker comparison — so the two
-    never report differently-defined displacements under one label.
+    One implementation for every "what would promoting this head DO" probe,
+    so two callers never report differently-defined displacements under one
+    label.
     """
 
     ids = list(baseline)
@@ -303,9 +303,9 @@ def calibrate_similarity_score(
 
 def shrink_toward(total: float, n: float, grand_mean: float, strength: float) -> float:
     """A group's mean pulled toward the grand mean by ``strength``
-    pseudo-observations. THE shrinkage expression: Signal Lab's categorical
-    heads and the retrieval channel yield both go through it, so they differ in
-    what they count and how hard they shrink, never in the maths."""
+    pseudo-observations. THE shrinkage expression: every caller goes through
+    it, so they differ in what they count and how hard they shrink, never in
+    the maths."""
     return (total + strength * grand_mean) / (n + strength)
 
 

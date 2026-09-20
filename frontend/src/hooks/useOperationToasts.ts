@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { invalidateAfterPaperMutation, invalidateAfterSignalLabMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
@@ -45,7 +45,7 @@ function rootsForOperation(operationKey?: string): string[] {
   if (!key) return []
 
   if (key === 'papers.reconcile_groups') {
-    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights', 'signal-lab']
+    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights']
   }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
@@ -222,12 +222,6 @@ export function useOperationToasts() {
 
     for (const op of newlyTerminal) {
       seenRef.current.add(op.job_id)
-      // The answer/settings POST precedes its asynchronous fit. Refresh again
-      // when the actual learned artifact lands, without replacing a live deck.
-      if (op.operation_key === 'materialize.signal_lab.model'
-        || op.operation_key === 'materialize.signal_lab.eval') {
-        void invalidateAfterSignalLabMutation(queryClient)
-      }
       // Always refetch affected pages — background plumbing (cache
       // materialization, hydration) is precisely what pages need to pick up,
       // even though it never toasts.

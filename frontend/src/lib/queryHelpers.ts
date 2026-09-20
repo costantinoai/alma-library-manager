@@ -56,20 +56,6 @@ export function invalidateQueryRoots(
 // libraries") instead of a key soup, and it centralises the set so adding a
 // new consumer (e.g. ['reading-queue']) happens once.
 
-/** Lab settings/purge change both retained decks and live learned fields.
- * Ordinary answers keep their current deck and refresh only read models. */
-export function invalidateAfterSignalLabMutation(
-  qc: QueryClient,
-  { resetDecks = false }: { resetDecks?: boolean } = {},
-): Promise<void[]> {
-  const labKeys = resetDecks
-    ? [['signal-lab']]
-    : [['signal-lab', 'summary'], ['signal-lab', 'model'], ['signal-lab', 'eval']]
-  return invalidateQueries(
-    qc, ...labKeys, ['home'], ['home-brief'], ['signal-field'], ['author-field'],
-  )
-}
-
 /**
  * After ANY change to one paper's own state — membership, rating, reading
  * status — from any surface. Every list that embeds that state must re-read

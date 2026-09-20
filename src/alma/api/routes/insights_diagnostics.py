@@ -26,11 +26,11 @@ from alma.api.routes.insights import (
     _build_authors_snapshot,
     _build_branch_trends,
     _build_cold_start_topic_validation,
+    _build_feedback_snapshot,
+    _build_feedback_trend,
     _build_operational_snapshot,
     _build_recommendation_action_trend,
     _build_refresh_trend,
-    _build_signal_lab_snapshot,
-    _build_signal_lab_trend,
     _library_workflow_snapshot,
     _load_recent_operations,
     router,
@@ -521,12 +521,12 @@ def _build_diag_alerts(db: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-# ── Section: feedback (signal lab) ----------------------------------------
+# ── Section: feedback ----------------------------------------
 
 
 def _build_diag_feedback(db: sqlite3.Connection) -> dict[str, Any]:
-    snapshot = _build_signal_lab_snapshot(db)
-    feedback_learning_trend = _build_signal_lab_trend(db, days=30)
+    snapshot = _build_feedback_snapshot(db)
+    feedback_learning_trend = _build_feedback_trend(db, days=30)
     return {**snapshot, "feedback_learning_trend": feedback_learning_trend}
 
 

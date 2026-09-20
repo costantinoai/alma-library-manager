@@ -1321,12 +1321,11 @@ def init_db_schema() -> None:
                 )"""
             )
 
-            # Signal Lab (task 54, D20): ONE durable table for the minigame
-            # layer. Every answered round is one row; the fitted model is a
-            # materialized view derived wholesale from these rows, so
-            # "purge the lab" is DELETE + invalidate — nothing else to clean.
-            # Deliberately NOT feedback_events: that table feeds the
-            # unpurgeable preference_profiles accumulator.
+            # Signal Lab rounds (task 54, D20). The feature left main under
+            # D25 and is preserved on `feature/signal-lab`; the TABLE stays so
+            # the answers a user already gave survive, and so the append-only
+            # migration ledger (m43) still has something to alter. Nothing in
+            # this line reads it. See tasks/86_SIGNAL_LAB_EXTRACTION §6.
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS signal_lab_rounds (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

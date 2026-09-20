@@ -1707,8 +1707,6 @@ def setup_scheduler() -> None:
     )
 
     # -- Semantic partition freshness (interval) -----------------------------
-    # What the Signal Lab learns against must not depend on the map's layout
-    # pass. Registered unconditionally; the runner self-gates on the Lab.
     partition_hours = _discovery_schedule_interval_hours(
         "schedule.semantic_partition_interval_hours",
         6,
@@ -1719,45 +1717,11 @@ def setup_scheduler() -> None:
         func=semantic_partition_refresh_periodic,
         name="Semantic partition freshness",
         description=(
-            "Assigns new papers a semantic membership and refreshes the regions the "
-            f"Signal Lab samples from, every {partition_hours}h"
+            "Assigns new papers a semantic membership and refreshes the regions, "
+            f"every {partition_hours}h"
         ),
         enabled=partition_hours > 0,
         interval_hours=partition_hours,
-    )
-
-    # -- Signal Lab model freshness (interval, task 67 B2) -----------------
-    # Registered unconditionally: the runner self-gates on the Lab switch and on
-    # there being any rounds at all, so a Lab-less install pays one cheap SELECT
-    # per tick. Deliberately NOT folded into the graph layout pass — the map
-    # leaves main under D24 and retained learning keeps its freshness owner.
-    signal_lab_model_hours = _discovery_schedule_interval_hours(
-        "schedule.signal_lab_model_interval_hours",
-        6,
-    )
-    _register_interval_job(
-        sched,
-        job_id="signal_lab_model_refresh",
-        func=signal_lab_model_refresh_periodic,
-        name="Signal Lab model freshness",
-        description=(
-            "Refits the retained Signal Lab model when its inputs change, every "
-            f"{signal_lab_model_hours}h"
-        ),
-        enabled=signal_lab_model_hours > 0,
-        interval_hours=signal_lab_model_hours,
-    )
-
-    # Evaluation GETs serve stored rows only. This independent lightweight
-    # owner follows deck/model/settings changes even when Lab consumption is off.
-    _register_interval_job(
-        sched,
-        job_id="signal_lab_eval_refresh",
-        func=signal_lab_eval_refresh_periodic,
-        name="Signal Lab evaluation freshness",
-        description="Refreshes stored Signal Lab replay when its inputs change.",
-        enabled=True,
-        interval_minutes=1,
     )
 
     # -- Citation graph maintenance (interval) -----------------------------
@@ -2351,78 +2315,6 @@ def inbox_capture_sweep_periodic() -> None:
         )
 
 
-def signal_lab_model_refresh_periodic() -> None:
-    """Freshness owner for ``signal_lab:model`` (task 67 B2).
-
-    Every consumer of the fitted model — the ranker's Lab heads, the categorical
-    folds, the summary, the eval replay — reads it with ``mv.get_stored``, a pure
-    row read that computes no fingerprint. So nothing on the read path can ever
-    notice that the model's inputs have moved. Until this job existed the only
-    thing that queued a refit was answering a round on a ``refit_every_rounds``
-    boundary, which left every OTHER input unowned: re-fitting the super-regions,
-    changing what is in your Library, recomputing a shown paper's vector or
-    correcting its authors all kept the previous model in force indefinitely.
-
-    ``mv.get`` is the whole logic, the same shape as ``super_regions.ensure_regions_fresh``:
-    it runs the (cheap, bounded) fingerprint SQL, serves the stored row when it
-    matches, and enqueues a deduped background rebuild when it does not. Unlike
-    that one this job is deliberately independent of the map layout pass — under
-    D24 the map leaves the main branch, and retained learning must not lose its
-    freshness owner with it.
-
-    Self-gating, so an idle tick is one small SELECT:
-
-    * Signal Lab switched off ⇒ nothing consumes the model, so nothing is
-      refitted. Disabling stays a pure consumption gate: the rounds, the stored
-      model and this job's next tick all survive it.
-    * No rounds at all ⇒ nothing to fit. A fresh install does not get a model
-      row written for it, and purge already queues its own honestly-empty
-      rebuild.
-    """
-    job_id = "periodic_signal_lab_model"
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.application import materialized_views as mv
-        from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-        from alma.application.signal_lab.settings import is_enabled
-
-        conn = open_db_connection()
-        try:
-            if not is_enabled(conn):
-                logger.debug("%s skipped: Signal Lab is switched off", job_id)
-                return
-            rounds = conn.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0]
-            if not rounds:
-                logger.debug("%s skipped: no rounds to fit", job_id)
-                return
-            envelope = mv.get(conn, MODEL_VIEW_KEY)
-            if envelope.get("stale") or envelope.get("rebuilding"):
-                logger.info(
-                    "Signal Lab model inputs changed; refit enqueued (rounds=%d)", rounds
-                )
-        finally:
-            conn.close()
-    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
-        logger.warning("Signal Lab model freshness check failed: %s", exc)
-
-
-def signal_lab_eval_refresh_periodic() -> None:
-    """Keep replay current off the request path, without refitting the model."""
-    from alma.api.deps import open_db_connection
-    from alma.application import materialized_views as mv
-    from alma.application.signal_lab.eval import EVAL_VIEW_KEY
-    from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-
-    conn = open_db_connection()
-    try:
-        if mv.stored_version(conn, MODEL_VIEW_KEY) is not None:
-            mv.get(conn, EVAL_VIEW_KEY)
-    except Exception as exc:  # noqa: BLE001 — advisory job, retried next tick
-        logger.warning("Signal Lab evaluation freshness check failed: %s", exc)
-    finally:
-        conn.close()
-
-
 def scoring_calibration_refresh_periodic() -> None:
     """Freshness owner for ``scoring:calibration``.
 
@@ -2475,7 +2367,7 @@ def semantic_partition_refresh_periodic() -> None:
     it did.
     """
     from alma.api.deps import open_db_connection
-    from alma.application.signal_lab.partition_refresh import refresh_learning_partition
+    from alma.application.learning_partition import refresh_learning_partition
 
     job_id = "periodic_semantic_partition"
     operation_key = "semantic.partition.refresh"

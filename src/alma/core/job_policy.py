@@ -321,14 +321,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             may_overlap_maintenance=False,
             destructive=True,
         ),
-        _p(
-            "signal_lab",
-            JobClass.DATA_MANAGEMENT,
-            50,
-            {_R.DB_WRITER},
-            max_concurrency=1,
-            destructive=True,
-        ),
         # ---- Housekeeping (DB-exclusive, quiet slot) ---------------------------
         _p(
             "db",

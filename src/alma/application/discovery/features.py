@@ -6,12 +6,6 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
-# v4: the snapshot carries the SIGNED Signal Lab head inputs
-# (`_LAB_SIGNED_INPUTS`) and the exposure carries the Lab model generation.
-# Rows stamped v3 never recorded them, so a v3 row cannot say whether the Lab
-# was off or simply not captured — eval must treat it as unassessable, not as
-# "Lab contributed 0". Additive keys on their own would not have earned a bump;
-# that ambiguity did.
 # v5: four declared ranking inputs began arriving that never had (2026-09-06).
 # `is_retracted` (so the −45-point penalty fires at all), `fwci`, and both PPR
 # proximities were absent from every locally-sourced candidate; `topic_score`
@@ -20,16 +14,11 @@ from typing import Any
 # MUST bump: a v4 row and a v5 row measure different things under the same
 # names, so replay, evaluation and the shadow ranker's training pool must not
 # mix them. Nothing about the snapshot's SHAPE changed — its meaning did.
-FEATURE_SCHEMA_VERSION = "discovery-features-v5"
-
-# Signal Lab heads, on the signed unit interval, evidence damper already
-# applied (see `signal_lab.scoring_terms.compute_lab_adjustments`). Written by
-# `measure_candidate` only when a usable Lab model was loaded, so absence means
-# "not measured", which the snapshot records as unavailable.
-_LAB_SIGNED_INPUTS = (
-    "lab_region_offset_raw",
-    "lab_utility_raw",
-)
+# v6: the two signed Signal Lab head inputs and the `lab_generation` stamp are
+# gone — the feature left main with D25. A v5 row carries two reward keys a v6
+# row does not, so the two must not be mixed in replay, evaluation or the
+# shadow ranker's training pool.
+FEATURE_SCHEMA_VERSION = "discovery-features-v6"
 
 _SCALAR_DIAGNOSTICS = (
     "semantic_similarity_centroid_raw",
@@ -194,9 +183,6 @@ def build_feature_snapshot(
             else 0,
         )
 
-    for name in _LAB_SIGNED_INPUTS:
-        reward[name] = _feature(breakdown.get(name), available=name in breakdown)
-
     referenced = candidate.get("referenced_works")
     reference_count = (
         len(referenced)
@@ -308,10 +294,6 @@ def build_feature_snapshot(
             or candidate.get("specter2_model")
         ),
         "embedding_model_compatible": candidate.get("embedding_model_compatible"),
-        # Which fitted Lab model / region payload produced the signed inputs
-        # above (None when no Lab context was loaded). Lets eval tell a
-        # snapshot from the current model apart from one fitted on fewer rounds.
-        "lab_generation": breakdown.get("lab_generation"),
     }
     return reward, exposure
 

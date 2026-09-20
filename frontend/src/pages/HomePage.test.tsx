@@ -8,46 +8,10 @@ import { HOME_SECTION_THEMES } from '@/lib/palette'
 
 const getHomeBrief = vi.fn()
 const applyPaperAction = vi.fn().mockResolvedValue({})
-const getSignalLabQueue = vi.fn().mockResolvedValue({ available: false })
-const answerSignalLabRound = vi.fn().mockResolvedValue({
-  status: 'recorded',
-  round_id: 1,
-  skipped: false,
-})
-const getSignalLabSummary = vi.fn().mockResolvedValue({
-  active: true,
-  rounds: {
-    today: 0,
-    total: 0,
-    answered: 0,
-    skipped: 0,
-    unique_queries: 0,
-    duplicate_queries: 0,
-  },
-  fit: {
-    ready: false,
-    fresh: false,
-    source_rounds: 0,
-    fitted_queries: 0,
-    fitted_observations: 0,
-    pending_rounds: 0,
-    utility_preferences: 0,
-    metric_constraints: 0,
-  },
-  coverage: { regions_observed: 0, regions_total: 0, edges_observed: 0, edges_total: 0 },
-  effects: { upward: [], downward: [], regions_moving: 0, boundary_overrides: 0 },
-})
-
-// PARTIAL mock: Home renders real primitives whose children reach for other
-// client exports. A whole-module mock silently blanks every one of them, so
-// keep the originals and override only what this test drives.
 vi.mock('@/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   getHomeBrief: (...args: unknown[]) => getHomeBrief(...args),
   applyPaperAction: (...args: unknown[]) => applyPaperAction(...args),
-  getSignalLabQueue: (...args: unknown[]) => getSignalLabQueue(...args),
-  getSignalLabSummary: (...args: unknown[]) => getSignalLabSummary(...args),
-  answerSignalLabRound: (...args: unknown[]) => answerSignalLabRound(...args),
   listCollections: () => Promise.resolve([]),
 }))
 
@@ -93,8 +57,6 @@ function renderHome() {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    getSignalLabQueue.mockResolvedValue({ available: false })
-    localStorage.removeItem('alma.signal-lab.dismissed-day')
     sessionStorage.clear()
     window.location.hash = ''
   })
@@ -213,82 +175,6 @@ describe('HomePage', () => {
     expect(screen.getByText('From followed author Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText('A compact explanation of the monitored result.')).toBeInTheDocument()
     expect(screen.getByText('Last 7 days')).toBeInTheDocument()
-  })
-
-  it('renders and advances a 12-round game deck with fitted effects and trivia', async () => {
-    getHomeBrief.mockResolvedValue(QUIET)
-    getSignalLabQueue.mockResolvedValue({
-      available: true,
-      game_id: 'triplet_best_worst',
-      question: 'Which would you read first — and which would you skip?',
-      options: ['best', 'worst'],
-      rounds: Array.from({ length: 12 }, (_, index) => ({
-        token: `signed-${index}`,
-        papers: [
-          { id: `p${index}a`, title: `Paper ${index}A`, summary: 'A' },
-          { id: `p${index}b`, title: `Paper ${index}B`, summary: 'B' },
-          { id: `p${index}c`, title: `Paper ${index}C`, summary: 'C' },
-        ],
-      })),
-    })
-    getSignalLabSummary.mockResolvedValue({
-      active: true,
-      rounds: {
-        today: 3,
-        total: 21,
-        answered: 15,
-        skipped: 6,
-        unique_queries: 14,
-        duplicate_queries: 1,
-      },
-      fit: {
-        ready: true,
-        fresh: false,
-        source_rounds: 15,
-        fitted_queries: 14,
-        fitted_observations: 14,
-        pending_rounds: 6,
-        utility_preferences: 42,
-        metric_constraints: 4,
-      },
-      coverage: { regions_observed: 6, regions_total: 32, edges_observed: 2, edges_total: 58 },
-      effects: {
-        upward: [{ region_id: 1, label: 'Methods', value: 0.25 }],
-        downward: [{ region_id: 2, label: 'Theory', value: -0.15 }],
-        regions_moving: 2,
-        boundary_overrides: 1,
-      },
-    })
-
-    renderHome()
-
-    // The progress readout counts trials DONE, so a fresh deck reads 0 / 12.
-    expect(await screen.findByText('0 / 12')).toBeInTheDocument()
-    expect(screen.getByText(/Methods \+25%/)).toBeInTheDocument()
-    expect(screen.getByText(/Theory −15%/)).toBeInTheDocument()
-    expect(screen.getByText(/14 obs/)).toBeInTheDocument()
-    expect(screen.getByText(/6\/32 regions/)).toBeInTheDocument()
-
-    // Two named verdicts per paper, not two sequential taps on one control:
-    // the round only records once both halves of the pair are given.
-    fireEvent.click(
-      screen.getByRole('button', { name: '“Paper 0A” is your most favourite of the three' }),
-    )
-    expect(screen.getByText('Now pick the other one')).toBeInTheDocument()
-    fireEvent.click(
-      screen.getByRole('button', { name: '“Paper 0B” is your least favourite of the three' }),
-    )
-
-    await waitFor(() =>
-      expect(answerSignalLabRound).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          token: 'signed-0',
-          answer: { best: 'p0a', worst: 'p0b' },
-        }),
-      ),
-    )
-    expect(await screen.findByText('1 / 12')).toBeInTheDocument()
   })
 
   it('scores a Discovery highlight and explains why every highlight is there', async () => {

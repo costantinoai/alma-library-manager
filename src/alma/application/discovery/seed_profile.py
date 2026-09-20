@@ -397,9 +397,7 @@ def library_taste_direction(db: sqlite3.Connection) -> np.ndarray | None:
     negative centroid (or the positive centroid alone when nothing was rated
     down). ``None`` without an embedded positive set.
 
-    One owner for "which way does the user's taste point in embedding space":
-    the Signal Lab fits its utility head as a delta from this, so what the Lab
-    learns is what your ordinary saves and ratings do NOT already say.
+    One owner for "which way does the user's taste point in embedding space".
     """
     from alma.discovery.similarity import compute_embedding_centroid
 

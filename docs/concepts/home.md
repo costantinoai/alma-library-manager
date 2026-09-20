@@ -19,22 +19,14 @@ The page has two halves, and the split is meaning, not decoration:
 - **The blotter** — one raised panel at the top carrying your whole *situation*:
   the greeting and date, the two workflow shortcuts, one slim status line, and
   today's figures. It is the pad you work on, and it is always the same shape.
-- **The desk** — the research itself, as loose sheets below: one optional
-  Signal Lab calibration, Inbox, Picked for you, Reading list. Each paper
+- **The desk** — the research itself, as loose sheets below: Inbox, Picked
+  for you, Reading list. Each paper
   section is its own **collapsible block** — fold away what
   isn't today's business and the rest comes up to meet you.
 
-Reading order follows urgency: what is my situation (blotter) → one cheap taste
-calibration when available → what did I send myself (Inbox) → what did ALMa
-find (Picked for you) → what am I already reading.
-
-Signal Lab serves a deck of at least ten signed rounds immediately above Inbox
-when the feature is active and the super-region graph exists. Its distinct game
-board explains the task, shows deck progress, and adds quiet evidence rows for
-directions, boundaries, daily/total rounds, unique and fitted observations,
-fit freshness, and super-region/edge coverage. It never presents the
-combinatorial triplet universe as progress. Disabling the feature hides this
-section and ignores retained signals without deleting them.
+Reading order follows urgency: what is my situation (blotter) → what did I
+send myself (Inbox) → what did ALMa find (Picked for you) → what am I already
+reading.
 
 ## The status line
 

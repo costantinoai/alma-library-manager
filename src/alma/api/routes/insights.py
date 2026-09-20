@@ -553,7 +553,7 @@ def _build_author_follow_trend(
     return [{"date": row["day"], "follows": int(row["follows"] or 0)} for row in rows if row["day"]]
 
 
-def _build_signal_lab_trend(
+def _build_feedback_trend(
     db: sqlite3.Connection,
     *,
     days: int = 30,
@@ -947,7 +947,7 @@ def _build_authors_snapshot(
     }
 
 
-def _build_signal_lab_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
+def _build_feedback_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
     summary = {
         "total_interactions": 0,
         "week_interactions": 0,

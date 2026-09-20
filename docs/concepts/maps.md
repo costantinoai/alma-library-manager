@@ -13,15 +13,9 @@ Nothing was lost:
 - The database artifacts it built (`publication_clusters` and the stored graph
   views) are left in place; nothing reads them here, and nothing deletes them.
 
-What learning needed from the same embeddings stayed, coordinate-free:
-
-- the **semantic partition** (`application/semantic_partition.py`) — clusters of
-  papers by what they are about, with no coordinates;
-- the **semantic regions** built on it (`semantic:regions`), which Signal Lab
-  samples from and scores against.
-
-Both are refreshed by one background operation, `semantic.partition.refresh`
-(a periodic tick and the Health repair *learning_partition* share it), visible
-in Activity.
+What learning needed from the same embeddings stayed behind at the time,
+coordinate-free: the **semantic partition** and the **semantic regions** built
+on it. Both existed for the Signal Lab, and both left with it under D25 — see
+[Signal Lab](signal-lab.md). Their tables are left in place, unread.
 
 Old links to `#/map` land on Discovery.

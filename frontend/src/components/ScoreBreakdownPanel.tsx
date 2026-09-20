@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils'
  *
  * Shows only, and all of, what produced the number: the ranking families that
  * contributed, any bounded adjustment (a retraction, which only ever subtracts;
- * the Signal Lab heads, which are SIGNED and can lift a paper as well as sink
+ * signed adjustments, which can lift a paper as well as sink
  * it), and the clipping term. Those sum to the final score exactly — the
  * backend guarantees that invariant
  * (`ranker.repaired_prior_score`) and this panel renders it rather than
@@ -225,7 +225,7 @@ function AdjustmentAtomRow({ atom }: { atom: ScoreAdjustmentAtom }) {
   )
 }
 
-/** A post-family adjustment. Coloured by SIGN — a positive Signal Lab nudge
+/** A post-family adjustment. Coloured by SIGN — a positive nudge
  *  drawn in red would claim a lift was a loss. Expands to its atoms when the
  *  ranker sent any (older persisted rows carry none). */
 function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {

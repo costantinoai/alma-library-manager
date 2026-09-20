@@ -6,12 +6,11 @@ preferences, and aggregates feedback into the Insights "Feedback Learning"
 stats. This is the ALWAYS-ON learning substrate — every surface (Feed /
 Library / rating endpoints) writes through `record_feedback` here.
 
-Named `signal_lab.py` until 2026-07-26 (task 54 P0): the interactive play
-modes were removed 2026-07-18 (see tasks/archive/completed/), and the name
-now belongs to the reversible minigame layer in
-`alma.application.signal_lab` — which deliberately does NOT write through
-this module (D20: `preference_profiles` is a wall-clock-decay accumulator,
-path-dependent and unreversible, so lab signal keeps its own purgeable
+Named `signal_lab.py` until 2026-07-26 (task 54 P0). The minigame layer that
+briefly owned that name left main under D25 and lives on `feature/signal-lab`;
+it deliberately never wrote through this module (D20: `preference_profiles` is
+a wall-clock-decay accumulator, path-dependent and unreversible, so lab signal
+kept its own purgeable
 store).
 """
 
@@ -37,23 +36,20 @@ DEFAULT_DECAY_HALF_LIFE_DAYS = 30
 # Minimum interactions before preference_profiles influence scoring.
 MIN_INTERACTIONS_FOR_SCORING = 2
 
-# D11 (locked 2026-04-24): Signal Lab candidate pool is a labelled blend of
-# three buckets. Default bias toward active suggestions — Signal Lab's main
-# job is sharpening the recommender — but surface Library and occasional
-# corpus papers too so the user can signal on the full space. Every
-# candidate carries `source_bucket ∈ SIGNAL_LAB_BUCKETS`, and every
-# resulting feedback event stamps that bucket into `context_json` so we can
-# audit which bucket is driving signal (`mode_breakdown` companion metric).
-# Weights can be overridden at call time — callers should only do that
-# deliberately (e.g. a future "only suggestions" lens-tuning mode).
-SIGNAL_LAB_BUCKET_WEIGHTS: dict[str, float] = {
+# Where a judged candidate came from. Every recommendation-backed feedback
+# event stamps `source_bucket ∈ SOURCE_BUCKETS` into `context_json` so stats
+# can audit which bucket is driving signal (`mode_breakdown` companion
+# metric). The shares are D11's pool blend, kept because the vocabulary is
+# what validates the stamp; D11 itself went dormant with the Signal Lab
+# (D25, tasks/86_SIGNAL_LAB_EXTRACTION).
+SOURCE_BUCKET_WEIGHTS: dict[str, float] = {
     "suggestion": 0.60,
     "library": 0.30,
     "corpus": 0.10,
 }
-SIGNAL_LAB_BUCKETS = tuple(SIGNAL_LAB_BUCKET_WEIGHTS.keys())
+SOURCE_BUCKETS = tuple(SOURCE_BUCKET_WEIGHTS.keys())
 
-# Simple gamification tuning for Signal Lab.
+# Simple gamification tuning for the feedback streak counters.
 _CHALLENGE_CONFIG: dict[str, dict[str, Any]] = {
     "interactions": {"goal": 12, "xp_reward": 20, "label": "12 interactions"},
     "tier": {"goal": 8, "xp_reward": 22, "label": "sort 8 cards into tiers"},
@@ -135,17 +131,16 @@ def record_feedback(
             except sqlite3.OperationalError:
                 paper_target_id = None
 
-        # D11: stamp `source_bucket` on publication events so Signal Lab
-        # stats can audit which bucket is driving signal. Callers from the
-        # Library / corpus buckets pass it in `context`; for rec-backed
-        # events we default to `suggestion`. Non-Signal-Lab callers (Feed,
-        # rating endpoints) pass nothing and we leave the context
-        # untouched — `source_bucket` is a Signal-Lab concept only. Raw
+        # D11: stamp `source_bucket` on publication events so stats can
+        # audit which bucket is driving signal. Callers from the Library /
+        # corpus buckets pass it in `context`; for rec-backed events we
+        # default to `suggestion`. Callers that have no bucket (Feed, rating
+        # endpoints) pass nothing and we leave the context untouched. Raw
         # caller values are clamped to the canonical set to keep stats
         # joinable.
         if enriched_context is not None:
             raw_bucket = str(enriched_context.get("source_bucket") or "").strip()
-            if raw_bucket in SIGNAL_LAB_BUCKETS:
+            if raw_bucket in SOURCE_BUCKETS:
                 enriched_context["source_bucket"] = raw_bucket
             elif rec_target is not None:
                 enriched_context["source_bucket"] = "suggestion"
@@ -216,9 +211,9 @@ def _resolve_recommendation_target(
 def _derive_source_fields(rec_row: sqlite3.Row | None) -> tuple[str, str]:
     """Derive (source_key, source_label) from a recommendation row.
 
-    The source_key is the stable identifier used for grouping / dedup in
-    Signal Lab stats. The source_label is the human-readable string shown
-    in `/results-summary` and the Signal Lab UI.
+    The source_key is the stable identifier used for grouping / dedup in the
+    feedback stats. The source_label is the human-readable string shown in
+    `/results-summary`.
     """
     if rec_row is None:
         return "", ""
@@ -421,6 +416,9 @@ def _record_publication_lens_signal(
             signal_value = excluded.signal_value,
             created_at = datetime('now')
         """,
+        # NOTE: the literal source label is a stored value in `lens_signals`
+        # (part of its ON CONFLICT key), so it outlives the feature it was
+        # named after. Renaming it needs a data migration, not an edit here.
         (lens_id, paper_id, int(signal_value), "signal_lab"),
     )
 
@@ -878,7 +876,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
 
 
 def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict:
-    """Return a compact, export-friendly summary of Signal Lab outcomes."""
+    """Return a compact, export-friendly summary of recommendation outcomes."""
     period_days = max(1, min(int(days), 365))
     cutoff_dt = utcnow() - timedelta(days=period_days)
     cutoff = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -995,7 +993,7 @@ def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict
     }
 
     # Next actions point ONLY at surfaces wired in this build (Discovery
-    # lenses, followed authors). The old Signal Lab game CTAs (Source
+    # lenses, followed authors). The old game CTAs (Source
     # Sprint / Author Duel / Swipe·Triage) referenced gameplay that has no
     # frontend here — surfacing them violated the truthful-UI contract.
     next_actions: list[str] = []

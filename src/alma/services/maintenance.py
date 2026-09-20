@@ -539,16 +539,13 @@ def _run_reference_graph(job_id: str, cap: int, target_paper_ids=None, params=No
 
 def _count_learning_partition(conn: sqlite3.Connection, params=None) -> int:
     from alma.application.semantic_partition import read_state
-    from alma.application.signal_lab.settings import is_enabled
     from alma.application.super_regions import regions_ready
 
-    if not is_enabled(conn):
-        return 0
     return int(read_state(conn) is None or not regions_ready(conn))
 
 
 def _run_learning_partition(job_id: str, cap: int, target_paper_ids=None, params=None):
-    from alma.application.signal_lab.partition_refresh import refresh_learning_partition
+    from alma.application.learning_partition import refresh_learning_partition
 
     with _maintenance_conn() as conn:
         return refresh_learning_partition(conn)
@@ -1378,7 +1375,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
         MaintenanceTask(
             key="learning_partition",
             label="Prepare learning groups",
-            description="Build semantic groups used by Signal Lab from existing vectors. Disabled Lab needs no repair.",
+            description="Build semantic groups from existing vectors.",
             health_dimensions=(), candidate_path="",
             operation_key="semantic.partition.refresh", job_id_prefix="maint_learning_partition",
             cost=COST_COMPUTE, runner=_run_learning_partition, count_fn=_count_learning_partition,

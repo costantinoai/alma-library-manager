@@ -827,32 +827,4 @@ def build_discovery_author_affinity(
         if signal is not None:
             _register(name, signal.affinity)
 
-    _apply_signal_lab_author_offsets(db, affinity)
     return affinity
-
-
-def _apply_signal_lab_author_offsets(
-    db: sqlite3.Connection, affinity: dict[str, float]
-) -> None:
-    """Add Signal Lab's fitted author head into the canonical affinity map.
-
-    Folded in HERE rather than added as a second author term in the ranker:
-    this module is the one definition of "how much do I care about this
-    author", and a parallel `lab_author` signal beside `author_affinity` would
-    let the same evidence be counted twice and drift apart — the same trap the
-    rating-contract guard exists to prevent.
-
-    The gating (enabled, weight, one settings read, ADD-never-replace) is the
-    same for every categorical head, so it lives in the shared fold rather than
-    being re-typed per head — the venue head reached `journal_affinity` by
-    copying this function once, and a copy is where two heads start disagreeing
-    about what "disabled" means.
-    """
-    from alma.application.signal_lab.scoring_terms import fold_lab_offsets
-
-    fold_lab_offsets(
-        db,
-        affinity,
-        head="author_offsets",
-        weight_key="weights.lab_author_offset",
-    )

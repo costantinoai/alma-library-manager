@@ -487,7 +487,7 @@ def _invalidate_group_caches(conn: sqlite3.Connection, root_id: str) -> int:
                 conn.execute(
                     "DELETE FROM materialized_views WHERE view_key IN "
                     "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield', "
-                    "'signal_lab:model', 'semantic:regions')"
+                    "'semantic:regions')"
                 ).rowcount
                 or 0
             ),

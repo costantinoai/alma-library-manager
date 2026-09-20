@@ -1432,11 +1432,6 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     # ── Build preference profile (topics, author/journal affinity, feedback) ──
     preference_profile = compute_preference_profile(db, positive_pubs, negative_pubs, settings)
 
-    # Signal Lab context — loaded ONCE per scan; None until the lab weights
-    # are promoted off 0.0 (task 54, D20).
-    from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
-
-    lab_ctx = load_lab_scoring_context(db, settings)
     from alma.application.discovery.calibration import ensure_calibration
 
     calibration = ensure_calibration(db)
@@ -1578,7 +1573,6 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 conn=db,
                 settings=settings,
                 candidate_embedding=candidate_embeddings.get(str(fr["id"])),
-                lab_ctx=lab_ctx,
                 calibration=calibration,
             )
             score, breakdown = rank_candidate(

@@ -14,9 +14,9 @@ export interface PaperTileProps {
   /** Where the tile hands the paper off — always the surface that OWNS it.
    *  Omit with `onSelect` (a selection tile navigates nowhere), or omit both
    *  for a tile whose paper is the subject of a question and whose only
-   *  interaction is its `actions` strip (Signal Lab). */
+   *  interaction is its `actions` strip. */
   href?: string
-  /** Selection variant (Signal Lab calibration): the whole tile is one
+  /** Selection variant: the whole tile is one
    *  stretched BUTTON instead of a link. Mutually exclusive with `href`. */
   onSelect?: () => void
   title: string
@@ -133,7 +133,7 @@ export function PaperTile({
           ) : (
             // Neither a destination nor a selection: the paper is the SUBJECT
             // of a question and the tile's `actions` are the only interaction
-            // (Signal Lab). Plain text — an `<a>` with no href is unfocusable
+            // Plain text — an `<a>` with no href is unfocusable
             // and inert, and its stretched `::after` would still sit over the
             // card swallowing clicks meant for the actions strip.
             <span className="line-clamp-3">{title}</span>

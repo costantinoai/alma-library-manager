@@ -11,20 +11,17 @@ emits all three so the UI can show *only* and *all* of what produced it:
 1. every family's value is derived from its atoms (:data:`FAMILY_SPECS`),
 2. families are weighted with FIXED weights (unmeasured ones imputed at their
    corpus prior mean),
-3. bounded adjustments — retraction (:data:`_RETRACTION_PENALTY`) and the
-   Signal Lab heads (:data:`LAB_ADJUSTMENTS`) — are added and the result is
-   clipped to 0..100.
+3. the bounded retraction adjustment (:data:`_RETRACTION_PENALTY`) is added
+   and the result is clipped to 0..100.
 
 Invariant, asserted by ``tests/test_score_explanation_closure.py``::
 
     sum(family points) + sum(adjustment points) + clipped == final_score
 
-``FAMILY_SPECS`` and ``LAB_ADJUSTMENTS`` are the single source of truth for
-what reaches a score. Both the value and its explanation are derived from
-them, so the UI can never describe a formula the scorer is not running — and
-a measured input nobody declared here cannot move a score silently
-(``tests/test_signal_lab_ranker_boundary.py``, bug B1: the Lab heads were
-measured and dropped for two releases).
+``FAMILY_SPECS`` is the single source of truth for what reaches a score. Both
+the value and its explanation are derived from it, so the UI can never describe
+a formula the scorer is not running — and a measured input nobody declared here
+cannot move a score silently.
 """
 
 from __future__ import annotations
@@ -34,10 +31,7 @@ from dataclasses import dataclass, field
 
 from alma.discovery.defaults import (
     DEFAULT_SIGNAL_WEIGHTS,
-    LAB_HEAD_DEFAULT_POINTS,
-    LAB_HEAD_MAX_POINTS,
     TEXT_SIMILARITY_SEMANTIC_SHARE,
-    lab_head_points,
 )
 
 from .calibration import UNCALIBRATED, ScoringCalibration
@@ -57,7 +51,10 @@ from .features import build_feature_snapshot
 # every `prior_mean` was re-measured on a random corpus sample through the real
 # measurement path (`scripts/measure_ranking_priors.py`). Bumped so a score
 # computed under the v6 arithmetic is never read as comparable with these.
-RANKER_VERSION = "discovery-v7-calibrated-prior"
+# v8: the Signal Lab heads left main with the feature (D25). The score is
+# families + the retraction adjustment, nothing else, so a v7 score carries two
+# adjustment rows a v8 score does not and the two must not be mixed.
+RANKER_VERSION = "discovery-v8-calibrated-prior"
 SHADOW_VERSION = "discovery-v3-prior-centered-ridge-shadow"
 SHADOW_MIN_OBSERVATIONS = 80
 SHADOW_MIN_PER_CLASS = 20
@@ -282,7 +279,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
     FamilySpec(
         key="preference",
         label="Preference",
-        description="The taste profile accumulated from Signal Lab and your history.",
+        description="The taste profile accumulated from your ratings and history.",
         weight_setting="weights.preference_affinity",
         weight_default=DEFAULT_SIGNAL_WEIGHTS["preference_affinity"],
         prior_mean=0.513,
@@ -301,53 +298,6 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
 
 _SPEC_BY_KEY = {spec.key: spec for spec in FAMILY_SPECS}
 
-
-@dataclass(frozen=True)
-class LabAdjustmentSpec:
-    """One Signal Lab head that enters the score as an additive adjustment.
-
-    The head's raw value is measured by ``measure_candidate`` (via
-    ``signal_lab.scoring_terms.compute_lab_adjustments``) on the signed unit
-    interval, evidence damper already applied. The ranker weights it ONCE::
-
-        points = clamp(setting, 0, weight_max) * clip(raw, -1, 1)
-
-    so a head at ``weights.lab_*`` = 5 moves a score by at most ±5 points. The
-    categorical heads (author, venue) are NOT here: they fold into the curated
-    author / venue affinity before measurement (``fold_lab_offsets``), so the
-    same evidence is never paid twice.
-    """
-
-    key: str
-    label: str
-    description: str
-    #: The snapshot key carrying the signed raw value.
-    atom_key: str
-    #: The settings key whose slider is this head's weight, in score points.
-    weight_setting: str
-    weight_default: float = LAB_HEAD_DEFAULT_POINTS
-    weight_max: float = LAB_HEAD_MAX_POINTS
-
-
-LAB_ADJUSTMENTS: tuple[LabAdjustmentSpec, ...] = (
-    LabAdjustmentSpec(
-        key="region",
-        label="Region preference",
-        description="How the Signal Lab rounds you answered rate this paper's region.",
-        atom_key="lab_region_offset_raw",
-        weight_setting="weights.lab_region_offset",
-    ),
-    LabAdjustmentSpec(
-        key="utility",
-        label="Learned direction",
-        description=(
-            "Alignment with the utility direction fitted from your Signal Lab "
-            "answers, scaled by how much evidence backs it."
-        ),
-        atom_key="lab_utility_raw",
-        weight_setting="weights.lab_utility",
-    ),
-)
 
 # Explore / exploit reweighting. Ported from the retired composite stage so the
 # Settings control keeps reweighting the ranking it claims to reweight. Applied
@@ -382,19 +332,6 @@ def _atom_reading(snapshot: dict, atom: Atom, calibration: ScoringCalibration) -
     else:
         reading = raw / atom.scale
     return _clip(reading), True
-
-
-def _signed_reading(snapshot: dict, key: str) -> tuple[float, bool]:
-    """Return ``(value clipped to [-1, 1], available)`` for a signed input.
-
-    The Lab heads are directions, not levels: −1 is "your answers say no" as
-    strongly as +1 says yes. Family atoms clip to [0, 1]; these must not.
-    """
-
-    detail = snapshot.get(key) or {}
-    if not isinstance(detail, dict) or not detail.get("availability"):
-        return 0.0, False
-    return _clip(float(detail.get("value") or 0.0), -1.0, 1.0), True
 
 
 def _family_reading(
@@ -481,54 +418,10 @@ def prior_family_values(
     }
 
 
-def _lab_adjustment(snapshot: dict, lab_points: dict[str, float]) -> dict:
-    """The ONE Signal Lab explanation row: summed points + per-head atoms.
-
-    Each head is weighted exactly once here. ``lab_points`` is already clamped
-    to ``[0, weight_max]`` by :func:`resolve_lab_points`; the raw value is
-    already damped by its evidence (``scoring_terms``) and is clipped to the
-    signed unit interval, so ``|points| <= weight_max`` per head by
-    construction. A head whose input was never measured (Lab disabled, no
-    model, no embedding) is *unavailable* and contributes exactly zero — the
-    same distinction the families draw between "unknown" and "measured 0".
-    """
-
-    atoms: list[dict] = []
-    total = 0.0
-    for spec in LAB_ADJUSTMENTS:
-        value, available = _signed_reading(snapshot, spec.atom_key)
-        weight = lab_points.get(spec.key, 0.0)
-        points = weight * value
-        total += points
-        atoms.append(
-            {
-                "key": spec.atom_key,
-                "label": spec.label,
-                "description": spec.description,
-                "value": round(value, 6),
-                "weight": round(weight, 6),
-                "points": round(points, 6),
-                "available": available,
-            }
-        )
-    return {
-        "key": "signal_lab",
-        "label": "Signal Lab",
-        "description": (
-            "What the rounds you answered in the Signal Lab say about this "
-            "paper, in score points. Each head is bounded by its Settings weight."
-        ),
-        "points": round(total, 6),
-        "available": any(atom["available"] for atom in atoms),
-        "atoms": atoms,
-    }
-
-
 def repaired_prior_score(
     snapshot: dict,
     *,
     weights: dict[str, float] | None = None,
-    lab_points: dict[str, float] | None = None,
     calibration: ScoringCalibration | None = None,
 ) -> tuple[float, dict]:
     """Score every family once and return the closed explanation.
@@ -553,17 +446,11 @@ def repaired_prior_score(
     error — it ranks by hydration completeness, which is the trap that got
     ``usefulness_boost`` deleted.
 
-    ``lab_points`` are the Signal Lab head weights in score points (see
-    :func:`resolve_lab_points`); ``None`` means the shipped defaults, the same
-    convention as ``weights``. Pass an all-zero map to score as if the Lab
-    were off — that is how eval builds its baseline.
-
     Returns ``(score, explanation)``; the explanation's family points,
     adjustment points and clipping term sum exactly to the score.
     """
 
     configured = weights or resolve_family_weights(None)
-    lab_weights = lab_points if lab_points is not None else resolve_lab_points(None)
     calibration = calibration or UNCALIBRATED
     readings = {spec.key: _family_reading(snapshot, spec, calibration) for spec in FAMILY_SPECS}
 
@@ -598,7 +485,6 @@ def repaired_prior_score(
         snapshot, Atom("is_retracted", "Retracted", 1.0), calibration
     )
     retraction_points = -100.0 * _RETRACTION_PENALTY * retraction_value
-    lab_row = _lab_adjustment(snapshot, lab_weights)
     adjustments = [
         {
             "key": "retraction",
@@ -608,10 +494,9 @@ def repaired_prior_score(
             "available": retraction_available,
             "atoms": [],
         },
-        lab_row,
     ]
 
-    raw_total = points_total + retraction_points + lab_row["points"]
+    raw_total = points_total + retraction_points
     score = _clip(raw_total, 0.0, 100.0)
     explanation = {
         "ranker_version": RANKER_VERSION,
@@ -694,13 +579,12 @@ def apply_repaired_prior(
     """Attach immutable features and write the ranking score in place."""
 
     active_weights = resolve_family_weights(scoring_settings)
-    lab_points = resolve_lab_points(scoring_settings)
     calibration = calibration or UNCALIBRATED
     calibration_record = calibration.as_dict()
     for candidate in candidates.values():
         reward, exposure = build_feature_snapshot(candidate, timestamp=timestamp)
         score, explanation = repaired_prior_score(
-            reward, weights=active_weights, lab_points=lab_points, calibration=calibration
+            reward, weights=active_weights, calibration=calibration
         )
         # What the score was computed WITH, next to what it was computed FROM,
         # so an immutable observation can be replayed under the same settings
@@ -708,7 +592,6 @@ def apply_repaired_prior(
         exposure["ranking_weights"] = {
             "ranker_version": RANKER_VERSION,
             "families": dict(active_weights),
-            "lab_points": dict(lab_points),
             # The derived tables and priors this score was read through, so a
             # replay is exact even after the calibration has been rebuilt.
             "calibration": calibration_record,
@@ -770,24 +653,6 @@ def resolve_family_weights(
     if total <= 0.0:
         raise ValueError("At least one Discovery ranking weight must be positive")
     return {family: weight / total for family, weight in raw.items()}
-
-
-def resolve_lab_points(settings: dict[str, str] | None) -> dict[str, float]:
-    """Map the Signal Lab sliders onto head weights, in score points.
-
-    Unlike the family weights these are NOT renormalised: a head's setting IS
-    its maximum reach on the 0..100 score, which is what the Settings card
-    promises ("up to N points"). Parsing, default fallback and the ceiling
-    clamp live in :func:`alma.discovery.defaults.lab_head_points`, shared with
-    the categorical folds and the scoring-context gate. Public because eval
-    replays stored snapshots under the current settings through it, and the
-    gate uses it to decide whether loading a model is worth anything.
-    """
-
-    return {
-        spec.key: lab_head_points(settings, spec.weight_setting)
-        for spec in LAB_ADJUSTMENTS
-    }
 
 
 @dataclass

@@ -7,7 +7,7 @@ description: The manifest, schema, activation, transport, and test contract for 
 
 An integration connects an external service to core [Alerts](../concepts/alerts.md),
 core [Inbox](../concepts/inbox.md), or both. It is not a place to implement
-matching rules, paper resolution, triage, scheduling, or Signal Lab.
+matching rules, paper resolution, triage, or scheduling.
 
 ## Package shape
 

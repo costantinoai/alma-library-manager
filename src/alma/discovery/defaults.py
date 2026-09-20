@@ -6,63 +6,6 @@ from collections.abc import Mapping
 
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
-LAB_HEAD_MAX_POINTS = 10.0
-"""Ceiling for one Signal Lab head, in points on the 0-100 score.
-
-Was 2.5, which put the whole lab BELOW `citation_quality` (5 points) — your
-explicit pairwise taste judgements counting for less than how many strangers
-cited a paper. That is backwards for a signal whose entire purpose is to record
-what you actually prefer.
-
-10 puts a fully-evidenced head on par with `feedback_adj` and
-`preference_affinity`, the other two signals that encode your own opinions.
-
-Raising it is safe because the ceiling is NOT what protects against a thin fit:
-the evidence dampers do (`map_terms.utility_confidence` and the per-region
-James-Stein shrinkage), continuously and in proportion to how much you have
-actually answered. A low ceiling only guaranteed the feature could never
-matter, even at full evidence.
-
-Lives here, next to the setting defaults, because the ranker
-(`application.discovery.ranker.LAB_ADJUSTMENTS`) and the Signal Lab settings
-validator both read it: one number, one owner."""
-
-LAB_HEAD_DEFAULT_POINTS = 5.0
-"""Default weight per head.
-
-Non-zero (was 0.0) so a fitted head takes effect without a manual promotion
-step. There is nothing to promote: `load_lab_scoring_context` already
-early-returns when no usable model exists, so an unplayed install is unaffected,
-and the dampers make an under-evidenced one small on their own."""
-
-def lab_enabled(settings: Mapping[str, str] | None) -> bool:
-    """Shared consumption gate; disabling retains settings and learned evidence."""
-    return str((settings or {}).get("signal_lab.enabled", "true")).lower() == "true"
-
-
-def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
-    """Read ONE Signal Lab head weight, in score points, from a settings map.
-
-    The single parser for every ``weights.lab_*`` key — the ranker's additive
-    heads, the categorical folds and the scoring-context gate all read through
-    here, so "what does 5 mean" is answered once. An absent or unparseable
-    value is the shipped default (never 0: a corrupt row must not silently
-    switch a head off), and the result is clamped to ``[0, LAB_HEAD_MAX_POINTS]``
-    so a hand-edited row cannot exceed the ceiling the validator enforces.
-    """
-
-    if not lab_enabled(settings):
-        return 0.0
-    raw = (settings or {}).get(key, LAB_HEAD_DEFAULT_POINTS)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        value = LAB_HEAD_DEFAULT_POINTS
-    if value != value:  # NaN parses as a float; treat like unparseable
-        value = LAB_HEAD_DEFAULT_POINTS
-    return max(0.0, min(LAB_HEAD_MAX_POINTS, value))
-
-
 # THE default signal weights — one owner. The ranker's family specs, the API
 # model, the settings defaults and the reset route all read this table.
 #
@@ -99,48 +42,6 @@ TEXT_SIMILARITY_SEMANTIC_SHARE = 0.87
 
 DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     **{f"weights.{key}": str(value) for key, value in DEFAULT_SIGNAL_WEIGHTS.items()},
-    # Signal Lab heads (task 54, D20 — amended 2026-07-27).
-    #
-    # They defaulted to 0.0 and required a MANUAL promotion per head. Two things
-    # were wrong with that. The ceiling was 2.5 points on a 0-100 score, so even
-    # fully promoted the whole lab sat BELOW `citation_quality` (5) — explicit
-    # pairwise taste judgements counting for less than a prestige proxy. And the
-    # manual step gated an on/off decision that never needed gating, because the
-    # ceiling was not what protected against a thin fit.
-    #
-    # The dampers are, and all three heads already have one:
-    #   utility  — global confidence, min(1, train_prefs/60)
-    #   region   — per-region James-Stein shrinkage (a region judged once
-    #              contributes ~11% of its raw vote, ~71% at twenty)
-    #   author   — per-author James-Stein shrinkage + a minimum-comparison floor
-    # Each scales continuously with the evidence actually collected, which is
-    # strictly better than a fixed low ceiling that guaranteed irrelevance.
-    #
-    # So: non-zero by default, ceiling 10 (parity with `feedback_adj` and
-    # `preference_affinity`, the other signals encoding the user's own opinion).
-    # An unplayed install is still unaffected — `load_lab_scoring_context`
-    # early-returns when no usable model exists.
-    "weights.lab_region_offset": str(LAB_HEAD_DEFAULT_POINTS),
-    "weights.lab_utility": str(LAB_HEAD_DEFAULT_POINTS),
-    # The author and venue heads fold into the canonical author / journal
-    # signals rather than scoring on their own.
-    "weights.lab_author_offset": str(LAB_HEAD_DEFAULT_POINTS),
-    "weights.lab_venue_offset": str(LAB_HEAD_DEFAULT_POINTS),
-    # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
-    # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
-    # epsilon: ring-uniform exploration share — the self-confirmation guard.
-    # coverage_target: answered rounds/region before its uncertainty relaxes
-    #   (stage-0 empirical: error plateaus at 20, not 10).
-    # refit_every_rounds: model-refit debounce on the answer path.
-    # holdout_percent: rounds reserved for evaluation, stamped at creation.
-    # override_min_votes: consistent boundary votes before a region override.
-    "signal_lab.enabled": "true",
-    "signal_lab.gamma_start": "0.35",
-    "signal_lab.epsilon": "0.20",
-    "signal_lab.coverage_target": "20",
-    "signal_lab.refit_every_rounds": "5",
-    "signal_lab.holdout_percent": "15",
-    "signal_lab.override_min_votes": "3",
     # Citation-fabric bonuses (task 47 §7): bounded ADDITIVE nudges (not weights)
     # for candidates that share citation structure with the loved/saved set —
     # coupling (shared references) + co-citation (shared citers). Each scales its

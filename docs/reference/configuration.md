@@ -131,22 +131,6 @@ Activation is independent of configuration. Turning a plugin off retains every
 field and secret. Existing configured integrations are activated by the
 version-1 migration; fresh unconfigured integrations default off.
 
-Signal Lab is not an integration setting. **Settings → Intelligence → Signal
-Lab** owns its strict native feature schema:
-
-| Setting | Range/default | Meaning |
-|---|---|---|
-| `signal_lab.enabled` | `true` | Serve/consume retained lab evidence; off ignores without deleting |
-| `weights.lab_region_offset` | `0…10`, default `5` | Maximum additive region-head points in Discovery/Feed |
-| `weights.lab_utility` | `0…10`, default `5` | Maximum confidence-scaled utility-head points |
-| `weights.lab_author_offset` | `0…10`, default `5` | Author head, folded into `author_affinity` (converted to affinity units) |
-| `weights.lab_venue_offset` | `0…10`, default `5` | Venue head from matched-pair rounds, folded into `journal_affinity` |
-| `signal_lab.gamma_start` / `signal_lab.epsilon` | `0…1` | Library-outward ring decay and protected ring-uniform exploration share |
-| `signal_lab.coverage_target` | `1…500` | Evidence scale used to reduce already-covered region/edge priority |
-| `signal_lab.refit_every_rounds` | `1…100` | Wholesale refit cadence |
-| `signal_lab.holdout_percent` | `0…50` | Deterministic evaluation holdout |
-| `signal_lab.override_min_votes` | `1…100` | Boundary-override evidence threshold |
-
 | Variable | Purpose |
 |---|---|
 | `SLACK_API_TOKEN` / `SLACK_TOKEN` | Bot User OAuth token (`xoxb-…`). |

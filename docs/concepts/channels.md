@@ -32,7 +32,7 @@ a `PluginManifest` with:
 - optional Alert sender, Inbox adapter, and connectivity-test action.
 
 Registration is explicit. An unregistered id cannot enter an Alert row, deliver
-a digest, or put a message into Inbox. Signal Lab is not in this registry: it is
+a digest, or put a message into Inbox. Not in this registry: anything that is
 a native intelligence feature.
 
 The capability protocols remain separate. Outbound integrations implement the
