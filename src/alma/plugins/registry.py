@@ -55,21 +55,22 @@ class PluginRegistry:
         return manifest.describe()
 
     def inbound_channels(self):
+        """Every channel that may reach your Inbox right now.
+
+        Activation is the manifest's own business (``inbound_channel`` returns
+        nothing while off), so this list is simply what came back — one gate,
+        not two that can drift apart.
+        """
         channels = []
         for manifest in self.with_capability(RECEIVE):
-            if not manifest.is_enabled():
-                continue
             channel = manifest.inbound_channel()
             if channel is not None:
                 channels.append(channel)
         return channels
 
     def enabled_delivery_plugins(self) -> list[PluginManifest]:
-        return [
-            manifest
-            for manifest in self.with_capability(SEND)
-            if manifest.is_enabled() and manifest.status().get("can_send")
-        ]
+        """Every plugin switched on AND able to post an alert."""
+        return [m for m in self.with_capability(SEND) if m.can_deliver_alerts()]
 
 
 _registry: PluginRegistry | None = None
@@ -80,8 +81,3 @@ def get_plugin_registry() -> PluginRegistry:
     if _registry is None:
         _registry = PluginRegistry()
     return _registry
-
-
-def plugin_enabled(plugin_id: str) -> bool:
-    """The shared activation seam used by Alerts and Inbox adapters."""
-    return get_plugin_registry().get(plugin_id).is_enabled()

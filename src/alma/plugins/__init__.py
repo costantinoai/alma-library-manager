@@ -5,7 +5,7 @@ Registration, activation, schema, and configuration ownership live in
 plugins adapt their capability-specific protocols.
 """
 
-from alma.plugins.registry import get_plugin_registry, plugin_enabled
+from alma.plugins.registry import get_plugin_registry
 
 __version__ = "1.0.0"
-__all__ = ["get_plugin_registry", "plugin_enabled"]
+__all__ = ["get_plugin_registry"]
