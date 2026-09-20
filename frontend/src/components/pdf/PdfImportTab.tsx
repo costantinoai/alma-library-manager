@@ -1,42 +1,25 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, CheckCircle, FileQuestion, Loader2 } from 'lucide-react'
 
-import { importPdf, retryPdfImport, waitForJob, type JobEnvelope, type PdfImportResult } from '@/api/client'
 import { FileDropZone } from '@/components/shared/FileDropZone'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-
-type RowStatus = 'waiting' | 'working' | 'done' | 'unresolved' | 'failed'
-
-interface Row {
-  key: string
-  file: File
-  status: RowStatus
-  message: string
-  result?: PdfImportResult
-}
+import { PENDING_PDF_UPLOADS_KEY, usePendingPdfUploads } from '@/hooks/usePendingPdfUploads'
+import {
+  addPdfFiles,
+  discardPdfImportRow,
+  getPdfImportSnapshot,
+  mergePendingUploads,
+  retryPdfImportRow,
+  setPdfImportError,
+  setPdfImportHint,
+  subscribeToPdfImports,
+  type PdfImportRow,
+} from '@/lib/pdfImportQueue'
+import { formatRelativeShort } from '@/lib/utils'
 
 const isPdf = (file: File) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-
-/** What the user typed: a DOI / doi.org link / arXiv id, or else a title. */
-function hintFrom(value: string): { doi?: string; title?: string } {
-  const text = value.trim()
-  const looksLikeId = /10\.\d{4,9}\/\S+/.test(text) || /arxiv|^\d{4}\.\d{4,5}(v\d+)?$/i.test(text)
-  return looksLikeId ? { doi: text } : { title: text }
-}
-
-function outcomeLine(result: PdfImportResult): string {
-  switch (result.outcome) {
-    case 'imported':
-      return `Saved to your Library: ${result.title}`
-    case 'attached':
-      return `Attached to ${result.title} (already in ALMa)`
-    case 'already_stored':
-      return `Already stored for ${result.title}`
-    default:
-      return 'Could not tell which paper this is'
-  }
-}
 
 /**
  * Import tab: drop the PDFs you already have.
@@ -46,59 +29,37 @@ function outcomeLine(result: PdfImportResult): string {
  * first (never a duplicate), otherwise finds it online and saves it to your
  * Library, and keeps the PDF with it. A file it cannot place waits here for
  * a DOI or title you type.
+ *
+ * The rows are NOT this component's state. Radix unmounts an inactive tab and
+ * the dialog unmounts the lot on close, which used to take every running job
+ * and every unresolved upload with it; the queue lives in
+ * `lib/pdfImportQueue` and the unresolved ones are read back from the server,
+ * so switching tabs, closing the dialog or reloading the page all keep them.
  */
 export function PdfImportTab({ onImportComplete }: { onImportComplete?: () => void }) {
-  const [rows, setRows] = useState<Row[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [hints, setHints] = useState<Record<string, string>>({})
-  const queue = useRef<Promise<void>>(Promise.resolve())
+  const queue = useSyncExternalStore(subscribeToPdfImports, getPdfImportSnapshot, getPdfImportSnapshot)
+  const queryClient = useQueryClient()
+  const pending = usePendingPdfUploads()
 
-  const update = (key: string, patch: Partial<Row>) =>
-    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)))
+  // Seed / reconcile the rows the server is still holding files for.
+  useEffect(() => {
+    if (pending.data) mergePendingUploads(pending.data)
+  }, [pending.data])
 
-  const follow = async (key: string, start: () => Promise<JobEnvelope>) => {
-    update(key, { status: 'working', message: 'Uploading…' })
-    try {
-      const envelope = await start()
-      const result = await waitForJob<PdfImportResult>(envelope.job_id, {
-        intervalMs: 1_000,
-        timeoutMs: 5 * 60_000,
-        onProgress: (status) => update(key, { message: status.message ?? 'Working…' }),
-      })
-      update(key, {
-        status: result.outcome === 'unresolved' ? 'unresolved' : 'done',
-        message: outcomeLine(result),
-        result,
-      })
-      if (result.outcome !== 'unresolved') onImportComplete?.()
-    } catch (err) {
-      update(key, { status: 'failed', message: err instanceof Error ? err.message : String(err) })
+  // A finished job changes what the server is holding; one that landed also
+  // changes the Library. Compare against what this mount has already seen, so
+  // a job that finished while the dialog was closed does not fire twice.
+  const seen = useRef({ settled: queue.settled, imported: queue.imported })
+  useEffect(() => {
+    if (queue.settled !== seen.current.settled) {
+      seen.current.settled = queue.settled
+      void queryClient.invalidateQueries({ queryKey: PENDING_PDF_UPLOADS_KEY })
     }
-  }
-
-  // Files run one at a time: each is its own job, and the server paces lookups.
-  const enqueue = (key: string, start: () => Promise<JobEnvelope>) => {
-    queue.current = queue.current.then(() => follow(key, start))
-  }
-
-  const addFiles = (files: File[]) => {
-    setError(null)
-    const added = files.map((file) => ({
-      key: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
-      file,
-      status: 'waiting' as const,
-      message: 'Waiting…',
-    }))
-    setRows((current) => [...current, ...added])
-    for (const row of added) enqueue(row.key, () => importPdf(row.file))
-  }
-
-  const retry = (row: Row) => {
-    const value = (hints[row.key] ?? '').trim()
-    const uploadId = row.result?.upload_id
-    if (!value || !uploadId) return
-    enqueue(row.key, () => retryPdfImport(uploadId, hintFrom(value)))
-  }
+    if (queue.imported !== seen.current.imported) {
+      seen.current.imported = queue.imported
+      onImportComplete?.()
+    }
+  }, [queue.settled, queue.imported, queryClient, onImportComplete])
 
   return (
     <div className="space-y-4">
@@ -110,57 +71,83 @@ export function PdfImportTab({ onImportComplete }: { onImportComplete?: () => vo
         accept="application/pdf,.pdf"
         multiple
         isAccepted={isPdf}
-        onFiles={addFiles}
-        onRejected={setError}
+        onFiles={addPdfFiles}
+        onRejected={setPdfImportError}
         rejectMessage="Please drop PDF files"
         prompt="Drop PDF files here or click to browse"
         hint="One or many; each is matched to its paper"
       />
-      {error && (
+      {queue.error && (
         <p className="flex items-center gap-2 text-sm text-critical-700">
-          <AlertCircle className="h-4 w-4" aria-hidden /> {error}
+          <AlertCircle className="h-4 w-4" aria-hidden /> {queue.error}
         </p>
       )}
-      {rows.length > 0 && (
+      {pending.isError && (
+        <p className="flex items-center gap-2 text-sm text-critical-700" role="alert">
+          <AlertCircle className="h-4 w-4" aria-hidden /> Could not read the PDFs still waiting for a
+          DOI or title. They are kept for a day — reopen this tab to try again.
+        </p>
+      )}
+      {queue.rows.length > 0 && (
         <ul className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)]">
-          {rows.map((row) => (
-            <li key={row.key} className="space-y-2 px-3 py-2.5">
-              <div className="flex items-start gap-2 text-sm">
-                {row.status === 'done' && <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-success-600" aria-hidden />}
-                {row.status === 'failed' && <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-critical-600" aria-hidden />}
-                {row.status === 'unresolved' && <FileQuestion className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />}
-                {(row.status === 'working' || row.status === 'waiting') && (
-                  <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-slate-400" aria-hidden />
-                )}
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-alma-800">{row.file.name}</p>
-                  <p className="text-xs text-slate-500" role="status">{row.message}</p>
-                </div>
-              </div>
-              {row.status === 'unresolved' && (
-                <form
-                  className="flex gap-2"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    retry(row)
-                  }}
-                >
-                  <Input
-                    value={hints[row.key] ?? ''}
-                    onChange={(event) => setHints((current) => ({ ...current, [row.key]: event.target.value }))}
-                    placeholder="DOI, arXiv id or title"
-                    aria-label={`DOI or title for ${row.file.name}`}
-                    className="h-8 text-xs"
-                  />
-                  <Button type="submit" size="sm" variant="outline" disabled={!(hints[row.key] ?? '').trim()}>
-                    Retry
-                  </Button>
-                </form>
-              )}
-            </li>
+          {queue.rows.map((row) => (
+            <ImportRow key={row.key} row={row} />
           ))}
         </ul>
       )}
     </div>
+  )
+}
+
+/** One dropped (or kept) file: its status line, and the hint form when unplaced. */
+function ImportRow({ row }: { row: PdfImportRow }) {
+  const waiting = row.status === 'unresolved' && Boolean(row.uploadId)
+  return (
+    <li className="space-y-2 px-3 py-2.5">
+      <div className="flex items-start gap-2 text-sm">
+        {row.status === 'done' && <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-success-600" aria-hidden />}
+        {row.status === 'failed' && <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-critical-600" aria-hidden />}
+        {row.status === 'unresolved' && <FileQuestion className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />}
+        {(row.status === 'working' || row.status === 'waiting') && (
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-slate-400" aria-hidden />
+        )}
+        <div className="min-w-0">
+          <p className="truncate font-medium text-alma-800">{row.filename}</p>
+          <p className="text-xs text-slate-500" role="status">
+            {row.message}
+            {row.stagedAt && ` · kept ${formatRelativeShort(row.stagedAt)}`}
+          </p>
+        </div>
+      </div>
+      {waiting && (
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            retryPdfImportRow(row.key)
+          }}
+        >
+          <Input
+            value={row.hint}
+            onChange={(event) => setPdfImportHint(row.key, event.target.value)}
+            placeholder="DOI, arXiv id or title"
+            aria-label={`DOI or title for ${row.filename}`}
+            className="h-8 text-xs"
+          />
+          <Button type="submit" size="sm" variant="outline" disabled={!row.hint.trim()}>
+            Retry
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => void discardPdfImportRow(row.key)}
+            aria-label={`Give up on ${row.filename}`}
+          >
+            Give up
+          </Button>
+        </form>
+      )}
+    </li>
   )
 }

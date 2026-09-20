@@ -1275,6 +1275,49 @@ async def import_pdf_endpoint(
     return pdf_jobs.request_import(staged=staged, filename=filename)
 
 
+class PdfPendingUpload(BaseModel):
+    """One kept upload still waiting for a DOI or title."""
+
+    upload_id: str
+    filename: str
+    sha256: str
+    bytes: int
+    staged_at: str
+
+
+class PdfPendingUploads(BaseModel):
+    uploads: list[PdfPendingUpload]
+
+
+@router.get(
+    "/import/pdf/uploads",
+    summary="PDFs ALMa could not identify, still waiting for a DOI or title",
+    description=(
+        "The staged uploads a `pdf.import` job left unresolved, newest first. "
+        "They outlive the page that dropped them (an upload is kept a day), so "
+        "the Import dialog can show them again after a tab switch, a close or "
+        "a reload. Pure read of the staging directory — no job, no write."
+    ),
+    response_model=PdfPendingUploads,
+)
+def pending_pdf_uploads_endpoint():
+    return PdfPendingUploads(uploads=[PdfPendingUpload(**u.to_wire()) for u in pdf_store.list_staged()])
+
+
+@router.delete(
+    "/import/pdf/uploads/{upload_id}",
+    summary="Give up on a PDF ALMa could not identify",
+    description=(
+        "Removes the kept upload and its sidecar. 404 once it is gone "
+        "(given up already, or expired after a day)."
+    ),
+)
+def discard_pdf_upload_endpoint(upload_id: str):
+    if not pdf_store.discard_staged(upload_id):
+        raise HTTPException(status_code=404, detail="That upload is already gone")
+    return {"status": "discarded", "upload_id": upload_id}
+
+
 class PdfImportHint(BaseModel):
     """What the user knows about a PDF ALMa could not identify."""
 
