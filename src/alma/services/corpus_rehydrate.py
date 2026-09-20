@@ -20,7 +20,7 @@ from typing import Any
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
 from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
-from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
     normalize_doi,
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 OPENALEX_SOURCE = "openalex"
 S2_SOURCE = "semantic_scholar"
 CROSSREF_SOURCE = "crossref"
+DATACITE_SOURCE = "datacite"
 ABSTRACT_RECOVERY_SOURCE = "abstract_recovery"
 # Synthetic source used by `_resolve_identifiers_via_title`. Phase 4 of
 # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`. Distinct from
@@ -202,6 +203,14 @@ def _eligible_status_clause(force: bool) -> str:
     """
 
 
+# Hydration stops at the paper, never its parts. A version or component is inert
+# by contract: it is not shown, counted or ranked, so fetching metadata for it
+# spends provider calls on a row nobody reads — and every attempt writes a
+# `paper_enrichment_status` row, which the group ledger then reports as "a child
+# carrying sidecar state". Reconcile purged those, the next sweep re-created
+# them, and the pair looped forever (observed on a live corpus, 2026-09-20).
+# `canonical_paper_filter` only excludes dedup twins; components need the full
+# `standalone_paper_sql` gate.
 def _select_openalex_candidates(
     conn: sqlite3.Connection,
     *,
@@ -241,7 +250,7 @@ def _select_openalex_candidates(
          AND es.source = ?
          AND es.purpose = ?
         WHERE COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
-          AND {canonical_paper_filter('p')}
+          AND {standalone_paper_sql('p')}
           {target_clause}
           AND {_missing_metadata_clause()}
           AND {status_clause}
@@ -300,7 +309,7 @@ def _select_s2_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE {canonical_paper_filter('p')}
+        WHERE {standalone_paper_sql('p')}
           {target_clause}
           AND (
               COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
@@ -363,7 +372,7 @@ def _candidate_count(conn: sqlite3.Connection) -> int:
          AND es.source = ?
          AND es.purpose = ?
         WHERE COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
-          AND {canonical_paper_filter('p')}
+          AND {standalone_paper_sql('p')}
           AND {_missing_metadata_clause()}
           AND (
               es.paper_id IS NULL
@@ -765,7 +774,7 @@ def _select_crossref_abstract_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE {canonical_paper_filter('p')}
+        WHERE {standalone_paper_sql('p')}
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
           AND COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
           {seed_clause}
@@ -839,6 +848,7 @@ def _run_crossref_abstract_phase(
 
     applied = 0
     seen = 0
+    datacite_candidates: list[str] = []
     chunk_size = 50
     for chunk_start in range(0, len(paper_ids), chunk_size):
         if is_cancellation_requested(job_id):
@@ -870,6 +880,10 @@ def _run_crossref_abstract_phase(
                         fields_key="crossref_v1",
                     )
                     fallback_summary["terminal_no_match"] += 1
+                    # Not in Crossref is where DataCite lives: datasets, software
+                    # and supplements are registered there, and they are exactly
+                    # the rows that carry a "supplement to <article>" relation.
+                    datacite_candidates.append(pid)
                     continue
                 try:
                     fields_filled = _apply_crossref_candidate(
@@ -925,6 +939,14 @@ def _run_crossref_abstract_phase(
                 f"{int(fallback_summary['abstract_filled'])} abstracts filled"
             ),
         )
+    _link_datacite_components(
+        conn,
+        paper_ids=datacite_candidates,
+        paper_to_doi=paper_to_doi,
+        job_id=job_id,
+        add_job_log=add_job_log,
+        summary=fallback_summary,
+    )
     add_job_log(
         job_id,
         "Phase 2 cross-source fallback complete",
@@ -932,6 +954,136 @@ def _run_crossref_abstract_phase(
         data={**dict(fallback_summary), "applied": applied},
     )
     return fallback_summary
+
+
+#: How many DataCite lookups one sweep makes. Each is a single request for a DOI
+#: Crossref does not have, so the tail is naturally small; the cap keeps a corpus
+#: full of dataset DOIs from turning one sweep into thousands of calls.
+_DATACITE_LOOKUP_LIMIT = 50
+
+
+def _unasked_datacite_dois(conn: sqlite3.Connection, dois: list[str]) -> list[str]:
+    """The DOIs whose DataCite answer we do not already hold.
+
+    One sweep's misses are the next sweep's candidates unless the answer is
+    remembered, so the ledger decides what is worth a request: never asked, or
+    asked long enough ago that its retry window has passed.
+    """
+    if not dois:
+        return []
+    keys = {f"datacite:{doi.lower()}": doi for doi in dois}
+    placeholders = ",".join("?" for _ in keys)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT lookup_key, status, next_retry_at
+            FROM paper_enrichment_status
+            WHERE source = ? AND lookup_key IN ({placeholders})
+            """,
+            (DATACITE_SOURCE, *keys.keys()),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return dois
+    now = _utcnow_iso()
+    settled = {
+        str(row["lookup_key"])
+        for row in rows
+        if str(row["status"] or "") == "enriched"
+        or (row["next_retry_at"] and str(row["next_retry_at"]) > now)
+    }
+    return [doi for key, doi in keys.items() if key not in settled]
+
+
+def _link_datacite_components(
+    conn: sqlite3.Connection,
+    *,
+    paper_ids: list[str],
+    paper_to_doi: dict[str, str],
+    job_id: str,
+    add_job_log: Callable[..., None],
+    summary: Counter[str],
+) -> None:
+    """Ask DataCite whether a DOI Crossref does not have is a supplement.
+
+    The registry that holds datasets, software and supplements is the one that
+    knows they belong to an article. A match flows through the SAME component
+    path as the Crossref relation (`_apply_crossref_candidate` →
+    `resolve_component`), so "what is a component" stays spelled once.
+
+    Network first, then one short write window: the lookups happen outside the
+    writer entirely.
+    """
+    if not paper_ids:
+        return
+    from alma.discovery.datacite import fetch_parent_dois
+
+    candidates = list(dict.fromkeys(paper_to_doi[pid] for pid in paper_ids if pid in paper_to_doi))
+    if not candidates:
+        return
+    wanted = _unasked_datacite_dois(conn, candidates)[:_DATACITE_LOOKUP_LIMIT]
+    if not wanted:
+        return
+    add_job_log(
+        job_id,
+        f"Phase 2: DataCite relation lookup for {len(wanted)} DOI(s) Crossref does not have",
+        step="datacite_prepare",
+        data={"dois": len(wanted)},
+    )
+    parents = fetch_parent_dois(wanted)
+
+    linked = 0
+    asked = {doi.lower() for doi in wanted}
+    with write_section(conn, label="corpus_rehydrate datacite relations"):
+        for pid in paper_ids:
+            doi = paper_to_doi.get(pid)
+            if (doi or "").lower() not in asked:
+                continue  # beyond this sweep's cap: it is asked on the next one
+            parent = parents.get((doi or "").lower())
+            if not parent:
+                # Record the miss, or every sweep asks the same registry the
+                # same question about the same DOI forever. A registry that
+                # does not hold a relation today may hold one later, so this is
+                # a dated outcome rather than a terminal one.
+                _write_ledger(
+                    conn,
+                    paper_id=pid,
+                    source=DATACITE_SOURCE,
+                    lookup_key=f"datacite:{(doi or '').lower()}",
+                    status="unchanged",
+                    reason="no_supplement_relation",
+                    fields_filled=[],
+                    fields_key="datacite_v1",
+                    retry_after=UNCHANGED_RETRY_AFTER,
+                )
+                summary["datacite_no_relation"] += 1
+                continue
+            try:
+                fields_filled = _apply_crossref_candidate(
+                    conn, paper_id=pid, candidate={"doi": doi, "parent_doi": parent}
+                )
+            except Exception as exc:
+                logger.warning("DataCite relation apply failed for %s: %s", pid, exc)
+                continue
+            if fields_filled:
+                linked += 1
+            _write_ledger(
+                conn,
+                paper_id=pid,
+                source=DATACITE_SOURCE,
+                lookup_key=f"datacite:{(doi or '').lower()}",
+                status="enriched" if fields_filled else "unchanged",
+                reason=f"supplement_to:{parent}" if fields_filled else "relation_not_local",
+                fields_filled=fields_filled,
+                fields_key="datacite_v1",
+                retry_after=None if fields_filled else UNCHANGED_RETRY_AFTER,
+            )
+    summary["datacite_linked"] += linked
+    add_job_log(
+        job_id,
+        f"Phase 2: DataCite linked {linked} component(s) to their parent paper",
+        step="datacite_done",
+        data={"looked_up": len(wanted), "linked": linked},
+    )
 
 
 class _AbstractMetaParser(HTMLParser):
@@ -1070,7 +1222,7 @@ def _select_abstract_recovery_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE {canonical_paper_filter('p')}
+        WHERE {standalone_paper_sql('p')}
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
           {target_clause}
           AND (

@@ -37,6 +37,7 @@ from alma.application.signal_lab.evidence import (
 )
 from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import MiniGame
+from alma.core.sql_helpers import standalone_paper_sql
 
 # Protected ring-uniform exploration share.
 EPSILON = 0.20
@@ -457,14 +458,18 @@ def _load_region_pools(
     }
     if not cluster_to_region:
         return {}, {}, {}
+    # Membership is re-derived on every partition refresh, so a version that was
+    # cleared at merge time can be assigned again. The pool asks the paper
+    # itself: the Lab must never ask you to judge a work twice.
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT pc.paper_id, pc.cluster_id, p.journal
         FROM semantic_partition_members pc
         JOIN papers p ON p.id = pc.paper_id
         JOIN publication_embeddings pe
           ON pe.paper_id = pc.paper_id AND pe.model = ?
-        WHERE TRIM(COALESCE(p.title, '')) != ''
+        WHERE {standalone_paper_sql('p')}
+          AND TRIM(COALESCE(p.title, '')) != ''
           AND (TRIM(COALESCE(p.abstract, '')) != ''
                OR TRIM(COALESCE(p.tldr, '')) != '')
         ORDER BY pc.paper_id

@@ -54,6 +54,7 @@ from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 from alma.application.materialized_views import MaterializedViewReadError
 from alma.core.logging import setup_logging
 from alma.core.network_policy import ExternalAccessError
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
@@ -531,10 +532,18 @@ def get_statistics():
             cursor = db.execute("SELECT COUNT(*) as count FROM authors")
             total_authors = cursor.fetchone()["count"]
 
-            cursor = db.execute("SELECT COUNT(*) as count FROM papers")
+            # Works, not rows: a version absorbed into its published paper and a
+            # component of one are the same work, and counting them again makes
+            # the headline figure disagree with every list it summarises.
+            cursor = db.execute(
+                f"SELECT COUNT(*) as count FROM papers p WHERE {standalone_paper_sql('p')}"
+            )
             total_publications = cursor.fetchone()["count"]
 
-            cursor = db.execute("SELECT COALESCE(SUM(cited_by_count), 0) as total FROM papers")
+            cursor = db.execute(
+                "SELECT COALESCE(SUM(cited_by_count), 0) as total FROM papers p "
+                f"WHERE {standalone_paper_sql('p')}"
+            )
             total_citations = cursor.fetchone()["total"] or 0
         finally:
             db.close()
