@@ -174,8 +174,24 @@ as a version pointer. Components donate no user state. Child records cannot
 independently affect Library counts, calibration or recommendation evaluation.
 
 Title/year matches merge automatically only when each side has one plausible
-partner. Ambiguous matches remain separate and are listed in Activity with the
-relevant paper IDs. The repair reports actual merges, failures and remaining
+partner **and both carry a DOI** — a shared title and year alone is how two
+different papers become one. Ambiguous matches remain separate and are listed in
+Activity with the relevant paper IDs.
+
+**Preview before you repair.** Health and Settings both offer a preview: it
+reads exactly what a pass would act on — relationships to repair, components to
+classify, merges ready, what the run limit would defer, and what is left for a
+person to judge — and writes nothing. Unattended auto-repair is unaffected.
+
+**The schema holds the rule too.** `papers.canonical_paper_id` and
+`parent_paper_id` cannot name their own row or a paper that is not in the
+corpus; SQLite refuses the write. A database that already contains such a row
+stays editable until Reconcile clears it, and Health counts it meanwhile.
+
+**Registered datasets know their parent.** A DOI Crossref does not have is
+looked up in DataCite, whose `IsSupplementTo` relation names the article a
+deposited dataset, software release or supplement belongs to. It then becomes a
+component of that paper like any other. The repair reports actual merges, failures and remaining
 title matches. Its limit applies to new title matches; existing relationship
 repair scans the corpus. Each group commits independently, so Library actions
 remain available and a failed group does not undo successful repairs.

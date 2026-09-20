@@ -1,16 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Archive,
-  Database,
-  HardDrive,
-  Layers,
-  Loader2,
-  RotateCcw,
-  ShieldAlert,
-  Trash2,
-  UploadCloud,
-} from 'lucide-react'
+import { Archive, Database, Eye, HardDrive, Layers, Loader2, RotateCcw, ShieldAlert, Trash2, UploadCloud } from 'lucide-react'
 
 import {
   api,
@@ -188,12 +178,24 @@ export function LibraryManagementCard() {
   // used to run the whole pass in a single write transaction, stalling every
   // other write in the app until it finished.
   const reconcileGroupsMutation = useMutation({
-    mutationFn: () => runMaintenanceOperation('paper_group_reconcile', {}),
+    mutationFn: () => runMaintenanceOperation('paper_group_reconcile', { dry_run: false }),
     onSuccess: (result) => {
       toast(describeMaintenanceLaunch(result, 'Paper-group reconcile'))
       void invalidateQueries(queryClient, ['activity-operations'])
     },
     onError: (err) => errorToast('Failed to start paper-group reconcile', getApiErrorMessage(err)),
+  })
+
+  // Preview first (task 45.8): the same operation with `dry_run`, which reads
+  // the selectors a pass would act on and writes nothing. Same button pair as
+  // Health's repair card, so "preview then run" means one thing in the app.
+  const previewGroupsMutation = useMutation({
+    mutationFn: () => runMaintenanceOperation('paper_group_reconcile', { dry_run: true }),
+    onSuccess: (result) => {
+      toast(describeMaintenanceLaunch(result, 'Paper-group preview'))
+      void invalidateQueries(queryClient, ['activity-operations'])
+    },
+    onError: (err) => errorToast('Failed to start paper-group preview', getApiErrorMessage(err)),
   })
 
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -276,6 +278,14 @@ export function LibraryManagementCard() {
               </AsyncButton>
               <AsyncButton
                 variant="outline"
+                icon={<Eye className="h-4 w-4" />}
+                pending={previewGroupsMutation.isPending}
+                onClick={() => previewGroupsMutation.mutate()}
+              >
+                Preview Paper Groups
+              </AsyncButton>
+              <AsyncButton
+                variant="outline"
                 icon={<Layers className="h-4 w-4" />}
                 pending={reconcileGroupsMutation.isPending}
                 onClick={() => reconcileGroupsMutation.mutate()}
@@ -286,7 +296,8 @@ export function LibraryManagementCard() {
 
             <p className="text-sm text-slate-500">
               Paper-group repair keeps published versions together and removes child state.
-              Ambiguous matches stay separate. Follow progress and unresolved matches in Activity.
+              Ambiguous matches stay separate. Preview reports what a repair would change
+              without touching anything; both it and the repair report in Activity.
             </p>
 
             {/* Existing backups */}

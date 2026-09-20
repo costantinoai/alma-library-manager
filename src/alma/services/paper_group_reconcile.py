@@ -19,7 +19,6 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from alma.application.preprint_dedup import (
-    find_preprint_twin_candidates,
     merge_preprint_into_canonical,
 )
 from alma.core.components import backfill_components, count_linkable_orphan_components
@@ -68,21 +67,65 @@ def _count_component_candidates(conn: sqlite3.Connection) -> int:
 _AMBIGUOUS_REPORT_LIMIT = 25
 
 
-def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
-    """Pending work for the group reconciliation operation — REPAIRABLE defects only.
+def preview_paper_group_repairs(
+    conn: sqlite3.Connection, *, limit: int | None = None
+) -> dict[str, Any]:
+    """What a run would do, read with the selectors the run itself uses.
 
-    A count that includes defects this pass cannot fix never reaches zero, so the
-    operation stays `readiness='ready'` forever and every maintenance cycle
-    reschedules a run that repairs nothing. `orphan_components` is exactly that
-    case: an orphan whose parent paper is absent from the corpus is terminal, so
-    only the LINKABLE subset counts (`count_linkable_orphan_components`).
+    ONE owner for three questions that must agree: the pending count Health
+    shows, the preview the button offers before you commit to a pass, and the
+    work the pass then performs. When they were computed separately, a preview
+    could promise merges the run would not make.
+
+    Repairable and terminal are kept apart. A count that includes work no pass
+    can do never reaches zero, so the operation would stay "ready" forever and
+    every maintenance cycle would reschedule a run that repairs nothing:
+    orphan components whose parent is not in the corpus, and ambiguous matches,
+    are findings for a person, not pending work.
     """
-    integrity = dict(relationship_integrity_counts(conn))
-    if integrity.get("orphan_components"):
-        integrity["orphan_components"] = count_linkable_orphan_components(conn)
-    integrity.pop("ambiguous_preprints", None)  # review evidence, never auto-work
-    preprint_twins = len(find_preprint_twin_candidates(conn, scope="corpus"))
-    return _integrity_defect_total(integrity) + preprint_twins + _count_component_candidates(conn)
+    # One index for the whole preview: the defect ledger needs it to spot
+    # ambiguity and the plan needs it to count merges. Building it twice means
+    # scanning and re-normalizing every title in the corpus twice.
+    index = build_preprint_title_index(conn)
+    integrity = dict(relationship_integrity_counts(conn, preprint_index=index))
+    ambiguous_defects = int(integrity.pop("ambiguous_preprints", 0) or 0)
+    orphans = int(integrity.get("orphan_components") or 0)
+    linkable_orphans = count_linkable_orphan_components(conn) if orphans else 0
+    integrity["orphan_components"] = linkable_orphans
+
+    pairs = index.pairs(require_doi=True)
+    safe = [pair for pair in pairs if not pair["ambiguous"]]
+    ambiguous = [pair for pair in pairs if pair["ambiguous"]]
+    selected = len(safe) if limit is None else min(len(safe), limit)
+    components = _count_component_candidates(conn)
+
+    repairable = _integrity_defect_total(integrity) + len(safe) + components
+    return {
+        "repairable": repairable,
+        "relationships_to_repair": _integrity_defect_total(integrity),
+        "components_to_classify": components,
+        "title_matches_ready": len(safe),
+        "title_matches_this_run": selected,
+        "title_matches_deferred": len(safe) - selected,
+        "ambiguous": len(ambiguous),
+        "terminal_orphans": max(0, orphans - linkable_orphans),
+        "ambiguous_defect_rows": ambiguous_defects,
+        "limit": limit,
+        "message": (
+            f"Would repair {repairable} finding(s): "
+            f"{_integrity_defect_total(integrity)} relationship(s), "
+            f"{components} component(s), {selected} preprint merge(s)"
+            + (f" ({len(safe) - selected} deferred by the limit)" if len(safe) > selected else "")
+            + f". {len(ambiguous)} ambiguous match(es) and "
+            f"{max(0, orphans - linkable_orphans)} orphan component(s) with no parent "
+            "in the corpus are left for you to look at."
+        ),
+    }
+
+
+def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
+    """Pending REPAIRABLE work, from the shared preview selector."""
+    return int(preview_paper_group_repairs(conn)["repairable"])
 
 
 def _repair_dangling_relationships(conn: sqlite3.Connection, *, unit) -> dict[str, int]:
@@ -203,6 +246,7 @@ def reconcile_paper_groups(
     limit: int | None = None,
     section: Callable[[str], AbstractContextManager[Any]] | None = None,
     on_phase: Callable[[str, dict[str, Any]], None] | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Repair through one plan, with independently atomic group writes.
 
@@ -210,10 +254,22 @@ def reconcile_paper_groups(
     matches; classification and existing relationship repair scan the corpus.
     Ambiguous matches are reported separately and never count as automatic work.
     `on_phase` is called only outside a write scope, including error events.
+
+    ``dry_run`` answers the same question without touching the database: what
+    this pass would repair, what it would leave alone, and what the limit would
+    defer. It is what the manual button shows you before you start a pass.
     """
     scope = section or (lambda _name: nullcontext())
     errors: list[dict[str, str]] = []
     changes = 0
+
+    if dry_run:
+        # A preview writes NOTHING: it reports the same selectors the pass would
+        # act on, so "what it would do" and "what it does" cannot drift apart.
+        preview = preview_paper_group_repairs(conn, limit=limit)
+        if on_phase is not None:
+            on_phase("preview", preview)
+        return {"dry_run": True, "changes": 0, "errors": [], "errors_total": 0, **preview}
 
     def report(name, counts):
         if on_phase:

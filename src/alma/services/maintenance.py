@@ -261,7 +261,11 @@ def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, para
 
 
 def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, params=None):
-    """Use the shared reconciler with short atomic group writes and Activity logs."""
+    """Use the shared reconciler with short atomic group writes and Activity logs.
+
+    ``params['dry_run']`` previews instead: the same selectors, no writes, so the
+    manual button can show what a pass would repair before you start one.
+    """
     from alma.api.scheduler import add_job_log, set_job_status
     from alma.core.db_write import write_section
     from alma.core.time import utcnow
@@ -274,11 +278,15 @@ def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, par
         add_job_log(job_id, message, step=f"reconcile_{phase}", data=dict(counts))
         set_job_status(job_id, message=message)
 
+    dry_run = bool((params or {}).get("dry_run", False))
     with _maintenance_conn() as conn:
         result = reconcile_paper_groups(
             conn, limit=cap,
-            section=lambda unit: write_section(conn, label=f"papers.reconcile_groups:{unit}"),
+            section=None if dry_run else (
+                lambda unit: write_section(conn, label=f"papers.reconcile_groups:{unit}")
+            ),
             on_phase=report,
+            dry_run=dry_run,
         )
     if result["errors"]:
         set_job_status(job_id, status="failed", finished_at=utcnow().isoformat(),
@@ -1206,6 +1214,10 @@ REGISTRY: dict[str, MaintenanceTask] = {
             job_id_prefix="maint_paper_groups",
             cost=COST_CHEAP,
             runner=_run_paper_group_reconcile,
+            # Preview before you commit to a pass (task 45.8): the run stays
+            # non-destructive and auto-repair keeps working, but a person
+            # pressing the button first sees what it would change.
+            supports_dry_run=True,
             stage=MaintenanceStage.PAPER_CANONICALIZATION,
             order=56,
             unit=MaintenanceUnit.PAPER,
