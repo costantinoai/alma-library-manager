@@ -26,5 +26,12 @@ The core seams are intentionally different:
 An integration may implement either or both. It must use one transport per
 external service and store secrets only through `alma.core.secrets`.
 
+Everything here ships **switched off**. `PluginManifest` enforces that itself:
+while `plugins.<id>.enabled` is false, `inbound_channel()` yields nothing and
+`send_alert()` / `test_connection()` raise `PluginDisabledError`. Only
+self-description, configuration and `status()` stay available — and
+`status_factory` must be local, cheap and side-effect-free, so that listing
+plugins never loads a transport.
+
 See [the MkDocs integration guide](../../../docs/development/integrations.md)
 for the complete skeleton, schema extensions, registration, and tests.
