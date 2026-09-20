@@ -148,7 +148,7 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "cache.similarity_ttl_hours": "24",
     "recommendation_mode": "balanced",
     # D12 paper-signal composite (blends rating + topic + embedding +
-    # author centroid + signal-lab + recency). Used wherever a single
+    # author centroid + feedback events + recency). Used wherever a single
     # "how strong is this paper as a signal right now" number is
     # needed — today: seed selection for network author suggestions.
     # Missing components get their weight redistributed to the

@@ -1250,7 +1250,7 @@ def _build_ai_snapshot(
         )
 
     # LLM-backed capabilities (query planner, recommendation explanations,
-    # signal-lab coaching, narrative reports) were removed in 2026-04 (see
+    # gamified coaching, narrative reports) were removed in 2026-04 (see
     # tasks/01_LLM_PRODUCTION_EXIT.md). The capabilities list is now empty
     # — kept in the response for shape compatibility with the frontend.
     capabilities = []

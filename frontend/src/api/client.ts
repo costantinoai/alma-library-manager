@@ -3380,21 +3380,6 @@ export interface RankerOutcome {
   reason?: string | null
   cutoff?: string | null
   bars?: Partial<Record<'negative' | 'random_corpus', RankerOutcomeBar>>
-  /** What the Signal Lab heads change, versus no Lab, on the same papers. */
-  lab?: {
-    rounds_answered: number
-    configured_points: Record<string, number>
-    vs_off: Partial<Record<'negative' | 'random_corpus', Partial<Record<'as_configured' | 'all_max', RankerOutcomeDelta>>>>
-  } | null
-}
-
-/** Paired AUC difference with its bootstrap interval. */
-export interface RankerOutcomeDelta {
-  delta: number | null
-  ci95?: [number, number]
-  verdict: 'improves' | 'worsens' | 'no_measurable_effect' | 'no_data'
-  n_pos: number
-  n_neg: number
 }
 
 /** One lens channel's yield: of the papers it helped surface, how many were kept. */

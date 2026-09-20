@@ -863,7 +863,7 @@ def _seed_strength(seed: dict) -> float:
     when callers have stamped it on the seed via
     `_attach_signal_scores_to_seeds` — that read-once batch covers
     rating, topic alignment, embedding similarity, author alignment,
-    signal-lab swipes, and recency through one shared primitive.
+    feedback events, and recency through one shared primitive.
     Falls back to the legacy rating + citation + recency heuristic
     when the stamp is missing (ad-hoc callers, tests, or pipelines
     that have not yet been threaded through the batch).

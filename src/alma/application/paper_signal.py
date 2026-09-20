@@ -442,7 +442,7 @@ def score_papers_batch(
             if sim > prev:
                 author_align[pid] = sim
 
-    # --- signal-lab (feedback_events) --------------------------------
+    # --- feedback_events ---------------------------------------------
     sig_lab: dict[str, float] = {}
     try:
         fe_rows = db.execute(

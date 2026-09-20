@@ -128,7 +128,7 @@ def age_decay(age_days: float | None, *, half_life_days: float) -> float:
     Returns ``1.0`` when ``age_days`` is ``None`` (treat as fresh) or
     ``0.5 ** (age_days / half_life_days)`` otherwise. The same shape
     is used for paper-feedback events, recommendation history, missing-
-    author feedback, signal-lab swipes, and the recency component of
+    author feedback, feedback events, and the recency component of
     paper_signal scoring.
     """
     if age_days is None:
