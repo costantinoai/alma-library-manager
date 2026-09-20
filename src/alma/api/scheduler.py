@@ -1706,24 +1706,6 @@ def setup_scheduler() -> None:
         interval_hours=calibration_hours,
     )
 
-    # -- Semantic partition freshness (interval) -----------------------------
-    partition_hours = _discovery_schedule_interval_hours(
-        "schedule.semantic_partition_interval_hours",
-        6,
-    )
-    _register_interval_job(
-        sched,
-        job_id="semantic_partition_refresh",
-        func=semantic_partition_refresh_periodic,
-        name="Semantic partition freshness",
-        description=(
-            "Assigns new papers a semantic membership and refreshes the regions, "
-            f"every {partition_hours}h"
-        ),
-        enabled=partition_hours > 0,
-        interval_hours=partition_hours,
-    )
-
     # -- Citation graph maintenance (interval) -----------------------------
     graph_maintenance_hours = _discovery_schedule_interval_hours(
         "schedule.graph_maintenance_interval_hours",
@@ -2355,69 +2337,6 @@ def scoring_calibration_refresh_periodic() -> None:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
         logger.warning("Scoring calibration freshness check failed: %s", exc)
-
-
-def semantic_partition_refresh_periodic() -> None:
-    """Periodic caller of the core-owned learning partition refresh.
-
-    Enveloped like every other tick: visible in Activity under the SAME
-    operation key as the manual Health repair (`learning_partition`), so the two
-    dedupe instead of clustering twice. A tick that changed nothing ends `noop`
-    and stays out of the way; a first build, an assignment or a prune says what
-    it did.
-    """
-    from alma.api.deps import open_db_connection
-    from alma.application.learning_partition import refresh_learning_partition
-
-    job_id = "periodic_semantic_partition"
-    operation_key = "semantic.partition.refresh"
-    if find_active_job(operation_key) is not None:
-        logger.debug("%s skipped: a partition refresh is already running", job_id)
-        return
-    set_job_status(
-        job_id,
-        status="running",
-        trigger_source="scheduler",
-        operation_key=operation_key,
-        started_at=utcnow().isoformat(),
-        message="Checking semantic groups",
-    )
-    try:
-        conn = open_db_connection()
-        try:
-            result = refresh_learning_partition(conn) or {}
-        finally:
-            conn.close()
-        assigned = int(result.get("assigned") or 0)
-        pruned = int(result.get("pruned") or 0)
-        changed = bool(result.get("built")) or assigned > 0 or pruned > 0
-        message = (
-            ("Built semantic groups; " if result.get("built") else "")
-            + f"{assigned} paper(s) assigned, {pruned} stale membership(s) removed"
-            if changed
-            else str(result.get("message") or "Semantic groups are current")
-        )
-        set_job_status(
-            job_id,
-            status="completed" if changed else "noop",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message=message,
-            result=result,
-        )
-        if changed:
-            logger.info("Semantic partition refresh: %s", message)
-    except Exception as exc:
-        logger.exception("Semantic partition refresh failed")
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message=f"Semantic partition refresh failed: {exc}",
-        )
 
 
 @scheduled_network_job("feed.refresh_periodic")

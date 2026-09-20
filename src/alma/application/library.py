@@ -831,10 +831,13 @@ def _invalidate_embedding_artifacts(db: sqlite3.Connection, paper_id: str) -> No
         db.execute("DELETE FROM publication_embeddings WHERE paper_id = ?", (paper_id,))
     except sqlite3.OperationalError:
         pass
-    # The semantic membership is derived from the same vector (task 67 C2).
-    from alma.application.semantic_partition import forget_members
-
-    forget_members(db, [paper_id])
+    # The semantic membership was derived from the same vector. The partition
+    # left main with the Signal Lab (D25) and nothing reads the table any more,
+    # but its rows still describe THIS paper, so they go with it.
+    try:
+        db.execute("DELETE FROM semantic_partition_members WHERE paper_id = ?", (paper_id,))
+    except sqlite3.OperationalError:
+        pass
 
 
 def add_to_library(

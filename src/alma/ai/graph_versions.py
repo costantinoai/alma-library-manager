@@ -17,10 +17,10 @@ reports, and vice-versa.
 
 Usage — wrap a view's existing fingerprint SQL at registration time::
 
-    from alma.ai.graph_versions import with_version, SUPER_REGION_VERSION
+    from alma.ai.graph_versions import with_version, LABELLING_VERSION
     mv.register(mv.View(
-        key="semantic:regions",
-        fingerprint_sql=with_version(partition_fingerprint_sql(), SUPER_REGION_VERSION),
+        key="graph:cluster_labels",
+        fingerprint_sql=with_version(cluster_fingerprint_sql(), LABELLING_VERSION),
         ...
     ))
 """
@@ -47,27 +47,6 @@ from __future__ import annotations
 #            document frequencies for IDF while keeping per-cluster TF/prevalence
 #            local; paper-map payloads also carry corpus-navigation metadata.
 LABELLING_VERSION = "2026.07-8"
-
-# Semantic partition (application/semantic_partition.py, task 67 C2): the
-# core-owned membership + state tables and the incremental assignment rule.
-# Stamped as `algorithm_version` on every published generation.
-# 2026.09-1: initial — legacy layout import + nearest-centroid assignment.
-PARTITION_VERSION = "2026.09-1"
-
-# Super-region aggregation (application/super_regions.py, task 54): how the
-# substrate's clusters are agglomerated into the ~32 regions the Signal Lab
-# samples from, the adjacency rule, and the identity-carrying remap. Bump on
-# any change to grouping/adjacency/remap logic so the cached
-# `graph:super_regions` payload rebuilds — its data fingerprint (cluster rows)
-# can't see code fixes.
-# 2026.07-1: initial — average-link cosine agglomeration to ≤32 regions,
-#            mutual-kNN(4) adjacency, cosine≥0.9 greedy identity remap.
-# 2026.09-1: coordinate-free — centroids come from the core semantic partition
-#            (membership + vectors only); the payload no longer carries x/y,
-#            which nothing read. Identities carry through the cosine remap.
-# 2026.09-2: regions read the core partition tables (`semantic:regions` key);
-#            masses, labels and rings come from memberships, never layouts.
-SUPER_REGION_VERSION = "2026.09-2"
 
 # Signal Lab model fit (application/signal_lab/fit.py, task 54): the pure
 # rounds→model recompute — head formulas, shrinkage, holdout metrics, γ gate.

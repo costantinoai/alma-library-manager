@@ -138,9 +138,9 @@ React Query roots when the Activity job completes.
 | `insights:overview` | ~30 ms | Library paper add/edit, recommendations churn, follow change, embedding-model change |
 
 The 2-D map (layout, terrain, author network) is not part of this line: it
-lives on the `feature/maps-plugin` branch. What learning needs from the same
-embeddings — the semantic partition and its regions — is core, coordinate-free,
-and refreshed by the `semantic.partition.refresh` operation.
+lives on the `feature/maps-plugin` branch. The semantic partition and its
+regions, kept at the time because the Signal Lab read them, left with the Lab
+on `feature/signal-lab` — so no clustering job runs here at all.
 
 ## Database size
 

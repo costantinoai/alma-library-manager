@@ -778,20 +778,6 @@ def run_s2_vector_backfill(
                         "author centroid refresh skipped after S2 batch",
                         exc_info=True,
                     )
-                # Keep the semantic-map substrate coherent too (task 50 M1):
-                # each paper that just gained a vector is placed at its nearest
-                # cluster centroid so the frontier/corpus maps show it without
-                # waiting for a full re-layout. Owns its own write windows;
-                # non-fatal (the maintenance tick catches anything missed).
-                try:
-                    from alma.application.semantic_partition import assign_missing_members
-
-                    # Core membership first (task 67 C2), map position second.
-                    assign_missing_members(conn, batch_inserted_paper_ids)
-                except Exception:
-                    logger.debug(
-                        "substrate placement skipped after S2 batch", exc_info=True
-                    )
             add_job_log(
                 job_id,
                 "S2/SPECTER2 vector batch processed",

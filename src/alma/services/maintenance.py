@@ -537,20 +537,6 @@ def _run_reference_graph(job_id: str, cap: int, target_paper_ids=None, params=No
 
 
 
-def _count_learning_partition(conn: sqlite3.Connection, params=None) -> int:
-    from alma.application.semantic_partition import read_state
-    from alma.application.super_regions import regions_ready
-
-    return int(read_state(conn) is None or not regions_ready(conn))
-
-
-def _run_learning_partition(job_id: str, cap: int, target_paper_ids=None, params=None):
-    from alma.application.learning_partition import refresh_learning_partition
-
-    with _maintenance_conn() as conn:
-        return refresh_learning_partition(conn)
-
-
 def _run_topic_normalize(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Topic normalization (step 10, derived): the deterministic canonical-topic
     pass (NFKD + acronym folding → canonical term + aliases). Safe + idempotent;
@@ -1371,18 +1357,6 @@ REGISTRY: dict[str, MaintenanceTask] = {
             default_auto_daily_cap=250,
             auto_chunk_size=100,
             sources=(SOURCE_OPENALEX,),
-        ),
-        MaintenanceTask(
-            key="learning_partition",
-            label="Prepare learning groups",
-            description="Build semantic groups from existing vectors.",
-            health_dimensions=(), candidate_path="",
-            operation_key="semantic.partition.refresh", job_id_prefix="maint_learning_partition",
-            cost=COST_COMPUTE, runner=_run_learning_partition, count_fn=_count_learning_partition,
-            stage=MaintenanceStage.DERIVED, order=88, unit=MaintenanceUnit.OPERATION,
-            target_kind=TargetKind.NONE, supports_targets=False, prerequisites=("embedding",),
-            default_manual_limit=1, max_manual_limit=1, default_auto_daily_cap=1,
-            max_auto_daily_cap=1, local_compute=True,
         ),
         MaintenanceTask(
             key="topic_normalize",
