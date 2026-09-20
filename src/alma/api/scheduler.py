@@ -1,24 +1,28 @@
-"""Background scheduler for periodic alert evaluation and author refresh.
+"""Background scheduler: the periodic jobs and the lifecycle every job reports through.
 
-Uses APScheduler's BackgroundScheduler to run jobs in background threads.
-The two core periodic jobs are:
+Uses APScheduler's BackgroundScheduler to run jobs in background threads. Every
+periodic job is registered in :func:`setup_scheduler`.
 
-1. **evaluate_scheduled_alerts** -- runs every ALERT_CHECK_INTERVAL_HOURS
-   (default: 1 hour).  For each enabled alert whose schedule is 'daily' or
-   'weekly', the function checks whether enough time has elapsed since
-   ``last_evaluated_at`` and, if so, evaluates the alert (matching rules,
-   filtering already-alerted papers, sending notifications, recording
-   history).
+Work the CLOCK starts and that spends an external provider's quota is admitted
+by ONE gate, :func:`scheduled_network_refusal`: the profile must allow
+unattended network work (``core.network_policy.unattended_network_enabled``),
+outbound access must be on, and the provider must still hold the user's reserve.
+Runners declare it with :func:`scheduled_network_job`; dispatcher ticks that
+mix network and local work ask the gate per branch. The reserve then stays BOUND
+for the length of the run (``core.provider_quota.background_reserve``), so the
+run stops at it mid-flight too, not only at admission.
 
-2. **refresh_authors_periodic** -- runs daily at AUTHOR_REFRESH_HOUR
-   (default: 03:00 UTC).  Refreshes publication caches for all tracked
-   authors.
+There is no nightly author refresh any more (task 85). It walked every author
+row with one OpenAlex call each, re-searched unresolved identities every night,
+and burned the shared daily quota. New works from followed authors belong to the
+Feed's author monitors (``application.feed.refresh_feed_inbox``, batched).
 
 Environment variables
 ---------------------
 SCHEDULER_ENABLED           -- set to "false" to disable scheduler (default: true)
 ALERT_CHECK_INTERVAL_HOURS  -- interval between alert evaluation sweeps (default: 1)
-AUTHOR_REFRESH_HOUR         -- UTC hour for the daily author refresh cron (default: 3)
+ALMA_UNATTENDED_NETWORK     -- may the scheduler start network work on its own
+                               (default: on for the prod profile, off otherwise)
 ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
                             -- idle-gated suggestion-cache cadence (default: 6)
 """
@@ -26,14 +30,17 @@ ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
 import asyncio
 import base64
 import collections
+import functools
 import json
 import logging
 import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from weakref import WeakValueDictionary
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -46,6 +53,30 @@ from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+_admission_registry_lock = threading.Lock()
+_admission_locks: WeakValueDictionary = WeakValueDictionary()
+
+
+@contextmanager
+def job_admission(operation_key: str) -> Iterator[None]:
+    """Serialize active lookup plus reservation for one operation in this process.
+
+    No build or scheduler submission belongs inside this section. Different
+    keys remain independent, and unused locks disappear from the registry.
+    Acquire before any writer gate to keep lock ordering consistent.
+    """
+    from alma.core.db_write import gate_held_by_current_thread
+
+    if gate_held_by_current_thread():
+        raise RuntimeError("Job admission must run after releasing the writer gate")
+    with _admission_registry_lock:
+        lock = _admission_locks.get(operation_key)
+        if lock is None:
+            lock = threading.Lock()
+            _admission_locks[operation_key] = lock
+    with lock:
+        yield
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -785,13 +816,6 @@ def _inbox_sweep_interval_minutes() -> int:
         return 5
 
 
-def _author_refresh_hour() -> int:
-    try:
-        return int(os.getenv("AUTHOR_REFRESH_HOUR", "3")) % 24
-    except (ValueError, TypeError):
-        return 3
-
-
 def _discovery_schedule_interval_hours(key: str, default: int = 0) -> int:
     try:
         from alma.api.deps import open_db_connection
@@ -1065,17 +1089,139 @@ def background_yield_reason(
     ok, reason = gate(conn, exclude_operation_key=operation_key)
     if not ok:
         return (BG_PAUSED_FOR_USER, f"Paused for user activity ({reason}); will resume when idle")
+    refusal = _budget_refusal(conn, budget_source)
+    if refusal is not None:
+        return (refusal[0], f"Stopped: {refusal[1]}")
+    return None
+
+
+def _budget_refusal(conn: sqlite3.Connection, budget_source: str) -> tuple[str, str] | None:
+    """``(BG_CREDIT_LIMIT, why)`` when *budget_source* is down to the user's reserve.
+
+    The one reading of the background reserve, shared by the start gate
+    (`scheduled_network_refusal`) and the keep-going tripwire
+    (`background_yield_reason`), so both stop at the same number.
+    """
     from alma.core.http_sources import provider_budget_ok
     from alma.services.background_settings import get_reserved_api_calls
 
     reserve = get_reserved_api_calls(conn)
-    if not provider_budget_ok(budget_source, reserve=reserve):
+    if provider_budget_ok(budget_source, reserve=reserve):
+        return None
+    return (
+        BG_CREDIT_LIMIT,
+        f"{budget_source} quota near its limit "
+        f"(reserving {reserve} calls for your manual operations)",
+    )
+
+
+# Why the scheduler did not START a network run (task 85). The two yield reasons
+# above stop a sweep midway; these stop a run before it begins, so nothing is left
+# half-done and the next tick simply asks again.
+BG_UNATTENDED_OFF = "unattended_network_off"
+BG_NETWORK_OFF = "network_off"
+
+
+def scheduled_network_refusal(
+    conn: sqlite3.Connection, *, budget_source: str | None = "openalex"
+) -> tuple[str, str] | None:
+    """THE admission gate for network work the clock starts. ``None`` admits.
+
+    Every run a timer starts and that talks to an external service asks this,
+    in this order:
+
+    1. ``BG_UNATTENDED_OFF``: this profile may not start network work on its
+       own (`network_policy.unattended_network_enabled`). Only prod may by
+       default, because every profile shares one provider key.
+    2. ``BG_NETWORK_OFF``: outbound access is switched off. Starting anyway
+       would only fail each call at the transport.
+    3. ``BG_CREDIT_LIMIT``: *budget_source* is down to the reserve kept for the
+       user's own operations. Pass ``budget_source=None`` for runs whose spend
+       is the user's own (an Inbox capture they sent) or whose sub-jobs already
+       stop at the reserve themselves (the hydration drain's sweeps).
+
+    Work a user asked for never comes through here: a click is not unattended.
+    Runners declare themselves with :func:`scheduled_network_job`; dispatcher
+    ticks that mix network and local work call this per network branch.
+    """
+    from alma.core.network_policy import network_access_enabled, unattended_network_enabled
+
+    if not unattended_network_enabled():
+        from alma.config import get_env_profile
+
         return (
-            BG_CREDIT_LIMIT,
-            f"Stopped: {budget_source} quota near its limit "
-            f"(reserving {reserve} calls for your manual operations)",
+            BG_UNATTENDED_OFF,
+            f"scheduled network work is off for the '{get_env_profile()}' profile "
+            "(set ALMA_UNATTENDED_NETWORK=1 to allow it)",
         )
+    if not network_access_enabled():
+        return (BG_NETWORK_OFF, "external network access is disabled in Settings")
+    if budget_source:
+        return _budget_refusal(conn, budget_source)
     return None
+
+
+def log_scheduled_refusal(label: str, refusal: tuple[str, str]) -> None:
+    """Log why a scheduled network run did not start, at the right level.
+
+    The profile refusal is static for the life of the process and announced once
+    at startup (`setup_scheduler`), so repeating it every tick is DEBUG. The
+    other two change with the day and are worth reading in the log.
+    """
+    code, message = refusal
+    level = logging.DEBUG if code == BG_UNATTENDED_OFF else logging.INFO
+    logger.log(level, "%s not started: %s", label, message)
+
+
+def scheduled_network_job(
+    label: str, *, budget_source: str | None = "openalex"
+) -> Callable[[Callable[..., None]], Callable[..., None]]:
+    """Declare a clock-started runner that talks to an external service.
+
+    The decorated runner starts only when :func:`scheduled_network_refusal`
+    admits it. Otherwise it logs why and returns before opening an Activity row.
+    While it runs, the user's credit reserve is BOUND
+    (`provider_quota.background_reserve`), so the run also stops at the reserve
+    mid-flight rather than spending the pool to zero once admitted.
+    The gate travels with the function, so every registration of it (startup,
+    a live settings change, a manual trigger of the scheduled job) is admitted
+    the same way. ``tests/test_scheduled_network_admission.py`` fails on any
+    periodic job that is neither declared here nor classified as local.
+    """
+
+    def decorate(runner: Callable[..., None]) -> Callable[..., None]:
+        @functools.wraps(runner)
+        def admitted(*args, **kwargs) -> None:
+            from alma.api.deps import open_db_connection
+            from alma.core.provider_quota import background_reserve
+            from alma.services.background_settings import get_reserved_api_calls
+
+            try:
+                conn = open_db_connection()
+                try:
+                    reserve = get_reserved_api_calls(conn) if budget_source else 0
+                    refusal = scheduled_network_refusal(conn, budget_source=budget_source)
+                finally:
+                    conn.close()
+            except Exception:
+                # Unknown admission is not admission: an unattended run that
+                # cannot read its own reserve does not get to spend it.
+                logger.exception("%s not started: admission check failed", label)
+                return None
+            if refusal is not None:
+                log_scheduled_refusal(label, refusal)
+                return None
+            # Admission answered "may it start". The reserve stays BOUND for the
+            # whole run, so every paid call it makes — including from fanned-out
+            # workers — stops while the user's headroom is intact, instead of
+            # relying on each loop to re-ask (task 85).
+            with background_reserve(reserve):
+                return runner(*args, **kwargs)
+
+        admitted.scheduled_network = True  # type: ignore[attr-defined]
+        return admitted
+
+    return decorate
 
 
 def make_background_cancel_check(
@@ -1343,8 +1489,7 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
     connection, so it is a writer like any other and must queue on the process
     writer gate rather than race the write lock via `busy_timeout`.
 
-    When this thread already holds the gate (the sweep is reachable from
-    `find_active_job`, which the scheduling path calls) the write is deferred
+    When this thread already holds the gate, the write is deferred
     past the caller's commit and this call reports 0 — honest, since nothing
     has been reaped *yet*. Callers use the count for logging only, and the
     sweep is idempotent: the next call closes whatever is still stale.
@@ -1380,6 +1525,21 @@ def setup_scheduler() -> None:
         logger.warning("Orphan job reap skipped: %s", exc)
 
     sched = get_scheduler()
+
+    # Say once whether this profile may start network work on its own (task 85).
+    # Each tick's refusal is only DEBUG, so this line is where a dev or worktree
+    # copy tells you why its background sweeps never run.
+    from alma.config import get_env_profile
+    from alma.core.network_policy import unattended_network_enabled
+
+    if unattended_network_enabled():
+        logger.info("Scheduled network work is ON for profile '%s'", get_env_profile())
+    else:
+        logger.info(
+            "Scheduled network work is OFF for profile '%s': periodic jobs that call "
+            "external services will not start. Set ALMA_UNATTENDED_NETWORK=1 to allow them.",
+            get_env_profile(),
+        )
 
     # -- Durable Health snapshots -----------------------------------------
     # Health routes are pure stored reads. Startup warms the three dependent
@@ -1444,27 +1604,6 @@ def setup_scheduler() -> None:
     logger.info(
         "Registered evaluate_alerts job (interval=%dh)",
         interval_hours,
-    )
-
-    # -- Daily author refresh (cron) ----------------------------------------
-    refresh_hour = _author_refresh_hour()
-    sched.add_job(
-        refresh_authors_periodic,
-        trigger=CronTrigger(hour=refresh_hour),
-        id="refresh_authors",
-        name="Daily author refresh",
-        replace_existing=True,
-    )
-    with _job_lock:
-        _job_meta["refresh_authors"] = {
-            "action": "refresh_authors",
-            "name": "Daily author refresh",
-            "description": f"Refreshes all authors daily at {refresh_hour:02d}:00 UTC",
-            "cron": f"0 {refresh_hour} * * *",
-        }
-    logger.info(
-        "Registered refresh_authors job (cron hour=%d)",
-        refresh_hour,
     )
 
     # -- Author suggestion discovery (interval, background-owned) ----------
@@ -1609,6 +1748,18 @@ def setup_scheduler() -> None:
         interval_hours=signal_lab_model_hours,
     )
 
+    # Evaluation GETs serve stored rows only. This independent lightweight
+    # owner follows deck/model/settings changes even when Lab consumption is off.
+    _register_interval_job(
+        sched,
+        job_id="signal_lab_eval_refresh",
+        func=signal_lab_eval_refresh_periodic,
+        name="Signal Lab evaluation freshness",
+        description="Refreshes stored Signal Lab replay when its inputs change.",
+        enabled=True,
+        interval_minutes=1,
+    )
+
     # -- Citation graph maintenance (interval) -----------------------------
     graph_maintenance_hours = _discovery_schedule_interval_hours(
         "schedule.graph_maintenance_interval_hours",
@@ -1633,69 +1784,9 @@ def setup_scheduler() -> None:
             graph_maintenance_hours,
         )
 
-    # -- Graph layout maintenance (interval, task 50 M1) --------------------
-    # GETs on /graphs/* are pure stored reads; THIS job owns freshness:
-    # incremental substrate placement every tick, full MV rebuilds only on
-    # embedding-set drift / algo-version change / weekly age floor. Idle-gated
-    # inside the job, so a short interval only costs a cheap check.
-    layout_maintenance_hours = _discovery_schedule_interval_hours(
-        "schedule.graph_layout_interval_hours",
-        6,
-    )
-    if layout_maintenance_hours > 0:
-        sched.add_job(
-            graph_layout_maintenance_periodic,
-            trigger=IntervalTrigger(hours=layout_maintenance_hours),
-            id="graph_layout_maintenance",
-            name="Graph layout maintenance",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["graph_layout_maintenance"] = {
-                "action": "graph_layout_maintenance",
-                "name": "Graph layout maintenance",
-                "description": (
-                    f"Places new vectors on the semantic-map substrate and rebuilds stale "
-                    f"graph views every {layout_maintenance_hours}h (idle-gated)"
-                ),
-            }
-        logger.info(
-            "Registered graph_layout_maintenance job (interval=%dh)",
-            layout_maintenance_hours,
-        )
-
-        # One-shot warm-up: the maps should already exist when the user first
-        # opens Map / Authors / Discovery, not start fitting because they did.
-        # Delayed so it lands after bootstrap, migrations, and the first
-        # request burst; the pass itself is idle-gated and no-ops when every
-        # view is fresh.
-        sched.add_job(
-            graph_layout_warmup,
-            trigger=DateTrigger(
-                # Timezone-aware on purpose: `utcnow()` is naive UTC and
-                # APScheduler would localize it to the scheduler's timezone,
-                # firing the warm-up hours early or late.
-                run_date=datetime.now(timezone.utc) + timedelta(seconds=_GRAPH_WARMUP_DELAY_SECONDS)
-            ),
-            id="graph_layout_warmup",
-            name="Prepare semantic maps",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["graph_layout_warmup"] = {
-                "action": "graph_layout_warmup",
-                "name": "Prepare semantic maps",
-                "description": (
-                    "Builds any missing or overdue map layout shortly after "
-                    "startup so the first visit reads a finished one"
-                ),
-            }
-        logger.info("Registered graph_layout_warmup job (runs in %ds)", _GRAPH_WARMUP_DELAY_SECONDS)
-
     # -- DB maintenance (daily) -------------------------------------------
     # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
-    # UTC — well after the daily author refresh at AUTHOR_REFRESH_HOUR
-    # (default 03:00) so the two never compete for the writer lock.
+    # UTC, a quiet hour for the single writer.
     sched.add_job(
         db_maintenance_periodic,
         trigger=CronTrigger(hour=4, minute=30),
@@ -1944,93 +2035,7 @@ def evaluate_scheduled_alerts() -> None:
         )
 
 
-def refresh_authors_periodic() -> None:
-    """Refresh publication caches for all tracked authors.
-
-    Reuses the same logic as ``POST /api/v1/fetch/refresh-cache``.
-    Catches all exceptions so the scheduler job never crashes.
-    """
-    job_id = "periodic_author_refresh"
-    operation_key = "authors.refresh_periodic"
-    set_job_status(
-        job_id,
-        status="running",
-        trigger_source="scheduler",
-        operation_key=operation_key,
-        started_at=utcnow().isoformat(),
-        message="Refreshing authors (periodic)",
-    )
-    logger.info("Starting periodic author refresh")
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.api.routes.operations import do_refresh_cache_all
-
-        conn = open_db_connection()
-        try:
-            # Pass the job_id so Activity gets live processed/total + the current
-            # author name. This sweep walks EVERY tracked author with a network
-            # call each, so it can run for hours (the ~980 authors with no
-            # OpenAlex id now actually resolve, instead of the run dying in
-            # 0.8s) — without progress it just looks hung, and it becomes
-            # cancellable from Activity, which the no-job_id call never was.
-            result = do_refresh_cache_all(conn, job_id=job_id)
-            logger.info("Periodic author refresh complete: %s", result)
-
-            # Score new feed items by relevance after refresh
-            try:
-                from alma.application.feed import score_feed_items
-
-                scored = score_feed_items(conn)
-                if scored:
-                    logger.info("Scored %d feed items after author refresh", scored)
-            except Exception as score_exc:
-                logger.debug("Feed scoring after refresh failed: %s", score_exc)
-
-            # Now that the sweep is cancellable (job_id above), a user cancel
-            # already stamped `cancelled` — never overwrite that with a
-            # "completed" the run didn't earn.
-            if result.get("cancelled"):
-                logger.info("Periodic author refresh cancelled by user")
-            else:
-                # A sweep that skipped authors still finished, but Activity must
-                # say so — do_refresh_cache_all keeps going past a per-author
-                # failure and reports the count (stack traces are in the log).
-                failed = int(result.get("failed") or 0)
-                set_job_status(
-                    job_id,
-                    status="completed",
-                    trigger_source="scheduler",
-                    operation_key=operation_key,
-                    finished_at=utcnow().isoformat(),
-                    message=(
-                        f"Periodic author refresh complete — {failed} author(s) failed, see log"
-                        if failed
-                        else "Periodic author refresh complete"
-                    ),
-                    result=result,
-                )
-        finally:
-            conn.close()
-
-    except Exception as exc:
-        logger.exception("Fatal error in refresh_authors_periodic")
-        # Persist the WHY, not just the fact: the error column + a log line
-        # are what Health/Activity show the user — a bare "failed" message
-        # made the failure undiagnosable from the UI.
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Periodic author refresh failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        add_job_log(
-            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
-        )
-
-
+@scheduled_network_job("authors.suggestions_periodic")
 def refresh_author_suggestions_periodic() -> None:
     """Refresh stale author-suggestion sources while the app is idle.
 
@@ -2146,6 +2151,7 @@ def refresh_author_suggestions_periodic() -> None:
         conn.close()
 
 
+@scheduled_network_job("discovery.refresh_periodic")
 def refresh_recommendations_periodic() -> None:
     """Periodically refresh discovery recommendations via the lens system.
 
@@ -2272,6 +2278,10 @@ def refresh_recommendations_periodic() -> None:
         )
 
 
+# No budget gate: a capture is a paper YOU sent, so its lookup is your own spend,
+# which is what the reserve exists to protect. The profile and the network
+# switch still apply: a dev copy must not poll your real capture channel.
+@scheduled_network_job("inbox.capture_sweep", budget_source=None)
 def inbox_capture_sweep_periodic() -> None:
     """Poll every configured Inbox delivery channel (Slack today).
 
@@ -2396,6 +2406,23 @@ def signal_lab_model_refresh_periodic() -> None:
         logger.warning("Signal Lab model freshness check failed: %s", exc)
 
 
+def signal_lab_eval_refresh_periodic() -> None:
+    """Keep replay current off the request path, without refitting the model."""
+    from alma.api.deps import open_db_connection
+    from alma.application import materialized_views as mv
+    from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+    from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+
+    conn = open_db_connection()
+    try:
+        if mv.stored_version(conn, MODEL_VIEW_KEY) is not None:
+            mv.get(conn, EVAL_VIEW_KEY)
+    except Exception as exc:  # noqa: BLE001 — advisory job, retried next tick
+        logger.warning("Signal Lab evaluation freshness check failed: %s", exc)
+    finally:
+        conn.close()
+
+
 def scoring_calibration_refresh_periodic() -> None:
     """Freshness owner for ``scoring:calibration``.
 
@@ -2413,6 +2440,7 @@ def scoring_calibration_refresh_periodic() -> None:
         from alma.api.deps import open_db_connection
         from alma.application import materialized_views as mv
         from alma.application.discovery.calibration import CALIBRATION_VIEW_KEY
+        from alma.application.discovery.outcome_eval import request_outcome_eval_refresh
 
         conn = open_db_connection()
         try:
@@ -2425,6 +2453,12 @@ def scoring_calibration_refresh_periodic() -> None:
             envelope = mv.get(conn, CALIBRATION_VIEW_KEY)
             if envelope.get("stale") or envelope.get("rebuilding"):
                 logger.info("Scoring calibration inputs changed; rebuild enqueued")
+                return
+            # The outcome evaluation reads the ranker THROUGH the calibration,
+            # so it waits for a settled one: a run against tables about to be
+            # replaced would be redone on the next tick.
+            if request_outcome_eval_refresh(conn):
+                logger.info("Ranker outcome evaluation inputs changed; re-run enqueued")
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
@@ -2432,61 +2466,69 @@ def scoring_calibration_refresh_periodic() -> None:
 
 
 def semantic_partition_refresh_periodic() -> None:
-    """Core freshness owner for what learning reads from the partition (task 67 C2).
+    """Periodic caller of the core-owned learning partition refresh.
 
-    Until now `semantic:regions` was refreshed only by the map's layout pass,
-    so without a map the Signal Lab would learn against stale regions with
-    nothing able to notice. This tick, gated on the Lab being enabled:
-
-    * assigns a bounded batch of vectored-but-unassigned papers a membership
-      (nearest admitted centroid, no coordinates);
-    * runs `mv.get` on `semantic:regions` — one fingerprint SELECT when
-      nothing moved, a deduped background rebuild when the partition did.
-
-    An unbuilt partition is built here (`build_partition`: the corpus's own
-    clustering run, no layout), so a core install with no map ever gets its
-    regions. A full re-partition of a built corpus stays a deliberate event —
-    a layout rebuild publishes one — while growth is absorbed incrementally.
+    Enveloped like every other tick: visible in Activity under the SAME
+    operation key as the manual Health repair (`learning_partition`), so the two
+    dedupe instead of clustering twice. A tick that changed nothing ends `noop`
+    and stays out of the way; a first build, an assignment or a prune says what
+    it did.
     """
-    job_id = "periodic_semantic_partition"
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.application import super_regions
-        from alma.application.semantic_partition import (
-            assign_missing_members,
-            build_partition,
-            read_state,
-        )
-        from alma.application.signal_lab import settings as lab_settings
+    from alma.api.deps import open_db_connection
+    from alma.application.signal_lab.partition_refresh import refresh_learning_partition
 
+    job_id = "periodic_semantic_partition"
+    operation_key = "semantic.partition.refresh"
+    if find_active_job(operation_key) is not None:
+        logger.debug("%s skipped: a partition refresh is already running", job_id)
+        return
+    set_job_status(
+        job_id,
+        status="running",
+        trigger_source="scheduler",
+        operation_key=operation_key,
+        started_at=utcnow().isoformat(),
+        message="Checking semantic groups",
+    )
+    try:
         conn = open_db_connection()
         try:
-            if not lab_settings.is_enabled(conn):
-                logger.debug("%s skipped: Signal Lab disabled", job_id)
-                return
-            if read_state(conn) is None:
-                built = build_partition(conn)
-                if built is None:
-                    logger.info("%s: corpus too small to partition", job_id)
-                    return
-                logger.info("%s: built partition generation %d", job_id, built.generation)
-            assigned = assign_missing_members(conn)
-            if assigned.get("assigned") or assigned.get("outliers"):
-                logger.info(
-                    "%s: assigned %d paper(s) (%d unclustered)",
-                    job_id,
-                    assigned["assigned"] + assigned["outliers"],
-                    assigned["outliers"],
-                )
-            envelope = super_regions.ensure_regions_fresh(conn) or {}
-            if envelope.get("stale") or envelope.get("rebuilding"):
-                logger.info("Semantic regions inputs changed; rebuild enqueued")
+            result = refresh_learning_partition(conn) or {}
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 — advisory freshness, never kill the tick
-        logger.warning("Semantic partition freshness check failed: %s", exc)
+        assigned = int(result.get("assigned") or 0)
+        pruned = int(result.get("pruned") or 0)
+        changed = bool(result.get("built")) or assigned > 0 or pruned > 0
+        message = (
+            ("Built semantic groups; " if result.get("built") else "")
+            + f"{assigned} paper(s) assigned, {pruned} stale membership(s) removed"
+            if changed
+            else str(result.get("message") or "Semantic groups are current")
+        )
+        set_job_status(
+            job_id,
+            status="completed" if changed else "noop",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=message,
+            result=result,
+        )
+        if changed:
+            logger.info("Semantic partition refresh: %s", message)
+    except Exception as exc:
+        logger.exception("Semantic partition refresh failed")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=f"Semantic partition refresh failed: {exc}",
+        )
 
 
+@scheduled_network_job("feed.refresh_periodic")
 def refresh_feed_inbox_periodic() -> None:
     """Periodically refresh the feed inbox from active monitors.
 
@@ -2552,6 +2594,7 @@ def refresh_feed_inbox_periodic() -> None:
         )
 
 
+@scheduled_network_job("graphs.reference_backfill")
 def maintain_citation_graph_periodic() -> None:
     """Backfill citation edges, then rebuild and vectorize offline frontier."""
     job_id = "periodic_citation_graph_maintenance"
@@ -2609,51 +2652,8 @@ def maintain_citation_graph_periodic() -> None:
         )
 
 
-def _graph_layout_views() -> list[tuple[object, str]]:
-    """The registered graph views ALMa keeps warm, in build order.
-
-    Corpus paper map FIRST: its build persists the substrate every other view
-    (and the frontier map) reads.
-    """
-    from alma.core.scope import Scope
-
-    return [
-        (Scope.corpus, Scope.corpus.view_key("paper_map")),
-        (Scope.library, Scope.library.view_key("paper_map")),
-        (Scope.library, Scope.library.view_key("author_network")),
-        (Scope.corpus, Scope.corpus.view_key("author_network")),
-    ]
 
 
-def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, str]]:
-    """``(scope, view_key, reason)`` for every graph view that needs a rebuild.
-
-    Pure reads. Computed BEFORE any gate so the pass can tell a routine
-    freshness top-up (yield freely) from "there is no map to serve at all"
-    (must happen, see `_URGENT_STALE_REASONS`).
-    """
-    from alma.api.routes.graphs import _paper_scope_gauge
-    from alma.application import materialized_views as mv
-    from alma.application.discovery.lens_crud import read_settings
-
-    settings = read_settings(conn)
-    stale: list[tuple[object, str, str]] = []
-    for scope, view_key in _graph_layout_views():
-        gauge = _paper_scope_gauge(conn, scope)
-        meta = mv.stored_meta(conn, view_key)
-        sig_kv = str(settings.get(f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}") or "")
-        if meta is None:
-            stale.append((scope, view_key, "never_built"))
-        elif not sig_kv or not gauge.is_fresh(conn, sig_kv, threshold=_LAYOUT_REBUILD_DRIFT):
-            stale.append((scope, view_key, "embedding_drift_or_version"))
-        else:
-            age_days = _iso_age_days(str(meta.get("computed_at") or ""))
-            if age_days is None or age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS * 2:
-                stale.append((scope, view_key, "age_overdue"))
-            elif age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
-                stale.append((scope, view_key, "age_floor"))
-
-    return stale
 
 
 # Staleness that the ordinary idle gate must not be allowed to postpone forever.
@@ -2664,199 +2664,10 @@ def _graph_view_staleness(conn: sqlite3.Connection) -> list[tuple[object, str, s
 _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
-def _graph_layout_pass(
-    *, job_id: str, operation_key: str, message: str, user_initiated: bool = False
-) -> None:
-    """Place new vectors, then rebuild whichever graph views are stale.
-
-    Shared by the startup warm-up and the periodic maintenance tick, so
-    "the maps we serve exist and are fresh" has ONE implementation.
-
-    Task 50 M1 — GETs on /graphs/* are pure stored reads, so freshness is owned
-    HERE, on the embedding set (never ``papers.updated_at`` — hydration churns
-    it; see tasks/lessons.md "Semantic maps"):
-
-    1. **Incremental placement** (always, cheap): papers that gained a vector
-       since the last tick get nearest-centroid coords on the corpus substrate.
-    2. **Full MV rebuilds** (rare, deliberate): never-built, algo/model version
-       change, embedding drift ≥ :data:`_LAYOUT_REBUILD_DRIFT`, or older than
-       :data:`_LAYOUT_REBUILD_MAX_AGE_DAYS`.
-
-    Idle-gated, with the escalation in `_URGENT_STALE_REASONS`. At most one
-    layout fit runs at a time process-wide (`graph_build_in_flight`).
-
-    ``user_initiated`` — the user CLICKED "Rebuild map layouts". The background
-    idle gate does not apply to that run, and it must never end silently:
-
-    - The idle gate asks "may background work start?", and both
-      `admit_maintenance` and `admit_maintenance_continue` require `app_idle`.
-      The click itself is a user request, so it makes the app non-idle — a
-      human-triggered run could NEVER pass, returned before the `running`
-      status write, and the harness stamped it `completed` in 0.16 s with no
-      Activity line at all (prod, 2026-07-28). A deliberate click is not
-      background work; it does not consult the background admission policy.
-    - The "nothing to do" early return exists so a restart warm-up stays out of
-      Activity. For a click, "already fresh" is the ANSWER and has to be said
-      out loud, or the button reads as broken for the second time.
-    """
-    from alma.api.deps import open_db_connection
-
-    conn = open_db_connection()
-    try:
-        stale = _graph_view_staleness(conn)
-        urgent = any(reason in _URGENT_STALE_REASONS for _, _, reason in stale)
-
-        # Regions are the core partition owner's to build and keep fresh
-        # (`semantic_partition_refresh_periodic`); this pass only re-checks them
-        # after it places papers, below.
-        if not user_initiated:
-            gate = may_background_continue if urgent else may_background_run
-            ok, reason = gate(conn, exclude_operation_key=operation_key)
-            if not ok:
-                logger.debug("graph layout pass %s skipped: %s", job_id, reason)
-                return
-
-        from alma.application.discovery.lens_crud import upsert_setting
-        from alma.application.graph_process import graph_build_in_flight, run_graph_process
-        from alma.application.graph_substrate import place_missing_papers
-        from alma.application.super_regions import ensure_regions_fresh
-        from alma.core.db_write import write_section
-
-        def _mark_running() -> None:
-            set_job_status(
-                job_id,
-                status="running",
-                trigger_source="user" if user_initiated else "scheduler",
-                started_at=utcnow().isoformat(),
-                operation_key=operation_key,
-                message=message,
-            )
-
-        placement = place_missing_papers(conn)
-        ensure_regions_fresh(conn)
-        if not stale and not (placement.get("placed") or placement.get("outliers")):
-            # Nothing to do. A warm-up on every restart must stay out of Activity
-            # so it can't push real operations off the user's list — but a CLICK
-            # gets an answer, otherwise "already fresh" is indistinguishable from
-            # "the button is broken".
-            if user_initiated:
-                _mark_running()
-                add_job_log(
-                    job_id,
-                    "Every map layout is already current — nothing to rebuild.",
-                    step="uptodate",
-                )
-            return
-
-        _mark_running()
-        if placement.get("placed") or placement.get("outliers"):
-            add_job_log(
-                job_id, "Placed new vectors on the substrate", step="placement", data=placement
-            )
-
-        from alma.api.routes.graphs import _paper_scope_gauge
-        from alma.application.super_regions import OPERATION_KEY as _SUPER_REGIONS_OP
-
-        # Exclude the super-regions build THIS pass just enqueued a few lines up:
-        # counting it as "someone else is fitting a layout" made the pass defer
-        # every view on its own job ("placed 720, rebuilt 0 view(s)", prod
-        # 2026-07-28).
-        own_keys = (operation_key, _SUPER_REGIONS_OP)
-
-        rebuilt: list[str] = []
-        for scope, view_key, stale_reason in stale:
-            busy = graph_build_in_flight(conn, exclude_operation_key=own_keys)
-            if busy:
-                add_job_log(
-                    job_id,
-                    f"Deferring {view_key}: {busy} is already fitting a layout",
-                    step="defer",
-                )
-                break
-
-            add_job_log(job_id, f"Rebuilding {view_key} ({stale_reason})", step="rebuild")
-            try:
-                gauge = _paper_scope_gauge(conn, scope)
-                run_graph_process(
-                    {"kind": "registered_view", "view_key": view_key},
-                    job_id=job_id,
-                )
-                with write_section(conn, label="graph layout maintenance: signature"):
-                    upsert_setting(
-                        conn, f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}", gauge.signature(conn)
-                    )
-                rebuilt.append(view_key)
-            except Exception as exc:  # noqa: BLE001 — one view failing must not sink the rest
-                logger.warning("graph layout pass: rebuild failed for %s: %s", view_key, exc)
-                add_job_log(
-                    job_id, f"Rebuild failed for {view_key}: {exc}", step="rebuild", level="error"
-                )
-
-            # Re-check the gate between expensive rebuilds: yield the moment the
-            # user does anything (pull-based pause). Urgent work still yields —
-            # but only to the user, never to a background sibling.
-            ok, reason = gate(conn, exclude_operation_key=operation_key)
-            if not ok:
-                add_job_log(
-                    job_id, f"Yielding after {len(rebuilt)} rebuild(s): {reason}", step="yield"
-                )
-                break
-
-        set_job_status(
-            job_id,
-            status="completed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message=(
-                f"Graph layouts: placed {placement.get('placed', 0)}, "
-                f"rebuilt {len(rebuilt)} view(s)"
-            ),
-            result={"placement": placement, "rebuilt": rebuilt},
-        )
-    except Exception as exc:
-        logger.exception("Fatal error in graph layout pass %s", job_id)
-        # Always surface a real failure, including one that happened before the
-        # pass decided it had visible work — a placement crash is not a no-op.
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Graph layout maintenance failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
-def graph_layout_maintenance_periodic() -> None:
-    """Periodic freshness tick for the semantic-map substrate + graph MVs."""
-    _graph_layout_pass(
-        job_id="periodic_graph_layout_maintenance",
-        operation_key="graphs.layout_maintenance",
-        message="Graph layout maintenance (placement + freshness)",
-    )
 
 
-def graph_layout_warmup() -> None:
-    """Build the maps we serve BEFORE anyone asks for them.
-
-    Runs once shortly after startup. Without it, the first visit to Map /
-    Authors / Discovery after a fresh install, a schema-version bump, or a
-    restart that interrupted a build is what discovers the missing layout — and
-    the user then waits on a 202 plate for the whole fit. Same pass as the
-    periodic tick, so a view already fresh costs a handful of cheap reads.
-    """
-    _graph_layout_pass(
-        job_id="graph_layout_warmup_run",
-        operation_key="graphs.layout_warmup",
-        message="Preparing semantic maps",
-    )
 
 
 # Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set
@@ -3005,6 +2816,10 @@ def drain_pending_hydration_periodic() -> None:
     `find_active_job`, so it never spawns a second dispatcher when one is live —
     whenever pending rows exist, guaranteeing one dispatcher resumes the durable
     queue. Cheap: two COUNT(*) reads, then at most two idempotent schedule calls.
+
+    The tick mixes network and local work, so it is not a `scheduled_network_job`
+    as a whole: its network branches (the two sweeps, the S2 re-arm) ask
+    `scheduled_network_refusal`, and the local-fill convergence runs regardless.
     """
     from alma.api.deps import open_db_connection
 
@@ -3052,8 +2867,19 @@ def drain_pending_hydration_periodic() -> None:
             metadata_work = bool(papers_pending) or count_corpus_metadata_candidates(conn) > 0
         except Exception:
             metadata_work = bool(papers_pending)
+        # The paper/author sweeps and the S2 re-arm below talk to providers; the
+        # local-fill convergence at the end does not. Ask the admission gate once
+        # for the network branches only. No budget here: each sweep already stops
+        # itself at the reserve (`make_background_cancel_check`).
+        network_refusal = scheduled_network_refusal(conn, budget_source=None)
     finally:
         conn.close()
+
+    if network_refusal is not None:
+        if metadata_work or authors_pending:
+            log_scheduled_refusal("hydration drain", network_refusal)
+        metadata_work = False
+        authors_pending = 0
 
     if metadata_work:
         try:
@@ -3089,7 +2915,7 @@ def drain_pending_hydration_periodic() -> None:
         conn2 = open_db_connection()
         try:
             ok, _reason = may_background_run(conn2)
-            if ok and is_post_hydration_chain_pending(conn2):
+            if ok and network_refusal is None and is_post_hydration_chain_pending(conn2):
                 chain = schedule_post_hydration_chain(conn2, trigger_reason="chain_rearm")
                 # Duty discharged when we armed the S2 fetch OR there is
                 # nothing left to chain — clear the marker either way.
@@ -3186,20 +3012,6 @@ def list_jobs() -> list[dict]:
     return jobs
 
 
-def remove_job(job_id: str) -> bool:
-    """Remove a scheduled job by ID."""
-    sched = get_scheduler()
-    try:
-        sched.remove_job(job_id)
-        with _job_lock:
-            _job_meta.pop(job_id, None)
-        logger.info("Removed job %s", job_id)
-        return True
-    except Exception as exc:
-        logger.warning("Failed to remove job %s: %s", job_id, exc)
-        return False
-
-
 def run_job(job_id: str) -> bool:
     """Trigger a job to run immediately."""
     sched = get_scheduler()
@@ -3246,14 +3058,14 @@ def get_job_status(job_id: str) -> dict | None:
 
 
 def find_active_job(operation_key: str) -> dict | None:
-    """Find an active job by operation key.
+    """Read the latest active job by operation key without writing or scheduling.
 
     Active statuses are ``queued``, ``scheduled``, and ``running``.
-    Returns the most recently updated match.
+    Stale rows are excluded without changing them. Startup and the periodic
+    orphan sweep own cleanup; stored-data GETs also use this lookup.
     """
     if not operation_key:
         return None
-    reap_orphan_jobs()
     candidates: list[tuple[str, dict]] = []
     with _job_lock:
         candidates.extend(

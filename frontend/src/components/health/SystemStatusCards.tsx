@@ -48,7 +48,7 @@ import {
   testPluginConnection,
   updateDiscoverySettings,
 } from '@/api/client'
-import { useDiagnosticsSections } from '@/components/insights/useDiagnosticsSections'
+import { type InsightsDiagnosticsSections } from '@/components/insights/useDiagnosticsSections'
 import { AsyncButton } from '@/components/settings/primitives'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import {
@@ -380,11 +380,10 @@ const HEALTHY_NOTE: Record<string, string> = {
   jobs: 'No background jobs have failed in the last 24 hours.',
 }
 
-export function SystemStatusCards() {
+export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsDiagnosticsSections; onRefresh: () => void }) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const reducedMotion = useReducedMotion()
-  const sections = useDiagnosticsSections()
   // Track the OPEN component by id, not a captured snapshot — the popup then
   // reads from the live `components` memo below, so a successful remediation
   // (which invalidates + refetches diagnostics) updates the open popup's states
@@ -392,6 +391,7 @@ export function SystemStatusCards() {
   const [openId, setOpenId] = useState<string | null>(null)
 
   const invalidateOperational = (...extraKeys: readonly unknown[][]) => {
+    onRefresh()
     void invalidateQueries(
       queryClient,
       ['insights-diag'],

@@ -35,7 +35,13 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   const metric = isError ? (
     <span
       className="shrink-0 text-xs italic text-warning-600"
-      title="The health assessor for this dimension failed — see the server log. This is NOT a measured zero."
+      // The backend says WHICH measurement failed, why, and what to press next
+      // (`health.unmeasured_reason`). Repeating a vaguer sentence here would
+      // hide it, and the row has nowhere else to put it.
+      title={
+        dim.severity_reason ||
+        'The health assessor for this dimension failed — see the server log. This is NOT a measured zero.'
+      }
     >
       couldn’t measure
     </span>

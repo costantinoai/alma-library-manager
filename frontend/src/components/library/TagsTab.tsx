@@ -42,6 +42,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast, errorToast} from '@/hooks/useToast'
+import { describeJobLaunch } from '@/lib/activity'
 import { formatPercent } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { PRESET_COLORS } from './types'
@@ -133,10 +134,7 @@ export function TagsTab() {
     mutationFn: () => bulkGenerateTagSuggestions(),
     onSuccess: (data) => {
       void invalidateQueries(queryClient, ['activity-operations'])
-      toast({
-        title: data.status === 'already_running' ? 'Already running' : 'Smart tagging started',
-        description: data.job_id ? `Job ${data.job_id} is now in Activity.` : (data.message || 'Started'),
-      })
+      toast(describeJobLaunch(data, 'Smart tagging'))
     },
     onError: () => {
       errorToast('Error', 'Failed to start bulk tag suggestion generation.')

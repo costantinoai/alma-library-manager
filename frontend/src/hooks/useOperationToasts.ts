@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { invalidateQueryRoots } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateAfterSignalLabMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
@@ -26,6 +26,7 @@ const POLL_INTERVAL = 12000 // 12 seconds
 function operationToastTitle(operationKey: string | undefined, failed: boolean): string {
   const key = (operationKey ?? '').trim()
   const domain =
+    key === 'papers.reconcile_groups' ? 'Paper groups' :
     key.startsWith('discovery.') ? 'Discovery refresh' :
     key.startsWith('feed.') ? 'Feed refresh' :
     key.startsWith('authors.') ? 'Authors' :
@@ -51,6 +52,10 @@ function rootsForOperation(operationKey?: string): string[] {
   }
   if (key.startsWith('pdf.')) {
     return ['paper-pdf']
+  }
+
+  if (key === 'papers.reconcile_groups') {
+    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights', 'signal-lab']
   }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
@@ -111,22 +116,8 @@ function rootsForOperation(operationKey?: string): string[] {
       'discovery-status',
       'discovery-seeded-similar',
       'discovery-explain',
-      'frontier',
       // Recommendation reactions change the space-owned preference field
       // independently of the durable layout payload.
-      'signal-field',
-      'author-field',
-      'insights-diagnostics',
-    ]
-  }
-
-  if (key.startsWith('graphs.')) {
-    return [
-      'graph',
-      'frontier',
-      'signal-field',
-      'author-field',
-      'authors',
       'insights-diagnostics',
     ]
   }
@@ -156,7 +147,6 @@ function rootsForOperation(operationKey?: string): string[] {
       'ai-status',
       'insights-diagnostics',
       'papers',
-      'graph',
     ]
   }
 
@@ -165,14 +155,14 @@ function rootsForOperation(operationKey?: string): string[] {
   // refetch so the page swaps the stale payload for the new one. Keys
   // mirror the view_key suffix (`materialize.insights.overview` →
   // `['insights']`).
+  if (key.startsWith('materialize.insights.diag.')) {
+    return ['insights-diag', 'insights-diagnostics']
+  }
   if (key.startsWith('materialize.insights.')) {
     return ['insights']
   }
-  if (key.startsWith('materialize.graph.')) {
-    return ['graph', 'frontier', 'paper-map', 'author-network']
-  }
-  if (key.startsWith('materialize.variant:')) {
-    return ['graph']
+  if (key.startsWith('materialize.variant:discovery:branches:')) {
+    return ['lens-branches']
   }
 
   return []
@@ -242,9 +232,18 @@ export function useOperationToasts() {
 
     for (const op of newlyTerminal) {
       seenRef.current.add(op.job_id)
+      // The answer/settings POST precedes its asynchronous fit. Refresh again
+      // when the actual learned artifact lands, without replacing a live deck.
+      if (op.operation_key === 'materialize.signal_lab.model'
+        || op.operation_key === 'materialize.signal_lab.eval') {
+        void invalidateAfterSignalLabMutation(queryClient)
+      }
       // Always refetch affected pages — background plumbing (cache
       // materialization, hydration) is precisely what pages need to pick up,
       // even though it never toasts.
+      if (op.operation_key === 'papers.reconcile_groups') {
+        void invalidateAfterPaperMutation(queryClient)
+      }
       const roots = rootsForOperation(op.operation_key)
       if (roots.length > 0) {
         void invalidateQueryRoots(queryClient, ...roots)

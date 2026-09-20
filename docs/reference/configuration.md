@@ -91,7 +91,7 @@ port 465.
 |---|---|---|
 | `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. |
 | `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
-| `AUTHOR_REFRESH_HOUR` | `3` | Hour-of-day (UTC) for nightly author refresh. |
+| `ALMA_UNATTENDED_NETWORK` | on for the `prod` profile, off otherwise | May the scheduler start work that calls external services on its own (feed / discovery / suggestion / citation-graph refreshes, the hydration drain's sweeps, Health auto-repair tasks that fetch). Every profile shares one provider key, so a dev or worktree copy seeded from prod would otherwise spend the same daily quota again. `1` turns it on for a copy, `0` holds it in prod. Runs you start by hand are never affected. |
 | `ALERT_CHECK_INTERVAL_HOURS` | `1` | How often the alert dispatcher runs. |
 | `INBOX_SWEEP_INTERVAL_MINUTES` | `5` | How often ALMa polls your [Inbox](../concepts/inbox.md) capture channels. Minutes, not hours — this is the phone→ALMa loop, so latency is the experience. `0` disables the sweep. Costs one API call per configured channel per sweep, and returns immediately when no channel is set up. |
 | `ALMA_DEEP_REFRESH_WORKERS` | `4` | Concurrency for the per-author deep-refresh fan-out (clamped 1–16). |
@@ -141,7 +141,6 @@ Lab** owns its strict native feature schema:
 | `weights.lab_utility` | `0…10`, default `5` | Maximum confidence-scaled utility-head points |
 | `weights.lab_author_offset` | `0…10`, default `5` | Author head, folded into `author_affinity` (converted to affinity units) |
 | `weights.lab_venue_offset` | `0…10`, default `5` | Venue head from matched-pair rounds, folded into `journal_affinity` |
-| `signal_lab.map_tint_strength` | `0…1`, default `0.45` | Read-time Terrain bend; never coordinates |
 | `signal_lab.gamma_start` / `signal_lab.epsilon` | `0…1` | Library-outward ring decay and protected ring-uniform exploration share |
 | `signal_lab.coverage_target` | `1…500` | Evidence scale used to reduce already-covered region/edge priority |
 | `signal_lab.refit_every_rounds` | `1…100` | Wholesale refit cadence |

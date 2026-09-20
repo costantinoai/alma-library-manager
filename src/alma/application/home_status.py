@@ -29,6 +29,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from alma.core.sql_helpers import standalone_paper_sql
+
 logger = logging.getLogger(__name__)
 
 #: Job outcomes that PROVE something about a subsystem.
@@ -44,9 +46,9 @@ CONCLUSIVE_STATUSES = ("completed", "noop", "failed")
 LOCAL_AI_MODULES = ("torch", "transformers", "adapters", "numpy")
 
 #: A Feed that has not refreshed in this long is stale enough to explain a zero.
-#: Two days rather than one: the nightly author refresh legitimately skips a day
-#: when nothing upstream changed, and crying wolf on that would train the user to
-#: ignore the pill.
+#: Two days rather than one: a Feed refreshed once a day, by hand or on its
+#: schedule, lands a little more than 24 h apart, and crying wolf on that would
+#: train the user to ignore the pill.
 FEED_STALE_AFTER = timedelta(days=2)
 #: Lenses are refreshed deliberately, not nightly, so the bar is a week.
 LENS_STALE_AFTER = timedelta(days=7)
@@ -412,8 +414,9 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
 
     label = "SPECTER2" if local_ready else ("OpenAI embeddings" if hosted_ready else "Embeddings")
 
-    papers = int(_scalar(db, "SELECT COUNT(*) FROM papers") or 0)
-    embedded = int(_scalar(db, "SELECT COUNT(*) FROM publication_embeddings") or 0)
+    papers = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
+    embedded = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
+                           "AND EXISTS (SELECT 1 FROM publication_embeddings pe WHERE pe.paper_id = p.id)") or 0)
     coverage = round((embedded / papers) * 100, 1) if papers else 0.0
 
     if not local_ready and not hosted_ready:
@@ -687,32 +690,6 @@ def _supplier_pills(db: sqlite3.Connection) -> list[dict[str, Any]]:
     return pills
 
 
-def _map_pill(db: sqlite3.Connection) -> dict[str, Any] | None:
-    """Papers that have a vector but no place on the map.
-
-    Keyed on the EMBEDDING set rather than `papers.updated_at`, per the semantic-
-    map rule: hydration touches most rows weekly, so a paper-timestamp gauge
-    would report the layout stale every week regardless of the truth.
-    """
-    embedded = int(_scalar(db, "SELECT COUNT(*) FROM publication_embeddings") or 0)
-    if embedded == 0:
-        return None
-    placed = int(_scalar(db, "SELECT COUNT(DISTINCT paper_id) FROM publication_clusters") or 0)
-    missing = max(0, embedded - placed)
-    if missing == 0 or (missing / embedded) * 100 <= MAP_GAP_TOLERANCE_PCT:
-        return None
-    return _pill(
-        key="maps",
-        label="Maps",
-        state="warning",
-        metric=f"{missing:,} papers unplaced",
-        detail=(
-            f"{missing:,} papers have a vector but no position in the layout, so "
-            "the map is missing them. Rebuild the layout from the Map page."
-        ),
-        tier="problem",
-        href="#/map",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -743,7 +720,4 @@ def assess(db: sqlite3.Connection, *, now: datetime | None = None) -> list[dict[
         _alerts_pill(db, now=moment),
         *_supplier_pills(db),
     ]
-    map_pill = _map_pill(db)
-    if map_pill is not None:
-        pills.append(map_pill)
     return pills

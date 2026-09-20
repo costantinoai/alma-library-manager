@@ -4,11 +4,13 @@ import { FlaskConical, Trash2 } from 'lucide-react'
 
 import {
   getApiErrorMessage,
+  getRankerOutcome,
   getSignalLabEval,
   getSignalLabModel,
   getSignalLabSettings,
   purgeSignalLab,
   updateSignalLabSettings,
+  type RankerOutcome,
   type SignalLabHeadLimits,
   type SignalLabModelSummary,
   type SignalLabReplay,
@@ -16,6 +18,7 @@ import {
   type SignalLabSettingsView,
 } from '@/api/client'
 import { SettingsCard } from '@/components/settings/primitives'
+import { RANKER_OUTCOME_KEY } from '@/components/settings/RankerOutcomeLine'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,7 +38,29 @@ import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterSignalLabMutation } from '@/lib/queryHelpers'
+
+/** A folded head moves an affinity, and the affinity counts for its family's
+ *  Discovery weight — so its reach is that weight's to give. Stated from the
+ *  server's number, never the ceiling. */
+function categoricalReach(head: 'author' | 'venue', family: string, limits: SignalLabHeadLimits): string {
+  const reach = limits.categorical_reach_points?.[head]
+  if (reach == null) return ''
+  if (reach <= 0) return `No effect right now: the ${family} weight in Discovery settings is 0.`
+  return `At most ${reach.toFixed(1)} points at the ceiling, because it counts through the ${family} weight in Discovery settings.`
+}
+
+/** What the outcome evaluation says the heads change, in plain words. */
+function labOutcomeClause(outcome: RankerOutcome | undefined): string | null {
+  const lab = outcome?.state === 'ready' ? outcome.lab : null
+  const vs = lab?.vs_off?.negative?.as_configured
+  if (!lab || !vs || vs.delta == null) return null
+  const points = (vs.delta * 100).toFixed(1)
+  const played = `${lab.rounds_answered} rounds answered`
+  if (vs.verdict === 'improves') return `On your own history the heads improve how often a kept paper outranks a rejected one by ${points} points (${played}).`
+  if (vs.verdict === 'worsens') return `On your own history the heads currently make the ranking worse by ${points} points against rejected papers (${played}). Consider lowering them.`
+  return `On your own history the heads do not measurably change the ranking yet (${vs.delta >= 0 ? '+' : ''}${points} points against rejected papers, ${played}). More rounds are what moves this.`
+}
 
 /** Mirrors the backend's default head bounds. Used only until the settings
  *  query lands; the served `limits` block replaces it and is the authority. */
@@ -52,7 +77,6 @@ const DEFAULTS: SignalLabSettings = {
   utility_points: FALLBACK_LIMITS.head_points_default,
   author_offset_points: FALLBACK_LIMITS.head_points_default,
   venue_offset_points: FALLBACK_LIMITS.head_points_default,
-  map_tint_strength: 0.45,
   ring_decay: 0.35,
   exploration_rate: 0.20,
   coverage_target: 20,
@@ -124,6 +148,7 @@ export function SignalLabSettingsCard() {
     queryFn: getSignalLabModel,
     staleTime: 30_000,
   })
+  const outcomeQuery = useQuery({ queryKey: RANKER_OUTCOME_KEY, queryFn: getRankerOutcome })
   const evalQuery = useQuery({
     queryKey: ['signal-lab', 'eval'],
     queryFn: getSignalLabEval,
@@ -135,13 +160,7 @@ export function SignalLabSettingsCard() {
     mutationFn: (next: SignalLabSettings) => updateSignalLabSettings(next),
     onSuccess: async (saved) => {
       setForm(saved)
-      await invalidateQueries(
-        queryClient,
-        ['signal-lab'],
-        ['home'],
-        ['home-brief'],
-        ['graphs'],
-      )
+      await invalidateAfterSignalLabMutation(queryClient, { resetDecks: true })
       toast({
         title: saved.enabled ? 'Signal Lab settings saved' : 'Signal Lab switched off',
         description: saved.enabled
@@ -156,7 +175,7 @@ export function SignalLabSettingsCard() {
     mutationFn: purgeSignalLab,
     onSuccess: async (result) => {
       setLastPurged(result.rounds_deleted)
-      await invalidateQueries(queryClient, ['signal-lab'], ['graphs'])
+      await invalidateAfterSignalLabMutation(queryClient, { resetDecks: true })
     },
     onError: (error) => errorToast('Signal Lab purge failed', getApiErrorMessage(error)),
   })
@@ -310,7 +329,7 @@ export function SignalLabSettingsCard() {
                   min={0}
                   max={headMax}
                   step={0.5}
-                  description={`Folds into the author signal your Library already produces. Fitted from same-region comparisons only. Up to ${headMax} points.`}
+                  description={`Folds into the author signal your Library already produces. Fitted from same-region comparisons only. ${categoricalReach('author', 'Author', limits)}`}
                   onChange={(value) => update('author_offset_points', value)}
                 />
                 <NumberField
@@ -320,27 +339,8 @@ export function SignalLabSettingsCard() {
                   min={0}
                   max={headMax}
                   step={0.5}
-                  description={`Folds into the venue signal your Library already produces. Fitted from same-region comparisons only. Up to ${headMax} points.`}
+                  description={`Folds into the venue signal your Library already produces. Fitted from same-region comparisons only. ${categoricalReach('venue', 'Venue', limits)}`}
                   onChange={(value) => update('venue_offset_points', value)}
-                />
-              </div>
-            </section>
-
-            {/* The tint is NOT a scoring weight — it never reaches a score. It
-                colours the map at read time, and geometry is corpus-intrinsic:
-                taste may tint what you see, never move where a paper sits. */}
-            <section className="space-y-3">
-              <EyebrowLabel tone="muted">Map</EyebrowLabel>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <NumberField
-                  id="lab-map-tint"
-                  label="Map taste tint"
-                  value={form.map_tint_strength}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  description="Read-time terrain colour only. Never moves a paper's position and never changes a score."
-                  onChange={(value) => update('map_tint_strength', value)}
                 />
               </div>
             </section>
@@ -364,6 +364,9 @@ export function SignalLabSettingsCard() {
                   : evalQuery.data?.replay ? replayClause(evalQuery.data.replay)
                     : 'Evaluation appears when enough information is available.'}
               </p>
+              {labOutcomeClause(outcomeQuery.data) && (
+                <p className="text-xs text-slate-500" data-testid="lab-outcome-line">{labOutcomeClause(outcomeQuery.data)}</p>
+              )}
               {parity && parity.mismatched > 0 && (
                 <p className="text-xs text-critical-600">
                   {parity.mismatched} of {parity.checked} stored scores could not be reproduced.

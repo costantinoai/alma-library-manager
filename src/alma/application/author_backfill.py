@@ -62,24 +62,50 @@ _S2_BATCH_SIZE = 100
 _VECTOR_FIELDS = "paperId,externalIds,embedding.specter_v2"
 
 
-def _record_works_outcome(
-    conn: sqlite3.Connection, openalex_id: str, *, status: str, reason: str = ""
+def _settle_works_outcome(
+    conn: sqlite3.Connection,
+    openalex_id: str,
+    *,
+    status: str,
+    reason: str,
+    summary: dict,
+    log: Callable[..., None],
 ) -> None:
-    """Stamp one works-fetch outcome, never letting the bookkeeping abort the run.
+    """Stamp a successful works outcome, THEN refresh the centroid — two units.
 
-    Recording the outcome is what makes the operation converge, so a failure to
-    record is logged loudly rather than swallowed — but it must not turn a
-    successful works fetch into a failed job."""
+    The outcome is the fact that OpenAlex was read; the centroid is a derived
+    artifact built from it. They used to share ONE write section, so a centroid
+    error rolled back the `fetched` stamp and the runner's failure handler then
+    recorded a perfectly good fetch as a retryable failure.
+
+    Failure policy, deliberately asymmetric:
+      * the OUTCOME write raises — an unrecorded outcome leaves the author
+        pending, so every later run would re-fetch it without anyone knowing;
+      * a CENTROID failure is logged and reported in ``summary`` but does not
+        fail the author: the fetch already landed, and the centroid selector
+        (`_authors_needing_centroid_sql`) still lists the author as needing a
+        recompute.
+    """
     from alma.services import author_hydrate
 
-    try:
+    with write_section(conn, label="author works outcome"):
         author_hydrate.record_author_works_outcome(
             conn, openalex_id=openalex_id, status=status, reason=reason
         )
-    except Exception:
-        logger.warning(
-            "could not record works outcome %s for %s", status, openalex_id, exc_info=True
+    try:
+        with write_section(conn, label="author centroid"):
+            summary["centroid_updated"] = refresh_author_centroid(
+                conn,
+                openalex_id,
+                model=semantic_scholar.S2_SPECTER2_MODEL,
+            )
+    except Exception as exc:
+        logger.error(
+            "author centroid refresh failed for %s: %s", openalex_id, exc, exc_info=True
         )
+        summary["centroid_updated"] = False
+        summary["centroid_error"] = f"{type(exc).__name__}: {exc}"
+        log("centroid_failed", f"Centroid refresh failed: {exc}")
 
 
 # -- centroid maintenance --------------------------------------------
@@ -669,26 +695,22 @@ def refresh_author_works_and_vectors(
             summary["vectors_fetched"] = int(vector_summary.get("vectors_fetched") or 0)
             summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
             summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
-            # Record the works outcome BEFORE (and independently of) the
-            # centroid — the centroid may legitimately fail to build, and that
-            # must not erase the fact that we reached OpenAlex for this author.
-            # still refresh centroid — embeddings may have just arrived (gated
-            # local write; no raw commit racing the gate).
-            with write_section(conn, label="author works outcome (skip path)"):
-                _record_works_outcome(
-                    conn,
-                    oid_norm,
-                    status=author_hydrate.WORKS_SKIPPED_STATUS,
-                    reason=f"already hold {existing_count}/{declared} declared works",
-                )
-                summary["centroid_updated"] = refresh_author_centroid(
-                    conn,
-                    oid_norm,
-                    model=semantic_scholar.S2_SPECTER2_MODEL,
-                )
+            # Still refresh the centroid — embeddings may have just arrived.
+            _settle_works_outcome(
+                conn,
+                oid_norm,
+                status=author_hydrate.WORKS_SKIPPED_STATUS,
+                reason=f"already hold {existing_count}/{declared} declared works",
+                summary=summary,
+                log=_log,
+            )
             return summary
 
-        # Phase 2: paginate through all works.
+        # Phase 2: paginate through all works. A failed page RAISES (→ the
+        # retryable outcome below), so a partial walk can never be stamped
+        # `fetched`. An empty page does not end the walk: the client drops
+        # works outside its type allowlist, so a page can be all-filtered while
+        # the cursor still has more — only a missing `next_cursor` is the end.
         cursor: str | None = "*"
         works: list[dict] = []
         total_hint = declared or None
@@ -697,8 +719,6 @@ def refresh_author_works_and_vectors(
                 oid_norm, cursor=cursor, per_page=100
             )
             batch = page.get("results") or []
-            if not batch:
-                break
             works.extend(batch)
             summary["works_fetched"] += len(batch)
             if page.get("total") is not None and total_hint is None:
@@ -780,24 +800,17 @@ def refresh_author_works_and_vectors(
             except Exception as exc:
                 _log("enrich_enqueue_skipped", f"Author enrichment enqueue skipped: {exc}")
 
-        # Phase 5: record the works outcome, then recompute the centroid (gated
-        # local write — no raw commit racing the writer gate under concurrent
-        # deep-refresh workers). The outcome is stamped FIRST and separately:
-        # the centroid is a derived artifact and cannot testify that OpenAlex
-        # was read, which is precisely why it must not gate the next run.
+        # Phase 5: record the works outcome, then recompute the centroid — as
+        # two separate gated units (see `_settle_works_outcome`).
         _log("centroid", "Recomputing author centroid")
-        with write_section(conn, label="author works outcome + centroid"):
-            _record_works_outcome(
-                conn,
-                oid_norm,
-                status=author_hydrate.WORKS_FETCHED_STATUS,
-                reason=f"fetched {summary['works_fetched']} works",
-            )
-            summary["centroid_updated"] = refresh_author_centroid(
-                conn,
-                oid_norm,
-                model=semantic_scholar.S2_SPECTER2_MODEL,
-            )
+        _settle_works_outcome(
+            conn,
+            oid_norm,
+            status=author_hydrate.WORKS_FETCHED_STATUS,
+            reason=f"fetched {summary['works_fetched']} works",
+            summary=summary,
+            log=_log,
+        )
         return summary
     except Exception as exc:
         # A failed fetch is a RETRYABLE outcome, not silence. Without this the
@@ -805,9 +818,9 @@ def refresh_author_works_and_vectors(
         # hammers the same failing identity immediately.
         try:
             with write_section(conn, label="author works failure outcome"):
-                _record_works_outcome(
+                author_hydrate.record_author_works_outcome(
                     conn,
-                    oid_norm,
+                    openalex_id=oid_norm,
                     status=author_hydrate.RETRYABLE_STATUS,
                     reason=f"{type(exc).__name__}: {exc}",
                 )
@@ -938,41 +951,6 @@ def count_local_papers_for_author(conn: sqlite3.Connection, openalex_id: str) ->
     return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
 
 
-def count_placed_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -> int:
-    """How many of this author's papers sit in the semantic partition.
-
-    `count_local_papers_for_author` counts ROWS; a semantic position needs a
-    paper that is embedded AND partitioned (task 67 C2: the core-owned
-    `semantic_partition_members`, never the map's layout rows — a map dot
-    follows from membership, not the other way round).
-
-    The two counts differ exactly where the false green lived: seeding lands two
-    papers, the S2 vector fetch returns nothing for them, the row count reaches
-    `SEED_TARGET_PAPERS`, `authors.unplaceable` drops to zero — and the author
-    still has no position, no score and no way onto any semantic surface
-    (2026-07-26).
-    """
-    from alma.application.semantic_partition import MEMBERS_TABLE
-
-    oid = str(openalex_id or "").strip().lower()
-    if not oid:
-        return 0
-    # Health owns the unavailable/error state; do not invent a placement gap
-    # when the partition cannot be read.
-    row = conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT pa.paper_id) AS n
-        FROM publication_authors pa
-        JOIN papers p ON p.id = pa.paper_id
-        JOIN {MEMBERS_TABLE} m ON m.paper_id = pa.paper_id
-        WHERE lower(pa.openalex_id) = ?
-          AND {standalone_paper_sql('p')}
-        """,
-        (oid,),
-    ).fetchone()
-    return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
-
-
 def seed_papers_for_author(
     conn: sqlite3.Connection,
     author_openalex_id: str,
@@ -1038,9 +1016,18 @@ def seed_papers_for_author(
     seen_paper_ids = _existing_paper_ids_for_author(conn, oid_norm)
 
     # Gather over the network FIRST — never hold a write txn across HTTP.
-    page = openalex_client.fetch_works_page_for_author(
-        oid_norm, per_page=_SEED_SCAN_PER_PAGE, sort="cited_by_count:desc"
-    )
+    try:
+        page = openalex_client.fetch_works_page_for_author(
+            oid_norm, per_page=_SEED_SCAN_PER_PAGE, sort="cited_by_count:desc"
+        )
+    except Exception as exc:  # noqa: BLE001 — seeding never raises on upstream failure
+        # RETRYABLE: no seed attempt is recorded, so the author stays pending
+        # with the cause in the summary.
+        logger.warning("seed: OpenAlex works fetch failed for %s: %s", oid_norm, exc)
+        summary["skipped"] = True
+        summary["reason"] = f"{type(exc).__name__}: {exc}"
+        _log("seed_fetch", f"OpenAlex works fetch failed for {oid_norm}")
+        return summary
     candidates = page.get("results") or []
     next_cursor = page.get("next_cursor")
     # What upstream actually HOLDS for this author. `total` is the OpenAlex
@@ -1051,7 +1038,7 @@ def seed_papers_for_author(
 
     if not candidates:
         summary["skipped"] = True
-        summary["reason"] = str(page.get("error") or "no_works")
+        summary["reason"] = "no_works"
         # Terminality is decided by what OpenAlex HOLDS (`meta.count`), never by
         # the length of this list. `fetch_works_page_for_author` filters client
         # side — work types outside its allowlist (dataset, dissertation,
@@ -1060,9 +1047,9 @@ def seed_papers_for_author(
         # and no error. Stamping that terminal retired seedable authors
         # permanently (finding B-3, 2026-07-26).
         #
-        # An upstream ERROR is likewise retryable; only a genuinely empty
-        # catalogue is terminal.
-        if not page.get("error") and declared_works < target_papers:
+        # An upstream ERROR never reaches here (it raised above and is
+        # retryable); only a genuinely empty catalogue is terminal.
+        if declared_works < target_papers:
             _record_seed_attempt(
                 conn, oid_norm, status=SEED_STATUS_EXHAUSTED,
                 declared_works=declared_works, local_papers=existing,
@@ -1141,13 +1128,18 @@ def seed_papers_for_author(
             break
         if pages_read >= _SEED_MAX_PAGES:
             break
-        page = openalex_client.fetch_works_page_for_author(
-            oid_norm,
-            per_page=_SEED_SCAN_PER_PAGE,
-            sort="cited_by_count:desc",
-            cursor=next_cursor,
-        )
-        if page.get("error"):
+        try:
+            page = openalex_client.fetch_works_page_for_author(
+                oid_norm,
+                per_page=_SEED_SCAN_PER_PAGE,
+                sort="cited_by_count:desc",
+                cursor=next_cursor,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep what landed; not terminal
+            # `catalogue_walked` stays False, so the outcome below is retryable.
+            logger.warning(
+                "seed: OpenAlex page %d failed for %s: %s", pages_read + 1, oid_norm, exc
+            )
             break
         candidates = page.get("results") or []
         next_cursor = page.get("next_cursor")
@@ -1281,6 +1273,7 @@ def backfill_all_resolved_authors(
         "papers_new": 0,
         "vectors_fetched": 0,
         "centroids_updated": 0,
+        "centroid_failures": 0,
         "failures": 0,
         "cancelled": False,
     }
@@ -1301,8 +1294,11 @@ def backfill_all_resolved_authors(
                 db_path, oid, ctx=None, profile_cache=profile_cache
             )
         except Exception as exc:
+            # Recorded retryable by the runner; named in Activity so a failed
+            # author is visible in the job log, not only as a count.
             logger.warning("author backfill failed for %s: %s", oid, exc)
             summary["failures"] += 1
+            _log_batch_step(ctx, "author_failed", f"{oid}: {type(exc).__name__}: {exc}")
             continue
         summary["processed"] += 1
         if per.get("skipped"):
@@ -1311,6 +1307,11 @@ def backfill_all_resolved_authors(
         summary["vectors_fetched"] += int(per.get("vectors_fetched") or 0)
         if per.get("centroid_updated"):
             summary["centroids_updated"] += 1
+        if per.get("centroid_error"):
+            summary["centroid_failures"] += 1
+            _log_batch_step(
+                ctx, "centroid_failed", f"{oid}: works fetched, centroid not refreshed — {per['centroid_error']}"
+            )
         if ctx is not None:
             try:
                 ctx.log_step(
@@ -1325,6 +1326,16 @@ def backfill_all_resolved_authors(
 
 
 # -- helpers ---------------------------------------------------------
+
+def _log_batch_step(ctx: Any | None, step: str, message: str) -> None:
+    """Forward one batch event to the job's Activity log (no-op without a ctx)."""
+    if ctx is None:
+        return
+    try:
+        ctx.log_step(step, message=message)
+    except Exception:
+        logger.debug("ctx.log_step failed on %s", step, exc_info=True)
+
 
 def _upsert_work(
     conn: sqlite3.Connection, work: dict, *, now: str

@@ -17,7 +17,7 @@
  * OpenAlex ids are case-insensitive identifiers, so every id crossing this
  * boundary is folded through `authorKey` (2026-07-26).
  */
-import { useCallback, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import {
@@ -25,7 +25,6 @@ import {
   listFollowedAuthors,
   type Author,
   type AuthorSuggestion,
-  type GraphNode,
 } from '@/api/client'
 import { authorSuggestionsQueryOptions } from '@/components/authors/authorSuggestionQueries'
 
@@ -43,8 +42,6 @@ export interface AuthorIdentity {
   followedKeys: Set<string>
   /** Who the engine is offering right now, by every id that names them. */
   suggestionsByKey: Map<string, AuthorSuggestion>
-  /** The suggestion behind a map node, or null. */
-  suggestionForNode: (node: GraphNode) => AuthorSuggestion | null
   /** The single owner row (set during onboarding) → "This is you". */
   ownerId: string | null
   isLoading: boolean
@@ -108,28 +105,6 @@ export function useAuthorIdentity(): AuthorIdentity {
     return map
   }, [suggestionsQuery.data])
 
-  const suggestionForNode = useCallback(
-    (node: GraphNode): AuthorSuggestion | null => {
-      const direct =
-        suggestionsByKey.get(authorKey(node.id)) ??
-        suggestionsByKey.get(
-          authorKey(
-            typeof node.metadata?.openalex_id === 'string'
-              ? node.metadata.openalex_id
-              : undefined,
-          ),
-        )
-      if (direct) return direct
-      const local = authorsByKey.get(authorKey(node.id))
-      return local
-        ? suggestionsByKey.get(authorKey(local.id)) ??
-            suggestionsByKey.get(authorKey(local.openalex_id)) ??
-            null
-        : null
-    },
-    [authorsByKey, suggestionsByKey],
-  )
-
   const ownerId = useMemo(
     () => (followedAuthorsQuery.data ?? []).find((item) => item.is_owner)?.author_id ?? null,
     [followedAuthorsQuery.data],
@@ -141,7 +116,6 @@ export function useAuthorIdentity(): AuthorIdentity {
     authorsByKey,
     followedKeys,
     suggestionsByKey,
-    suggestionForNode,
     ownerId,
     isLoading: authorsQuery.isLoading || followedAuthorsQuery.isLoading,
     suggestions: suggestionsQuery.data ?? [],

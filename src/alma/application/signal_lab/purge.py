@@ -18,8 +18,8 @@ import logging
 import sqlite3
 
 from alma.application import materialized_views as mv
-from alma.application.signal_lab.fit import MODEL_VIEW_KEY
-from alma.core.db_write import run_after_gate_release, run_write_unit
+from alma.application.signal_lab.fit import MODEL_VIEW_KEY, enqueue_model_refit
+from alma.core.db_write import run_write_unit
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +34,16 @@ def purge(db: sqlite3.Connection) -> dict[str, int]:
     """
 
     def _unit() -> dict[str, int]:
+        from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+
         n = int(db.execute("SELECT COUNT(*) FROM signal_lab_rounds").fetchone()[0] or 0)
         db.execute("DELETE FROM signal_lab_rounds")
         mv.invalidate(db, MODEL_VIEW_KEY)
+        mv.invalidate(db, EVAL_VIEW_KEY)
         return {"rounds_deleted": n}
 
     result = run_write_unit(db, _unit, label="signal_lab.purge")
 
-    def _enqueue() -> None:
-        mv.enqueue_rebuild(MODEL_VIEW_KEY)
-
-    run_after_gate_release(_enqueue, conn=db, label="signal_lab purge refit")
+    enqueue_model_refit(db, label="signal_lab purge refit")
     logger.info("signal_lab purge: %s rounds deleted", result["rounds_deleted"])
     return result

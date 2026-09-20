@@ -14,6 +14,7 @@ from typing import Any
 from alma.core.scoring_math import rrf_score_normalized, rrf_weight
 
 from ._common import (
+    CHANNEL_BY_FAMILY,
     _candidate_author_keys,
     _candidate_key,
     _candidate_topic_keys,
@@ -311,16 +312,10 @@ def _merge_channel_candidates(
         ordered = sorted(evidence, key=lambda key: (-evidence[key], key))
         family_ranks[family] = {key: rank for rank, key in enumerate(ordered, 1)}
 
-    weight_keys = {
-        "lexical": "lexical",
-        "semantic": "vector",
-        "citation": "graph",
-        "taste": "external",
-    }
     positive_weights = {
         family: max(
             0.0,
-            float(channel_weights.get(weight_keys.get(family, family), 0.0) or 0.0),
+            float(channel_weights.get(CHANNEL_BY_FAMILY.get(family, family), 0.0) or 0.0),
         )
         for family in family_evidence
     }

@@ -71,8 +71,8 @@ const ATTENTION: Record<AttentionKey, AttentionSpec> = {
     label: () => 'Feed monitors',
     metric: (n) => `${n} not delivering`,
     title: (n) =>
-      `${n} Feed ${n === 1 ? 'monitor has' : 'monitors have'} lost their link and are silently delivering nothing. Relink them in Settings.`,
-    href: buildHashRoute('settings', { anchor: 'feed-monitors' }),
+      `${n} Feed ${n === 1 ? 'monitor has' : 'monitors have'} lost their link and are silently delivering nothing. Relink them in Feed → Tune monitors.`,
+    href: buildHashRoute('feed', { tune: 'monitors' }),
   },
   inbox_unresolved: {
     icon: Inbox,

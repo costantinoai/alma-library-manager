@@ -59,6 +59,7 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { describeJobLaunch } from '@/lib/activity'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterFeedRefresh,
@@ -407,15 +408,10 @@ export function FeedPage() {
   }
 
   const invalidateFeedWorkflowAction = () =>
-    invalidateQueries(
-      queryClient,
-      ['feed-inbox'],
-      ['feed-status'],
-      ['papers'],
-      ['library-saved'],
-      ['library-workflow-summary'],
-      ['reading-queue'],
-    )
+    Promise.all([
+      invalidateAfterPaperMutation(queryClient),
+      invalidateQueries(queryClient, ['feed-status']),
+    ])
 
   // Reverses a single dismiss (restores the card). Wired to the transient
   // "Undo" button on the dismiss toast.
@@ -522,10 +518,9 @@ export function FeedPage() {
       const status = String(data.status ?? operation.status ?? '')
       if (status === 'queued' || status === 'running' || status === 'already_running') {
         await invalidateQueries(queryClient, ['activity-operations'])
-        toast({
-          title: status === 'already_running' ? 'Refresh already running' : 'Feed refresh queued',
-          description: data.message || 'Track progress in Activity. Feed will refresh automatically when the job completes.',
-        })
+        toast(describeJobLaunch({ ...data, status }, 'Feed refresh', {
+          startedDetail: 'Feed will refresh automatically when the job completes.',
+        }))
         return
       }
 

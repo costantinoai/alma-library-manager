@@ -959,6 +959,10 @@ export interface NetworkPolicyStatus {
   enabled: boolean
   settings_enabled: boolean
   forced_off_by_env: boolean
+  /** May the scheduler start network work on its own on this profile? Off by
+   *  default everywhere but prod: every profile shares one provider key. */
+  unattended_enabled: boolean
+  profile: string
 }
 
 export function getNetworkPolicy(): Promise<NetworkPolicyStatus> {
@@ -1071,10 +1075,6 @@ export function listSavedPapers(params?: {
   if (params?.offset != null) qs.set('offset', String(params.offset))
   const q = qs.toString()
   return api.get<Publication[]>(`/library/saved${q ? `?${q}` : ''}`)
-}
-
-export function addToLibrary(paperId: string, rating = 0): Promise<Publication> {
-  return api.post<Publication>('/library/saved', { paper_id: paperId, rating })
 }
 
 export function removeFromLibrary(paperId: string): Promise<void> {
@@ -1306,23 +1306,6 @@ export function refreshAuthorSuggestionNetwork(
   )
 }
 
-/**
- * D12 Phase B — enqueue the corpus author works + SPECTER2 vector
- * backfill. `authorOpenalexId` null runs the batch variant (every
- * resolved author whose centroid is missing or older than 14 days).
- */
-export function backfillAuthorWorks(opts: {
-  authorOpenalexId?: string | null
-  fullRefetch?: boolean
-  limit?: number | null
-} = {}): Promise<JobEnvelope> {
-  return api.post<JobEnvelope>('/authors/backfill-works', {
-    author_openalex_id: opts.authorOpenalexId ?? null,
-    full_refetch: opts.fullRefetch ?? false,
-    limit: opts.limit ?? null,
-  })
-}
-
 /** One named contributor to an author's signal. `score` is the display
  *  magnitude (0..100); `tone` carries the sign so the bar renders length +
  *  colour without re-deriving either. Mirrors
@@ -1408,14 +1391,6 @@ export function listAuthorOpenAlexWorks(
   return api.get<AuthorOpenAlexWorksPage>(
     `/authors/${encodeURIComponent(authorId)}/openalex-works?${qs.toString()}`,
   )
-}
-
-export function saveOpenAlexWork(body: {
-  openalex_id?: string | null
-  doi?: string | null
-  action: 'add' | 'like' | 'love' | 'dislike'
-}): Promise<{ paper_id?: string; rating?: number; status?: string }> {
-  return api.post('/library/import/search/save', body)
 }
 
 export function lookupAuthorByName(name: string): Promise<Author> {
@@ -2031,6 +2006,10 @@ export interface LensRecommendation {
    *  meaning "in the Library but not in this lens's collection". */
   in_library?: boolean
   score_breakdown?: ScoreBreakdown | null
+  /** HISTORY, not state: what was done to this row and when. Only an undo of
+   *  a save clears it; removing from the Library, leaving the reading list or
+   *  marking it done elsewhere leave it stamped. Read live membership /
+   *  reading state from `paper.status` and `paper.reading_status`. */
   user_action?: string | null
   action_at?: string | null
   source_type?: string | null
@@ -2144,6 +2123,8 @@ export interface DiscoveryStrategies {
   taste_authors: boolean
   taste_venues: boolean
   recent_wins: boolean
+  /** Scale lens channel weights by how often what each channel surfaced was kept. */
+  adaptive_channels: boolean
 }
 
 export interface DiscoveryLimits {
@@ -2834,8 +2815,8 @@ export interface AIProviderInfo {
   device?: 'cuda' | 'cpu' | null
 }
 
-export function getInsightsDiagnostics(): Promise<InsightsDiagnostics> {
-  return api.get<InsightsDiagnostics>('/insights/diagnostics')
+export function getInsightsDiagnostics(): Promise<InsightsDiagnostics | null> {
+  return api.get<InsightsDiagnostics | null>('/insights/diagnostics')
 }
 
 // ── Per-section diagnostics endpoints ────────────────────────────────────
@@ -2946,10 +2927,14 @@ export type DiagnosticsSectionPayload = {
 
 export function getDiagnosticsSection<K extends DiagnosticsSectionKey>(
   section: K,
-): Promise<DiagnosticsSectionPayload[K]> {
-  return api.get<DiagnosticsSectionPayload[K]>(
+): Promise<DiagnosticsSectionPayload[K] | null> {
+  return api.get<DiagnosticsSectionPayload[K] | null>(
     `/insights/diagnostics/sections/${section}`,
   )
+}
+
+export function refreshDiagnostics(force = false): Promise<{ job_id: string | null }> {
+  return api.post(`/insights/diagnostics/refresh?force=${force}`)
 }
 
 /**
@@ -3200,17 +3185,7 @@ export function discardPdfUpload(uploadId: string): Promise<{ status: string; up
 }
 
 export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {
-  return api.post('/graphs/reference-backfill?background=true')
-}
-
-export function refreshClusterLabels(body: {
-  graph_type: 'paper_map' | 'author_network'
-  scope?: 'library' | 'corpus'
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  return api.post('/graphs/cluster-labels/refresh', {
-    graph_type: body.graph_type,
-    scope: body.scope ?? 'library',
-  })
+  return api.post('/health/operations/reference_graph/run')
 }
 
 // Default scope is `followed` (~tens of authors). `followed_plus_library`
@@ -3518,6 +3493,74 @@ export function updateDiscoverySettings(body: DiscoverySettings): Promise<Discov
   return api.put<DiscoverySettings>('/discovery/settings', body)
 }
 
+/** One bar of the ranker outcome evaluation: AUC of kept papers vs a group. */
+export interface RankerOutcomeBar {
+  auc: number
+  ci95: [number, number]
+  verdict: 'predicts' | 'anti_predicts' | 'inconclusive'
+  n_pos: number
+  n_neg: number
+}
+
+/** Stored summary of "does the ranker's order predict what you kept?". */
+export interface RankerOutcome {
+  state: 'not_built' | 'not_ready' | 'ready'
+  rebuilding: boolean
+  /** False when weights / Library / calibration moved since the stored run. */
+  current?: boolean
+  computed_at?: string | null
+  reason?: string | null
+  cutoff?: string | null
+  bars?: Partial<Record<'negative' | 'random_corpus', RankerOutcomeBar>>
+  /** What the Signal Lab heads change, versus no Lab, on the same papers. */
+  lab?: {
+    rounds_answered: number
+    configured_points: Record<string, number>
+    vs_off: Partial<Record<'negative' | 'random_corpus', Partial<Record<'as_configured' | 'all_max', RankerOutcomeDelta>>>>
+  } | null
+}
+
+/** Paired AUC difference with its bootstrap interval. */
+export interface RankerOutcomeDelta {
+  delta: number | null
+  ci95?: [number, number]
+  verdict: 'improves' | 'worsens' | 'no_measurable_effect' | 'no_data'
+  n_pos: number
+  n_neg: number
+}
+
+/** One lens channel's yield: of the papers it helped surface, how many were kept. */
+export interface ChannelYieldRow {
+  surfaced: number
+  kept: number
+  rate: number | null
+  shrunk_rate: number | null
+  /** What the lens weight is multiplied by at refresh (1 = no opinion). */
+  multiplier: number
+}
+
+export interface ChannelYield {
+  enabled: boolean
+  /** null until a lens refresh has built it. */
+  channels: Record<'lexical' | 'vector' | 'graph' | 'external', ChannelYieldRow> | null
+  papers_surfaced?: number
+  pooled_rate?: number
+  /** null = the channels do not differ beyond sampling noise. */
+  shrinkage_strength?: number | null
+}
+
+export function getChannelYield(): Promise<ChannelYield> {
+  return api.get<ChannelYield>('/discovery/channel-yield')
+}
+
+export function getRankerOutcome(): Promise<RankerOutcome> {
+  return api.get<RankerOutcome>('/discovery/outcome-evaluation')
+}
+
+export function refreshRankerOutcome(force = false): Promise<{ job_id: string | null }> {
+  return api.post(`/discovery/outcome-evaluation/refresh?force=${force}`)
+}
+
 export function getAlertTemplates(): Promise<AlertAutomationTemplate[]> {
   return api.get<AlertAutomationTemplate[]>('/alerts/templates')
 }
@@ -3680,97 +3723,6 @@ export interface AIConfig {
 
 // ── Graph types ──
 
-export interface GraphNode {
-  id: string
-  name: string
-  x: number
-  y: number
-  cluster_id?: number
-  color?: string
-  size: number
-  node_type?: string
-  // True when the node is in the Library (paper: status='library'; author:
-  // >=1 library paper). In a corpus-scope graph the map dims non-library
-  // nodes to half opacity; defaults true so a library-scope graph never dims.
-  in_library?: boolean
-  metadata: Record<string, unknown>
-}
-
-export interface GraphEdge {
-  source: string
-  target: string
-  weight: number
-  // Typed edge layer (Phase 3 / I-11): "semantic" (mutual-kNN in 768-d),
-  // "bibliographic_coupling" (shared refs), "co_authorship" (shared authors),
-  // or "topic" (paper↔topic overlay). The map filters by this.
-  edge_type?: string
-}
-
-export interface GraphData {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  metadata: Record<string, unknown>
-}
-
-// ── Frontier map (Discovery) ──
-export interface FrontierNode {
-  paper_id: string
-  x: number
-  y: number
-  in_library: boolean
-  layer: 'library' | 'rec' | 'seen'
-  branch_id?: string | null
-  branch_label?: string | null
-  score?: number | null
-  title?: string | null
-  year?: number | null
-  /** Corpus-cluster identity, for the map's "group by clusters" mode. */
-  cluster_id?: number | null
-  cluster_label?: string | null
-}
-export interface FrontierEdge {
-  source: string
-  target: string
-  weight: number
-  edge_type: 'bibliographic_coupling' | 'co_citation'
-}
-export interface FrontierResponse {
-  status: 'ready' | 'building'
-  nodes?: FrontierNode[]
-  edges?: FrontierEdge[]
-  counts?: {
-    library: number
-    recs: number
-    recs_unplaced: number
-    seen_shown: number
-    seen_total: number
-    edges?: number
-  }
-  /** Which centroid ranked the seen layer: the lens's own seeds, or the
-   *  whole library when the lens has none. The legend states it. */
-  seen_ranked_by?: 'lens' | 'library'
-  /** Cluster id → hue rank over the WHOLE corpus substrate. A cluster's colour
-   *  identifies which region of the space it is, so every host that draws a
-   *  subset of that space reads the same ranking instead of ranking its own
-   *  dots (which gave one cluster a different colour per surface). */
-  cluster_hues?: Record<string, number>
-  message?: string
-  job_id?: string
-}
-/** Layered semantic-map nodes for the Discovery frontier view. `seenLimit=0`
- * hides the seen layer; `includeEdges` also returns coupling + co-citation
- * edges between placed nodes; a 202 body carries `status:'building'`. */
-export function getFrontier(
-  lensId: string,
-  seenLimit: number,
-  includeEdges = false,
-): Promise<FrontierResponse> {
-  return api.get<FrontierResponse>(
-    `/graphs/frontier?lens_id=${encodeURIComponent(lensId)}&seen_limit=${seenLimit}` +
-      `&include_edges=${includeEdges}`,
-  )
-}
-
 /** An adopted map region on a lens (task 47 §8). Member IDS are stored, not
  * vectors, so the centroid is recomputed live at every refresh. */
 export interface CustomDirection {
@@ -3781,38 +3733,6 @@ export interface CustomDirection {
   mode: 'boost' | 'pin'
   created_at?: string
 }
-export interface RegionDescription {
-  label: string
-  top_terms: string[]
-  sample: string[]
-  counts: { library: number; recs: number; seen: number }
-  sufficient: boolean
-}
-/** Characterise an arbitrary set of papers (a selected map region) by its
- * dominant vocabulary — label, top terms, sample titles, membership counts.
- * POST because the body carries up to ~300 ids; it is a pure read. */
-export function describeRegion(paperIds: string[]): Promise<RegionDescription> {
-  return api.post<RegionDescription>('/graphs/region/describe', { paper_ids: paperIds })
-}
-
-export interface MapSelectionLensResult {
-  collection_id: string
-  lens_id: string
-  name: string
-  paper_count: number
-}
-
-/** One atomic action: save a visible map selection into a collection, then
- * create a collection-backed Discovery lens. Backend re-validates scope. */
-export function createLensFromMapSelection(body: {
-  name: string
-  selection_kind: 'papers' | 'authors'
-  ids: string[]
-  scope: 'library' | 'corpus'
-}): Promise<MapSelectionLensResult> {
-  return api.post<MapSelectionLensResult>('/graphs/selection/lens', body)
-}
-
 // ── Import types ──
 
 export interface ImportResult {
@@ -4224,16 +4144,28 @@ export function listLensRecommendations(
   return api.get<LensRecommendation[]>(`/lenses/${encodeURIComponent(lensId)}/recommendations${q ? `?${q}` : ''}`)
 }
 
-export function previewLensBranches(
-  lensId: string,
-  params?: { max_branches?: number; temperature?: number; resolution?: number },
-): Promise<LensBranchPreview> {
+export interface BranchPreviewOptions {
+  max_branches?: number
+  temperature?: number
+  resolution?: number
+}
+
+function branchPreviewPath(lensId: string, params?: BranchPreviewOptions, refresh = false, force = false): string {
   const qs = new URLSearchParams()
-  if (params?.max_branches != null) qs.set('max_branches', String(params.max_branches))
-  if (params?.temperature != null) qs.set('temperature', String(params.temperature))
-  if (params?.resolution != null) qs.set('resolution', String(params.resolution))
-  const q = qs.toString()
-  return api.get<LensBranchPreview>(`/lenses/${encodeURIComponent(lensId)}/branches${q ? `?${q}` : ''}`)
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value != null) qs.set(key, String(value))
+  }
+  if (force) qs.set('force', 'true')
+  const query = qs.toString()
+  return `/lenses/${encodeURIComponent(lensId)}/branches${refresh ? '/refresh' : ''}${query ? `?${query}` : ''}`
+}
+
+export function previewLensBranches(lensId: string, params?: BranchPreviewOptions): Promise<LensBranchPreview | null> {
+  return api.get(branchPreviewPath(lensId, params))
+}
+
+export function refreshLensBranches(lensId: string, params: BranchPreviewOptions, force = false): Promise<{ job_id: string | null }> {
+  return api.post(branchPreviewPath(lensId, params, true, force), {})
 }
 
 export function explainRecommendation(recId: string): Promise<{
@@ -5058,7 +4990,6 @@ export type PaperActionSurface =
   | 'feed'
   | 'discovery'
   | 'inbox'
-  | 'map'
   | 'papers'
   | 'library'
   | 'onboarding'
@@ -5341,7 +5272,6 @@ export interface SignalLabSettings {
   utility_points: number
   author_offset_points: number
   venue_offset_points: number
-  map_tint_strength: number
   ring_decay: number
   exploration_rate: number
   coverage_target: number
@@ -5355,6 +5285,9 @@ export interface SignalLabSettings {
 export interface SignalLabHeadLimits {
   head_points_max: number
   head_points_default: number
+  /** Points the author / venue head can really move at the ceiling, under the
+   *  current Discovery weights. 0 when that family's weight is 0. */
+  categorical_reach_points?: Partial<Record<'author' | 'venue', number>>
 }
 
 /** What `GET /signal-lab/settings` serves: the settings plus their limits. */

@@ -6,14 +6,12 @@ from .alerts import router as alerts_router
 from .authors import router as authors_router
 from .discovery import router as discovery_router
 from .feed import router as feed_router
-from .graphs import router as graphs_router
 from .imports import router as imports_router
 from .insights import router as insights_router
 from .lenses import router as lenses_router
 from .library import router as library_router
 from .library_mgmt import router as library_mgmt_router
 from .logs import router as logs_router
-from .operations import router as operations_router
 from .plugins import router as plugins_router
 from .publications import router as papers_router
 from .scheduler import router as scheduler_router
@@ -27,14 +25,12 @@ __all__ = [
     "authors_router",
     "discovery_router",
     "feed_router",
-    "graphs_router",
     "imports_router",
     "insights_router",
     "library_router",
     "library_mgmt_router",
     "lenses_router",
     "logs_router",
-    "operations_router",
     "plugins_router",
     "papers_router",
     "scheduler_router",

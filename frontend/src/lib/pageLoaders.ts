@@ -13,7 +13,6 @@ export const pageLoaders = {
     import('@/pages/DiscoveryPage').then((m) => ({ default: m.DiscoveryPage })),
   authors: () =>
     import('@/pages/AuthorsPage').then((m) => ({ default: m.AuthorsPage })),
-  map: () => import('@/pages/MapPage').then((m) => ({ default: m.MapPage })),
   library: () =>
     import('@/pages/LibraryPage').then((m) => ({ default: m.LibraryPage })),
   insights: () =>

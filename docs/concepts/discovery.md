@@ -59,7 +59,7 @@ Several lifecycle filters run before staging, on top of scoring:
 
 Discovery dismissal is scoped to the clicked lens. It uses a slow visibility
 cooldown; repeat dismissals keep the paper out of that lens longer, but never
-write a paper rating, feedback event, lens signal, or global map valence. Other
+write a paper rating, feedback event or lens signal. Other
 lenses remain free to surface the paper. Use **Dislike** for negative opinion,
 or Dislike + Dismiss for “bad and gone”.
 
@@ -227,16 +227,13 @@ Each candidate's `score_breakdown` carries `explanation` — the closed
 decomposition of the score, family by family and atom by atom — which is what
 the card's **Why** panel renders.
 
-After consensus, a final **outcome-calibration multiplier** scales
-`source_relevance` per candidate. Three independent axes — the
-source API that surfaced the candidate, the retrieval lane mode,
-and the specific branch — each carry a Bayesian-smoothed quality
-estimate in `[0.5, 1.5]` based on observed save / dismiss rates.
-The three are composed multiplicatively in log space and clamped
-back to the same band. Empty on a fresh DB → 1.0 → no behavior
-change. Surfaced in the breakdown as `source_calibration_multiplier`
-and `source_calibration_components`. See `docs/reference/scoring.md
-#outcome-calibration`.
+Outcomes feed back into **retrieval**, not into the score. Each lens
+channel (lexical / vector / graph / external) is scaled at refresh by its
+*yield* — of the papers it helped surface, the share you kept — shrunk toward
+the pooled rate by a strength derived from the data, and bounded to
+`[0.5, 1.5]`. Until your history shows the channels differing, every multiplier
+is 1.0. The lens's **Lens Weights** panel states the counts and the weight
+actually used. See `docs/reference/scoring.md` → "Channel yield".
 
 ### Refresh size and the staged page
 
@@ -409,94 +406,12 @@ them (`PRIOR_STRENGTH = 6.0`, `HALF_LIFE_DAYS = 30`) live in
 They're tuned for "noticeable enough to act on, not so reactive
 that one bad day kills a branch."
 
-## Map panel
-
-The recommendation list and its map are visible together: the collapsible map
-panel sits above the cards, using the same durable SPECTER2 corpus space as the
-top-level [Map page](maps.md). Proximity means semantic similarity; the three
-layers make “where am I, where is the frontier, what next?” spatially legible.
-
-- **Library** — solid neutral dots: the terrain, the shape of what you've saved.
-- **Suggestions** — the hero layer: the lens's current recommendations, coloured
-  by **branch** (the same branch identity as Branch Studio) and sized by score.
-  A suggestion near your library is a natural extension; one far out is a novel
-  direction. Suggestions with no abstract yet (no coordinate) are reported as
-  "N not placed".
-- **Context** — faint corpus dots that keep the surrounding research landscape
-  visible without claiming they are recommendations. `dismissed`/`removed`
-  papers never become hero suggestions.
-
-The map is fully connected to the rest of Discovery: a **branch legend** chips
-row highlights a branch and dims the others. Clicking a suggestion opens a
-compact anchored paper card with its internal score and quick triage actions;
-TLDR/cluster/neighbour context is progressively disclosed. A dot click never
-scrolls the list—**Go to paper** is the explicit bridge. Pan, zoom, display
-knobs, and the last-good layout survive navigation; preference Terrain updates
-after an action without rebuilding coordinates.
-
-The **branch legend** does more than highlight: each chip can boost or mute
-its branch inline, writing the same `branch_controls` Branch Studio writes —
-one state, two views. A **Branches / Clusters** switch recolours the map by
-corpus cluster instead of by branch (never both at once: two
-colourings on one scatter would lie about which structure you're reading). When
-a lens has seeds, recommendation placement still uses the shared corpus
-coordinates while branch identity remains a view-only colour. After an
-Explore-direction refresh, recommendations that were not in the previous set
-carry a dashed halo, so the loop is visible end to end.
-
-An opt-in **Citation links** toggle overlays the citation fabric — coupling
-(shared references) and co-citation (cited-together) edges — between the library
-and suggestion nodes, so you can see how a suggestion connects to what you
-already have. Edges are drawn over the library + rec nodes only (the faint seen
-layer would otherwise swamp the view), colored by the same layer palette as the
-Analytics graph.
-
-Endpoint: `GET /graphs/frontier?lens_id=&seen_limit=&include_edges=` (see the
-API reference).
-
-### Directions — naming a region and exploring it
-
-The frontier map isn't just a picture; you can **adopt a region of it as a
-direction** to deepen retrieval there. Turn on **Select a direction** and drag a
-box around a cluster of papers. Before any action, a popover shows the region's
-*meaning*: a c-TF-IDF **label** and top terms (the same labeler the corpus
-clusters use), honest membership counts ("12 in library · 3 suggestions · 41
-seen here"), and three sample titles. Selections under five papers are too small
-to characterize and the action is disabled.
-
-**Explore this direction** adopts it onto the lens: the region is stored on
-`branch_controls.custom_directions` as `{label, terms, member_paper_ids, mode}`
-and a refresh is kicked off. Crucially, the *member ids* are stored — never raw
-vectors — so the direction's centroid is recomputed from live embeddings at
-every refresh and can never go stale. At refresh time each lane consumes it: the
-**vector lane** blends the direction's centroid into the seed centroid (a `pin`
-pulls harder than a `boost`) so retrieval leans toward the region, and the
-**lexical lane** folds the direction's terms into its query expansion.
-
-Adopted directions appear in **Branch Studio** as branch-like rows (label, mode,
-member/term summary) with a **Remove** control. This adoption is the *only*
-crossing between the map's clusters and the lens's branches — it's always
-explicit and user-driven, never automatic.
-
-Endpoint: `POST /graphs/region/describe` (a pure read — the POST body just
-carries the selected paper ids).
-
-### Citation fabric on the corpus graph
-
-The same coupling and co-citation layers ship on the top-level **Map** page as
-filterable edge layers alongside the semantic
-and co-authorship layers. A **Citation influence** slider (Layout basis) blends
-those structural signals into the node *positions* at library scale; the panel
-also reports honest citation-edge coverage — "citation edges cover N% of the
-corpus" — since coupling and co-citation can only connect papers whose references
-ALMa actually holds.
-
 ## Actions on a Discovery card
 
 | Action | What it does |
 |---|---|
 | **Save** | Transitions to `library` with the default rating. The current card stays visible; the next lens refresh excludes it. |
-| **Reading list** | Sets `reading_status='reading'` without saving it to Library. The current card stays visible; the next lens refresh excludes it. |
+| **Reading list** | Sets `reading_status='reading'` without saving it to Library. The current card stays visible and shows **Queued** while the paper is on the reading list — read from the paper itself, so taking it off the list anywhere (Library, Feed, undo) lets you queue it again from Discovery. The next lens refresh excludes it. |
 | **Like / Love** | Sets rating 4 / 5 and writes a positive feedback signal. The recommendation stays visible. |
 | **Dislike** | Sets rating 1 and writes a negative feedback signal. The recommendation stays visible. |
 | **Dismiss** | Hides this lens suggestion only. It changes no rating or preference signal; a per-lens cooldown controls re-entry. |

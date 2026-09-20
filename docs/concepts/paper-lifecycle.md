@@ -57,7 +57,7 @@ Consequences worth knowing:
 ## Reading axis
 
 The `papers.reading_status` column holds one of four values
-(empty string = none):
+(`NULL` = none):
 
 | Value | Meaning |
 |---|---|
@@ -69,6 +69,13 @@ The `papers.reading_status` column holds one of four values
 The reading axis is **independent of membership**. A paper in your
 Reading list does not have to be in your Library — you can queue
 something for reading while still deciding whether to keep it.
+
+Every surface that changes it — Library's reading select, the Reading
+list, Feed and Discovery's Queue button, undo, and a capture "to the
+reading list" — goes through one writer,
+`paper_actions.set_reading_status`. It validates the value (the retired
+`queued` is accepted as `reading`), writes it on the paper-group root,
+and bumps `updated_at`.
 
 ## Why two axes
 
@@ -158,3 +165,33 @@ Reading transitions are completely orthogonal to the diagram above.
 * [Feed](feed.md) — the chronological inbox
 * [Discovery](discovery.md) — the recommender
 * [Vision & philosophy](../vision.md) — why the model is shaped this way
+
+### Repairing versions and components
+
+Health and Settings share **Reconcile paper groups**. A published paper receives
+its preprint's saved state, reading state, ratings and notes; the preprint remains
+as a version pointer. Components donate no user state. Child records cannot
+independently affect Library counts, calibration or recommendation evaluation.
+
+Title/year matches merge automatically only when each side has one plausible
+partner **and both carry a DOI** — a shared title and year alone is how two
+different papers become one. Ambiguous matches remain separate and are listed in
+Activity with the relevant paper IDs.
+
+**Preview before you repair.** Health and Settings both offer a preview: it
+reads exactly what a pass would act on — relationships to repair, components to
+classify, merges ready, what the run limit would defer, and what is left for a
+person to judge — and writes nothing. Unattended auto-repair is unaffected.
+
+**The schema holds the rule too.** `papers.canonical_paper_id` and
+`parent_paper_id` cannot name their own row or a paper that is not in the
+corpus; SQLite refuses the write. A database that already contains such a row
+stays editable until Reconcile clears it, and Health counts it meanwhile.
+
+**Registered datasets know their parent.** A DOI Crossref does not have is
+looked up in DataCite, whose `IsSupplementTo` relation names the article a
+deposited dataset, software release or supplement belongs to. It then becomes a
+component of that paper like any other. The repair reports actual merges, failures and remaining
+title matches. Its limit applies to new title matches; existing relationship
+repair scans the corpus. Each group commits independently, so Library actions
+remain available and a failed group does not undo successful repairs.

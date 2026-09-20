@@ -56,10 +56,30 @@ export function invalidateQueryRoots(
 // libraries") instead of a key soup, and it centralises the set so adding a
 // new consumer (e.g. ['reading-queue']) happens once.
 
+/** Lab settings/purge change both retained decks and live learned fields.
+ * Ordinary answers keep their current deck and refresh only read models. */
+export function invalidateAfterSignalLabMutation(
+  qc: QueryClient,
+  { resetDecks = false }: { resetDecks?: boolean } = {},
+): Promise<void[]> {
+  const labKeys = resetDecks
+    ? [['signal-lab']]
+    : [['signal-lab', 'summary'], ['signal-lab', 'model'], ['signal-lab', 'eval']]
+  return invalidateQueries(
+    qc, ...labKeys, ['home'], ['home-brief'], ['signal-field'], ['author-field'],
+  )
+}
+
 /**
- * After a triage mutation on a paper (save / like / love / dismiss) that
- * touches both Library state and Feed / Discovery reconciliation. Optionally
- * scoped to a specific lens for Discovery-side recomputes.
+ * After ANY change to one paper's own state — membership, rating, reading
+ * status — from any surface. Every list that embeds that state must re-read
+ * it. Optionally scoped to a specific lens for Discovery-side recomputes.
+ *
+ * `lens-recommendations` is here because each recommendation carries the live
+ * paper (`rec.paper.status`, `.reading_status`, `.rating`) and the cache is
+ * kept 60 s. Without it, taking a paper off the reading list in Library left
+ * Discovery showing it "Queued" — and clicking that card ran UNDO, so the
+ * paper could not be put back from Discovery (2026-09-19).
  */
 export function invalidateAfterPaperMutation(
   qc: QueryClient,
@@ -71,28 +91,12 @@ export function invalidateAfterPaperMutation(
     ['feed-inbox'],
     ['library-workflow-summary'],
     ['reading-queue'],
-    // Layout coordinates are durable, but membership and the live preference
-    // fields are not. Active map hosts refetch these immediately after any
-    // save/rating/remove/undo, so Terrain and Score change without a
-    // layout rebuild.
-    ['graph'],
-    ['frontier'],
-    ['signal-field'],
-    ['author-field'],
+    ['lens-recommendations'],
   ]
   if (lensId) {
     return invalidateQueries(qc, ...keys, ['lens-signals', lensId])
   }
   return invalidateQueries(qc, ...keys)
-}
-
-/**
- * A paper reaction changed, but its layout/membership did not. Refetch only
- * the live fields laid over the durable coordinates. Keeping this separate
- * prevents a Like from retransferring the full graph payload.
- */
-export function invalidatePaperSignalFields(qc: QueryClient): Promise<void[]> {
-  return invalidateQueries(qc, ['signal-field'], ['author-field'])
 }
 
 /**

@@ -1547,7 +1547,61 @@ def _m_0040_semantic_partition(conn: sqlite3.Connection) -> None:
         )
 
 
-def _m_0041_paper_pdfs(conn: sqlite3.Connection) -> None:
+def _m_0041_fitted_default_signal_weights(conn: sqlite3.Connection) -> None:
+    """Move untouched installs from the hand-picked default weights to the fitted ones (2026-09-18).
+
+    Default weights are written into `discovery_settings` on first run, so
+    changing the defaults in code reaches nobody who already has a database.
+    An install whose nine stored weights are EXACTLY the previous defaults has
+    never touched a slider; it moves to the new defaults. Any deviation means a
+    deliberate choice and is left alone — a migrator must not overrule a user.
+    """
+    from alma.discovery.defaults import DEFAULT_SIGNAL_WEIGHTS
+
+    previous = {
+        "source_relevance": 0.15, "topic_score": 0.20, "text_similarity": 0.20,
+        "author_affinity": 0.15, "journal_affinity": 0.05, "recency_boost": 0.10,
+        "citation_quality": 0.05, "feedback_adj": 0.10, "preference_affinity": 0.10,
+    }  # fmt: skip
+    tables = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "discovery_settings" not in tables:
+        return
+    stored = {
+        str(r[0])[len("weights."):]: r[1]
+        for r in conn.execute("SELECT key, value FROM discovery_settings WHERE key LIKE 'weights.%'")
+    }
+    try:
+        untouched = all(abs(float(stored[key]) - value) < 1e-9 for key, value in previous.items())
+    except (KeyError, TypeError, ValueError):
+        return  # missing or unparseable: not the old defaults
+    if not untouched:
+        return
+    for key, value in DEFAULT_SIGNAL_WEIGHTS.items():
+        conn.execute("UPDATE discovery_settings SET value = ? WHERE key = ?", (str(value), f"weights.{key}"))
+
+
+def _m_0042_paper_group_pointer_guards(conn: sqlite3.Connection) -> None:
+    """Let the schema refuse a self-link or a pointer to a missing paper (task 45).
+
+    Until now nothing but application code stopped `papers.canonical_paper_id` /
+    `parent_paper_id` naming the row itself or a paper that is not in the corpus,
+    and both are silent: a self-link is an infinite walk without the resolver's
+    cycle guard, and a dangling pointer hides a paper from every standalone read.
+
+    SQLite cannot add a CHECK or a foreign key in place, so the rule is two
+    triggers. Existing bad rows are NOT rewritten here — a migrator repairing
+    data would hide the defect; Health counts them and Reconcile clears them.
+    The update trigger only fires when a pointer changes, so those rows stay
+    writable until then.
+    """
+    from alma.core.paper_groups import install_paper_group_pointer_guards
+
+    tables = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "papers" not in tables:
+        return
+    install_paper_group_pointer_guards(conn)
+
+def _m_0043_paper_pdfs(conn: sqlite3.Connection) -> None:
     """Paper PDF tables (task 81, 2026-09-19).
 
     ``paper_pdfs`` (one kept file per paper), ``paper_pdf_attempts`` (latest
@@ -1603,7 +1657,9 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
     (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
     (40, "semantic_partition", _m_0040_semantic_partition),
-    (41, "paper_pdfs", _m_0041_paper_pdfs),
+    (41, "fitted_default_signal_weights", _m_0041_fitted_default_signal_weights),
+    (42, "paper_group_pointer_guards", _m_0042_paper_group_pointer_guards),
+    (43, "paper_pdfs", _m_0043_paper_pdfs),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

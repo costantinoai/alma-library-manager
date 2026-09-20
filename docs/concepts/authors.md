@@ -18,54 +18,6 @@ page to follow / unfollow people, fix identifier mismatches, and
 review **author suggestions** (the people you don't follow yet that
 ALMa thinks you should).
 
-## The author map
-
-The page opens on a map of everyone in scope, placed by **what they
-write about** — so people working on similar things sit together and
-the map shows the research communities behind your corpus. Clicking a
-dot opens a compact card with their profile and follow controls.
-
-Membership reads on the **same three channels as the paper maps**, one
-shared space:
-
-| | means |
-|---|---|
-| **Filled dot** | Yours — you follow them, or they co-authored a paper you saved. A **dashed ring** marks the followed ones specifically. |
-| **Gold outline** | Currently suggested to you — the exact same snapshot and evidence as the rail below, independent of fill or cluster colour. |
-| **Hollow / faint dot** | Other eligible corpus authors: context, not a claim. |
-
-**Scope** switches between the authors of papers you saved and every
-tracked paper. **Colour** shows communities (clusters) or the engine's
-score; the **Terrain** overlay washes the space by how you actually feel
-about each author's papers — saves, ratings and removals first, engine
-score as weaker evidence, from the same central per-paper valence primitive as
-the paper map.
-
-The author aggregate is evidence-weighted and shrunk toward a neutral two-paper
-prior. An engine-only paper has one quarter of an explicit user signal's
-evidence, so one plausible recommendation does not imply that you like the
-author. Authors with no evidence do not contribute a splat. The colourbar
-always spans the canonical `[-1,+1]` domain instead of restretching the current
-population, making Authors comparable with the paper maps and keeping weak
-positive evidence near neutral.
-
-There are **no link lines**: on an author map adjacency already *is*
-semantic similarity, and drawing a dense collaboration graph would bury the
-dots. Each author sits at the centroid of their papers on the shared paper
-substrate; communities are clustered over those centroids.
-
-An author needs at least two papers already placed on the corpus substrate.
-Thinner profiles are **left off and counted** in the legend rather than parked
-somewhere arbitrary — see [seeding a suggestion's
-evidence](#seeding-a-suggestions-evidence).
-
-Clicking a dot opens quick profile/follow actions first; publication,
-community, score, and suggestion evidence are progressively disclosed. The
-two-column drilldown below the map expands the selected author and community.
-**Select region** summarizes a lassoed community from its visible nodes and
-can follow every eligible, not-yet-followed member. See [Semantic
-maps](maps.md) for the shared interaction and rebuild lifecycle.
-
 ## Adding an author
 
 You can add by:
@@ -196,8 +148,7 @@ calls.
 
 A suggested author is, almost by definition, someone whose work you
 don't have yet — typically 0–1 papers locally. That thinness used to
-show everywhere at once: no dot on the author map (placement needs two
-papers), **"No sample title"** on the card, and no score. The sample
+show everywhere at once: **"No sample title"** on the card, and no score. The sample
 titles are read from *your* corpus, so a blank card meant a missing
 paper, not missing metadata.
 

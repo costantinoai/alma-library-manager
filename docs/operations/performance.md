@@ -126,35 +126,21 @@ Source: `frontend/src/pages/DiscoveryPage.tsx`,
 
 Insights and graph aggregates are stored in the `materialized_views`
 table (see `src/alma/application/materialized_views.py`). Insights
-views use fingerprint-keyed stale-while-revalidate reads. Graph GETs
-are even narrower: they only read a completed stored payload;
-embedding-drift/version/age checks belong to the idle-gated six-hour
-layout-maintenance job. A missing user-requested graph queues one
-deduplicated build and answers `202`; speculative navigation prefetch
-never queues compute.
-
-Graph clustering and projection run in a separate Python worker
-process. The API keeps serving Home, Suggestions, and the last-good
-paper/author layouts while it computes; only the completed payload is
-published. Advanced option combinations use the same process boundary
-and a durable bounded variant cache. `useOperationToasts` invalidates
-the matching React Query roots when the Activity job completes.
+views use fingerprint-keyed stale-while-revalidate reads. Stored-only
+surfaces (Health, the semantic regions, the ranker outcome evaluation, the
+channel yield) read the completed row and never compute on a GET; their
+refresh is requested by a mutation or a periodic tick and runs as one
+deduplicated background job. `useOperationToasts` invalidates the matching
+React Query roots when the Activity job completes.
 
 | View | Build cost (cold) | Triggers a rebuild |
 |---|---|---|
 | `insights:overview` | ~30 ms | Library paper add/edit, recommendations churn, follow change, embedding-model change |
-| `graph:paper_map:library` | seconds | Scheduled embedding drift/version/age gate or explicit rebuild |
-| `graph:paper_map:corpus` | tens of seconds | Same, corpus-wide; owns the one paper substrate |
-| `graph:author_network:library` | sub-second to seconds | Scheduled gate or explicit rebuild; aggregates paper-substrate coordinates |
-| `graph:author_network:corpus` | seconds | Same, corpus-wide |
-| `graph:topic_map` | ~hundreds of ms | Any paper change |
 
-Explicit "Rebuild graphs" (`POST /graphs/rebuild`) and the cluster-
-label refresh job bypass the fingerprint check and force a fresh
-build in the graph worker process. The old substrate is retained until
-the replacement exists. Layout rebuild is local compute only; OpenAlex
-reference enrichment is the separate `/graphs/reference-backfill`
-operation.
+The 2-D map (layout, terrain, author network) is not part of this line: it
+lives on the `feature/maps-plugin` branch. What learning needs from the same
+embeddings — the semantic partition and its regions — is core, coordinate-free,
+and refreshed by the `semantic.partition.refresh` operation.
 
 ## Database size
 

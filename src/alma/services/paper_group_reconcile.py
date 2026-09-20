@@ -6,10 +6,9 @@ dedup model: components are linked/purged, preprint twins collapse into the
 journal paper when present, existing chains are flattened, and orphan child
 state is stripped.
 
-Caller owns the write transaction. Do not commit here — either wrap the whole call
-in one write unit, or pass ``section=`` to scope a write unit to each PHASE (what
-the background maintenance runner does, so an 8-minute pass no longer holds the
-single SQLite writer end to end).
+The background and import runners pass a per-group write scope. Scans and match
+planning happen outside that scope; one failing group rolls back independently.
+Callers already inside a write unit omit the scope. No nested write units.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from alma.application.preprint_dedup import (
-    find_preprint_twin_candidates,
     merge_preprint_into_canonical,
 )
 from alma.core.components import backfill_components, count_linkable_orphan_components
@@ -30,8 +28,6 @@ from alma.core.paper_groups import (
     build_preprint_title_index,
     collect_paper_group_ids,
     is_component_row,
-    is_preprint_row,
-    promote_matching_preprints,
     purge_orphan_subordinate_state,
     relationship_integrity_counts,
 )
@@ -65,23 +61,74 @@ def _count_component_candidates(conn: sqlite3.Connection) -> int:
     return pending
 
 
-def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
-    """Pending work for the group reconciliation operation — REPAIRABLE defects only.
+#: How many ambiguous matches (and errors) a single run spells out. The counts
+#: stay exact; only the per-item detail is sampled, so one bad corpus cannot
+#: turn an Activity row into a megabyte of JSON.
+_AMBIGUOUS_REPORT_LIMIT = 25
 
-    A count that includes defects this pass cannot fix never reaches zero, so the
-    operation stays `readiness='ready'` forever and every maintenance cycle
-    reschedules a run that repairs nothing. `orphan_components` is exactly that
-    case: an orphan whose parent paper is absent from the corpus is terminal, so
-    only the LINKABLE subset counts (`count_linkable_orphan_components`).
+
+def preview_paper_group_repairs(
+    conn: sqlite3.Connection, *, limit: int | None = None
+) -> dict[str, Any]:
+    """What a run would do, read with the selectors the run itself uses.
+
+    ONE owner for three questions that must agree: the pending count Health
+    shows, the preview the button offers before you commit to a pass, and the
+    work the pass then performs. When they were computed separately, a preview
+    could promise merges the run would not make.
+
+    Repairable and terminal are kept apart. A count that includes work no pass
+    can do never reaches zero, so the operation would stay "ready" forever and
+    every maintenance cycle would reschedule a run that repairs nothing:
+    orphan components whose parent is not in the corpus, and ambiguous matches,
+    are findings for a person, not pending work.
     """
-    integrity = dict(relationship_integrity_counts(conn))
-    if integrity.get("orphan_components"):
-        integrity["orphan_components"] = count_linkable_orphan_components(conn)
-    preprint_twins = len(find_preprint_twin_candidates(conn, scope="corpus"))
-    return _integrity_defect_total(integrity) + preprint_twins + _count_component_candidates(conn)
+    # One index for the whole preview: the defect ledger needs it to spot
+    # ambiguity and the plan needs it to count merges. Building it twice means
+    # scanning and re-normalizing every title in the corpus twice.
+    index = build_preprint_title_index(conn)
+    integrity = dict(relationship_integrity_counts(conn, preprint_index=index))
+    ambiguous_defects = int(integrity.pop("ambiguous_preprints", 0) or 0)
+    orphans = int(integrity.get("orphan_components") or 0)
+    linkable_orphans = count_linkable_orphan_components(conn) if orphans else 0
+    integrity["orphan_components"] = linkable_orphans
+
+    pairs = index.pairs(require_doi=True)
+    safe = [pair for pair in pairs if not pair["ambiguous"]]
+    ambiguous = [pair for pair in pairs if pair["ambiguous"]]
+    selected = len(safe) if limit is None else min(len(safe), limit)
+    components = _count_component_candidates(conn)
+
+    repairable = _integrity_defect_total(integrity) + len(safe) + components
+    return {
+        "repairable": repairable,
+        "relationships_to_repair": _integrity_defect_total(integrity),
+        "components_to_classify": components,
+        "title_matches_ready": len(safe),
+        "title_matches_this_run": selected,
+        "title_matches_deferred": len(safe) - selected,
+        "ambiguous": len(ambiguous),
+        "terminal_orphans": max(0, orphans - linkable_orphans),
+        "ambiguous_defect_rows": ambiguous_defects,
+        "limit": limit,
+        "message": (
+            f"Would repair {repairable} finding(s): "
+            f"{_integrity_defect_total(integrity)} relationship(s), "
+            f"{components} component(s), {selected} preprint merge(s)"
+            + (f" ({len(safe) - selected} deferred by the limit)" if len(safe) > selected else "")
+            + f". {len(ambiguous)} ambiguous match(es) and "
+            f"{max(0, orphans - linkable_orphans)} orphan component(s) with no parent "
+            "in the corpus are left for you to look at."
+        ),
+    }
 
 
-def _repair_dangling_relationships(conn: sqlite3.Connection) -> dict[str, int]:
+def count_paper_group_reconcile_candidates(conn: sqlite3.Connection) -> int:
+    """Pending REPAIRABLE work, from the shared preview selector."""
+    return int(preview_paper_group_repairs(conn)["repairable"])
+
+
+def _repair_dangling_relationships(conn: sqlite3.Connection, *, unit) -> dict[str, int]:
     """Handle links whose target row no longer exists.
 
     A component with a missing parent remains an inert orphan and has app state
@@ -106,25 +153,25 @@ def _repair_dangling_relationships(conn: sqlite3.Connection) -> dict[str, int]:
     ).fetchall()
     for row in rows:
         pid = str(row["id"])
-        if is_component_row(row):
+        def repair():
             conn.execute(
                 "UPDATE papers SET canonical_paper_id = NULL, parent_paper_id = NULL WHERE id = ?",
                 (pid,),
             )
-            purged_orphans += purge_orphan_subordinate_state(conn, pid)
-        else:
-            conn.execute(
-                "UPDATE papers SET canonical_paper_id = NULL, parent_paper_id = NULL WHERE id = ?",
-                (pid,),
-            )
-            repaired_versions += 1
+            return purge_orphan_subordinate_state(conn, pid) if is_component_row(row) else None
+        ok, cleaned = unit("dangling", pid, repair)
+        if ok:
+            if is_component_row(row):
+                purged_orphans += int(cleaned or 0)
+            else:
+                repaired_versions += 1
     return {
         "dangling_versions_restored": repaired_versions,
         "dangling_orphan_sidecars_purged": purged_orphans,
     }
 
 
-def _normalize_existing_groups(conn: sqlite3.Connection) -> dict[str, int]:
+def _normalize_existing_groups(conn: sqlite3.Connection, *, unit) -> dict[str, int]:
     groups_normalized = reparented = cleaned_sidecars = journal_promotions = 0
     rootless_groups = orphaned_components = 0
     seen_groups: set[frozenset[str]] = set()
@@ -146,32 +193,36 @@ def _normalize_existing_groups(conn: sqlite3.Connection) -> dict[str, int]:
         if group_key in seen_groups:
             continue
         seen_groups.add(group_key)
-        try:
-            result = absorb_paper_group(conn, pid, target, reason="paper_group_reconcile")
-        except PaperGroupIntegrityError:
-            placeholders = ",".join("?" for _ in group_ids)
-            if not placeholders:
-                continue
-            group_rows = conn.execute(
-                f"SELECT * FROM papers WHERE id IN ({placeholders})",
-                sorted(group_ids),
-            ).fetchall()
-            changed = 0
-            for group_row in group_rows:
-                if not is_component_row(group_row):
-                    continue
-                component_id = str(group_row["id"])
-                conn.execute(
-                    "UPDATE papers SET canonical_paper_id = NULL, parent_paper_id = NULL "
-                    "WHERE id = ?",
-                    (component_id,),
-                )
-                cleaned_sidecars += purge_orphan_subordinate_state(conn, component_id)
-                changed += 1
-            if changed:
-                rootless_groups += 1
-                orphaned_components += changed
+        def normalize_group():
+            try:
+                return absorb_paper_group(conn, pid, target, reason="paper_group_reconcile")
+            except PaperGroupIntegrityError:
+                placeholders = ",".join("?" for _ in group_ids)
+                if not placeholders:
+                    return {"skipped": True}
+                group_rows = conn.execute(
+                    f"SELECT * FROM papers WHERE id IN ({placeholders})",
+                    sorted(group_ids),
+                ).fetchall()
+                changed = 0
+                for group_row in group_rows:
+                    if not is_component_row(group_row):
+                        continue
+                    component_id = str(group_row["id"])
+                    conn.execute(
+                        "UPDATE papers SET canonical_paper_id = NULL, parent_paper_id = NULL "
+                        "WHERE id = ?",
+                        (component_id,),
+                    )
+                    purge_orphan_subordinate_state(conn, component_id)
+                    changed += 1
+                return {"rootless": changed, "skipped": not changed}
+        ok, result = unit("normalize", pid, normalize_group)
+        if not ok:
             continue
+        if result.get("rootless"):
+            rootless_groups += 1
+            orphaned_components += result["rootless"]
         if result.get("skipped"):
             continue
         groups_normalized += 1
@@ -189,114 +240,137 @@ def _normalize_existing_groups(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
-def _promote_available_journals(conn: sqlite3.Connection) -> dict[str, int]:
-    """Let every standalone published paper absorb its preprint twins.
-
-    The preprint index is built ONCE and handed to every call: this loop runs over
-    the whole published corpus, and letting `promote_matching_preprints` do its own
-    scan per row made the phase quadratic (see `PreprintTitleIndex`).
-    """
-    candidates = conn.execute(
-        """
-        SELECT id, doi, work_type, preprint_source, component_type
-        FROM papers
-        WHERE COALESCE(NULLIF(TRIM(canonical_paper_id), ''), '') = ''
-          AND COALESCE(NULLIF(TRIM(parent_paper_id), ''), '') = ''
-        """
-    ).fetchall()
-    preprint_index = build_preprint_title_index(conn)
-    scanned = merged = reparented = 0
-    for row in candidates:
-        if is_component_row(row) or is_preprint_row(row):
-            continue
-        scanned += 1
-        result = promote_matching_preprints(conn, str(row["id"]), preprint_index=preprint_index)
-        merged += int(result.get("merged") or 0)
-        reparented += int(result.get("reparented") or 0)
-    return {
-        "published_scanned": scanned,
-        "preprints_promoted": merged,
-        "preprint_children_reparented": reparented,
-    }
-
-
-def _merge_preprint_twins(conn: sqlite3.Connection, *, limit: int | None = None) -> dict[str, int]:
-    try:
-        candidates = find_preprint_twin_candidates(conn, limit=limit, scope="corpus")
-    except Exception:
-        candidates = []
-    merged = skipped = errors = journal_promotions = 0
-    for pair in candidates:
-        try:
-            result = merge_preprint_into_canonical(
-                conn,
-                str(pair["preprint_id"]),
-                str(pair["canonical_id"]),
-            )
-            if result.get("skipped"):
-                skipped += 1
-            else:
-                merged += 1
-                if result.get("journal_promoted"):
-                    journal_promotions += 1
-        except Exception:
-            errors += 1
-    return {
-        "preprint_candidates": len(candidates),
-        "preprint_twins_merged": merged,
-        "preprint_twins_skipped": skipped,
-        "preprint_twin_errors": errors,
-        "journal_promotions": journal_promotions,
-    }
-
-
 def reconcile_paper_groups(
     conn: sqlite3.Connection,
     *,
     limit: int | None = None,
     section: Callable[[str], AbstractContextManager[Any]] | None = None,
-    on_phase: Callable[[str, dict[str, int]], None] | None = None,
+    on_phase: Callable[[str, dict[str, Any]], None] | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Run an idempotent corpus-wide paper group reconciliation pass.
+    """Repair through one plan, with independently atomic group writes.
 
-    ``section`` is an optional per-phase write scope, given the phase name. A caller
-    that already owns an enclosing write transaction (the importer, the Settings
-    route) omits it and gets the historical single-transaction behaviour; the
-    background maintenance runner passes `write_section` so the writer gate is
-    RELEASED between phases instead of being held for the whole pass. Write units
-    never nest, so exactly one of the two owns the transaction.
+    Health, Settings and post-import use this owner. `limit` bounds new title
+    matches; classification and existing relationship repair scan the corpus.
+    Ambiguous matches are reported separately and never count as automatic work.
+    `on_phase` is called only outside a write scope, including error events.
 
-    ``on_phase(name, counts)`` reports each phase as it finishes — this pass is long
-    and used to log nothing at all between "started" and "completed".
+    ``dry_run`` answers the same question without touching the database: what
+    this pass would repair, what it would leave alone, and what the limit would
+    defer. It is what the manual button shows you before you start a pass.
     """
-    scope = section if section is not None else (lambda _name: nullcontext())
+    scope = section or (lambda _name: nullcontext())
+    errors: list[dict[str, str]] = []
+    changes = 0
 
-    def run(name: str, phase: Callable[[], dict[str, int]]) -> dict[str, int]:
-        with scope(name):
-            counts = phase()
+    if dry_run:
+        # A preview writes NOTHING: it reports the same selectors the pass would
+        # act on, so "what it would do" and "what it does" cannot drift apart.
+        preview = preview_paper_group_repairs(conn, limit=limit)
         if on_phase is not None:
-            on_phase(name, counts)
-        return counts
+            on_phase("preview", preview)
+        return {"dry_run": True, "changes": 0, "errors": [], "errors_total": 0, **preview}
 
+    def report(name, counts):
+        if on_phase:
+            on_phase(name, counts)
+
+    def error(phase, paper_id, exc):
+        detail = {"phase": phase, "paper_id": paper_id,
+                  "cause": f"{type(exc).__name__}: {exc}",
+                  "recovery": "Retry Reconcile paper groups; if it fails again, inspect this paper's versions."}
+        errors.append(detail)
+        report("error", detail)
+
+    def unit(phase, paper_id, action):
+        nonlocal changes
+        try:
+            with scope(f"{phase}:{paper_id}"):
+                # A savepoint also protects callers already inside a write unit.
+                conn.execute("SAVEPOINT paper_group_unit")
+                before = conn.total_changes
+                try:
+                    result = action()
+                except BaseException:
+                    conn.execute("ROLLBACK TO paper_group_unit")
+                    conn.execute("RELEASE paper_group_unit")
+                    raise
+                conn.execute("RELEASE paper_group_unit")
+                changed = conn.total_changes - before
+            changes += changed
+            if changed:
+                report("group", {"phase": phase, "paper_id": paper_id, "changed_rows": changed,
+                                 "message": f"Repaired paper group {paper_id} ({phase})."})
+            return True, result
+        except Exception as exc:
+            error(phase, paper_id, exc)
+            return False, None
+
+    report("scan", {"message": "Scanning paper relationships; Library remains available."})
     before = relationship_integrity_counts(conn)
-    dangling = run("dangling", lambda: _repair_dangling_relationships(conn))
-    components = run("components", lambda: backfill_components(conn))
-    normalized = run("normalize", lambda: _normalize_existing_groups(conn))
-    twins = run("preprint_twins", lambda: _merge_preprint_twins(conn, limit=limit))
-    promoted = run("journal_promotion", lambda: _promote_available_journals(conn))
-    # A final normalize pass catches groups formed by the twin/promotion phases
-    # and ensures every child points directly at the chosen root.
-    final_normalized = run("normalize_final", lambda: _normalize_existing_groups(conn))
+    dangling = _repair_dangling_relationships(conn, unit=unit)
+    report("dangling", dangling)
+    # Classification plans are prepared outside the writer. Components are made
+    # inert by the following group pass (and orphan pass) through the same owner.
+    report("classify", {"message": "Classifying components and checking parent links."})
+    components = backfill_components(
+        conn, section=scope, normalize=False,
+        on_error=lambda pid, exc: error("components", pid, exc),
+    )
+    changes += components["classified"] + components["linked"] + components["cleaned"]
+    report("components", components)
+    normalized = _normalize_existing_groups(conn, unit=unit)
+    orphans = conn.execute(
+        "SELECT id FROM papers WHERE component_type IS NOT NULL "
+        "AND COALESCE(parent_paper_id, '') = '' AND COALESCE(canonical_paper_id, '') = ''"
+    ).fetchall()
+    for row in orphans:
+        pid = str(row["id"])
+        unit("orphans", pid, lambda: purge_orphan_subordinate_state(conn, pid))
+    report("normalize", normalized)
+
+    # Freeze the WHOLE candidate graph before any mutation: picking matches
+    # after earlier merges can make an ambiguous component appear unique.
+    report("match", {"message": "Checking complete title-match groups before merging."})
+    pairs = build_preprint_title_index(conn).pairs(require_doi=True)
+    ambiguous = [p for p in pairs if p["ambiguous"]]
+    safe = [p for p in pairs if not p["ambiguous"]]
+    selected = safe if limit is None else safe[:limit]
+    merged = skipped = 0
+    for pair in selected:
+        ok, result = unit("preprint_twins", pair["preprint_id"], lambda: merge_preprint_into_canonical(
+            conn, pair["preprint_id"], pair["canonical_id"]))
+        if ok:
+            skipped += int(bool(result.get("skipped")))
+            merged += int(not result.get("skipped"))
+    for pair in ambiguous[:_AMBIGUOUS_REPORT_LIMIT]:
+        report("ambiguous", {"paper_id": pair["preprint_id"], "title": pair["title"],
+                             "candidates": pair["canonical_candidates"],
+                             "message": "Multiple plausible versions; left separate. Inspect identifiers before merging."})
+    if len(ambiguous) > _AMBIGUOUS_REPORT_LIMIT:
+        # Health's paper-group breakdown carries the full count; Activity gets a
+        # readable sample rather than one line per pair on a large corpus.
+        report("ambiguous", {
+            "message": f"{len(ambiguous) - _AMBIGUOUS_REPORT_LIMIT} further ambiguous matches "
+                       "left separate; see Health → paper groups for the full count.",
+            "remaining": len(ambiguous) - _AMBIGUOUS_REPORT_LIMIT,
+        })
+    twins = {"preprint_candidates": len(safe), "preprint_twins_merged": merged,
+             "preprint_twins_skipped": skipped, "ambiguous": len(ambiguous),
+             "remaining": max(0, len(safe) - len(selected)), "limit": limit}
+    report("preprint_twins", twins)
     after = relationship_integrity_counts(conn)
-    return {
-        "before": before,
-        "after": after,
-        "defects_before": _integrity_defect_total(before),
-        "defects_after": _integrity_defect_total(after),
-        "dangling": dangling,
-        "components": components,
-        "normalized": normalized,
-        "preprints": twins,
-        "promotions": promoted,
-        "final_normalized": final_normalized,
-    }
+    message = (f"Paper groups: {merged} preprints merged; {normalized['groups_normalized']} groups repaired; "
+               f"{len(ambiguous)} ambiguous (left separate); {len(errors)} failed; "
+               f"{twins['remaining']} title matches remain. "
+               f"Title-match limit: {limit if limit is not None else 'all'}; existing-group scan: corpus-wide.")
+    # The result is stored on the Activity row: keep a sample, not a corpus dump.
+    result = {"before": before, "after": after,
+              "defects_before": _integrity_defect_total(before), "defects_after": _integrity_defect_total(after),
+              "dangling": dangling, "components": components, "normalized": normalized,
+              "preprints": twins, "changes": changes,
+              "errors": errors[:_AMBIGUOUS_REPORT_LIMIT], "errors_total": len(errors),
+              "ambiguous": ambiguous[:_AMBIGUOUS_REPORT_LIMIT], "ambiguous_total": len(ambiguous),
+              "message": message}
+    report("summary", {"message": message, "changes": changes, "errors": len(errors)})
+    return result

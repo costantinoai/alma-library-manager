@@ -276,6 +276,8 @@ class NetworkPolicyResponse(BaseModel):
     enabled: bool
     settings_enabled: bool
     forced_off_by_env: bool
+    unattended_enabled: bool
+    profile: str
 
 
 def _network_policy_response(status_value: NetworkPolicyStatus) -> NetworkPolicyResponse:

@@ -21,6 +21,17 @@ FAMILY_LEXICAL = "lexical"
 FAMILY_SEMANTIC = "semantic"
 FAMILY_CITATION = "citation"
 FAMILY_TASTE = "taste"
+
+#: Retrieval family -> the lens channel weight that scales it in the fusion
+#: (and that the lens weights panel shows). One owner: the fusion reads it to
+#: weight families, the channel yield reads it to say which slider a finding is
+#: about.
+CHANNEL_BY_FAMILY: dict[str, str] = {
+    FAMILY_LEXICAL: "lexical",
+    FAMILY_SEMANTIC: "vector",
+    FAMILY_CITATION: "graph",
+    FAMILY_TASTE: "external",
+}
 RETRIEVAL_FAMILIES = (FAMILY_LEXICAL, FAMILY_SEMANTIC, FAMILY_CITATION, FAMILY_TASTE)
 
 # ── The local `papers` → candidate projection. ONE owner. ──────────────────

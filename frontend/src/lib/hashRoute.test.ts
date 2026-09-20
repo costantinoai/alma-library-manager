@@ -4,7 +4,7 @@ import { buildHashRoute, parseHashRoute } from './hashRoute'
 
 describe('hashRoute', () => {
   it('routes Map instead of silently falling back to Home', () => {
-    expect(parseHashRoute('#/map')).toMatchObject({ page: 'map', found: true })
+    expect(parseHashRoute('#/map')).toMatchObject({ page: 'discovery', found: true })
   })
 
   it('marks unknown addresses for the branded not-found page', () => {

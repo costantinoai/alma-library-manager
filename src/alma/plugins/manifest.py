@@ -47,6 +47,20 @@ def activation_setting_key(plugin_id: str) -> str:
     return f"plugins.{plugin_id}.enabled"
 
 
+class PluginDisabledError(RuntimeError):
+    """Something asked a switched-off plugin to act.
+
+    Raised by the manifest itself, the way
+    :func:`alma.core.network_policy.require_network_access` guards the network:
+    the caller cannot forget the check, because there is no way to reach the
+    transport except through the accessor that performs it.
+    """
+
+    def __init__(self, plugin_id: str, display_name: str = ""):
+        self.plugin_id = plugin_id
+        super().__init__(f"{display_name or plugin_id} is switched off in Settings")
+
+
 @dataclass(frozen=True)
 class PluginManifest:
     """One explicitly registered external integration."""
@@ -72,20 +86,27 @@ class PluginManifest:
         return capability in self.capabilities
 
     def is_enabled(self) -> bool:
-        """Read the explicit activation flag.
+        """Read the explicit activation flag. Absent means OFF.
 
-        Fresh settings get every flag from ``DEFAULT_SETTINGS``. Existing
+        Fresh settings get every flag from ``DEFAULT_SETTINGS``; existing
         profiles are upgraded by ``migrate_settings_schema`` before the API
-        starts. The default argument is a bootstrap default, not a legacy
-        inference from credentials.
+        starts. Falling back to ``False`` rather than indexing
+        ``DEFAULT_SETTINGS`` makes off-by-default a property of the code: a
+        plugin whose key nobody has added yet is inert, not a ``KeyError``.
+        Activation is never inferred from credentials.
         """
         from alma.config import DEFAULT_SETTINGS, get_setting
 
         key = activation_setting_key(self.id)
-        value = get_setting(key, DEFAULT_SETTINGS[key])
+        value = get_setting(key, DEFAULT_SETTINGS.get(key, False))
         if not isinstance(value, bool):
             raise ValueError(f"{key} must be a boolean")
         return value
+
+    def _require_enabled(self) -> None:
+        """Refuse to act while switched off."""
+        if not self.is_enabled():
+            raise PluginDisabledError(self.id, self.display_name)
 
     def set_enabled(self, enabled: bool) -> None:
         from alma.config import update_settings
@@ -93,7 +114,15 @@ class PluginManifest:
         update_settings({activation_setting_key(self.id): bool(enabled)})
 
     def status(self, db: sqlite3.Connection | None = None) -> dict[str, Any]:
-        """Current non-secret status. Fail visibly in logs, never leak details."""
+        """Current non-secret status. Fail visibly in logs, never leak details.
+
+        Deliberately NOT gated on activation: "set up, but switched off" is a
+        state Settings, Health and the Alerts channel picker all have to be
+        able to show. A ``status_factory`` is therefore held to a contract —
+        **local, cheap, no side effects**: read settings and secrets, build no
+        transport, open no socket, import no network library. Anything that
+        probes the outside world belongs in ``connection_tester``.
+        """
         try:
             return dict(self.status_factory(db))
         except Exception as exc:  # pragma: no cover - defensive boundary
@@ -118,7 +147,13 @@ class PluginManifest:
         return self.config_model.model_json_schema()
 
     def inbound_channel(self) -> InboundChannel | None:
-        if self.inbound_factory is None:
+        """The adapter that may poll for captures, or ``None``.
+
+        Switched off is quiet absence, not a fault: no adapter is built and
+        nothing is logged. A factory that RAISES is a different thing, and
+        still leaves a warning behind.
+        """
+        if self.inbound_factory is None or not self.is_enabled():
             return None
         try:
             return self.inbound_factory()
@@ -127,14 +162,50 @@ class PluginManifest:
             return None
 
     def pdf_sources(self) -> list[PdfSource]:
-        """This plugin's PDF sources, built from current config (never cached)."""
-        if self.pdf_source_factory is None:
+        """This plugin's PDF sources, built from current config (never cached).
+
+        Empty while the plugin is switched off: a PDF source is a thing that
+        goes and fetches from the outside world, so it obeys the same gate as
+        every other capability.
+        """
+        if self.pdf_source_factory is None or not self.is_enabled():
             return []
         try:
             return list(self.pdf_source_factory())
         except Exception as exc:
             logger.warning("Plugin %s PDF sources unavailable: %s", self.id, exc)
             return []
+
+    def can_deliver_alerts(self) -> bool:
+        """This plugin is switched on and able to post an alert right now."""
+        return (
+            self.alert_sender is not None
+            and self.is_enabled()
+            and bool(self.status().get("can_send"))
+        )
+
+    async def send_alert(self, papers: list[dict[str, Any]], alert_name: str) -> bool:
+        """Deliver one digest. Raises :class:`PluginDisabledError` when off."""
+        self._require_enabled()
+        if self.alert_sender is None:
+            raise ValueError(f"Plugin '{self.id}' cannot send alerts")
+        return await self.alert_sender(papers, alert_name)
+
+    def has_connection_test(self) -> bool:
+        return self.connection_tester is not None
+
+    async def test_connection(self) -> dict[str, Any]:
+        """Run the plugin's own connectivity check — the one path that probes.
+
+        Gated here rather than in the route, because this is the only method
+        that deliberately reaches the real service: while it was ungated, a
+        switched-off Slack posted a real message, a switched-off Email sent
+        real mail, and a switched-off mirror list fetched from the mirrors.
+        """
+        self._require_enabled()
+        if self.connection_tester is None:
+            raise ValueError(f"Plugin '{self.id}' has no connection test")
+        return await self.connection_tester()
 
     def describe(self, db: sqlite3.Connection | None = None) -> dict[str, Any]:
         status = self.status(db)

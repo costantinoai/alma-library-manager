@@ -334,10 +334,9 @@ export function AuthorsPage() {
         </Alert>
       ) : null}
 
-      {/* The author map moved to the Map page (2026-07-27): papers and authors
-          are two views of one territory and belong behind one switcher. This
-          page is people-management now — who you follow, who to follow next,
-          and which identities need a decision. */}
+      {/* People-management: who you follow, who to follow next, and which
+          identities need a decision. (The author map left this line with the
+          Map — D24, preserved on `feature/maps-plugin`.) */}
 
       <div data-tour="authors-suggestions">
         <SuggestedAuthorsRail onOpenDetail={openSuggestionDetail} />

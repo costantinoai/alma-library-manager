@@ -1,6 +1,6 @@
 ---
 title: Signal Lab
-description: Reversible calibration games that sharpen ranking and taste terrain without touching your Library.
+description: Reversible calibration games that sharpen ranking without touching your Library.
 ---
 
 # Signal Lab
@@ -11,9 +11,9 @@ lives on Home immediately above Inbox; its controls and evidence live under
 **Settings → Intelligence → Signal Lab**.
 
 Each round shows three papers and asks one cheap question. Answers train a
-model that can sharpen paper scores and paper-map taste terrain. It is
+model that can sharpen paper scores. It is
 **signal-only**: a round never changes Library membership, ratings, reading
-state, feedback profiles, or semantic coordinates.
+state or feedback profiles.
 
 ## The three rounds
 
@@ -105,7 +105,7 @@ new statistical query.
 
 ## Where rounds come from
 
-Rounds sample the corpus map's **super-regions**, starting around your Library
+Rounds sample the corpus's semantic **super-regions**, starting around your Library
 and expanding outward as inner regions are learned. Only judgeable papers
 appear: a title plus an abstract or TLDR.
 
@@ -147,18 +147,20 @@ region/edge goals and multi-outcome games. It is goal-directed active design,
 not a promise that one heuristic wins on every corpus.
 
 The card remains hidden until the stored `semantic:regions` view exists. It is
-built from the core semantic partition (`semantic_partition_members`, seeded
-by the map's layout build and grown by incremental assignment); the
-`semantic_partition_refresh` job keeps it fresh without a map — and builds
-the partition itself when none exists — while a layout rebuild publishes a
-new generation through the core API.
+built from the core semantic partition (`semantic_partition_members`). One
+background operation, `semantic.partition.refresh`
+(`signal_lab/partition_refresh.py`), builds the partition when none exists,
+drops memberships whose vector is gone, assigns newly embedded papers and
+checks the regions' freshness; the periodic tick and the Health repair
+*learning_partition* share it, and every run is visible in Activity.
 
 Regions are **coordinate-free** (2026-09-06, decision D24). The build reads
 cluster membership and paper vectors through the core-owned
 `application/semantic_partition.py` — the same module that owns the one
 nearest-centroid assignment rule the sampler's boundary margins and the
-scoring terms use — and the payload carries no `x`/`y`. A map that draws a
-region derives its position from its own layout; the Lab never needs one.
+scoring terms use — and the payload carries no `x`/`y`. The 2-D map that used
+to draw these regions lives on the `feature/maps-plugin` branch; the Lab never
+needed one.
 Region identities survive a rebuild through the cosine remap (32/32 carried
 on an unchanged corpus).
 
@@ -191,18 +193,14 @@ were rejected with "token invalid or from a previous backend run" and their
 signal was lost. Fixed 2026-07-27; tokens minted before that no longer verify,
 which is exactly what that message covers.
 
-The region head can bend paper-space Terrain at read time. The utility head
+The utility head
 stores only its delta from the prior — and the prior is the same taste
 direction Discovery's feedback family reads (`library_taste_direction`: the
 centroid of what you kept and rated up minus the centroid of what you rated
 down), so the Lab learns what your ordinary saves and ratings do not already
-say. It projects that direction onto
-super-region centroids, then mass-centres the projection so weak evidence
-cannot wash the whole map green. Confidence grows with answered preferences.
-Neither head moves map positions: semantic coordinates describe what papers
-mean, while learned offsets describe how you feel about that territory. Tint
-strength is bounded, and adjusted terrain remains in the canonical
-`[-1,+1]` domain.
+say. Confidence grows with answered preferences. Neither head changes which
+region a paper belongs to: regions describe what papers mean, learned offsets
+describe how you feel about that territory.
 
 ### The author head
 
@@ -223,25 +221,13 @@ author on BOTH papers of a comparison is dropped from it, and an author needs
 `AUTHOR_MIN_COMPARISONS` usable comparisons before being published at all, so a
 prolific name cannot drift on noise.
 
-It reaches two places, the two the locked geometry answer allows — **ranking**
-and a read-time **tint** — and nowhere else.
-
-*Ranking.* It is consumed by one reader: `build_discovery_author_affinity()` in
+It reaches **ranking** and nowhere else. It is consumed by one reader: `build_discovery_author_affinity()` in
 `application/author_signal.py`, the canonical definition of "how much do I care
 about this author". Folding it in there rather than adding a second author term
 to the ranker keeps one definition — a parallel `lab_author` signal beside
 `author_affinity` would let the same evidence count twice. The offset is ADDED
 to the signal your Library already produces; Signal Lab nudges, your Library
 decides.
-
-*Tint.* The author map's terrain reads the head through the same
-`LabMapContext` the paper terrain uses, behind the same `map_tint_strength`
-gate — so answering a round bends both maps or neither. Before this the paper
-terrain learned from Signal Lab and the author terrain did not, which made the
-same answers visibly move one map and leave the other flat. The tint may CREATE
-an opinion where feedback had none (a learned preference for a person is
-exactly what the terrain is for), stays inside the canonical `[-1, 1]` domain,
-and never moves an author's coordinate or community.
 
 Guarded by `tests/test_geometry_admission_contract.py`, which pins the reader
 list: a new consumer has to be a deliberate edit with a reason.
@@ -308,6 +294,15 @@ parsed by one function, `discovery.defaults.lab_head_points`, so the gate that
 decides whether to load the model and the ranker that weights it cannot
 disagree.
 
+A folded head therefore does **not** own its points. It moves an affinity by at
+most 0.35, and that affinity then counts for its family's Discovery weight, so
+its real reach is `100 × family weight × 0.35` — about 1.8 points for the venue
+head at the shipped Venue weight of 0.05, and **0 for the author head while the
+Author weight is 0** (the fitted default, see `docs/reference/scoring.md`).
+`scoring_terms.categorical_head_reach_points` computes it from the live weights
+and the settings payload serves it as `limits.categorical_reach_points`; the
+card states that number. It used to promise "up to 10 points" for both.
+
 The default Settings card shows the purpose, on/off switch and learning status.
 **Advanced settings and evidence** contains weights, sampler controls, held-out
 accuracies, replay evidence and reset. Unsaved advanced edits remain signposted
@@ -337,7 +332,7 @@ author+venue metadata, the region payload, the Library prior set, the three
 tuning knobs). Before 2026-09-06 it covered only the round count and highest id,
 so every one of those changes left the previous model in force indefinitely.
 
-It is deliberately precise in both directions: the map tint, the sampler's own
+It is deliberately precise in both directions: the sampler's own
 knobs and unrelated papers are NOT inputs to the fit, and changing them refits
 nothing. The tick is one small indexed query when nothing moved, and it does
 nothing at all when Signal Lab is switched off or you have never played a round.
@@ -347,7 +342,7 @@ nothing at all when Signal Lab is switched off or you have never played a round.
 The **Active** switch is reversible. When off:
 
 - Home serves no game and the answer endpoint rejects writes;
-- Discovery, Feed, and maps do not load or apply the retained model;
+- Discovery and Feed do not load or apply the retained model;
 - rounds, fitted heads, metrics, and settings remain untouched.
 
 Re-enabling makes that retained evidence consumable again.
@@ -371,7 +366,7 @@ GET  /api/v1/signal-lab/eval
 POST /api/v1/signal-lab/purge
 ```
 
-The settings model strictly validates activation, map tint, head weights,
+The settings model strictly validates activation, head weights,
 ring decay, exploration, coverage, refit cadence, holdout share, and override
 votes.
 
@@ -400,7 +395,36 @@ The 2026-07-27 measurement (0 held-out pairs; 11 of 32 regions ever visited)
 remains the last recorded state of the *model* number. Re-check when the
 holdout has ≥ 30 pairs and `utility_accuracy` beats `prior_accuracy` by a
 margin that survives a binomial test at that sample size. Play more rounds
-first; the map is two-thirds unvisited.
+first; two-thirds of the regions are unvisited.
+
+## Do the heads improve the ranking? Measured on your own history
+
+Holdout accuracy says whether the model predicts your *Lab answers*. The
+question that matters to Discovery is different: do the heads put papers you
+later KEPT above papers you REJECTED? The ranker outcome evaluation
+(`application/discovery/outcome_eval.py`, stored view `scoring:outcome_eval`)
+answers it in its `lab` block:
+
+* the additive heads are re-ranked off / as configured / each alone at the
+  ceiling / all at the ceiling, over the same measured papers;
+* a test paper that was shown in a Lab round is left out (the head was fitted
+  on your answer about it);
+* the difference against "no Lab" comes from a **paired** bootstrap over the
+  same papers (`auc_delta_with_interval`), and is called *improves* or
+  *worsens* only when its 95% interval excludes 0 — otherwise "no measurable
+  effect";
+* the raw head inputs are measured even when an install has its heads at 0
+  points, so the question has an answer before anyone turns them on.
+
+The Signal Lab card prints that verdict in its Evidence section.
+
+Measured 2026-09-19: dev (54 answered rounds, 18 of them content rounds) −0.005
+against rejected papers [−0.014, +0.001], −0.002 against the corpus; the prod
+snapshot (25 rounds, heads forced to the ceiling) +0.001 / −0.005. The heads reach 92–100% of test papers, so this is
+not a coverage problem: with this few rounds the evidence dampers keep every
+head close to zero. **No measurable effect yet, in either direction** — the
+lever is answered rounds, not the point settings, so the defaults were left
+alone.
 
 ## Evaluation evidence
 
@@ -410,8 +434,10 @@ wholesale-fit primitives against stratified-random and margin baselines.
 and one seeded 768→64 Gaussian projection so repeated fits stay bounded;
 production always uses the full embeddings.
 
-The checked-in corpus report is `tasks/54_stage0_report.json`. At 200 answered
-rounds, EIG reached 0.6525 pairwise accuracy versus 0.6250 for
+`scripts/simulate_signal_lab.py --corpus` writes its report to
+`tasks/54_stage0_report.json`, in the local planning workspace (not part of
+the repository — rerun the script to regenerate it). At 200 answered rounds,
+EIG reached 0.6525 pairwise accuracy versus 0.6250 for
 stratified-random and passed the predeclared +2-point late gate; it did not beat
 random in the early checkpoints. That mixed result is kept visible: it
 supports posterior-aware acquisition as one component, not EIG-only selection.

@@ -156,7 +156,10 @@ def update_plugin_config(
     summary="Test an integration",
     description=(
         "Runs the integration manifest's registered connectivity test through "
-        "the Activity envelope and the same transport used in production."
+        "the Activity envelope and the same transport used in production. "
+        "409 when the plugin is switched off — the test really does reach the "
+        "service (it posts a message, it sends mail), so it is not something a "
+        "deactivated plugin may do."
     ),
 )
 def test_plugin_connection(
@@ -164,10 +167,20 @@ def test_plugin_connection(
     user: dict = Depends(get_current_user),
 ) -> dict:
     manifest = _manifest_or_404(plugin_id)
-    if manifest.connection_tester is None:
+    if not manifest.has_connection_test():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Plugin '{plugin_id}' has no connectivity test",
+        )
+    # Activation first, and a status of its own: 400 already means "you have
+    # not finished setting this up", which is the opposite problem.
+    if not manifest.is_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{manifest.display_name} is switched off. Switch it on in "
+                "Settings → Plugins before testing it."
+            ),
         )
 
     current_status = manifest.status()
@@ -215,7 +228,7 @@ def test_plugin_connection(
 
     def _runner() -> dict:
         try:
-            return asyncio.run(manifest.connection_tester())
+            return asyncio.run(manifest.test_connection())
         except Exception as exc:  # pragma: no cover - external boundary
             return {
                 "ok": False,

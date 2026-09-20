@@ -51,6 +51,7 @@ function resolveStatusBadgeProps(
   return { label: status || 'Unknown', tone: 'neutral' }
 }
 import { useToast, errorToast } from '@/hooks/useToast'
+import { describeJobLaunch } from '@/lib/activity'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
 export function ImportsTab({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
@@ -83,18 +84,7 @@ export function ImportsTab({ initiallyOpen = false }: { initiallyOpen?: boolean 
       }),
     onSuccess: (data) => {
       void invalidateQueries(queryClient, ['activity-operations'])
-      if (data.status === 'noop') {
-        toast({ title: 'No unresolved imports', description: data.message || 'Everything is resolved.' })
-        return
-      }
-      if (data.status === 'already_running') {
-        toast({ title: 'Already running', description: data.message || 'Resolve job is already running.' })
-        return
-      }
-      toast({
-        title: 'Resolve started',
-        description: data.job_id ? `Job ${data.job_id} is now tracked in Activity.` : 'Resolution queued.',
-      })
+      toast(describeJobLaunch(data, 'OpenAlex resolution'))
     },
     onError: () => {
       errorToast('Error', 'Failed to queue OpenAlex resolution.')
@@ -105,10 +95,7 @@ export function ImportsTab({ initiallyOpen = false }: { initiallyOpen?: boolean 
     mutationFn: () => enrichImportedPublications(true),
     onSuccess: (data) => {
       void invalidateQueries(queryClient, ['activity-operations'])
-      toast({
-        title: data.status === 'already_running' ? 'Already running' : 'Enrichment started',
-        description: data.job_id ? `Job ${data.job_id} is now tracked in Activity.` : (data.message || 'Enrichment queued.'),
-      })
+      toast(describeJobLaunch(data, 'Enrichment'))
     },
     onError: () => {
       errorToast('Error', 'Failed to queue enrichment.')

@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -54,20 +55,66 @@ DIM_INSUFFICIENT_DATA = "insufficient_data"  # empty universe — nothing to mea
 DIM_QUEUED = "queued"  # the gap is (nearly) all enqueued background work — runs when idle, not a defect (41.3)
 
 
-def _safe_assess(label: str, fn: Callable[[], Any]) -> tuple[Any, bool]:
+@dataclass(frozen=True, slots=True)
+class AssessorOutcome:
+    """Whether an assessor answered, and — when it did not — what it said.
+
+    Truthy when the measurement succeeded, so every existing ``if not ok:``
+    reads the same. What it adds is the CAUSE: the failure used to be logged and
+    then dropped, which is why every failed dimension could only say "couldn't
+    measure — see logs" and leave the user to go looking.
+    """
+
+    label: str
+    cause: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.cause is None
+
+    @classmethod
+    def failed(cls, label: str, cause: object) -> AssessorOutcome:
+        """Record a failure verbatim, trimmed. Never invent a cause."""
+        text = str(cause or "").strip()
+        return cls(label, (text[:160] or "the cause was not recorded"))
+
+
+def unmeasured_reason(outcome: AssessorOutcome, *, what: str) -> str:
+    """The ONE thing a dimension says when its assessor failed.
+
+    Four things a person needs and the old "Couldn't measure — see logs" gave
+    none of: WHICH measurement failed, WHY (verbatim, or an explicit "not
+    recorded" — never a guessed cause), that the number is unknown rather than
+    zero, and exactly where to look and what to press next.
+
+    Both references are real: "Re-assess" is the button on the Health page, and
+    the application log is `/api/v1/logs`, where `_safe_assess` writes the
+    traceback under that exact assessor label. There is no log viewer in the UI,
+    so this does not send anyone to one.
+    """
+    cause = outcome.cause or "the cause was not recorded"
+    return (
+        f"{what} could not be measured: {cause}. "
+        "The number is unknown, not zero. "
+        "Press Re-assess; if it fails again the traceback is in the application "
+        f"log (/api/v1/logs), under: health assessor '{outcome.label}'."
+    )
+
+
+def _safe_assess(label: str, fn: Callable[[], Any]) -> tuple[Any, AssessorOutcome]:
     """Run a health assessor; on failure log LOUDLY and signal it (H-2).
 
-    Returns ``(value, ok)``. ``ok=False`` means the assessor raised — the caller
-    MUST render a typed ``error`` state, never a healthy zero. A missing table /
-    malformed migration / SQL regression must look broken, not green (the
+    Returns ``(value, outcome)``. A falsy outcome means the assessor raised — the
+    caller MUST render a typed ``error`` state, never a healthy zero. A missing
+    table / malformed migration / SQL regression must look broken, not green (the
     project's no-silent-failure rule). The traceback goes to the log with the
-    assessor label so the failure is actionable.
+    assessor label, and the outcome carries the cause so the dimension can say it
+    instead of sending the user to go and find it.
     """
     try:
-        return fn(), True
+        return fn(), AssessorOutcome(label)
     except Exception as exc:  # noqa: BLE001 — deliberately broad: ANY failure must be loud, not silent
         logger.error("health assessor %r failed: %s", label, exc, exc_info=True)
-        return None, False
+        return None, AssessorOutcome.failed(label, f"{type(exc).__name__}: {exc}")
 
 HEALTH_CORPUS_VIEW_KEY = "health:corpus"
 
@@ -297,7 +344,14 @@ def _assess_coverage(cov: dict[str, Any]) -> tuple[Severity, str, str]:
     so an empty/onboarding corpus is never falsely critical.
     """
     if cov.get("error"):
-        return "warning", DIM_ERROR, "Couldn't measure embedding coverage — see logs."
+        return (
+            "warning",
+            DIM_ERROR,
+            unmeasured_reason(
+                AssessorOutcome.failed("embedding_coverage", cov.get("error")),
+                what="Embedding coverage",
+            ),
+        )
     if not cov.get("active_model"):
         return "ok", DIM_NOT_APPLICABLE, "No embedding model configured — coverage doesn't apply."
     if int(cov.get("papers_count") or 0) <= 0:
@@ -312,13 +366,14 @@ def _assess_coverage(cov: dict[str, Any]) -> tuple[Severity, str, str]:
 
 
 def _gap_dim_args(
-    count: int | None, total: int, *, impact: Impact, ok: bool
+    count: int | None, total: int, *, impact: Impact, ok: AssessorOutcome, what: str
 ) -> tuple[Severity, str, str]:
     """``(severity, state, reason)`` for a gap dimension, honoring the assessor
     ok-flag (H-2 + H-7). A failed assessor yields a typed ``error`` state — never
-    a measured zero — so the two concerns compose in one place."""
+    a measured zero — so the two concerns compose in one place. ``what`` names the
+    measurement, because "couldn't measure" is not worth reading without it."""
     if not ok:
-        return "warning", DIM_ERROR, "Couldn't measure — see logs."
+        return "warning", DIM_ERROR, unmeasured_reason(ok, what=what)
     return _assess_gap(int(count or 0), total, impact=impact)
 
 
@@ -328,7 +383,13 @@ _QUEUED_STATE_THRESHOLD = 0.9
 
 
 def _gap_dim_args_queued(
-    count: int | None, total: int, *, impact: Impact, ok: bool, queued: int = 0
+    count: int | None,
+    total: int,
+    *,
+    impact: Impact,
+    ok: AssessorOutcome,
+    what: str,
+    queued: int = 0,
 ) -> tuple[Severity, str, str]:
     """Like ``_gap_dim_args`` but treats enqueued-but-never-attempted rows as
     background work-in-progress, not a defect (41.3).
@@ -342,7 +403,7 @@ def _gap_dim_args_queued(
     calmer than its real fixable gap.
     """
     if not ok:
-        return "warning", DIM_ERROR, "Couldn't measure — see logs."
+        return "warning", DIM_ERROR, unmeasured_reason(ok, what=what)
     c = int(count or 0)
     q = max(0, min(int(queued or 0), c))
     if c <= 0 or total <= 0:
@@ -503,6 +564,18 @@ _PAPER_GROUP_DEFECT_META: dict[str, tuple[str, str, str]] = {
         "A component row has no parent paper at all, so it floats in the corpus as a "
         "fragment. Reconciliation links it to its parent, or purges its state when "
         "the parent isn't in the corpus.",
+    ),
+    "ambiguous_preprints": (
+        "Ambiguous preprint matches",
+        "Multiple possible published versions",
+        "Title and year identify several plausible versions. These papers stay separate; "
+        "inspect their identifiers and versions before choosing a match. Automatic repair does not guess.",
+    ),
+    "subordinate_user_state": (
+        "Child rows still carrying Library state",
+        "Leftover Library state",
+        "Versions and components must not own saved membership, ratings, reading state or notes. "
+        "Reconcile transfers eligible preprint state to the published paper and clears child state.",
     ),
     "subordinate_sidecars": (
         "Child rows still carrying sidecar state",
@@ -869,6 +942,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     group_terminal = max(
         0, int(group_integrity.get("orphan_components") or 0) - int(linkable_orphans or 0)
     )
+    group_terminal += int(group_integrity.get("ambiguous_preprints") or 0)
     group_fixable = max(0, group_defects - group_terminal)
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
@@ -910,7 +984,12 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # --- Identity ----------------------------------------------------------
     # High impact: a paper with no usable identity can't be embedded or ranked.
     id_sev, id_state, id_reason = _gap_dim_args_queued(
-        unresolved, papers_total, impact="high", ok=unres_ok, queued=queued_unresolved
+        unresolved,
+        papers_total,
+        impact="high",
+        ok=unres_ok,
+        what="Papers with no usable identity",
+        queued=queued_unresolved,
     )
     dims.append(
         _dimension(
@@ -930,7 +1009,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 "'unmatched'. Resolve missing identity (Semantic Scholar title search) "
                 "finds a match so they can be embedded and ranked."
                 if unres_ok
-                else "Couldn't measure — see logs."
+                else unmeasured_reason(unres_ok, what="Papers with no usable identity")
             ),
             impact="A usable DOI / Semantic Scholar identity unlocks vectors, ranking, and enrichment.",
             repair_task="title_resolution",
@@ -942,8 +1021,8 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         group_sev, _, group_reason = _assess_gap(group_fixable, papers_total, impact="integrity")
         if group_terminal:
             group_reason = (
-                f"{group_reason} {group_terminal} of {group_defects} defects are orphan "
-                "components with no parent in the corpus — terminal, no repair can clear them."
+                f"{group_reason} {group_terminal} of {group_defects} findings need a parent "
+                "or an unambiguous match — terminal for automatic repair; inspect the breakdown."
             )
         dims.append(
             _dimension(
@@ -980,9 +1059,13 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         # the dimension's actionable count agrees with the repair op's pending.
         exhausted = int(exhausted_by_field.get(field) or 0)
         fixable = max(0, count - exhausted)
-        sev, st, reason = _gap_dim_args(fixable, papers_total, impact=tier, ok=enr_ok)
+        sev, st, reason = _gap_dim_args(
+            fixable, papers_total, impact=tier, ok=enr_ok, what=f"Papers {why}"
+        )
         explanation = (
-            f"{count} papers {why}." if enr_ok else "Couldn't measure — see logs."
+            f"{count} papers {why}."
+            if enr_ok
+            else unmeasured_reason(enr_ok, what=f"Papers {why}")
         )
         if enr_ok and exhausted:
             explanation += (
@@ -1083,7 +1166,12 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # Medium impact: fetched vectors improve coverage but local compute is a
     # fallback, so a backlog degrades rather than blocks.
     s2_sev, s2_state, s2_reason = _gap_dim_args_queued(
-        s2_missing, papers_total, impact="medium", ok=s2_ok, queued=s2_queued
+        s2_missing,
+        papers_total,
+        impact="medium",
+        ok=s2_ok,
+        what="Papers that can fetch a Semantic Scholar vector",
+        queued=s2_queued,
     )
     dims.append(
         _dimension(
@@ -1102,7 +1190,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 "SPECTER2 vector from Semantic Scholar. Papers that Semantic Scholar "
                 "has no vector for fall through to local compute below."
                 if s2_ok
-                else "Couldn't measure — see logs."
+                else unmeasured_reason(s2_ok, what="Papers that can fetch a Semantic Scholar vector")
             ),
             impact="Fetched vectors are higher quality than local fallbacks and need no GPU.",
             repair_task="s2_vector",
@@ -1112,7 +1200,12 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         )
     )
     local_sev, local_state, local_reason = _gap_dim_args_queued(
-        local_computable, papers_total, impact="medium", ok=local_ok, queued=local_queued
+        local_computable,
+        papers_total,
+        impact="medium",
+        ok=local_ok,
+        what="Papers that can be embedded locally",
+        queued=local_queued,
     )
     dims.append(
         _dimension(
@@ -1133,7 +1226,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 "at all; fix those via metadata rehydration first (see the missing-abstract "
                 "/ missing-title gaps above)."
                 if local_ok
-                else "Couldn't measure — see logs."
+                else unmeasured_reason(local_ok, what="Papers that can be embedded locally")
             ),
             impact="Covers papers Semantic Scholar can't supply a vector for.",
             repair_task="embedding",
@@ -1207,7 +1300,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # and exposes the paper_group_reconcile repair operation.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v12',
+      'health-logic-v13',
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
@@ -1308,17 +1401,17 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         # silently clipped the count (and attention_total) at the cap.
         return len(list_affiliation_conflicts(conn, limit=None) or [])
 
-    def _count_thin_suggested() -> tuple[int, int, int]:
-        # One assessment, separate repair populations: missing papers are
-        # seedable; authors with enough papers need vector/layout work instead.
+    def _count_thin_suggested() -> tuple[int, int]:
+        # (seedable, exhausted): authors still missing papers, and authors the
+        # source has nothing more for. One owner, shared with the repair's count.
         from alma.services.maintenance import count_thin_suggested_authors
 
         return count_thin_suggested_authors(conn)
 
     merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
     thin_counts, thin_ok = _safe_assess("author_thin_suggested", _count_thin_suggested)
-    thin_fixable, thin_exhausted, thin_unvectorized = (
-        thin_counts if thin_ok else (None, None, None)
+    thin_fixable, thin_exhausted = (
+        thin_counts if thin_ok else (None, None)
     )
     affiliation_conflicts, affil_ok = _safe_assess(
         "author_affiliation_conflicts", _count_affiliation_conflicts
@@ -1346,7 +1439,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             thin_fixable, warn_at=None, crit_at=None, noun="suggested authors needing papers"
         )
     else:
-        thin_sev, thin_reason = "warning", "Couldn't measure suggested-author coverage — see logs."
+        thin_sev = "warning"
+        thin_reason = unmeasured_reason(thin_ok, what="Suggested-author paper coverage")
     dims: list[dict[str, Any]] = [
         _dimension(
             key="authors.resolution_error",
@@ -1421,38 +1515,12 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
                     else ""
                 )
                 if thin_ok
-                else "Couldn't measure suggested-author coverage — see logs."
+                else unmeasured_reason(thin_ok, what="Suggested-author paper coverage")
             ),
             impact=(
-                "Seeding adds source papers for judging these suggestions. Semantic "
-                "placement also requires usable vectors; fetching papers alone does not "
-                "guarantee a position."
+                "Seeding adds source papers so you can judge these author suggestions."
             ),
             repair_task="author_seed_thin",
-        ),
-        _dimension(
-            key="authors.unplaceable",
-            entity="author",
-            label="Suggested authors awaiting semantic placement",
-            count=thin_unvectorized if thin_ok else None,
-            total=total,
-            state=DIM_MEASURED if thin_ok else DIM_ERROR,
-            severity=("info" if thin_unvectorized else "ok") if thin_ok else "warning",
-            severity_reason=(
-                "These authors already have enough papers; seeding more cannot repair their semantic placement."
-                if thin_ok else "Could not measure suggested-author semantic placement. Re-assess Health to retry."
-            ),
-            explanation=(
-                f"{thin_unvectorized} suggested authors already have at least two papers, "
-                "but fewer than two are embedded and placed in the semantic partition."
-                if thin_ok else "Suggested-author semantic placement could not be measured."
-            ),
-            impact=(
-                "No more paper seeding is needed for these authors. Check the vector-fetch "
-                "and local-embedding steps above; once vectors exist, the semantic partition "
-                "refresh places them. If no usable vectors are available, the author can "
-                "remain absent without needing another seed run."
-            ),
         ),
         _dimension(
             key="authors.merge_conflicts",
@@ -1471,13 +1539,13 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             severity_reason=(
                 _count_severity(merge_conflicts, warn_at=1, crit_at=None, noun="merge conflicts")[2]
                 if merge_ok
-                else "Couldn't measure merge conflicts — see logs."
+                else unmeasured_reason(merge_ok, what="Unresolved merge conflicts")
             ),
             explanation=(
                 f"{merge_conflicts} merges kept a conflicting hard identifier "
                 "(orcid / scholar id) that needs a human decision."
                 if merge_ok
-                else "Couldn't measure merge conflicts — see logs."
+                else unmeasured_reason(merge_ok, what="Unresolved merge conflicts")
             ),
             impact="A wrong identifier can mis-attribute papers across people.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -1498,13 +1566,13 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             severity_reason=(
                 _count_severity(affiliation_conflicts, warn_at=None, crit_at=None, noun="affiliation conflicts")[2]
                 if affil_ok
-                else "Couldn't measure affiliation conflicts — see logs."
+                else unmeasured_reason(affil_ok, what="Affiliation conflicts")
             ),
             explanation=(
                 f"{affiliation_conflicts} authors have affiliation evidence that "
                 "disagrees across sources."
                 if affil_ok
-                else "Couldn't measure affiliation conflicts — see logs."
+                else unmeasured_reason(affil_ok, what="Affiliation conflicts")
             ),
             impact="The displayed institution may be wrong until reviewed.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -1585,7 +1653,7 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 #             operation and its dimension describe exactly the same population.
 # 2026.09-2: "placed" means a row in the core semantic partition, not a map
 #             layout row (task 67 C2); copy says semantic placement.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-2"
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-3"
 
 mv.register(
     mv.View(

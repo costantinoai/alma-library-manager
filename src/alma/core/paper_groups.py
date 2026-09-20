@@ -243,12 +243,66 @@ def choose_paper_group_root(
         ).strip()
         return (
             _root_rank(row),
-            1 if pid == preferred_id else 0,
             1 if standalone else 0,
+            1 if pid == preferred_id else 0,
             pid,
         )
 
     return str(max(candidates, key=key)["id"])
+
+
+#: The schema's own guard on the two relationship pointers. SQLite cannot add a
+#: CHECK or a foreign key to an existing table without rebuilding it (`papers` is
+#: the largest table in the database), so the rule is expressed as triggers —
+#: the one form SQLite can add in place.
+#:
+#: Two things are refused, matching the invariant this module exists to hold:
+#: a row that names ITSELF as its version or parent, and a pointer to a paper
+#: that is not in the corpus. Both used to be reachable, and both survive as
+#: silent corruption: `resolve_paper_root_id` walks a self-link forever without
+#: its cycle guard, and a dangling pointer hides a paper from every standalone
+#: read while nothing owns it.
+#:
+#: The UPDATE trigger fires only when a pointer actually CHANGES. A database
+#: repaired later must stay writable in the meantime: rating a paper that
+#: already carries a legacy dangling pointer is not the moment to refuse a
+#: write. Reconcile clears those, and Health counts them until it does.
+_POINTER_VIOLATION = (
+    "paper group pointer must name a different paper that exists "
+    "(see Health -> paper groups)"
+)
+_POINTER_INVALID_SQL = """
+    (NEW.{column} IS NOT NULL AND TRIM(NEW.{column}) <> '' AND (
+        NEW.{column} = NEW.id
+        OR NOT EXISTS (SELECT 1 FROM papers WHERE id = NEW.{column})
+    ))
+"""
+PAPER_GROUP_POINTER_DDL: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS papers_group_pointer_insert",
+    "DROP TRIGGER IF EXISTS papers_group_pointer_update",
+    f"""CREATE TRIGGER IF NOT EXISTS papers_group_pointer_insert
+        BEFORE INSERT ON papers
+        WHEN {_POINTER_INVALID_SQL.format(column='canonical_paper_id')}
+          OR {_POINTER_INVALID_SQL.format(column='parent_paper_id')}
+        BEGIN
+            SELECT RAISE(ABORT, '{_POINTER_VIOLATION}');
+        END""",
+    f"""CREATE TRIGGER IF NOT EXISTS papers_group_pointer_update
+        BEFORE UPDATE OF canonical_paper_id, parent_paper_id ON papers
+        WHEN (NEW.canonical_paper_id IS NOT OLD.canonical_paper_id
+              OR NEW.parent_paper_id IS NOT OLD.parent_paper_id)
+         AND ({_POINTER_INVALID_SQL.format(column='canonical_paper_id')}
+              OR {_POINTER_INVALID_SQL.format(column='parent_paper_id')})
+        BEGIN
+            SELECT RAISE(ABORT, '{_POINTER_VIOLATION}');
+        END""",
+)
+
+
+def install_paper_group_pointer_guards(conn: sqlite3.Connection) -> None:
+    """Create the pointer triggers. Idempotent; used by bootstrap and migration."""
+    for statement in PAPER_GROUP_POINTER_DDL:
+        conn.execute(statement)
 
 
 def _table_has_paper_id(conn: sqlite3.Connection, table: str) -> bool:
@@ -402,6 +456,10 @@ def _upgrade_root_scalars(
         loser_value = _value(loser, field)
         if (root_value is None or str(root_value).strip() == "") and loser_value not in (None, ""):
             updates[field] = loser_value
+    root_notes = str(_value(live_root, "notes") or "").strip()
+    loser_notes = str(_value(loser, "notes") or "").strip()
+    if root_notes and loser_notes and loser_notes not in root_notes:
+        updates["notes"] = root_notes + "\n\n" + loser_notes
     for field in ("cited_by_count", "influential_citation_count", "rating"):
         if field in columns:
             updates[field] = max(
@@ -422,19 +480,22 @@ def _upgrade_root_scalars(
 
 def _invalidate_group_caches(conn: sqlite3.Connection, root_id: str) -> int:
     cleaned = _delete_table_rows(conn, "paper_network_cache", root_id)
+    cleaned += _delete_table_rows(conn, "scoring_cache", root_id)
     try:
         cleaned += max(0, int(conn.execute("DELETE FROM similarity_cache").rowcount or 0))
     except sqlite3.OperationalError:
         pass
-    # The relationship rewrite touches papers.updated_at, so registered view
-    # fingerprints become stale. Variant graph rows use caller fingerprints;
-    # clearing them prevents a direct cache hit between rewrite and next read.
+    # These stored reads do not check fingerprints. Group identity changes
+    # their inputs even below count buckets; discard invalid evidence atomically.
+    # Existing materialized-view workers own rebuilding, never a GET.
     try:
         cleaned += max(
             0,
             int(
                 conn.execute(
-                    "DELETE FROM materialized_views WHERE view_key LIKE 'graph:%:v=%'"
+                    "DELETE FROM materialized_views WHERE view_key IN "
+                    "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield', "
+                    "'signal_lab:model', 'semantic:regions')"
                 ).rowcount
                 or 0
             ),
@@ -459,6 +520,11 @@ def _group_is_normalized(
         if pid == root_id:
             continue
         subordinate_ids.append(pid)
+        if (str(_value(row, "status") or "") != "tracked"
+                or int(_value(row, "rating") or 0)
+                or str(_value(row, "reading_status") or "").strip()
+                or str(_value(row, "notes") or "").strip()):
+            return False
         if is_component_row(row):
             if str(row["parent_paper_id"] or "").strip() != root_id:
                 return False
@@ -472,7 +538,7 @@ def _group_is_normalized(
     if not subordinate_ids:
         return False
     placeholders = ",".join("?" for _ in subordinate_ids)
-    for table in _ALL_PAPER_SIDECAR_TABLES:
+    for table in _ALL_PAPER_SIDECAR_TABLES | {"semantic_partition_members"}:
         if not _table_has_paper_id(conn, table):
             continue
         try:
@@ -504,6 +570,21 @@ def _group_is_normalized(
     return True
 
 
+def _clear_subordinate_user_state(conn: sqlite3.Connection, paper_id: str) -> int:
+    """Remove independent curation state after any allowed transfer to the root.
+
+    `tracked` is neutral: removing a child is not a negative user verdict.
+    The predicate also makes repeated repairs a true no-op.
+    """
+    return conn.execute(
+        "UPDATE papers SET status = 'tracked', rating = 0, reading_status = NULL, "
+        "notes = NULL, updated_at = ? WHERE id = ? AND "
+        "(status <> 'tracked' OR COALESCE(rating, 0) <> 0 OR "
+        "COALESCE(reading_status, '') <> '' OR COALESCE(notes, '') <> '')",
+        (utcnow().isoformat(), paper_id),
+    ).rowcount
+
+
 def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> int:
     """Strip every app sidecar from an unlinked subordinate row.
 
@@ -511,7 +592,10 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
     ``papers`` row; everything that could make it independently interactive is
     removed.  A later authoritative parent link starts from this inert state.
     """
-    cleaned = 0
+    from alma.application.semantic_partition import forget_members
+
+    cleaned = _clear_subordinate_user_state(conn, paper_id)
+    cleaned += forget_members(conn, [paper_id])
     for table in _ALL_PAPER_SIDECAR_TABLES:
         cleaned += _delete_table_rows(conn, table, paper_id)
     try:
@@ -542,7 +626,8 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
         )
     except sqlite3.OperationalError:
         pass
-    cleaned += _invalidate_group_caches(conn, paper_id)
+    if cleaned:
+        cleaned += _invalidate_group_caches(conn, paper_id)
     return cleaned
 
 
@@ -613,6 +698,10 @@ def absorb_paper_group(
             migrated[table] = migrated.get(table, 0) + count
         feedback_migrated += _merge_feedback(conn, pid, root_id)
         preferences_migrated += _merge_preference_profile(conn, pid, root_id)
+        from alma.application.semantic_partition import forget_members
+
+        cleaned += forget_members(conn, [pid])
+        cleaned += _clear_subordinate_user_state(conn, pid)
         # Anything not deliberately migrated must not remain on an inert child.
         for table in _ALL_PAPER_SIDECAR_TABLES - set(tables):
             cleaned += _delete_table_rows(conn, table, pid)
@@ -744,6 +833,8 @@ PAPER_GROUP_DEFECT_KEYS: tuple[str, ...] = (
     "published_under_preprint",
     "orphan_components",
     "subordinate_sidecars",
+    "subordinate_user_state",
+    "ambiguous_preprints",
 )
 
 
@@ -773,7 +864,9 @@ def _has_pointer_cycle(paper_id: str, by_id: dict[str, Any]) -> bool:
     return False
 
 
-def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+def paper_group_defect_map(
+    conn: sqlite3.Connection, *, preprint_index: PreprintTitleIndex | None = None
+) -> dict[str, dict[str, int]]:
     """Row-level relationship-defect ledger: ``paper_id -> {defect_key: count}``.
 
     The single detection pass behind BOTH ``relationship_integrity_counts`` (its
@@ -793,7 +886,7 @@ def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]
 
     rows = conn.execute(
         "SELECT id, doi, work_type, preprint_source, canonical_paper_id, "
-        "parent_paper_id, component_type FROM papers"
+        "parent_paper_id, component_type, status, rating, reading_status, notes FROM papers"
     ).fetchall()
     by_id = {str(row["id"]): row for row in rows}
     for row in rows:
@@ -806,6 +899,11 @@ def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]
             flag(pid, "dangling_parent")
         if pid in {canonical, parent}:
             flag(pid, "self_links")
+        if (canonical or parent or is_component_row(row)) and (
+            str(row["status"] or "") != "tracked" or int(row["rating"] or 0)
+            or str(row["reading_status"] or "").strip() or str(row["notes"] or "").strip()
+        ):
+            flag(pid, "subordinate_user_state")
         target = by_id.get(canonical or parent)
         if target is not None:
             if str(target["canonical_paper_id"] or "").strip() or str(
@@ -828,7 +926,7 @@ def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]
         for row in rows
         if str(row["canonical_paper_id"] or "").strip() or is_component_row(row)
     ]
-    for table in _ALL_PAPER_SIDECAR_TABLES:
+    for table in _ALL_PAPER_SIDECAR_TABLES | {"semantic_partition_members"}:
         if not subordinate_ids or not _table_has_paper_id(conn, table):
             continue
         placeholders = ",".join("?" for _ in subordinate_ids)
@@ -842,73 +940,124 @@ def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]
             continue
         for sidecar in sidecar_rows:
             flag(str(sidecar["paper_id"]), "subordinate_sidecars", int(sidecar["c"] or 0))
+    # The caller may already hold the index (the repair preview builds one to
+    # plan with): scanning and re-normalizing every title a second time is the
+    # most expensive thing this function could do twice.
+    index = preprint_index if preprint_index is not None else build_preprint_title_index(conn)
+    for pair in index.pairs(require_doi=True):
+        if pair["ambiguous"]:
+            flag(pair["preprint_id"], "ambiguous_preprints")
     return ledger
 
 
-def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def relationship_integrity_counts(
+    conn: sqlite3.Connection, *, preprint_index: PreprintTitleIndex | None = None
+) -> dict[str, int]:
     """Return relationship defects used by Health and reconciliation previews."""
     counts = {key: 0 for key in PAPER_GROUP_DEFECT_KEYS}
-    for defects in paper_group_defect_map(conn).values():
+    for defects in paper_group_defect_map(conn, preprint_index=preprint_index).values():
         for key, occurrences in defects.items():
             counts[key] += int(occurrences or 0)
     return counts
 
 
 class PreprintTitleIndex:
-    """Every preprint row in the corpus, bucketed by normalized title key.
+    """Standalone title buckets shared by ingest, repair and pending counts.
 
-    Exists so a corpus-wide pass can ask "which preprints match this published
-    paper?" thousands of times without re-scanning `papers` each time. Building it
-    once is a single table scan; each lookup is then a dict hit.
-
-    Why it matters: `promote_matching_preprints` used to run its own full scan per
-    call, so the corpus reconciliation loop over ~9k published rows performed ~9k ×
-    ~11k title normalizations — 8 MINUTES, and (because the reconcile runner holds a
-    write transaction) 8 minutes with the single SQLite writer pinned. Every other
-    write in the process queued behind it and cross-process writers took the
-    `busy_timeout` → HTTP 503. Found 2026-07-28.
-
-    The index is mutated as merges happen (`forget`), so a preprint already absorbed
-    into one parent is not offered to the next.
+    A title/year heuristic is accepted only when both endpoints have a unique
+    partner. Multiple plausible works are review evidence, never a tie to break.
+    Linked versions cannot be stolen from an existing group.
     """
 
-    __slots__ = ("_by_title",)
-
-    def __init__(self, by_title: dict[str, list[Any]]) -> None:
-        self._by_title = by_title
+    def __init__(self, rows: list[Any]) -> None:
+        self._by_title: dict[str, list[Any]] = {}
+        for row in rows:
+            if not is_component_row(row):
+                key = normalize_title_key(str(row["title"] or ""))
+                if key:
+                    self._by_title.setdefault(key, []).append(row)
 
     def candidates(self, title_key: str) -> list[Any]:
-        """Preprint rows sharing *title_key* (empty list when none)."""
-        return self._by_title.get(title_key, [])
+        return [r for r in self._by_title.get(title_key, []) if is_preprint_row(r)]
 
     def forget(self, preprint_id: str) -> None:
-        """Drop an absorbed preprint so a later published row cannot re-match it."""
-        target = str(preprint_id)
         for rows in self._by_title.values():
-            for index, row in enumerate(rows):
-                if str(_value(row, "id")) == target:
-                    del rows[index]
+            for i, row in enumerate(rows):
+                if str(row["id"]) == str(preprint_id):
+                    del rows[i]
                     return
+
+    def pairs(
+        self,
+        *,
+        year_tolerance: int = 2,
+        title_key: str | None = None,
+        require_doi: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return safe pairs and explicit ambiguous candidates from one snapshot.
+
+        ``require_doi`` keeps a registered identifier on BOTH sides. Every path
+        that merges without a person looking passes it: a shared title and year
+        alone is how two different conference papers become one. The ingest
+        promotion keeps the looser rule it has always had, because there the
+        published row is the one just written and its twin is being claimed
+        immediately, not swept up corpus-wide.
+        """
+        result = []
+        buckets = self._by_title.values() if title_key is None else [self._by_title.get(title_key, [])]
+        for rows in buckets:
+            if require_doi:
+                rows = [r for r in rows if str(r["doi"] or "").strip()]
+            preprints = [r for r in rows if is_preprint_row(r)]
+            journals = [r for r in rows if not is_preprint_row(r)]
+            edges = [(p, j) for p in preprints for j in journals
+                     if p["year"] is not None and j["year"] is not None
+                     and abs(int(p["year"]) - int(j["year"])) <= year_tolerance]
+            for p in preprints:
+                matches = [j for pp, j in edges if pp["id"] == p["id"]]
+                if not matches:
+                    continue
+                unique = len(matches) == 1 and sum(
+                    j["id"] == matches[0]["id"] for _, j in edges
+                ) == 1
+                j = matches[0] if unique else None
+                result.append({
+                    "preprint_id": str(p["id"]),
+                    "canonical_id": str(j["id"]) if j is not None else None,
+                    "canonical_candidates": sorted(str(m["id"]) for m in matches),
+                    "ambiguous": not unique,
+                    "preprint_doi": p["doi"],
+                    "canonical_doi": j["doi"] if j is not None else None,
+                    "preprint_source": classify_preprint_source(
+                        p["doi"], preprint_source=p["preprint_source"], work_type=p["work_type"]),
+                    "title": str(p["title"] or "")[:240],
+                    "year": int(p["year"]),
+                    "confidence": round(1 - abs(int(p["year"]) - int(j["year"])) * .05, 3)
+                                  if j is not None else None,
+                    "library": p["status"] == "library" or any(m["status"] == "library" for m in matches),
+                })
+        # Safe pairs first, best evidence first: a capped run must spend its
+        # budget on the most confident matches, not on whatever sorted earliest.
+        return sorted(
+            result,
+            key=lambda p: (
+                1 if p["ambiguous"] else 0,
+                -(p["confidence"] or 0.0),
+                p["year"],
+                p["preprint_id"],
+            ),
+        )
 
 
 def build_preprint_title_index(conn: sqlite3.Connection) -> PreprintTitleIndex:
-    """Scan `papers` ONCE and bucket every preprint row by normalized title key."""
+    """Read the complete eligible pool once, before any matching mutation."""
+    from alma.core.sql_helpers import standalone_paper_sql
+
     rows = conn.execute(
-        """
-        SELECT id, title, year, doi, work_type, preprint_source, component_type
-        FROM papers
-        WHERE COALESCE(TRIM(component_type), '') = ''
-        """
+        f"SELECT id, title, year, doi, work_type, preprint_source, component_type, status "
+        f"FROM papers p WHERE {standalone_paper_sql('p')}"
     ).fetchall()
-    by_title: dict[str, list[Any]] = {}
-    for row in rows:
-        if not is_preprint_row(row):
-            continue
-        title_key = normalize_title_key(str(row["title"] or ""))
-        if not title_key:
-            continue
-        by_title.setdefault(title_key, []).append(row)
-    return PreprintTitleIndex(by_title)
+    return PreprintTitleIndex(rows)
 
 
 def promote_matching_preprints(
@@ -918,47 +1067,23 @@ def promote_matching_preprints(
     year_tolerance: int = 2,
     preprint_index: PreprintTitleIndex | None = None,
 ) -> dict[str, int]:
-    """Promote a newly-arrived published row over exact-title preprint twins.
-
-    This is the cheap ingest-time path.  Corpus reconciliation adds semantic
-    candidate detection; the foreground write only uses the high-precision
-    normalized-title + year rule and persisted/DOI preprint evidence.
-
-    ``preprint_index`` lets a corpus-wide caller supply a prebuilt
-    `PreprintTitleIndex` instead of paying a table scan per call; when omitted one
-    is built for this call (the single-paper ingest path). The MATCH RULE itself is
-    spelled once either way, here.
-    """
-    published = conn.execute(
-        "SELECT id, title, year, doi, work_type, preprint_source, component_type "
-        "FROM papers WHERE id = ?",
-        (published_paper_id,),
-    ).fetchone()
-    if published is None or is_component_row(published) or is_preprint_row(published):
-        return {"candidates": 0, "merged": 0, "reparented": 0}
-    title_key = normalize_title_key(str(published["title"] or ""))
-    if not title_key:
-        return {"candidates": 0, "merged": 0, "reparented": 0}
+    """Apply only unambiguous standalone matches through the group owner."""
     index = preprint_index if preprint_index is not None else build_preprint_title_index(conn)
-    year = published["year"]
-    matches: list[str] = []
-    for row in index.candidates(title_key):
-        if str(row["id"]) == str(published_paper_id):
+    row = conn.execute("SELECT title FROM papers WHERE id = ?", (published_paper_id,)).fetchone()
+    if row is None:
+        return {"candidates": 0, "merged": 0, "reparented": 0, "ambiguous": 0}
+    pairs = [p for p in index.pairs(year_tolerance=year_tolerance, title_key=normalize_title_key(row["title"] or ""))
+             if published_paper_id in p["canonical_candidates"]]
+    merged = reparented = ambiguous = 0
+    for pair in pairs:
+        if pair["ambiguous"]:
+            ambiguous += 1
             continue
-        if year is not None and row["year"] is not None:
-            if abs(int(year) - int(row["year"])) > max(0, int(year_tolerance)):
-                continue
-        matches.append(str(row["id"]))
-    merged = reparented = 0
-    for preprint_id in matches:
-        result = absorb_paper_group(
-            conn,
-            preprint_id,
-            published_paper_id,
-            reason="journal_publication_promotion",
-        )
-        index.forget(preprint_id)
+        result = absorb_paper_group(conn, pair["preprint_id"], published_paper_id,
+                                    reason="journal_publication_promotion")
+        index.forget(pair["preprint_id"])
         if not result.get("skipped"):
             merged += 1
             reparented += int(result.get("reparented") or 0)
-    return {"candidates": len(matches), "merged": merged, "reparented": reparented}
+    return {"candidates": len(pairs), "merged": merged, "reparented": reparented,
+            "ambiguous": ambiguous}

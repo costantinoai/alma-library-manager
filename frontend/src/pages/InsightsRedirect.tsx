@@ -14,6 +14,7 @@ const SECTION_MAP: Record<string, string> = {
 export function InsightsRedirect() {
   const route = useHashRoute()
   useEffect(() => {
+    if (route.page !== 'insights') return
     const tab = route.params.get('tab')?.trim() ?? 'stats'
     const focus = route.params.get('focus')?.trim()
     // Operational telemetry moved to Health, analytics to Library (Phase 5).
@@ -25,7 +26,7 @@ export function InsightsRedirect() {
     }
     // Task 50 M3 (50-A): the graph moved again — to the top-level Map page.
     if (tab === 'graph') {
-      navigateTo('map')
+      navigateTo('discovery')
       return
     }
     const params: Record<string, string> = {
@@ -34,7 +35,7 @@ export function InsightsRedirect() {
     }
     if (focus) params.focus = focus
     navigateTo('library', params)
-  }, [route.params])
+  }, [route.page, route.params])
 
   return (
     <div className="py-16 text-center text-sm text-slate-500">Redirecting to Library › Analytics…</div>

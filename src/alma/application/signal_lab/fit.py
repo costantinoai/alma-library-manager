@@ -49,6 +49,8 @@ reports pairwise accuracy of each nested model on them (prior-only vs
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -66,6 +68,7 @@ from alma.ai.graph_versions import (
 from alma.application import materialized_views as mv
 from alma.application.signal_lab.query import canonical_query_key
 from alma.application.signal_lab.spec import MiniGame, Pref, RegionVote, RoundRow, Sim
+from alma.core.scoring_math import shrink_toward
 from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
@@ -123,7 +126,7 @@ OVERRIDE_MIN_VOTES = 3
 GAMMA_START = 0.35
 
 # Every input `build_signal_lab_model` reads, one term each. A materialized view
-# only rebuilds when this row changes, so an input missing HERE is an input that
+# rebuilds when this SQL row or the content digest changes. A missing input
 # can drift while the served model stays stale — and nothing on the read path
 # would ever notice, because every model consumer uses `mv.get_stored` (a pure
 # row read that computes no fingerprint). It tracked round COUNT/MAX(id) alone
@@ -138,22 +141,21 @@ GAMMA_START = 0.35
 #                            | edited answer keeps its length, so summing sizes
 #                            | would miss it
 #   embedding_model          | `get_active_embedding_model` (settings row)
-#   shown_vectors            | the vectors of the shown papers (count + bytes +
-#                            | newest write, so a recompute in place is caught)
+#   vector/prior digest      | active vector bytes and the canonical Library
+#                            | positive/negative split, streamed below
 #   super_regions            | the stored payload the offsets head maps through
 #   shown_clusters           | each shown paper's corpus cluster assignment
 #   shown_metadata           | shown papers' `authors` / `journal` (author +
 #                            | venue heads). Content, not `updated_at`: hydration
 #                            | touches that row weekly without changing either
-#   library_prior            | the Library-centroid prior's membership + vectors
 #   tuning                   | the three knobs the fit consumes. Named, not
 #                            | `signal_lab.%`: the map tint and the sampler's
 #                            | own settings change nothing about the fitted
 #                            | model, and refitting on them would be churn
 #
 # Cost: the shown set is bounded by the rounds themselves (a few papers per
-# round), and every join is on an indexed `paper_id`, so an idle freshness tick
-# is one small scan — see `scheduler.signal_lab_model_refresh_periodic`.
+# round). Vector hashing streams indexed batches without decoding arrays or
+# constructing a giant SQL hex string; inactive model rows are not loaded.
 _FINGERPRINT_SQL = with_version(
     """
     WITH shown AS (
@@ -175,10 +177,6 @@ _FINGERPRINT_SQL = with_version(
            FROM (SELECT * FROM signal_lab_rounds ORDER BY id)) AS rounds_content,
         (SELECT COALESCE(value, '') FROM discovery_settings
           WHERE key = 'embedding_model') AS embedding_model,
-        (SELECT COUNT(*) || ':' || COALESCE(SUM(LENGTH(pe.embedding)), 0)
-                       || ':' || COALESCE(MAX(pe.created_at), '')
-           FROM publication_embeddings pe
-           JOIN shown s ON s.paper_id = pe.paper_id) AS shown_vectors,
         (SELECT COALESCE(fingerprint, '') FROM materialized_views
           WHERE view_key = 'semantic:regions') AS super_regions,
         (SELECT COALESCE(GROUP_CONCAT(pair, char(10)), '') FROM (
@@ -192,13 +190,6 @@ _FINGERPRINT_SQL = with_version(
               FROM papers p
               JOIN shown s ON s.paper_id = p.id
              ORDER BY p.id)) AS shown_metadata,
-        (SELECT COUNT(*) || ':' || COALESCE(SUM(LENGTH(pe.embedding)), 0)
-                       || ':' || COALESCE(MAX(pe.created_at), '')
-                       || ':' || COALESCE(SUM(COALESCE(p.rating, 0)), 0)
-                       || ':' || COALESCE(SUM(CASE WHEN p.rating BETWEEN 1 AND 2 THEN 1 ELSE 0 END), 0)
-           FROM publication_embeddings pe
-           JOIN papers p ON p.id = pe.paper_id
-          WHERE p.status = 'library') AS library_prior,
         (SELECT COALESCE(GROUP_CONCAT(key || '=' || value, ';'), '') FROM (
             SELECT key, value FROM discovery_settings
              WHERE key IN ('signal_lab.gamma_start',
@@ -209,6 +200,45 @@ _FINGERPRINT_SQL = with_version(
     SIGNAL_LAB_FIT_VERSION,
     str(SIGNAL_LAB_POLICY_VERSION),
 )
+
+
+def _fingerprint_vectors_and_prior(conn: sqlite3.Connection) -> str:
+    """Hash actual active-model inputs without materialising a hex vector blob.
+
+    Counts, lengths and maximum timestamps cannot distinguish changed content.
+    Use the preference owner's split (including its cold-start fallback), and
+    stream each relevant vector exactly once. Rewriting identical vectors or
+    retaining an inactive model does not require another fit.
+    """
+    from alma.application.discovery.seed_profile import load_library_preference_inputs
+    from alma.discovery.similarity import get_active_embedding_model
+
+    model = get_active_embedding_model(conn)
+    _, positive, negative = load_library_preference_inputs(conn)
+    positive_ids = sorted(p["id"] for p in positive)
+    negative_ids = sorted(p["id"] for p in negative)
+    shown = {
+        str(row[0]) for row in conn.execute(
+            "SELECT DISTINCT je.value FROM signal_lab_rounds r, json_each(r.shown_json) je"
+        )
+    }
+    ids = sorted(shown | set(positive_ids) | set(negative_ids))
+    digest = hashlib.sha256(json.dumps(
+        [model, positive_ids, negative_ids], separators=(",", ":"),
+    ).encode())
+    # Bound SQLite variables and memory independently of the accumulated ledger.
+    for start in range(0, len(ids), 500):
+        batch = ids[start:start + 500]
+        placeholders = ",".join("?" for _ in batch)
+        for row in conn.execute(
+            f"SELECT paper_id, embedding FROM publication_embeddings "
+            f"WHERE model = ? AND paper_id IN ({placeholders}) ORDER BY paper_id",
+            [model, *batch],
+        ):
+            for value in (str(row[0]).encode(), bytes(row[1])):
+                digest.update(len(value).to_bytes(8, "big"))
+                digest.update(value)
+    return digest.hexdigest()
 
 
 def enqueue_model_refit(conn: sqlite3.Connection, *, label: str) -> None:
@@ -226,12 +256,7 @@ def enqueue_model_refit(conn: sqlite3.Connection, *, label: str) -> None:
     (``scheduler.signal_lab_model_refresh_periodic``), which compares the view's
     fingerprint instead of guessing.
     """
-    from alma.core.db_write import run_after_gate_release
-
-    def _enqueue() -> None:
-        mv.enqueue_rebuild(MODEL_VIEW_KEY)
-
-    run_after_gate_release(_enqueue, conn=conn, label=label)
+    mv.enqueue_after_write(conn, MODEL_VIEW_KEY, label=label)
 
 
 def _b64(vec: np.ndarray) -> str:
@@ -427,7 +452,7 @@ def shrunk_win_rates(
         return {}
     grand_mean = sum(sums.values()) / sum(counts.values())
     return {
-        entity: (sums[entity] + shrinkage * grand_mean) / (n + shrinkage)
+        entity: shrink_toward(sums[entity], n, grand_mean, shrinkage)
         for entity, n in counts.items()
         if n >= min_observations
     }
@@ -857,6 +882,7 @@ mv.register(
     mv.View(
         key=MODEL_VIEW_KEY,
         fingerprint_sql=_FINGERPRINT_SQL,
+        fingerprint_extra=_fingerprint_vectors_and_prior,
         build_fn=build_signal_lab_model,
         operation_key="materialize.signal_lab.model",
         # Thread path on purpose: small numpy over ≤ thousands of rounds — a

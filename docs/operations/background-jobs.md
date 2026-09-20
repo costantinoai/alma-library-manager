@@ -223,7 +223,7 @@ construction, not by bookkeeping.
 
 | Job | Triggers |
 |---|---|
-| Author refresh-cache | Per-author manual + nightly scheduler. |
+| Author refresh-cache | Per-author manual. (There is no nightly author refresh: new works from followed authors arrive through the Feed's author monitors.) |
 | Author deep-refresh | Per-author manual; deep-refresh-all bulk. |
 | Feed refresh | Manual + scheduler (every few hours). |
 | Lens refresh | Manual per-lens. Default `LENS_REFRESH_LIMIT = 50` (post-filter target — the backend oversamples internally so 50 actually land); runs four retrieval lanes (lexical, vector, graph, external), each emitted as a **child Activity row** under the parent `lens_refresh_<id>` so per-lane status / duration / failure is visible in the Activity panel. The parent's log carries `lane.{name}.start` and `lane.{name}.completed` markers linking to the subtask via `subtask_job_id`. After retrieval the parent merges by candidate identity (so cross-lane hits accumulate `consensus_count`), measures every candidate then ranks with the one family prior (`ranker.apply_repaired_prior`), applies the diversity pass (per-author cap = 2, per-source-key cap ≈ 25 %), then stages survivors. Branches are rebuilt on every refresh and go through the auto-lifecycle pass (rotate when `auto_weight ≤ 0.65`, auto-mute when `≤ 0.55`) before the external lane fans out. |
@@ -272,13 +272,42 @@ Some jobs run on a schedule, not just on demand:
 
 | Job | Default schedule | Env var |
 |---|---|---|
-| Nightly author refresh | 3 AM UTC | `AUTHOR_REFRESH_HOUR` |
 | Alert evaluation | every hour (default) | `ALERT_CHECK_INTERVAL_HOURS` |
 | Feed refresh (per-monitor) | per-monitor interval | UI |
 | Inbox capture sweep | every 5 minutes | `INBOX_SWEEP_INTERVAL_MINUTES` |
 
 Scheduler health is at `GET /api/v1/scheduler/status` — shows next-run
 timestamps for each job and whether the scheduler is alive.
+
+### Scheduled network work: one admission gate
+
+Every run the clock starts that calls an external service is admitted by one
+gate, `scheduler.scheduled_network_refusal`, and does not start when:
+
+1. **the profile does not allow it**: only `prod` runs scheduled network work
+   by default (`ALMA_UNATTENDED_NETWORK` overrides). Every profile shares one
+   provider key, and on 2026-09-19 a worktree copy seeded from prod spent 74%
+   of the shared OpenAlex quota overnight on work prod was doing anyway;
+2. **outbound access is off** (Settings → Connections);
+3. **the provider is down to the reserve** kept for your own operations
+   (OpenAlex; 200 calls by default, set in Settings → Background Operations →
+   "Reserve API calls for you").
+
+Runners declare themselves with `@scheduled_network_job`; the hydration drain
+and the idle healer mix network and local work, so they ask the gate for their
+network branches only and keep doing local work.
+
+Admission only answers "may this run start". For as long as a declared run
+lasts, the reserve is also **bound** to it
+(`provider_quota.background_reserve`), and the transport's hard stop adds it to
+what each call needs — including calls from fanned-out worker threads, which the
+shared pool republishes it into. So an unattended run stops while your headroom
+is intact instead of spending the pool to zero once it is under way. The
+metadata, title-resolution and S2 sweeps additionally yield mid-run through
+their cancel tripwire, which stops them at the same number. A refused run opens no
+Activity row: the reason is in the log, and Health's API budget card says when
+the profile holds scheduled network work. A guard test fails on any periodic
+job that is neither declared nor classified as local.
 
 ### Orphaned-sweep resume
 

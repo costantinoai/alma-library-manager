@@ -146,14 +146,16 @@ class PartitionState:
 
 
 def read_state(conn: sqlite3.Connection) -> PartitionState | None:
-    """The active partition's state, or ``None`` when nothing was ever published."""
-    try:
-        row = conn.execute(
-            f"SELECT generation, revision, model, input_fingerprint, algorithm_version, "
-            f"computed_at, provenance FROM {STATE_TABLE} WHERE id = 1"
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return None
+    """The active partition's state, or ``None`` when nothing was ever published.
+
+    A failed read RAISES: the tables are created at bootstrap, so a missing
+    table is a broken schema, not "never built" — and answering ``None`` there
+    would send a caller off to cluster the whole corpus to repair it.
+    """
+    row = conn.execute(
+        f"SELECT generation, revision, model, input_fingerprint, algorithm_version, "
+        f"computed_at, provenance FROM {STATE_TABLE} WHERE id = 1"
+    ).fetchone()
     if row is None:
         return None
     return PartitionState(
@@ -484,6 +486,60 @@ def record_memberships(conn: sqlite3.Connection, members: Mapping[str, Member]) 
     conn.execute(f"UPDATE {STATE_TABLE} SET revision = revision + 1 WHERE id = 1")
     commit_unless_gated(conn, label="semantic_partition: record memberships")
     return len(members)
+
+
+def forget_members(conn: sqlite3.Connection, paper_ids: list[str] | tuple[str, ...]) -> int:
+    """Drop memberships whose vector is gone. WRITES ONLY — the caller owns the
+    transaction (the Library's embedding invalidation runs this beside its own
+    deletes, so a paper never keeps a membership derived from text it no
+    longer has). Advances the revision so regions notice.
+    """
+    ids = [str(p) for p in paper_ids if str(p).strip()]
+    if not ids:
+        return 0
+    removed = 0
+    try:
+        for start in range(0, len(ids), 400):
+            chunk = ids[start : start + 400]
+            removed += conn.execute(
+                f"DELETE FROM {MEMBERS_TABLE} WHERE paper_id IN ({','.join('?' for _ in chunk)})",
+                chunk,
+            ).rowcount
+        if removed:
+            conn.execute(f"UPDATE {STATE_TABLE} SET revision = revision + 1 WHERE id = 1")
+    except sqlite3.OperationalError:  # partition tables absent: nothing to forget
+        return 0
+    return removed
+
+
+def prune_vectorless_members(conn: sqlite3.Connection) -> int:
+    """Self-healing sweep: a membership with no active-model vector is stale.
+
+    Covers what no hook can: vectors removed before the hook existed, and an
+    embedding-model switch that deletes every vector of the old model. Found
+    live 2026-09-18 — 23 members had lost their vectors while the layout table
+    (cleaned by the same invalidation) had none.
+    """
+    from alma.discovery.similarity import get_active_embedding_model
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT m.paper_id FROM {MEMBERS_TABLE} m
+            WHERE NOT EXISTS (
+                SELECT 1 FROM publication_embeddings pe
+                WHERE pe.paper_id = m.paper_id AND pe.model = ?
+            )
+            """,
+            (get_active_embedding_model(conn),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    removed = forget_members(conn, [str(r[0]) for r in rows])
+    if removed:
+        commit_unless_gated(conn, label="semantic_partition: prune vectorless members")
+        logger.info("semantic_partition: pruned %d membership(s) with no vector", removed)
+    return removed
 
 
 def legacy_layout_members(conn: sqlite3.Connection) -> dict[str, Member]:

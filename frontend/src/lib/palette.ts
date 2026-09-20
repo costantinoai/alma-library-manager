@@ -138,7 +138,6 @@ export type PageThemeKey =
   | 'home'
   | 'feed'
   | 'discovery'
-  | 'map'
   | 'authors'
   | 'library'
   | 'alerts'
@@ -187,11 +186,7 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
     medallion: 'bg-green-700/10',
     chip: 'border-green-700/10 bg-green-700/10 text-green-800',
   },
-  map: {
-    icon: 'text-teal-700',
-    medallion: 'bg-teal-700/10',
-    chip: 'border-teal-700/10 bg-teal-700/10 text-teal-800',
-  },
+
   authors: {
     icon: 'text-indigo-700',
     medallion: 'bg-indigo-700/10',

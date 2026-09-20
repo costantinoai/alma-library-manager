@@ -215,13 +215,13 @@ user's accumulated curation.
 
 ### Outcome calibration
 
-`alma.application.outcome_calibration` smooths observed save / dismiss
-outcomes into per-source quality multipliers via a Beta-Bernoulli
-posterior (α = β = 2) over a 180-day window with a 60-day half-life
-decay. Paper Discovery uses three independent axes — `source_api`,
-`branch_mode`, `branch_id` — composed multiplicatively in log space
-and clamped to `[0.5, 1.5]`, applied to `source_relevance` per
-candidate. The author rail uses a fourth axis — per-bucket calibration
+`alma.application.outcome_calibration` turns observed outcomes into a
+multiplier in `[0.5, 1.5]` via a Beta-Bernoulli posterior (α = β = 2). Paper
+Discovery no longer multiplies a score with it (exposure stays out of the
+reward model): its successor is the retrieval-side **channel yield**
+(`application/discovery/channel_yield.py`), which scales a lens's channel
+weights by `kept / surfaced` with data-derived shrinkage and shares the band.
+The author rail uses the module directly — per-bucket calibration
 keyed on `suggestion_type`, fed by `author_suggestion_follow_log` and
 the `suggestion_bucket` column on `missing_author_feedback`. Empty
 maps on a fresh DB return 1.0 multipliers — no behavior change until

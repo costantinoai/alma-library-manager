@@ -35,6 +35,11 @@ step. There is nothing to promote: `load_lab_scoring_context` already
 early-returns when no usable model exists, so an unplayed install is unaffected,
 and the dampers make an under-evidenced one small on their own."""
 
+def lab_enabled(settings: Mapping[str, str] | None) -> bool:
+    """Shared consumption gate; disabling retains settings and learned evidence."""
+    return str((settings or {}).get("signal_lab.enabled", "true")).lower() == "true"
+
+
 def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
     """Read ONE Signal Lab head weight, in score points, from a settings map.
 
@@ -46,6 +51,8 @@ def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
     so a hand-edited row cannot exceed the ceiling the validator enforces.
     """
 
+    if not lab_enabled(settings):
+        return 0.0
     raw = (settings or {}).get(key, LAB_HEAD_DEFAULT_POINTS)
     try:
         value = float(raw)
@@ -56,16 +63,42 @@ def lab_head_points(settings: Mapping[str, str] | None, key: str) -> float:
     return max(0.0, min(LAB_HEAD_MAX_POINTS, value))
 
 
+# THE default signal weights — one owner. The ranker's family specs, the API
+# model, the settings defaults and the reset route all read this table.
+#
+# Fitted, not picked (2026-09-18, `application/discovery/outcome_eval.py`):
+# non-negative logistic weights that best separate papers the user later KEPT
+# from papers they REJECTED and from the random corpus, under a temporal
+# holdout through the real scoring path, selected by 5-fold cross-validation,
+# on a Library of 539 papers (280 kept / 50 rejected / 600 corpus). Out of
+# sample the previous defaults scored AUC 0.65 vs rejected / 0.58 vs corpus;
+# these score 0.91 / 0.80. What the fit found, on two snapshots alike:
+#   * embedding similarity carries the ranking (alone: 0.93 / 0.77);
+#   * author affinity ANTI-predicts against the corpus — a corpus is mostly the
+#     back-catalogue of followed authors, which the Feed already delivers;
+#   * topic overlap adds nothing beyond the embedding; recency points the wrong
+#     way against rejected papers.
+# Zero is a fitted value, not an omission: the sliders bring any family back.
+# `source_relevance`, `feedback_adj` and `preference_affinity` cannot be
+# measured offline (no retrieval evidence; they read the very events under
+# test), so they keep their previous share.
+DEFAULT_SIGNAL_WEIGHTS: dict[str, float] = {
+    "source_relevance": 0.14,
+    "topic_score": 0.0,
+    "text_similarity": 0.51,
+    "author_affinity": 0.0,
+    "journal_affinity": 0.05,
+    "recency_boost": 0.0,
+    "citation_quality": 0.12,
+    "feedback_adj": 0.09,
+    "preference_affinity": 0.09,
+}
+# How the one `text_similarity` slider splits between its two families
+# (fitted: semantic 0.444, lexical 0.068).
+TEXT_SIMILARITY_SEMANTIC_SHARE = 0.87
+
 DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
-    "weights.source_relevance": "0.15",
-    "weights.topic_score": "0.20",
-    "weights.text_similarity": "0.20",
-    "weights.author_affinity": "0.15",
-    "weights.journal_affinity": "0.05",
-    "weights.recency_boost": "0.10",
-    "weights.citation_quality": "0.05",
-    "weights.feedback_adj": "0.10",
-    "weights.preference_affinity": "0.10",
+    **{f"weights.{key}": str(value) for key, value in DEFAULT_SIGNAL_WEIGHTS.items()},
     # Signal Lab heads (task 54, D20 — amended 2026-07-27).
     #
     # They defaulted to 0.0 and required a MANUAL promotion per head. Two things
@@ -102,7 +135,6 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # holdout_percent: rounds reserved for evaluation, stamped at creation.
     # override_min_votes: consistent boundary votes before a region override.
     "signal_lab.enabled": "true",
-    "signal_lab.map_tint_strength": "0.45",
     "signal_lab.gamma_start": "0.35",
     "signal_lab.epsilon": "0.20",
     "signal_lab.coverage_target": "20",
@@ -134,6 +166,9 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "strategies.taste_authors": "true",
     "strategies.taste_venues": "true",
     "strategies.recent_wins": "true",
+    # Scale each lens channel by how often what it surfaced was kept
+    # (`application/discovery/channel_yield.py`).
+    "strategies.adaptive_channels": "true",
     "limits.max_results": "50",
     # Minimum recommendation score (0-100 scale, matching the emitted
     # `score`). Recommendations scoring below this are dropped at staging time

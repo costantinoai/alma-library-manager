@@ -46,6 +46,7 @@ from typing import Any
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 from alma.core.scoring_math import interpolate_calibration
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ CALIBRATION_VIEW_KEY = "scoring:calibration"
 # row must be rebuilt even though the corpus did not move.
 # 2026.09-3: exemplars are chosen to cover the seed set (facility location),
 #            so the exemplar percentile tables must be re-measured.
-CALIBRATION_VERSION = "2026.09-3"
+# 2026.09-4: an unrated save counts as a positive in the profile the corpus is
+#            measured against (`split_preference_pubs`), so every similarity
+#            table and prior mean is read against a different Library.
+CALIBRATION_VERSION = "2026.09-5"
 
 #: The quantile grid every CDF table is sampled on. Dense at the top because a
 #: Discovery deck is drawn from the top percent of the corpus.
@@ -190,18 +194,14 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
     import numpy as np
 
     from alma.application.discovery import load_library_preference_inputs
-    from alma.application.discovery.features import build_feature_snapshot
-    from alma.application.discovery.lens_crud import read_settings
-    from alma.application.discovery.ranker import FAMILY_SPECS, _family_reading
-    from alma.application.discovery.retrieval._common import (
-        LOCAL_PAPER_SELECT,
-        local_paper_candidate,
+    from alma.application.discovery.offline_measure import (
+        build_profile_inputs,
+        measure_corpus_papers,
     )
+    from alma.application.discovery.ranker import FAMILY_SPECS, _family_reading
     from alma.core.vector_blob import decode_vector
     from alma.discovery import similarity as sim
-    from alma.discovery.scoring import compute_preference_profile, measure_candidate
 
-    settings = read_settings(conn)
     model = sim.get_active_embedding_model(conn)
 
     _, positive_pubs, negative_pubs = load_library_preference_inputs(conn)
@@ -211,21 +211,17 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
     ids = [
         r["id"]
         for r in conn.execute(
-            """SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
-               WHERE p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?""",
+            f"""SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
+               WHERE {standalone_paper_sql('p')} AND p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?""",
             (model,),
         )
     ]
     if len(ids) < _MIN_SAMPLE:
         return {"ready": False, "reason": "corpus has too few embedded papers to measure"}
 
-    profile = compute_preference_profile(conn, positive_pubs, negative_pubs, settings)
-    positive_texts = [t for t in (sim.build_similarity_text(p, conn=conn) for p in positive_pubs) if t]
-    negative_texts = [t for t in (sim.build_similarity_text(p, conn=conn) for p in negative_pubs) if t]
-    positive_centroid = sim.compute_embedding_centroid(positive_pubs, conn)
-    negative_centroid = sim.compute_embedding_centroid(negative_pubs, conn) if negative_pubs else None
-    exemplars = sim.load_publication_example_embeddings(positive_pubs, conn, limit=12)
-    lexical_profile = sim.build_lexical_profile(positive_texts, negative_texts) if positive_texts else None
+    # The one offline measurement path, shared with the outcome evaluation.
+    inputs = build_profile_inputs(conn, positive_pubs, negative_pubs)
+    positive_centroid = inputs.positive_centroid
 
     # Seeded, so the same corpus yields the same tables: the fingerprint says
     # WHEN to rebuild, determinism says the rebuild means something changed.
@@ -239,36 +235,14 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
 
         raw_samples: dict[str, list[float]] = {key: [] for key in CALIBRATED_INPUTS}
         rewards: list[dict] = []
-        for start in range(0, len(sample_ids), 200):
-            chunk = sample_ids[start : start + 200]
-            placeholders = ",".join("?" for _ in chunk)
-            rows = conn.execute(
-                f"SELECT {LOCAL_PAPER_SELECT} FROM papers WHERE id IN ({placeholders})", chunk
-            ).fetchall()
-            vectors = {
-                r["paper_id"]: decode_vector(r["embedding"])
-                for r in conn.execute(
-                    f"SELECT paper_id, embedding FROM publication_embeddings "
-                    f"WHERE model = ? AND paper_id IN ({placeholders})",
-                    (model, *chunk),
-                )
-            }
-            for row in rows:
-                candidate = local_paper_candidate(row)
-                breakdown = measure_candidate(
-                    candidate, profile, positive_centroid, negative_centroid,
-                    positive_texts, negative_texts, conn, settings,
-                    candidate_embedding=vectors.get(candidate["paper_id"]),
-                    lexical_profile=lexical_profile,
-                    positive_example_embeddings=exemplars,
-                    calibration=calibration,
-                )
-                candidate["score_breakdown"] = breakdown
-                if breakdown.get("candidate_embedding_ready"):
-                    for key in CALIBRATED_INPUTS:
-                        if key in breakdown and key not in _TABLE_ALIASES:
-                            raw_samples[key].append(float(breakdown[key] or 0.0))
-                rewards.append(build_feature_snapshot(candidate)[0])
+        for _pid, breakdown, reward in measure_corpus_papers(
+            conn, sample_ids, inputs, calibration=calibration
+        ):
+            if breakdown.get("candidate_embedding_ready"):
+                for key in CALIBRATED_INPUTS:
+                    if key in breakdown and key not in _TABLE_ALIASES:
+                        raw_samples[key].append(float(breakdown[key] or 0.0))
+            rewards.append(reward)
         return raw_samples, rewards
 
     # Pass 1, uncalibrated: the RAW distributions the tables are built from.
@@ -334,11 +308,11 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
 # writes, feedback by 10 events, plus the model and the build version. A
 # rebuild is also deduped and served-stale-meanwhile by the view layer.
 _FINGERPRINT_SQL = with_version(
-    """
+    f"""
     SELECT (SELECT COUNT(*) / 250 FROM publication_embeddings),
            (SELECT COALESCE(SUBSTR(MAX(created_at), 1, 10), '') FROM publication_embeddings),
            (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
-           (SELECT COUNT(*) / 5 FROM papers WHERE status = 'library'),
+           (SELECT COUNT(*) / 5 FROM papers WHERE {standalone_paper_sql('papers')} AND status = 'library'),
            (SELECT COUNT(*) / 10 FROM feedback_events)
     """,
     CALIBRATION_VERSION,

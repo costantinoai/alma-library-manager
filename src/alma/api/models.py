@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from alma.discovery.defaults import DEFAULT_SIGNAL_WEIGHTS
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
 # ============================================================================
@@ -602,17 +603,20 @@ class RecommendationExplainResponse(BaseModel):
 
 
 class DiscoveryWeights(BaseModel):
-    """Weights for scoring signals (should sum to ~1.0)."""
+    """Relative weights for the scoring signals; the ranker rescales them to 1.
 
-    source_relevance: float = Field(0.15, ge=0.0, le=1.0)
-    topic_score: float = Field(0.20, ge=0.0, le=1.0)
-    text_similarity: float = Field(0.20, ge=0.0, le=1.0)
-    author_affinity: float = Field(0.15, ge=0.0, le=1.0)
-    journal_affinity: float = Field(0.05, ge=0.0, le=1.0)
-    recency_boost: float = Field(0.10, ge=0.0, le=1.0)
-    citation_quality: float = Field(0.05, ge=0.0, le=1.0)
-    feedback_adj: float = Field(0.10, ge=0.0, le=1.0)
-    preference_affinity: float = Field(0.10, ge=0.0, le=1.0)
+    Defaults come from the one owner, ``discovery.defaults.DEFAULT_SIGNAL_WEIGHTS``.
+    """
+
+    source_relevance: float = Field(DEFAULT_SIGNAL_WEIGHTS["source_relevance"], ge=0.0, le=1.0)
+    topic_score: float = Field(DEFAULT_SIGNAL_WEIGHTS["topic_score"], ge=0.0, le=1.0)
+    text_similarity: float = Field(DEFAULT_SIGNAL_WEIGHTS["text_similarity"], ge=0.0, le=1.0)
+    author_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["author_affinity"], ge=0.0, le=1.0)
+    journal_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["journal_affinity"], ge=0.0, le=1.0)
+    recency_boost: float = Field(DEFAULT_SIGNAL_WEIGHTS["recency_boost"], ge=0.0, le=1.0)
+    citation_quality: float = Field(DEFAULT_SIGNAL_WEIGHTS["citation_quality"], ge=0.0, le=1.0)
+    feedback_adj: float = Field(DEFAULT_SIGNAL_WEIGHTS["feedback_adj"], ge=0.0, le=1.0)
+    preference_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["preference_affinity"], ge=0.0, le=1.0)
 
 
 class DiscoveryStrategies(BaseModel):
@@ -629,6 +633,7 @@ class DiscoveryStrategies(BaseModel):
     taste_authors: bool = True
     taste_venues: bool = True
     recent_wins: bool = True
+    adaptive_channels: bool = True
 
 
 class DiscoveryLimits(BaseModel):
@@ -1056,42 +1061,6 @@ class AlertTemplateApplyResponse(BaseModel):
     template_title: str
     rule: AlertRuleResponse
     alert: AlertResponse
-
-
-# ============================================================================
-# Job Models
-# ============================================================================
-
-
-class JobCreate(BaseModel):
-    """Request model for creating a scheduled job."""
-
-    name: str = Field(..., min_length=1, max_length=100)
-    description: str | None = Field(None, max_length=500)
-    cron_expression: str
-    # `notify` / `fetch_and_notify` retired with the plain-text digest they
-    # scheduled (task 55). Alert delivery is the alerts engine's, on its own
-    # rules and schedules.
-    action: str = Field(..., pattern="^(fetch)$")
-    plugin_name: str | None = None
-    author_ids: list[str] | None = None
-    enabled: bool = True
-
-
-class JobResponse(BaseModel):
-    """Response model for job data."""
-
-    id: int
-    name: str
-    description: str | None = None
-    cron_expression: str
-    action: str
-    plugin_name: str | None = None
-    author_ids: list[str] | None = None
-    enabled: bool
-    next_run: str | None = None
-    last_run: str | None = None
-    created_at: str
 
 
 # ============================================================================

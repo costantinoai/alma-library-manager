@@ -214,6 +214,57 @@ def defer_from_inbox(db: sqlite3.Connection, paper_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# The reading axis (D2) — one writer
+# ---------------------------------------------------------------------------
+
+#: Every reading state a paper can hold. `None` means "not on the reading
+#: list". Being ON the list IS `reading` — there is no separate queued step.
+READING_STATUSES: tuple[str | None, ...] = (None, "reading", "done", "excluded")
+
+
+def set_reading_status(
+    db: sqlite3.Connection, paper_id: str, reading_status: str | None
+) -> str | None:
+    """Set one paper's reading state — THE writer of `papers.reading_status`.
+
+    Four copies used to write it — the Library route, Discovery's "read"
+    action, undo, and `add_to_library`'s reading-list default — and they
+    disagreed: only two resolved the paper-group root, only three bumped
+    `updated_at`, only one validated the value, and "off the list" was NULL in
+    one and `''` in another. Orthogonal to membership (D2) and valence-free: no
+    rating, no feedback event, no lens signal.
+
+    One deliberate exception: group absorption (`core.paper_groups`) carries a
+    child's reading state onto its root. That MOVES a value the user already
+    set; it does not change one. Guard: `tests/test_reading_status_one_writer.py`.
+
+    ``''`` normalises to ``None``; the retired ``queued`` is accepted as
+    ``reading``. Any other value raises ``ValueError``. The write lands on the
+    group ROOT (a child row is inert and must not carry workflow state).
+
+    Returns the root id written, or None when the paper does not exist. The
+    caller owns the transaction.
+    """
+    from alma.core.paper_groups import resolve_action_paper_id
+
+    value = str(reading_status).strip().lower() if reading_status is not None else ""
+    status: str | None = {"": None, "queued": "reading"}.get(value, value)
+    if status not in READING_STATUSES:
+        raise ValueError(
+            f"Invalid reading status {reading_status!r}; expected one of "
+            f"{[s for s in READING_STATUSES if s]} or null"
+        )
+    root_id = resolve_action_paper_id(db, str(paper_id or "").strip())
+    if not root_id:
+        return None
+    cursor = db.execute(
+        "UPDATE papers SET reading_status = ?, updated_at = ? WHERE id = ?",
+        (status, utcnow().isoformat(), root_id),
+    )
+    return root_id if cursor.rowcount > 0 else None
+
+
+# ---------------------------------------------------------------------------
 # The one entry point for every paper action, on every surface
 # ---------------------------------------------------------------------------
 
@@ -226,7 +277,7 @@ SCOPED_SURFACES: frozenset[str] = frozenset({"feed", "discovery"})
 #: paper — the route rejects it — so a typo becomes a 400, not a silent
 #: mis-attributed feedback event.
 VALID_SURFACES: frozenset[str] = frozenset(
-    {"feed", "discovery", "inbox", "map", "papers", "library", "onboarding"}
+    {"feed", "discovery", "inbox", "papers", "library", "onboarding"}
 )
 
 #: `save` is Discovery's word for `add`. Normalised here so the wire contract

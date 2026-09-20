@@ -502,26 +502,16 @@ def migrate_settings_schema() -> None:
     if version > int(DEFAULT_SETTINGS["settings_schema_version"]):
         raise RuntimeError(f"settings.json was written by a newer ALMa version (schema {version})")
     if version == 0:
-        from alma.core.secrets import (
-            SECRET_SLACK_BOT_TOKEN,
-            SECRET_SMTP_PASSWORD,
-            get_secret,
-        )
-
-        slack_configured = bool(
-            get_secret(SECRET_SLACK_BOT_TOKEN)
-            and (raw.get("slack_channel") or raw.get("slack_inbox_channel"))
-        )
-        email_configured = bool(
-            raw.get("smtp_host")
-            and raw.get("smtp_to")
-            and (not raw.get("smtp_username") or get_secret(SECRET_SMTP_PASSWORD))
-        )
+        # Saved credentials are not consent: a plugin is active only because
+        # someone switched it on. Pre-schema profiles therefore arrive with
+        # every integration OFF, their configuration intact, waiting in
+        # Settings → Plugins. (Profiles already at schema 1+ keep whatever
+        # they were set to — an upgrade never switches your alerts off.)
         update_settings(
             {
                 "settings_schema_version": 1,
-                "plugins.slack.enabled": slack_configured,
-                "plugins.email.enabled": email_configured,
+                "plugins.slack.enabled": False,
+                "plugins.email.enabled": False,
             }
         )
         # An unfinished pre-schema implementation used these keys locally.
@@ -563,7 +553,13 @@ def plugin_activation_keys() -> list[str]:
 
 
 def validate_settings_schema() -> None:
-    """Fail startup when canonical plugin activation is absent or malformed."""
+    """Fail startup when canonical plugin activation is absent or malformed.
+
+    The key list comes from ``DEFAULT_SETTINGS`` — the schema — and NOT from
+    the plugin registry: the validator must only demand keys a migrator has
+    actually written, or shipping a new plugin would fail startup on every
+    existing profile before its migrator ever ran.
+    """
     raw = get_all_settings()
     expected = int(DEFAULT_SETTINGS["settings_schema_version"])
     if raw.get("settings_schema_version") != expected:
@@ -571,8 +567,6 @@ def validate_settings_schema() -> None:
             "settings.json schema migration incomplete: "
             f"expected {expected}, got {raw.get('settings_schema_version')!r}"
         )
-    # Derived from the defaults, so a new plugin cannot be registered with an
-    # activation flag the validator never checks.
     for key in plugin_activation_keys():
         if not isinstance(raw.get(key), bool):
             raise RuntimeError(f"settings.json key {key!r} must be boolean")

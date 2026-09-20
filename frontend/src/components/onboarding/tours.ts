@@ -130,43 +130,9 @@ export const DISCOVERY_TOUR: TourStep[] = [
     body: 'ALMa clusters each lens into branches — its sub-themes. Pin, boost, or mute them in Branch Studio to steer where the next refresh spends its effort.',
   },
   {
-    target: '[data-tour="discovery-map"]',
-    title: 'See where the suggestions sit',
-    body: 'Your library, this lens’s suggestions, and the space between. Click a suggestion to jump to its row, or lasso a region to explore it as a Direction.',
-  },
-  {
     target: '[data-tour="discovery-card"]',
     title: 'Triage to teach',
     body: 'Save, dismiss, and react to recommendations — the more you triage, the sharper the next round.',
-    side: 'top',
-  },
-]
-
-export const MAP_TOUR: TourStep[] = [
-  {
-    target: '[data-tour="map-kind"]',
-    title: 'Papers or authors',
-    body: 'One territory, two views. Papers are placed by what they are about; authors sit at the centre of what they write. Everything else on the page is shared.',
-  },
-  {
-    target: '[data-tour="map-plate"]',
-    title: 'Your corpus as territory',
-    body: 'Every paper placed by what it is about — near neighbours are semantically close. The words on the terrain name the region under them.',
-  },
-  {
-    target: '[data-tour="map-scope"]',
-    title: 'Corpus or Library',
-    body: 'Corpus is every paper ALMa tracks; Library is only what you saved. Same map, filtered — never a second, disagreeing layout.',
-  },
-  {
-    target: '[data-tour="map-select"]',
-    title: 'Ask about an area',
-    body: 'Turn on Select region and drag a box around a patch. ALMa characterises it — vocabulary, strongest papers, top authors — and you can turn it into a lens.',
-  },
-  {
-    target: '[data-tour="map-inspector"]',
-    title: 'The map’s vital signs',
-    body: 'With nothing selected this reads the whole layout: papers, links, clusters, coverage. Click a paper and it becomes that paper, its cluster, and its neighbourhood.',
     side: 'top',
   },
 ]

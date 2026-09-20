@@ -919,7 +919,7 @@ def build_similarity_text(
 # vectors are keyed only by (paper_id, model), so without a version bump the
 # old with-topics vectors and the new without-topics vectors would coexist in
 # one similarity space. Bumping this tag makes old-key rows residuals the normal
-# fill sweep replaces — mirroring how LABELLING_VERSION / CLUSTERING_ALGO_VERSION
+# fill sweep replaces — mirroring how LABELLING_VERSION / PARTITION_VERSION
 # force rebuilds (see ai/graph_versions.py). Bump on any remote text-format change.
 EMBEDDING_TEXT_VERSION = "notopics-v2"
 

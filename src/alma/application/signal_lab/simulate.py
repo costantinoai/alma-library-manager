@@ -30,6 +30,7 @@ from alma.application.signal_lab.fit import decode_head_vector, fit_model
 from alma.application.signal_lab.games.stub import BEST_WORST_SIM_GAME
 from alma.application.signal_lab.policy import draw_triplets, expected_information_scores
 from alma.application.signal_lab.spec import RoundRow
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,8 @@ def world_from_corpus(
         return None
 
     rows = conn.execute(
-        "SELECT paper_id, cluster_id FROM semantic_partition_members WHERE cluster_id >= 0"
+        f"SELECT pc.paper_id, pc.cluster_id FROM semantic_partition_members pc "
+        f"JOIN papers p ON p.id = pc.paper_id WHERE pc.cluster_id >= 0 AND {standalone_paper_sql('p')}"
     ).fetchall()
     rng = np.random.default_rng(seed)
     pairs = [(str(r[0]), cluster_to_region.get(int(r[1]))) for r in rows]
@@ -129,7 +131,7 @@ def world_from_corpus(
     if len(paper_regions) < 100:
         return None
 
-    lib_rows = conn.execute("SELECT id FROM papers WHERE status = 'library' LIMIT 2000").fetchall()
+    lib_rows = conn.execute(f"SELECT id FROM papers WHERE {standalone_paper_sql('papers')} AND status = 'library' ORDER BY id LIMIT 2000").fetchall()
     lib_vecs = load_vectors_by_id(conn, [str(r[0]) for r in lib_rows], model)
     if len(lib_vecs) < 5:
         return None

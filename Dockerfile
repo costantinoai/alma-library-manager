@@ -220,9 +220,9 @@ ENV HF_HOME=/app/data/.hf-cache \
 # `$HOME` (/home/appuser) doesn't exist and NUMBA_CACHE_DIR is unset, so the
 # user-wide locator can't initialise and import fails with
 # `RuntimeError: cannot cache function 'rdist': no locator available` —
-# every /api/v1/graphs/* request 500s. Point the cache at the writable data
-# volume: import succeeds and the compiled kernels persist across restarts,
-# so the first graph render after a deploy is fast too.
+# the semantic partition's clustering (UMAP / HDBSCAN) cannot import. Point the
+# cache at the writable data volume: import succeeds and the compiled kernels
+# persist across restarts, so the first partition build after a deploy is fast.
 ENV NUMBA_CACHE_DIR=/app/data/.numba-cache
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

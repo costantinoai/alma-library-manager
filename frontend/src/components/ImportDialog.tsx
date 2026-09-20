@@ -45,6 +45,7 @@ import {
   preflightZoteroRdfFile,
 } from '@/api/client'
 import { CollectionNameField } from '@/components/shared/CollectionNameField'
+import { describeJobLaunch } from '@/lib/activity'
 
 type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -724,19 +725,18 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
 }
 
 function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }) {
-  const alreadyRunning = envelope.status === 'already_running'
+  // Same launch wording as every job toast; the panel adds its Activity link.
+  const { title, description } = describeJobLaunch(envelope, 'Import', {
+    startedDetail:
+      'Your import is running in the background. You can keep using the app — Library will refresh automatically when it finishes.',
+  })
   return (
     <div className="rounded-lg border border-accent-edge bg-accent-soft p-4">
       <div className="mb-2 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
-        <span className="font-medium text-alma-800">
-          {alreadyRunning ? 'Import already running' : 'Import queued'}
-        </span>
+        <span className="font-medium text-alma-800">{title}</span>
       </div>
-      <p className="text-sm text-slate-600">
-        {envelope.message ||
-          'Your import is running in the background. You can keep using the app — Library will refresh automatically when it finishes.'}
-      </p>
+      <p className="text-sm text-slate-600">{description}</p>
       <p className="mt-2 text-xs text-slate-500">
         Track progress in the{' '}
         <a href="/activity" className="font-medium text-alma-700 hover:underline">

@@ -18,7 +18,7 @@ from alma.core.db_write import run_write_unit
 # The two head constants live with the setting defaults (`alma.discovery.
 # defaults`) because the ranker reads them too; re-exported here so the feature's
 # own callers keep one import path.
-from alma.discovery.defaults import LAB_HEAD_DEFAULT_POINTS, LAB_HEAD_MAX_POINTS
+from alma.discovery.defaults import LAB_HEAD_DEFAULT_POINTS, LAB_HEAD_MAX_POINTS, lab_enabled
 
 __all__ = [
     "LAB_HEAD_DEFAULT_POINTS",
@@ -77,11 +77,6 @@ class SignalLabSettings(BaseModel):
             "ADDED to the venue signal your Library already produces."
         ),
     )
-    map_tint_strength: Annotated[float, Field(ge=0, le=1)] = Field(
-        0.45,
-        title="Map taste tint",
-        description="How strongly learned region preference bends terrain.",
-    )
     ring_decay: Annotated[float, Field(gt=0, le=1)] = Field(
         0.35,
         title="Ring decay",
@@ -106,6 +101,9 @@ class SignalLabHeadLimits(BaseModel):
 
     head_points_max: float = LAB_HEAD_MAX_POINTS
     head_points_default: float = LAB_HEAD_DEFAULT_POINTS
+    #: What the author / venue heads can actually move at the ceiling setting,
+    #: under today's Discovery weights (`categorical_head_reach_points`).
+    categorical_reach_points: dict[str, float] = Field(default_factory=dict)
 
 
 class SignalLabSettingsView(SignalLabSettings):
@@ -125,7 +123,6 @@ _KEYS = {
     "utility_points": "weights.lab_utility",
     "author_offset_points": "weights.lab_author_offset",
     "venue_offset_points": "weights.lab_venue_offset",
-    "map_tint_strength": "signal_lab.map_tint_strength",
     "ring_decay": "signal_lab.gamma_start",
     "exploration_rate": "signal_lab.epsilon",
     "coverage_target": "signal_lab.coverage_target",
@@ -140,12 +137,11 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
 
     stored = read_settings(db)
     return SignalLabSettings(
-        enabled=stored[_KEYS["enabled"]].lower() == "true",
+        enabled=lab_enabled(stored),
         region_offset_points=float(stored[_KEYS["region_offset_points"]]),
         utility_points=float(stored[_KEYS["utility_points"]]),
         author_offset_points=float(stored[_KEYS["author_offset_points"]]),
         venue_offset_points=float(stored[_KEYS["venue_offset_points"]]),
-        map_tint_strength=float(stored[_KEYS["map_tint_strength"]]),
         ring_decay=float(stored[_KEYS["ring_decay"]]),
         exploration_rate=float(stored[_KEYS["exploration_rate"]]),
         coverage_target=int(float(stored[_KEYS["coverage_target"]])),
@@ -158,7 +154,11 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
 def read_view(db: sqlite3.Connection) -> SignalLabSettingsView:
     """The settings as the UI needs them: values plus the head-weight limits."""
 
-    return SignalLabSettingsView(**read(db).model_dump())
+    from alma.application.discovery.lens_crud import read_settings
+    from alma.application.signal_lab.scoring_terms import categorical_head_reach_points
+
+    limits = SignalLabHeadLimits(categorical_reach_points=categorical_head_reach_points(read_settings(db)))
+    return SignalLabSettingsView(**read(db).model_dump(), limits=limits)
 
 
 #: The knobs `fit.build_signal_lab_model` actually consumes. Changing one makes
@@ -193,9 +193,16 @@ def write(db: sqlite3.Connection, settings: SignalLabSettings) -> SignalLabSetti
         for field in FIT_INPUT_FIELDS
     ):
         enqueue_model_refit(db, label="signal_lab.settings refit")
+    if previous != validated:
+        from alma.application import materialized_views as mv
+        from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+
+        mv.enqueue_after_write(db, EVAL_VIEW_KEY, label="signal_lab.settings replay")
     return read(db)
 
 
 def is_enabled(db: sqlite3.Connection) -> bool:
     """The one shared consumption gate."""
-    return read(db).enabled
+    from alma.application.discovery.lens_crud import read_settings
+
+    return lab_enabled(read_settings(db))

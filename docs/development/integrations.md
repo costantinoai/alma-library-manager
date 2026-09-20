@@ -184,9 +184,37 @@ credential owner.
 
 Import the package's manifest in `alma.plugins.registry` and add it once to
 `PLUGINS`. Add `plugins.<id>.enabled` to `DEFAULT_SETTINGS`, advance the settings
-schema, and write a forward migration. Existing configured installs may be
-activated by migration; fresh unconfigured integrations default off. Runtime
-code must never infer activation from credentials.
+schema, and write a forward migration.
+
+**A plugin ships switched off, and no migration turns one on.** Saved
+credentials are not consent: activation is a thing the reader does in
+Settings → Plugins, never something the code infers. `is_enabled()` falls back
+to `False`, so a plugin whose activation key is not in `DEFAULT_SETTINGS` yet is
+inert rather than fatal — but add the key anyway, because
+`validate_settings_schema` checks every key the schema declares, and
+`tests/test_channel_registry.py` fails if a registered plugin has none.
+
+## What "off" means
+
+Off is enforced by `PluginManifest` itself, not by the call sites, so the next
+caller cannot forget it (`POST /plugins/{id}/test` did, and a deactivated Slack
+posted real messages for it). While a plugin is off:
+
+- `inbound_channel()` returns `None` — quietly. Off is absence, not a fault, so
+  nothing is logged; a factory that *raises* still leaves a warning.
+- `send_alert()` and `test_connection()` raise `PluginDisabledError`; the test
+  route answers **409** before it ever reaches the transport.
+- `enabled_delivery_plugins()` and `can_deliver_alerts()` exclude it.
+
+What a disabled plugin still does, deliberately: describe itself, keep its
+configuration (deactivating never deletes credentials), and report its
+`status()` — that is what lets Settings, Health and the Alerts channel picker
+say "set up, but off". A `status_factory` is therefore held to a contract:
+**local, cheap, side-effect-free** — read settings and secrets, build no
+transport, open no socket, import no network library (`tests/
+test_plugin_activation_gate.py` asserts that listing plugins loads neither
+`slack_sdk` nor `smtplib`). Anything that probes the outside world belongs in
+`connection_tester`.
 
 Add the integration's Settings icon only if a specific icon exists; the generic
 icon already works. Alert delivery choices and schema fields are discovered
@@ -197,7 +225,8 @@ from `/api/v1/plugins`, so no service-specific form or route is added.
 - registry identity and declared capabilities;
 - generated schema equals the validating model and forbids extra fields;
 - activate → deactivate retains config;
-- inactive adapters neither send nor poll;
+- it is off in a fresh profile, and has an activation key;
+- inactive adapters neither send, poll, nor accept a connection test (409);
 - secret reads are masked and plaintext never enters settings;
 - transport callback uses the service's one client;
 - inbound idempotency and acknowledgement, when `receive` is declared;

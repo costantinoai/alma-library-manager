@@ -80,16 +80,81 @@ the UI cannot describe a formula the scorer is not running.
 
 | Family | Default weight | Built from |
 |---|---|---|
-| `semantic` | 0.14 | max(library centroid, closest exemplar) − 0.5 · similarity to passed-on papers |
-| `topic` | 0.20 | `topic_score` |
-| `retrieval` | 0.15 | 0.75 · max(RRF over the four channels) + 0.25 · (channels that agreed / 4) |
-| `author` | 0.15 | `author_affinity` |
-| `lexical` | 0.06 | 0.45 word + 0.35 char n-gram + 0.20 key term − 0.5 · overlap with passed-on papers |
-| `recency` | 0.10 | `recency_boost` |
-| `citation` | 0.05 | 0.50 `citation_quality` + 0.10 log-ratio(`fwci`) + 0.20 noisy-OR(coupling, co-citation) + 0.20 max(PPR library, PPR loved) |
-| `feedback` | 0.10 | `feedback_adj` |
-| `preference` | 0.10 | `preference_affinity` |
+| `semantic` | 0.444 | max(library centroid, closest exemplar) − 0.5 · similarity to passed-on papers |
+| `topic` | 0 | `topic_score` |
+| `retrieval` | 0.14 | 0.75 · max(RRF over the four channels) + 0.25 · (channels that agreed / 4) |
+| `author` | 0 | `author_affinity` |
+| `lexical` | 0.066 | 0.45 word + 0.35 char n-gram + 0.20 key term − 0.5 · overlap with passed-on papers |
+| `recency` | 0 | `recency_boost` |
+| `citation` | 0.12 | 0.50 `citation_quality` + 0.10 log-ratio(`fwci`) + 0.20 noisy-OR(coupling, co-citation) + 0.20 max(PPR library, PPR loved) |
+| `feedback` | 0.09 | `feedback_adj` |
+| `preference` | 0.09 | `preference_affinity` |
 | `venue` | 0.05 | `journal_affinity` |
+
+### The defaults are fitted to outcomes, not chosen (2026-09-18)
+
+The defaults live in ONE table, `alma.discovery.defaults.DEFAULT_SIGNAL_WEIGHTS`
+(plus `TEXT_SIMILARITY_SEMANTIC_SHARE`). The ranker's `FAMILY_SPECS`, the
+settings defaults, the API model and migration 41 all read it; nothing else
+spells a weight.
+
+They were fitted by `application/discovery/outcome_eval.py` on a temporal
+holdout: the profile is built from Library papers saved before the median save
+date, and the test asks whether the score ranks the papers saved AFTER it above
+(a) papers the user rejected and (b) a random sample of the corpus. The fit is a
+non-negative logistic regression over the calibrated family readings, 5-fold
+cross-validated, with both bars weighted equally. `feedback` and `preference`
+are leak-prone offline (they are built from the very outcomes being predicted)
+and `retrieval` cannot be measured offline, so those three keep their previous
+budget and the fit distributes the rest.
+
+| AUC, kept papers vs … | previous defaults | fitted defaults |
+|---|---|---|
+| random corpus — install the fit used (280 kept / 50 rejected) | 0.604 | 0.786 |
+| rejected papers — same install | 0.742 | 0.920 |
+| random corpus — second install, never seen by the fit (78 / 40) | 0.637 | 0.788 |
+| rejected papers — second install | 0.680 | 0.825 |
+
+What the measurement said, and why three families default to zero:
+
+* **`semantic` alone beat the previous full score.** Every family that diluted
+  it cost ranking quality.
+* **`author` anti-predicted.** Most of a monitored corpus is BY followed
+  authors (measured: 82% of corpus papers vs 50% of Library papers), so
+  authorship separates nothing the user has not already chosen by following.
+* **`topic` added nothing over `semantic`**, and **`recency` pointed the wrong
+  way** against rejected papers (rejections are recent too: they come from the
+  Feed).
+
+Zero is a default, not a removal: the sliders remain, and the evaluation
+re-runs on any install
+(`evaluate_ranker_outcomes(conn)`; its `what_if.shipped_defaults` scenario
+scores this table against the stored weights). Migration 41 moves an install to
+the fitted table only when its nine stored weights equal the previous defaults
+exactly; any hand-tuned value is left alone.
+
+### The measurement is a stored view, shown where the weights are set
+
+`scoring:outcome_eval` (`outcome_eval.EVAL_VIEW_KEY`) stores the evaluation. It
+scores about a thousand papers, so no request computes it:
+
+* **Read** — `GET /discovery/outcome-evaluation` → `load_outcome_summary`, a
+  row read. Settings → Discovery prints it as one sentence above the sliders.
+* **Refresh** — `request_outcome_eval_refresh` is the one entry point, called
+  by a weights save or reset, by the periodic scoring tick (after the
+  calibration is settled: the evaluation reads the ranker through it) and by
+  the "Measure again" link.
+* **Freshness** — the fingerprint is the Library and verdict counts (bucketed),
+  the nine stored weights, and the calibration row's fingerprint. It is taken
+  BEFORE the build, so a run that started under weights which then changed is
+  stored as not `current` and the sentence says it describes an earlier state.
+* **Honesty at small n** — under 40 dated Library papers the state is
+  `not_ready` with the reason; a bar under 15 papers a side, or whose interval
+  contains 0.5, reads "inconclusive", never as a number.
+
+An unrated save counts as a positive in the profile (`split_preference_pubs`),
+the same rule Discovery's lens profile uses. Measured on an identical split,
+the change was neutral to slightly positive.
 
 ### Calibration is derived per library, never hardcoded (2026-09-06)
 
@@ -180,9 +245,10 @@ ceiling and squeezed the median to 0.05. The curve is now
 either side reach the ends, 1% saturate and the median lands at 0.30.
 
 Weights come from `discovery_settings.weights.*` (Settings → Discovery). One
-slider, `weights.text_similarity`, drives two families — `semantic` takes 70%
-of it and `lexical` 30% — which is why the defaults above are 0.14 / 0.06 for a
-slider set to 0.20. Weights are normalised to sum to 1 before scoring.
+slider, `weights.text_similarity`, drives two families — `semantic` takes 87%
+of it and `lexical` 13% (`TEXT_SIMILARITY_SEMANTIC_SHARE`, fitted with the
+weights) — which is why the defaults above are 0.444 / 0.066 for a slider set
+to 0.51. Weights are normalised to sum to 1 before scoring.
 
 **Three combinators**, declared per atom:
 
@@ -419,35 +485,52 @@ Range: 0…1. Requires `preference_profiles` to have entries; no embeddings need
 retrieval phase, before ranking. They shape which candidates exist, not what
 they score.
 
-## Outcome calibration
+## Channel yield: outcomes scale retrieval, never the score
 
-After consensus, every candidate's `source_relevance` is multiplied
-by an outcome-derived calibration multiplier. The multiplier is the
-composition of three independent axes:
+How a paper reached you is *exposure*, and exposure stays out of the reward
+model. So outcomes feed back into **what is retrieved**, not into a score
+multiplier (the per-source `source_calibration_multiplier` left the scoring
+path on 2026-07-27 and its code was removed on 2026-09-19; old stored
+breakdowns may still carry the key).
 
-| Axis | Grouping key | Source |
-|---|---|---|
-| `source_api` | The API that surfaced the candidate (`openalex` / `semantic_scholar` / …) | `recommendations.source_api` × `feedback_events` |
-| `branch_mode` | The retrieval lane (`core` / `explore` / `safe`) | `recommendations.branch_mode` |
-| `branch_id` | The specific branch within the lens | `recommendations.branch_id` |
+`application/discovery/channel_yield.py`, stored view `discovery:channel_yield`:
 
-Each axis runs the same Beta-Bernoulli posterior over a 180-day
-window with a 60-day half-life decay:
+* **Data.** Every refresh records, for each candidate it *surfaced*
+  (`discovery_ranking_candidates.selected = 1`), which retrieval families found
+  it (`retrieval_hits`). Joined to the outcome owner
+  (`recommendation_outcomes.build_paper_outcome_map`), each channel gets
+  `kept / surfaced`. A paper found by several channels counts for each.
+  Surfaced-and-ignored is the denominator: explicit rejections are too rare to
+  estimate anything from.
+* **Estimator.** Rates are shrunk toward the pooled rate by a strength *derived
+  from the data* — the beta-binomial method-of-moments estimate of how much the
+  channels vary beyond their sample sizes
+  (`core/scoring_math.empirical_bayes_rates`). When they do not, every
+  multiplier is exactly 1.0. No tuned constant.
+* **Effect.** `multiplier = shrunk rate / pooled rate`, clamped to
+  `outcome_calibration.MULTIPLIER_BAND` (`[0.5, 1.5]`). At refresh the lens's
+  channel weights (the prior: the user's sliders or the context-type defaults)
+  are multiplied and renormalised, and the Activity log states base → effective.
+* **Family → channel** has one owner, `retrieval/_common.CHANNEL_BY_FAMILY`
+  (semantic → `vector`, citation → `graph`, taste → `external`), read by the
+  fusion and by the yield.
+* **Surface.** The lens's **Tune this lens → Lens Weights** prints, per
+  channel, "k of n surfaced papers kept → ×m, used as w". Switch:
+  Settings → Discovery → Retrieval Strategies → *Adaptive Channel Weights*
+  (`strategies.adaptive_channels`, default on). `GET /discovery/channel-yield`
+  is a row read.
 
-$$
-\text{quality}(k) = \frac{\text{positives}(k) + \alpha}{\text{positives}(k) + \text{negatives}(k) + \alpha + \beta}
-$$
+Measured 2026-09-19 — prod snapshot: lexical 3/36 → ×0.85, vector 15/68 →
+×1.13, graph 10/62 → ×0.98 (external: nothing surfaced, ×1.00). Dev: lexical
+0/35 → ×0.68, vector 4/62 → ×1.50 (the band's ceiling), graph 2/55 → ×1.08,
+external 0/44 → ×0.62. Both installs order the channels the same way. The band's
+floor keeps every channel in play, and the slate's randomized exploration
+slots (`exploration.py`) are filled after fusion, so a down-weighted channel
+keeps producing the outcomes that could lift it again.
 
-with $\alpha = \beta = 2$. A fresh DB returns 0.5 → multiplier 1.0
-(no behavior change). A source where saves dominate climbs toward
-1.5×; one where explicit negative preference dominates falls toward 0.5×. The three
-axes compose multiplicatively in log space, then the composite is
-clamped back to `[0.5, 1.5]` so three independent positive axes
-can't push past the per-axis ceiling.
-
-Per-candidate breakdown carries the composite as
-`source_calibration_multiplier` and the per-axis components as
-`source_calibration_components.{source_api, branch_mode, branch_id}`.
+Branch-level outcome weighting is separate and unchanged: a branch's
+`auto_weight` (`lens_crud._compute_branch_auto_weight`) shapes its retrieval
+budget from its own save / dismiss history.
 The full snapshot — quality, multipliers, raw counts, impressions —
 also lives on `retrieval_summary.calibration.{source_api, branch_mode,
 branch_id}`.
@@ -483,12 +566,14 @@ accumulate.
 
 Three knobs change the balance:
 
-* **Per-family weights** — Settings → Discovery. Lowering
-  `weights.text_similarity` to 0.10 caps the semantic + lexical families at
-  ~10% of the normalised budget between them.
+* **Per-family weights** — Settings → Discovery. The sliders are normalised to
+  sum to 1, so halving `weights.text_similarity` from 0.51 to 0.25 drops the
+  semantic + lexical families from 51% to about a third of the budget.
 * **Recommendation mode** — see above.
-* **Per-lens overrides** — each lens carries its own `weights.*`, merged over
-  the global defaults at refresh time.
+* **Per-lens retrieval channels** — a lens carries its own retrieval channel
+  weights (lexical / vector / graph / external), which decide what is
+  *retrieved*. The family weights that *score* it are global: every caller goes
+  through `ranker.resolve_family_weights`.
 
 The `recommendations` table caches the last batch, so re-tuning does not lose
 results — only the next refresh applies new weights.

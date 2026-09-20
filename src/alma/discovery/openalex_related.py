@@ -920,6 +920,11 @@ def batch_fetch_recent_works_for_authors(
     if not author_ids:
         return {}
 
+    # Discovery reads several sources per lens and must not lose the whole deck
+    # because one of them refused. This is the ONE place that decides to degrade:
+    # the client raises (task 85), we log loudly and this strategy contributes
+    # nothing. Callers that need the failure to be visible to the user — Feed's
+    # monitors — call the client directly instead.
     try:
         raw_map = _client_batch_author_works(
             author_ids,
@@ -927,7 +932,7 @@ def batch_fetch_recent_works_for_authors(
             per_author_limit=per_author_limit,
         )
     except Exception as exc:
-        logger.warning("Batch author works fetch failed: %s", exc)
+        logger.warning("Batch author works fetch failed, this strategy yields nothing: %s", exc)
         return {}
 
     result: dict[str, list[dict]] = {}

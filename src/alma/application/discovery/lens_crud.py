@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import library as library_app
+from alma.application import paper_actions
 from alma.core.db_write import commit_unless_gated, run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.scoring_math import age_decay, clamp
@@ -471,15 +472,7 @@ def mark_recommendation_action(
             feedback_action = "save"
         elif action == "read":
             if paper_id:
-                db.execute(
-                    """
-                    UPDATE papers
-                    SET reading_status = 'reading',
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (now, paper_id),
-                )
+                paper_actions.set_reading_status(db, paper_id, "reading")
         elif action in {"like", "love"}:
             effective_rating = int(rating or (5 if action == "love" else 4))
             effective_rating = max(1, min(5, effective_rating))

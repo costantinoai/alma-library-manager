@@ -32,7 +32,6 @@ from alma.api.routes.discovery import router as discovery_router
 from alma.api.routes.extension import router as extension_router
 from alma.api.routes.feed import router as feed_router
 from alma.api.routes.feedback import router as feedback_router
-from alma.api.routes.graphs import router as graphs_router
 from alma.api.routes.health import router as health_router
 from alma.api.routes.home import router as home_router
 from alma.api.routes.imports import router as imports_router
@@ -44,7 +43,6 @@ from alma.api.routes.library_mgmt import router as library_mgmt_router
 from alma.api.routes.logs import install_log_handler
 from alma.api.routes.logs import router as logs_router
 from alma.api.routes.onboarding import router as onboarding_router
-from alma.api.routes.operations import router as operations_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
@@ -55,6 +53,8 @@ from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 from alma.application.materialized_views import MaterializedViewReadError
 from alma.core.logging import setup_logging
+from alma.core.network_policy import ExternalAccessError
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
@@ -117,24 +117,20 @@ async def lifespan(app: FastAPI):
 
     init_db_schema()
 
-    # Health endpoints are stored reads only. Build their dependency chain
-    # during startup so even the first request receives a complete snapshot;
-    # the scheduler then owns periodic and debounced refreshes.
-    try:
-        from alma.services.health_snapshots import rebuild_all as rebuild_health_snapshots
-
-        rebuild_health_snapshots()
-    except Exception as e:
-        logger.warning("Initial Health snapshot build skipped: %s", e)
-
     logger.info(
         "Integration plugins: %s",
         ", ".join(get_plugin_registry().ids()),
     )
 
-    # Start scheduler with periodic alert evaluation and author refresh jobs
+    # Start the scheduler and register its periodic jobs
     try:
         setup_scheduler()
+        # Serve persisted snapshots immediately. A corpus-wide assessment must
+        # not hold application startup (and every HTTP request) behind its work.
+        # Reuse the same background coordinator as mutation/periodic refreshes.
+        from alma.services.health_snapshots import request_refresh
+
+        request_refresh(delay_seconds=0)
     except Exception as e:
         logger.warning(f"Failed to start scheduler: {e}")
 
@@ -382,6 +378,28 @@ async def materialized_view_read_exception_handler(
     )
 
 
+@app.exception_handler(ExternalAccessError)
+async def external_access_exception_handler(request: Request, exc: ExternalAccessError):
+    """The network switch is off or a provider quota is spent: nothing was sent.
+
+    409, not 5xx: the server did not fail — the app's own state (a Settings
+    switch, a spent daily quota) conflicts with the request, and the message
+    says how to change it. Not 503 either: the frontend retries every 503, and
+    retrying cannot turn a switch back on.
+    """
+    logger.info(
+        f"External access blocked on {request.method} {request.url.path}: {exc}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": type(exc).__name__,
+            "message": str(exc),
+            "detail": str(exc),
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle uncaught exceptions."""
@@ -515,10 +533,18 @@ def get_statistics():
             cursor = db.execute("SELECT COUNT(*) as count FROM authors")
             total_authors = cursor.fetchone()["count"]
 
-            cursor = db.execute("SELECT COUNT(*) as count FROM papers")
+            # Works, not rows: a version absorbed into its published paper and a
+            # component of one are the same work, and counting them again makes
+            # the headline figure disagree with every list it summarises.
+            cursor = db.execute(
+                f"SELECT COUNT(*) as count FROM papers p WHERE {standalone_paper_sql('p')}"
+            )
             total_publications = cursor.fetchone()["count"]
 
-            cursor = db.execute("SELECT COALESCE(SUM(cited_by_count), 0) as total FROM papers")
+            cursor = db.execute(
+                "SELECT COALESCE(SUM(cited_by_count), 0) as total FROM papers p "
+                f"WHERE {standalone_paper_sql('p')}"
+            )
             total_citations = cursor.fetchone()["total"] or 0
         finally:
             db.close()
@@ -558,7 +584,6 @@ def get_statistics():
 app.include_router(authors_router, prefix="/api/v1")
 app.include_router(papers_router, prefix="/api/v1")
 app.include_router(plugins_router, prefix="/api/v1")
-app.include_router(operations_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(library_router, prefix="/api/v1/library", tags=["library"])
 app.include_router(imports_router, prefix="/api/v1/library", tags=["library-import"])
@@ -573,7 +598,6 @@ app.include_router(library_mgmt_router, prefix="/api/v1/library-mgmt", tags=["li
 app.include_router(logs_router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])
 app.include_router(ai_router, prefix="/api/v1/ai", tags=["ai"])
-app.include_router(graphs_router, prefix="/api/v1/graphs", tags=["graphs"])
 app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
 app.include_router(topics_router, prefix="/api/v1/topics", tags=["topics"])
 app.include_router(feedback_router, prefix="/api/v1/feedback", tags=["feedback"])

@@ -33,8 +33,10 @@ import math
 from dataclasses import dataclass, field
 
 from alma.discovery.defaults import (
+    DEFAULT_SIGNAL_WEIGHTS,
     LAB_HEAD_DEFAULT_POINTS,
     LAB_HEAD_MAX_POINTS,
+    TEXT_SIMILARITY_SEMANTIC_SHARE,
     lab_head_points,
 )
 
@@ -171,9 +173,9 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Semantic",
         description="Embedding similarity to what you already keep.",
         weight_setting="weights.text_similarity",
-        weight_default=0.20,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["text_similarity"],
         prior_mean=0.452,
-        weight_share=0.70,
+        weight_share=TEXT_SIMILARITY_SEMANTIC_SHARE,
         atoms=(
             Atom("semantic_similarity_centroid_raw", "Library centroid", 1.0, "max", "positive", curve="similarity"),
             Atom("semantic_similarity_exemplar_raw", "Closest exemplar", 1.0, "max", "positive", curve="similarity"),
@@ -192,7 +194,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Topic",
         description="Overlap with the topics your rated papers cluster on.",
         weight_setting="weights.topic_score",
-        weight_default=0.20,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["topic_score"],
         prior_mean=0.688,
         atoms=(Atom("topic_score", "Topic overlap", 1.0),),
     ),
@@ -201,7 +203,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Retrieval",
         description="How strongly the search channels surfaced it, and how many agreed.",
         weight_setting="weights.source_relevance",
-        weight_default=0.15,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["source_relevance"],
         prior_mean=0.642,
         atoms=(
             Atom("retrieval_rrf_semantic", "Vector channel rank", 0.75, "max", "rrf"),
@@ -216,7 +218,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Author",
         description="Authors you follow or repeatedly save.",
         weight_setting="weights.author_affinity",
-        weight_default=0.15,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["author_affinity"],
         prior_mean=0.588,
         atoms=(Atom("author_affinity", "Author affinity", 1.0),),
     ),
@@ -225,9 +227,9 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Lexical",
         description="Terminology overlap — the words, not the meaning.",
         weight_setting="weights.text_similarity",
-        weight_default=0.20,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["text_similarity"],
         prior_mean=0.380,
-        weight_share=0.30,
+        weight_share=1.0 - TEXT_SIMILARITY_SEMANTIC_SHARE,
         atoms=(
             # Same rule as the semantic atoms: a raw overlap fraction goes through
             # the ONE lexical calibration before anything weights it.
@@ -242,7 +244,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Recency",
         description="How recently it was published.",
         weight_setting="weights.recency_boost",
-        weight_default=0.10,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["recency_boost"],
         prior_mean=0.325,
         atoms=(Atom("recency_boost", "Publication recency", 1.0),),
     ),
@@ -251,7 +253,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Citation",
         description="Citation weight, and citation-graph proximity to your library.",
         weight_setting="weights.citation_quality",
-        weight_default=0.05,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["citation_quality"],
         prior_mean=0.199,
         # Shared references and co-citation are DIFFERENT relations — measured
         # correlation 0.59, and each decides the group's value on a large share
@@ -273,7 +275,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Feedback",
         description="Your explicit verdicts on similar papers.",
         weight_setting="weights.feedback_adj",
-        weight_default=0.10,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["feedback_adj"],
         prior_mean=0.657,
         atoms=(Atom("feedback_adj", "Feedback adjustment", 1.0),),
     ),
@@ -282,7 +284,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Preference",
         description="The taste profile accumulated from Signal Lab and your history.",
         weight_setting="weights.preference_affinity",
-        weight_default=0.10,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["preference_affinity"],
         prior_mean=0.513,
         atoms=(Atom("preference_affinity", "Preference affinity", 1.0),),
     ),
@@ -291,7 +293,7 @@ FAMILY_SPECS: tuple[FamilySpec, ...] = (
         label="Venue",
         description="Journals and conferences you read.",
         weight_setting="weights.journal_affinity",
-        weight_default=0.05,
+        weight_default=DEFAULT_SIGNAL_WEIGHTS["journal_affinity"],
         prior_mean=0.198,
         atoms=(Atom("journal_affinity", "Venue affinity", 1.0),),
     ),

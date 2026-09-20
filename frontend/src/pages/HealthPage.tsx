@@ -43,6 +43,7 @@ import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { RepairGroup } from '@/components/health/RepairGroup'
 import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { SystemStatusCards } from '@/components/health/SystemStatusCards'
 import { ApiBudgetCard } from '@/components/health/ApiBudgetCard'
 import { SectionLabel } from '@/components/health/SectionLabel'
@@ -52,6 +53,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { freshnessNote } from '@/components/health/healthFormat'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -90,12 +92,14 @@ export function HealthPage() {
     queryKey: SNAPSHOT_KEY,
     queryFn: getHealthSnapshot,
     staleTime: 30_000,
+    refetchInterval: query => query.state.data && !query.state.data.generated_at ? 1500 : false,
     retry: 1,
   })
   const operationsQuery = useQuery({
     queryKey: OPERATIONS_KEY,
     queryFn: getHealthOperations,
     staleTime: 30_000,
+    refetchInterval: query => query.state.data && !query.state.data.generated_at ? 1500 : false,
     retry: 1,
   })
   const networkPolicyMutation = useMutation({
@@ -182,26 +186,7 @@ export function HealthPage() {
         }
         return
       }
-      if (networkBlocked) {
-        toast({
-          title: 'External network access is off',
-          description: result.message ?? 'Enable network access in Settings → Connections.',
-        })
-      } else if (capSkipped) {
-        toast({
-          title: 'Daily API limit reached',
-          description:
-            result.message ??
-            'The provider daily API quota is exhausted — try again after it resets.',
-        })
-      } else if (!launched) {
-        toast({ title: 'Nothing to run', description: 'No provider or no eligible items.' })
-      } else {
-        toast({
-          title: 'Maintenance started',
-          description: `${result.key} queued (${result.job_id}). Track it in Activity.`,
-        })
-      }
+      toast(describeMaintenanceLaunch(result, 'Maintenance'))
     },
     onError: (err, variables) => {
       // A failed enqueue stops the sequence (don't loop on a broken step).
@@ -484,9 +469,18 @@ export function HealthPage() {
         ) : null}
 
         <div className="border-t border-[var(--color-border)] pt-4">
-          <SectionLabel>System status</SectionLabel>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel>System status</SectionLabel>
+            <Button variant="outline" size="sm" onClick={diagnosticsSections.refresh} disabled={diagnosticsSections.building}>
+              {diagnosticsSections.building ? 'Refreshing diagnostics…' : 'Refresh diagnostics'}
+            </Button>
+          </div>
+          {diagnosticsSections.refreshError && (
+            <ErrorState message={diagnosticsSections.refreshError} actionLabel="Retry diagnostics" onAction={diagnosticsSections.refresh} actionPending={diagnosticsSections.building} />
+          )}
+          {diagnosticsSections.building && <p role="status" className="text-sm text-slate-500">Refreshing diagnostics. Existing snapshots stay visible.</p>}
           <div className="mt-2">
-            <SystemStatusCards />
+            <SystemStatusCards sections={diagnosticsSections} onRefresh={diagnosticsSections.refresh} />
           </div>
           {/* External-API budget + last credit-limit abort (task 37 B/C). */}
           <div className="mt-3">

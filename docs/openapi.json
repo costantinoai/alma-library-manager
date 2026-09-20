@@ -836,89 +836,6 @@
         }
       }
     },
-    "/api/v1/authors/backfill-works": {
-      "post": {
-        "tags": [
-          "authors"
-        ],
-        "summary": "Backfill full works + SPECTER2 vectors for corpus authors (Activity-envelope)",
-        "description": "Fetches every OpenAlex work for the target author(s), upserts papers + publication_authors rows, batch-fetches missing SPECTER2 vectors from Semantic Scholar, then recomputes the author_centroids entry.",
-        "operationId": "backfill_author_works_api_v1_authors_backfill_works_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BackfillAuthorWorksRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/authors/follow-from-paper": {
       "post": {
         "tags": [
@@ -6589,595 +6506,6 @@
         }
       }
     },
-    "/api/v1/fetch/preview": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Fetch & preview for all authors (Activity-backed)",
-        "description": "Queue a background preview fetch across every author.\n\nThe previous implementation iterated authors synchronously in the request\nthread and held an anyio threadpool worker for the full duration of the\nremote round-trips (often many seconds). Now runs on the APS scheduler pool\nand reports progress per author; result JSON contains the combined preview.",
-        "operationId": "fetch_preview_all_api_v1_fetch_preview_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/preview/save": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Save preview publications (bulk) to DB",
-        "description": "Persist selected preview publications as a background operation.",
-        "operationId": "save_preview_publications_bulk_api_v1_fetch_preview_save_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SavePublicationsRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/hard-reset": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Hard reset publications database and refetch all authors",
-        "description": "Schedule a background hard reset and return a job id for progress polling.",
-        "operationId": "hard_reset_publications_db_api_v1_fetch_hard_reset_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/refresh-cache": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Refresh cache for all authors (no send)",
-        "description": "Refresh cached publications for all authors without sending notifications.",
-        "operationId": "refresh_cache_all_api_v1_fetch_refresh_cache_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "background",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Run in background and track in Activity",
-              "default": true,
-              "title": "Background"
-            },
-            "description": "Run in background and track in Activity"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/jobs": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Schedule a fetch job",
-        "description": "Schedule a cron job for fetch operations.",
-        "operationId": "schedule_job_api_v1_fetch_jobs_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JobCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "List scheduled jobs",
-        "operationId": "list_scheduled_jobs_api_v1_fetch_jobs_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/jobs/{job_id}": {
-      "delete": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Delete a scheduled job",
-        "operationId": "delete_job_api_v1_fetch_jobs__job_id__delete",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/jobs/{job_id}/run": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Run job immediately",
-        "operationId": "run_job_now_api_v1_fetch_jobs__job_id__run_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/run": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Run fetch action asynchronously",
-        "operationId": "run_async_action_api_v1_fetch_run_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/settings": {
       "get": {
         "tags": [
@@ -10016,7 +9344,7 @@
           "library"
         ],
         "summary": "Update paper reading status",
-        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
+        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. Validation, the legacy\n`queued` \u2192 `reading` coercion and the group-root resolution all live\nin `paper_actions.set_reading_status`, the one writer of the field.",
         "operationId": "update_reading_status_api_v1_library_papers__paper_id__reading_status_patch",
         "security": [
           {
@@ -12913,6 +12241,184 @@
         }
       }
     },
+    "/api/v1/discovery/outcome-evaluation": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Does the ranker's order predict what you kept? (stored result)",
+        "description": "Pure read of the stored evaluation summary; never computes.",
+        "operationId": "get_outcome_evaluation_api_v1_discovery_outcome_evaluation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/channel-yield": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Which retrieval channels surface papers you keep (stored result)",
+        "description": "Pure read: per channel surfaced / kept / shrunk rate / weight multiplier,\nand whether the adaptation is switched on. ``channels`` is null until a\nlens refresh has built it.",
+        "operationId": "get_channel_yield_api_v1_discovery_channel_yield_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/outcome-evaluation/refresh": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Re-run the ranker outcome evaluation in the background",
+        "description": "Queue a re-evaluation when its inputs moved (always, with ``force``).",
+        "operationId": "refresh_outcome_evaluation_api_v1_discovery_outcome_evaluation_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/discovery/settings/reset": {
       "post": {
         "tags": [
@@ -15381,7 +14887,7 @@
         "tags": [
           "discovery-lenses"
         ],
-        "summary": "Preview branch map for a lens",
+        "summary": "Read the stored branch preview for a lens",
         "operationId": "preview_lens_branches_api_v1_lenses__lens_id__branches_get",
         "security": [
           {
@@ -15469,8 +14975,138 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LensBranchPreviewResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LensBranchPreviewResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Preview Lens Branches Api V1 Lenses  Lens Id  Branches Get"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lenses/{lens_id}/branches/refresh": {
+      "post": {
+        "tags": [
+          "discovery-lenses"
+        ],
+        "summary": "Refresh Lens Branches",
+        "operationId": "refresh_lens_branches_api_v1_lenses__lens_id__branches_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lens_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lens Id"
+            }
+          },
+          {
+            "name": "max_branches",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 12,
+              "minimum": 2,
+              "default": 6,
+              "title": "Max Branches"
+            }
+          },
+          {
+            "name": "temperature",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Temperature"
+            }
+          },
+          {
+            "name": "resolution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 3.0,
+                  "minimum": 0.5
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resolution"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -15688,6 +15324,62 @@
         }
       }
     },
+    "/api/v1/insights/recommendations": {
+      "get": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Read recommendation engagement",
+        "operationId": "get_recommendation_engagement_api_v1_insights_recommendations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/insights": {
       "get": {
         "tags": [
@@ -15722,6 +15414,72 @@
         ],
         "responses": {
           "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/insights/refresh": {
+      "post": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Refresh Library analytics in the background",
+        "operationId": "refresh_insights_api_v1_insights_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -16082,6 +15840,72 @@
         ],
         "responses": {
           "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/insights/diagnostics/refresh": {
+      "post": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Refresh diagnostic snapshots asynchronously",
+        "operationId": "refresh_diagnostics_api_v1_insights_diagnostics_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -17154,65 +16978,6 @@
         "summary": "Deduplicate authors and publications",
         "description": "Run deduplication and stable-ID maintenance as a background job.",
         "operationId": "deduplicate_database_api_v1_library_mgmt_deduplicate_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/library-mgmt/backfill-components": {
-      "post": {
-        "tags": [
-          "library-management"
-        ],
-        "summary": "Reconcile paper groups (published papers / preprints / components)",
-        "description": "Run the corpus-wide parent/child reconciliation pass: published journal papers become the root when present, preprints and components point to that root, and child rows lose vectors / graph state / preference sidecars. Runs as a background job.",
-        "operationId": "backfill_components_route_api_v1_library_mgmt_backfill_components_post",
         "security": [
           {
             "HTTPBearer": []
@@ -18370,933 +18135,6 @@
                   "additionalProperties": true,
                   "title": "Response Ai Dependencies Api V1 Ai Dependencies Get"
                 }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/selection/lens": {
-      "post": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Create a collection-backed lens from a visible map selection",
-        "description": "Atomically save selected papers into a new collection and lens.",
-        "operationId": "create_selection_lens_api_v1_graphs_selection_lens_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MapSelectionLensCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MapSelectionLensResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/paper-map": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Paper Map",
-        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, resolution 1.0) are served via the materialised-view\nlayer: cache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations (incl. a non-default cluster_resolution) bypass the\ncache and build inline \u2014 those are rare, ad-hoc views where caching every\nvariant would be wasteful.",
-        "operationId": "get_paper_map_api_v1_graphs_paper_map_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "label_mode",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "Label mode: cluster (c-TF-IDF over title text)",
-              "default": "cluster",
-              "title": "Label Mode"
-            },
-            "description": "Label mode: cluster (c-TF-IDF over title text)"
-          },
-          {
-            "name": "color_by",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "Color by: cluster, year, rating, citations",
-              "default": "cluster",
-              "title": "Color By"
-            },
-            "description": "Color by: cluster, year, rating, citations"
-          },
-          {
-            "name": "size_by",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "Size by: citations, uniform, rating",
-              "default": "citations",
-              "title": "Size By"
-            },
-            "description": "Size by: citations, uniform, rating"
-          },
-          {
-            "name": "show_edges",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Show edges between nodes",
-              "default": true,
-              "title": "Show Edges"
-            },
-            "description": "Show edges between nodes"
-          },
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "library (default: Library-only papers) or corpus (every stored paper)",
-              "default": "library",
-              "title": "Scope"
-            },
-            "description": "library (default: Library-only papers) or corpus (every stored paper)"
-          },
-          {
-            "name": "cluster_resolution",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 3.0,
-              "minimum": 0.5,
-              "description": "Cluster detail (default = the substrate resolution, 1.5): >1 finer (more clusters), <1 coarser. Non-default builds a variant in the background (202 while building).",
-              "default": 1.5,
-              "title": "Cluster Resolution"
-            },
-            "description": "Cluster detail (default = the substrate resolution, 1.5): >1 finer (more clusters), <1 coarser. Non-default builds a variant in the background (202 while building)."
-          },
-          {
-            "name": "w_semantic",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: semantic-similarity weight in the fused layout",
-              "default": 1.0,
-              "title": "W Semantic"
-            },
-            "description": "PROTOTYPE: semantic-similarity weight in the fused layout"
-          },
-          {
-            "name": "w_coauthorship",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)",
-              "default": 0.0,
-              "title": "W Coauthorship"
-            },
-            "description": "PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"
-          },
-          {
-            "name": "w_bibliographic",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: bibliographic-coupling weight in the fused layout",
-              "default": 0.0,
-              "title": "W Bibliographic"
-            },
-            "description": "PROTOTYPE: bibliographic-coupling weight in the fused layout"
-          },
-          {
-            "name": "w_cocitation",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "Citation influence: co-citation weight in the fused layout (shared citers)",
-              "default": 0.0,
-              "title": "W Cocitation"
-            },
-            "description": "Citation influence: co-citation weight in the fused layout (shared citers)"
-          },
-          {
-            "name": "prefetch",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for.",
-              "default": false,
-              "title": "Prefetch"
-            },
-            "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for."
-          },
-          {
-            "name": "if-none-match",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload.",
-              "title": "If-None-Match"
-            },
-            "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload."
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphData"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/frontier": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Frontier",
-        "description": "Layered semantic-map nodes for the Discovery frontier view (task 47 P3).\n\nThree layers over the corpus-scope 2-D layout: (a) all library papers\n(`layer=library`), (b) the lens's CURRENT suggestion set, branch-stamped\n(`layer=rec`), (c) opt-in top-N seen papers by cosine to the library\ncentroid (`layer=seen`). `dismissed`/`removed` papers are never returned\n(D6/D3). Pure read except the one-time corpus-layout build, which returns\n202 `{status:'building'}` (the sanctioned cache-build path).",
-        "operationId": "get_frontier_api_v1_graphs_frontier_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "lens_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Discovery lens whose CURRENT suggestions to plot",
-              "title": "Lens Id"
-            },
-            "description": "Discovery lens whose CURRENT suggestions to plot"
-          },
-          {
-            "name": "seen_limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 1000,
-              "minimum": 0,
-              "description": "Top-N seen-but-unacted papers by centroid similarity (0 = hide the seen layer)",
-              "default": 0,
-              "title": "Seen Limit"
-            },
-            "description": "Top-N seen-but-unacted papers by centroid similarity (0 = hide the seen layer)"
-          },
-          {
-            "name": "include_edges",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Also return coupling + co-citation edges between the placed nodes (off by default)",
-              "default": false,
-              "title": "Include Edges"
-            },
-            "description": "Also return coupling + co-citation edges between the placed nodes (off by default)"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/region/describe": {
-      "post": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Describe Region",
-        "description": "Characterise an arbitrary set of papers by its dominant vocabulary \u2014 the\nread behind selecting a region on the frontier map (task 47 \u00a78, \"Directions\").\n\nPOST only because the body carries up to ~300 paper ids; it is a **pure read**\n(verified by the GET-purity suite). Reuses the SAME c-TF-IDF labeler the\ncluster labels use \u2014 no second TF-IDF. Returns the region's label, top terms,\nthree sample titles, honest membership counts (library / current suggestions /\nseen), and a `sufficient` flag (false below 5 papers \u2192 the UI shows \"too few\npapers to characterize\" and disables actions).",
-        "operationId": "describe_region_api_v1_graphs_region_describe_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegionDescribeRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/author-network": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Author Network",
-        "description": "Get author network visualization data.\n\nThe default (resolution 1.0, pure-semantic layout) is served from the\nmaterialised view. A non-default cluster_resolution OR a fused layout (a\nnon-zero co-authorship / bib-coupling weight) is a variant \u2014 served from the\nSAME durable, proportionally-invalidated cache as the paper map (task #20):\nbuild once, reuse across restarts, rebuild only when a real proportion of the\nunderlying papers has changed. The build itself is a pure read (no\npublication-layout persistence), mirroring the paper map (I-2).",
-        "operationId": "get_author_network_api_v1_graphs_author_network_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "library (default) or corpus",
-              "default": "library",
-              "title": "Scope"
-            },
-            "description": "library (default) or corpus"
-          },
-          {
-            "name": "cluster_resolution",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 3.0,
-              "minimum": 0.5,
-              "description": "Cluster detail: >1 finer (more clusters), <1 coarser",
-              "default": 1.0,
-              "title": "Cluster Resolution"
-            },
-            "description": "Cluster detail: >1 finer (more clusters), <1 coarser"
-          },
-          {
-            "name": "w_semantic",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: semantic weight in the fused author layout",
-              "default": 1.0,
-              "title": "W Semantic"
-            },
-            "description": "PROTOTYPE: semantic weight in the fused author layout"
-          },
-          {
-            "name": "w_coauthorship",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: co-authorship weight in the fused author layout",
-              "default": 0.0,
-              "title": "W Coauthorship"
-            },
-            "description": "PROTOTYPE: co-authorship weight in the fused author layout"
-          },
-          {
-            "name": "w_bibliographic",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "description": "PROTOTYPE: bibliographic-coupling weight in the fused author layout",
-              "default": 0.0,
-              "title": "W Bibliographic"
-            },
-            "description": "PROTOTYPE: bibliographic-coupling weight in the fused author layout"
-          },
-          {
-            "name": "prefetch",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for.",
-              "default": false,
-              "title": "Prefetch"
-            },
-            "description": "Read-only warm-up. A prefetch NEVER enqueues a layout build: it reports 'building' and returns. Set by speculative callers (sidebar hover) so brushing a nav item cannot start minutes of background work the user never asked for."
-          },
-          {
-            "name": "if-none-match",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload.",
-              "title": "If-None-Match"
-            },
-            "description": "Conditional read. A layout is an immutable artifact, so a matching validator answers 304 without ever decoding the stored payload."
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphData"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/signal-field": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Signal Field",
-        "description": "The SPACE-OWNED preference field over the corpus substrate.\n\nOne valence per signal-carrying paper, at its substrate coordinates \u2014\nindependent of which dots any view renders (user call 2026-07-25: the\nstats of the space belong to the space; toggling layers must never\nchange the terrain). Every map host splats THIS field for its Heat\nmode, so Discovery and the Map page show the same landscape.\n\nThe valence hierarchy and every weight live in ONE place:\n`alma.core.signal_valence` (strongest user signal wins; engine\nevidence at reduced authority; no-signal papers carry\nVALENCE_NO_SIGNAL so EVERY substrate point has a value \u2014 the\nterrain has no holes, user call 2026-07-25).\n\nSince 2026-07-27 the field is a FIELD: where a paper carries no signal\nof its own, `alma.application.terrain` predicts one from its\nneighbourhood in embedding space and reports how much it trusts the\nprediction. Every point therefore carries `c` (confidence, 0\u20131) and\n`src` (what produced the value) so hosts can render a guess\ndifferently from a fact. See that module for the method.\n\nPure read; the substrate is the durable corpus layout.",
-        "operationId": "get_signal_field_api_v1_graphs_signal_field_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/author-field": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Author Field",
-        "description": "The LIVE preference + score field for the author map.\n\nThe author analogue of `/graphs/signal-field`, and deliberately built from\nthe SAME contract: an author's valence aggregates `paper_valence` evidence\nover the papers of theirs you have an opinion about. User evidence carries\nfull confidence, engine-only evidence is weak, and a neutral prior prevents\none paper from reading as a settled author verdict. So \"how do I feel about\nthis author\" is derived from \"how do I feel about their papers\" \u2014 one owner\nof the hierarchy, confidence, and weights (`alma.core.signal_valence`).\n\n**Not scoped.** How you feel about an author is a fact about the author, not\nabout which view is open, so this is computed over ALL of their papers. It\nused to take a scope and average only the in-scope ones, which recoloured 48\nauthors when you switched between Corpus and Library (measured 2026-07-26) \u2014\ntwo different opinions about the same person depending on where you stood.\n\nTwo reasons this is an endpoint rather than a field baked into the network\npayload (user catch 2026-07-26 \u2014 \"terrain is all yellow and no scores\"):\n\n* **Live.** The author network is a materialized view; the score baked into\n  it goes stale the moment Discovery re-scores, which greyed the dots and\n  flattened the terrain exactly like the paper map's baked score did.\n* **Coverage.** The old terrain used the mean recommendation score alone and\n  substituted 0 for every author without one \u2014 in corpus scope that is ~90%\n  of them, and a flood of hard zeros diluted the splat's local mean to\n  nothing: uniform yellow. Valence covers every author carrying ANY signal\n  (saved / rated / dismissed / scored), and authors with NO signal are\n  returned with `v: null` so the host can omit them from the splat instead\n  of drowning it. Pale paper where you have no opinion is the honest render.\n\nKeyed by author id (the OpenAlex id, as the network's nodes are) rather than\nby coordinates: unlike the paper substrate there is no off-view author to\naccount for \u2014 the author map always draws every author in scope \u2014 so an\nid-keyed field is view-independent for exactly the same reason.\n\nPure read.",
-        "operationId": "get_author_field_api_v1_graphs_author_field_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/cluster-labels/refresh": {
-      "post": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Refresh Cluster Labels",
-        "description": "Regenerate representative cluster labels for one graph + scope.\n\nRuns in the Activity envelope so the UI can track per-cluster\nprogress without blocking the GET path. The GET route picks up\ncached labels from `graph_cluster_labels` on the next refresh \u2014\nthis endpoint invalidates `graph_cache` at the end to force that\nrebuild.",
-        "operationId": "refresh_cluster_labels_api_v1_graphs_cluster_labels_refresh_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClusterLabelRefreshRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/rebuild": {
-      "post": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Rebuild Graphs",
-        "description": "Rebuild the graph caches for the requested scope (I-3: scope-aware).",
-        "operationId": "rebuild_graphs_api_v1_graphs_rebuild_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "library (default) or corpus \u2014 the scope to rebuild",
-              "default": "library",
-              "title": "Scope"
-            },
-            "description": "library (default) or corpus \u2014 the scope to rebuild"
-          },
-          {
-            "name": "background",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Run rebuild in background and track in Activity",
-              "default": true,
-              "title": "Background"
-            },
-            "description": "Run rebuild in background and track in Activity"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/reference-backfill": {
-      "post": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Backfill Graph References",
-        "description": "Backfill missing publication references from OpenAlex without rebuilding caches.",
-        "operationId": "backfill_graph_references_api_v1_graphs_reference_backfill_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "background",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Run backfill in background and track in Activity",
-              "default": true,
-              "title": "Background"
-            },
-            "description": "Run backfill in background and track in Activity"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -21491,7 +20329,7 @@
           "signal-lab"
         ],
         "summary": "Get Eval",
-        "description": "Stage-1 promotion evidence: held-out accuracy + hypothetical churn.\n\nUses ``mv.get`` (fingerprint-driven): first call builds inline (bounded \u2014\n\u2264200 recommendation vectors), later calls serve the cached row and refresh\nin the background when rounds or the live list change.",
+        "description": "Stored holdout and runtime replay. Background jobs own all computation.",
         "operationId": "get_eval_api_v1_signal_lab_eval_get",
         "responses": {
           "200": {
@@ -22052,44 +20890,6 @@
           },
           "401": {
             "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/{full_path}": {
-      "get": {
-        "summary": "Serve Frontend",
-        "description": "Serve a real dist file if it exists, else 404.",
-        "operationId": "serve_frontend__full_path__get",
-        "parameters": [
-          {
-            "name": "full_path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Full Path"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
           },
           "422": {
             "description": "Validation Error",
@@ -23714,45 +22514,6 @@
         ],
         "title": "AuthorTypeUpdateRequest"
       },
-      "BackfillAuthorWorksRequest": {
-        "properties": {
-          "author_openalex_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Author Openalex Id",
-            "description": "Single author OpenAlex id, or null for the full batch"
-          },
-          "full_refetch": {
-            "type": "boolean",
-            "title": "Full Refetch",
-            "description": "Bypass the 'local paper count >= declared works_count' skip shortcut",
-            "default": false
-          },
-          "limit": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 10000.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit",
-            "description": "Batch runs only: cap the number of authors processed this job"
-          }
-        },
-        "type": "object",
-        "title": "BackfillAuthorWorksRequest",
-        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs \u2014 useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
-      },
       "BibtexTextImportRequest": {
         "properties": {
           "content": {
@@ -24118,22 +22879,6 @@
         ],
         "title": "BulkSuggestResponse",
         "description": "Response for bulk tag suggestion generation."
-      },
-      "ClusterLabelRefreshRequest": {
-        "properties": {
-          "graph_type": {
-            "type": "string",
-            "title": "Graph Type",
-            "default": "paper_map"
-          },
-          "scope": {
-            "type": "string",
-            "title": "Scope",
-            "default": "library"
-          }
-        },
-        "type": "object",
-        "title": "ClusterLabelRefreshRequest"
       },
       "CollectionCreate": {
         "properties": {
@@ -24949,6 +23694,11 @@
             "type": "boolean",
             "title": "Recent Wins",
             "default": true
+          },
+          "adaptive_channels": {
+            "type": "boolean",
+            "title": "Adaptive Channels",
+            "default": true
           }
         },
         "type": "object",
@@ -24962,28 +23712,28 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Source Relevance",
-            "default": 0.15
+            "default": 0.14
           },
           "topic_score": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Topic Score",
-            "default": 0.2
+            "default": 0.0
           },
           "text_similarity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Text Similarity",
-            "default": 0.2
+            "default": 0.51
           },
           "author_affinity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Author Affinity",
-            "default": 0.15
+            "default": 0.0
           },
           "journal_affinity": {
             "type": "number",
@@ -24997,33 +23747,33 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Recency Boost",
-            "default": 0.1
+            "default": 0.0
           },
           "citation_quality": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Citation Quality",
-            "default": 0.05
+            "default": 0.12
           },
           "feedback_adj": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Feedback Adj",
-            "default": 0.1
+            "default": 0.09
           },
           "preference_affinity": {
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Preference Affinity",
-            "default": 0.1
+            "default": 0.09
           }
         },
         "type": "object",
         "title": "DiscoveryWeights",
-        "description": "Weights for scoring signals (should sum to ~1.0)."
+        "description": "Relative weights for the scoring signals; the ranker rescales them to 1.\n\nDefaults come from the one owner, ``discovery.defaults.DEFAULT_SIGNAL_WEIGHTS``."
       },
       "ErrorResponse": {
         "properties": {
@@ -25535,135 +24285,6 @@
         "title": "GovernanceSettings",
         "description": "Background-ops governance knobs (task 37) \u2014 Settings \u2192 Data & system.\n\nKV-backed in the shared `discovery_settings` store; the shipped constants are\nthe defaults. The gate reads `idle_wait_minutes`; the per-sweep reserve + the\nHealth budget read `reserved_api_calls`."
       },
-      "GraphData": {
-        "properties": {
-          "nodes": {
-            "items": {
-              "$ref": "#/components/schemas/GraphNode"
-            },
-            "type": "array",
-            "title": "Nodes"
-          },
-          "edges": {
-            "items": {
-              "$ref": "#/components/schemas/GraphEdge"
-            },
-            "type": "array",
-            "title": "Edges"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Metadata",
-            "default": {}
-          }
-        },
-        "type": "object",
-        "required": [
-          "nodes",
-          "edges"
-        ],
-        "title": "GraphData"
-      },
-      "GraphEdge": {
-        "properties": {
-          "source": {
-            "type": "string",
-            "title": "Source"
-          },
-          "target": {
-            "type": "string",
-            "title": "Target"
-          },
-          "weight": {
-            "type": "number",
-            "title": "Weight",
-            "default": 1.0
-          },
-          "edge_type": {
-            "type": "string",
-            "title": "Edge Type",
-            "default": "semantic"
-          }
-        },
-        "type": "object",
-        "required": [
-          "source",
-          "target"
-        ],
-        "title": "GraphEdge"
-      },
-      "GraphNode": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "x": {
-            "type": "number",
-            "title": "X",
-            "default": 0.5
-          },
-          "y": {
-            "type": "number",
-            "title": "Y",
-            "default": 0.5
-          },
-          "cluster_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cluster Id"
-          },
-          "color": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Color"
-          },
-          "size": {
-            "type": "number",
-            "title": "Size",
-            "default": 1.0
-          },
-          "node_type": {
-            "type": "string",
-            "title": "Node Type",
-            "default": "paper"
-          },
-          "in_library": {
-            "type": "boolean",
-            "title": "In Library",
-            "default": true
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Metadata",
-            "default": {}
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name"
-        ],
-        "title": "GraphNode"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -25823,172 +24444,6 @@
           "openalex_id"
         ],
         "title": "IngestOwnerResponse"
-      },
-      "JobCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 500
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "cron_expression": {
-            "type": "string",
-            "title": "Cron Expression"
-          },
-          "action": {
-            "type": "string",
-            "pattern": "^(fetch)$",
-            "title": "Action"
-          },
-          "plugin_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plugin Name"
-          },
-          "author_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Author Ids"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled",
-            "default": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "cron_expression",
-          "action"
-        ],
-        "title": "JobCreate",
-        "description": "Request model for creating a scheduled job."
-      },
-      "JobResponse": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "cron_expression": {
-            "type": "string",
-            "title": "Cron Expression"
-          },
-          "action": {
-            "type": "string",
-            "title": "Action"
-          },
-          "plugin_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plugin Name"
-          },
-          "author_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Author Ids"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "next_run": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Run"
-          },
-          "last_run": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Run"
-          },
-          "created_at": {
-            "type": "string",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "cron_expression",
-          "action",
-          "enabled",
-          "created_at"
-        ],
-        "title": "JobResponse",
-        "description": "Response model for job data."
       },
       "LensBranchPreviewResponse": {
         "properties": {
@@ -26425,78 +24880,6 @@
         ],
         "title": "ManualSearchRequest"
       },
-      "MapSelectionLensCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 120,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "selection_kind": {
-            "type": "string",
-            "enum": [
-              "papers",
-              "authors"
-            ],
-            "title": "Selection Kind"
-          },
-          "ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "minItems": 1,
-            "title": "Ids"
-          },
-          "scope": {
-            "type": "string",
-            "enum": [
-              "library",
-              "corpus"
-            ],
-            "title": "Scope"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "selection_kind",
-          "ids",
-          "scope"
-        ],
-        "title": "MapSelectionLensCreate",
-        "description": "Create a collection-backed lens from the current map selection."
-      },
-      "MapSelectionLensResponse": {
-        "properties": {
-          "collection_id": {
-            "type": "string",
-            "title": "Collection Id"
-          },
-          "lens_id": {
-            "type": "string",
-            "title": "Lens Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "paper_count": {
-            "type": "integer",
-            "title": "Paper Count"
-          }
-        },
-        "type": "object",
-        "required": [
-          "collection_id",
-          "lens_id",
-          "name",
-          "paper_count"
-        ],
-        "title": "MapSelectionLensResponse",
-        "description": "Atomic collection + lens result for a lassoed map region."
-      },
       "MergeProfilesRequest": {
         "properties": {
           "alt_author_ids": {
@@ -26573,13 +24956,23 @@
           "forced_off_by_env": {
             "type": "boolean",
             "title": "Forced Off By Env"
+          },
+          "unattended_enabled": {
+            "type": "boolean",
+            "title": "Unattended Enabled"
+          },
+          "profile": {
+            "type": "string",
+            "title": "Profile"
           }
         },
         "type": "object",
         "required": [
           "enabled",
           "settings_enabled",
-          "forced_off_by_env"
+          "forced_off_by_env",
+          "unattended_enabled",
+          "profile"
         ],
         "title": "NetworkPolicyResponse"
       },
@@ -27028,13 +25421,12 @@
           "surface": {
             "type": "string",
             "enum": [
-              "feed",
               "discovery",
+              "feed",
               "inbox",
-              "map",
-              "papers",
               "library",
-              "onboarding"
+              "onboarding",
+              "papers"
             ],
             "title": "Surface",
             "default": "papers"
@@ -28071,22 +26463,6 @@
         "title": "RefreshAuthorNetworkRequest",
         "description": "Trigger the two network author-suggestion refresh runners.\n\n`force=True` re-runs both even if their caches are fresh; by\ndefault stale/missing caches are the only ones refreshed\n(fresh caches are left alone \u2014 cheap no-op)."
       },
-      "RegionDescribeRequest": {
-        "properties": {
-          "paper_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Paper Ids"
-          }
-        },
-        "type": "object",
-        "required": [
-          "paper_ids"
-        ],
-        "title": "RegionDescribeRequest"
-      },
       "RejectSuggestionRequest": {
         "properties": {
           "openalex_id": {
@@ -28812,6 +27188,13 @@
             "type": "number",
             "title": "Head Points Default",
             "default": 5.0
+          },
+          "categorical_reach_points": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Categorical Reach Points"
           }
         },
         "additionalProperties": false,
@@ -28904,14 +27287,6 @@
             "description": "How much affinity a fully-preferred journal gains. Fitted only from same-field, different-venue rounds \u2014 the one place ALMa can learn which venue you would rather read at equal topic \u2014 and ADDED to the venue signal your Library already produces.",
             "default": 5.0
           },
-          "map_tint_strength": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Map taste tint",
-            "description": "How strongly learned region preference bends terrain.",
-            "default": 0.45
-          },
           "ring_decay": {
             "type": "number",
             "maximum": 1.0,
@@ -29000,14 +27375,6 @@
             "title": "Venue scoring nudge",
             "description": "How much affinity a fully-preferred journal gains. Fitted only from same-field, different-venue rounds \u2014 the one place ALMa can learn which venue you would rather read at equal topic \u2014 and ADDED to the venue signal your Library already produces.",
             "default": 5.0
-          },
-          "map_tint_strength": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Map taste tint",
-            "description": "How strongly learned region preference bends terrain.",
-            "default": 0.45
           },
           "ring_decay": {
             "type": "number",

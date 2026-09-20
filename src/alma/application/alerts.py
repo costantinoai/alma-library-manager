@@ -963,6 +963,9 @@ async def evaluate_digest(
                 "papers_sent": 0,
             }
             continue
+        # Each refusal keeps its own reason: "cannot", "switched off" and
+        # "not set up" are three different things to read in Activity, and the
+        # manifest's gate would flatten them into one exception.
         if not plugin.can(SEND) or plugin.alert_sender is None:
             channel_results[channel_name] = {
                 "status": "skipped",
@@ -997,7 +1000,7 @@ async def evaluate_digest(
             continue
         payload = [paper for _, paper in new_papers]
         try:
-            ok = await plugin.alert_sender(payload, alert["name"])
+            ok = await plugin.send_alert(payload, alert["name"])
             if ok:
                 channel_results[channel_name] = {
                     "status": "sent",

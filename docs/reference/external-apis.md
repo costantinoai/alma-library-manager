@@ -44,9 +44,11 @@ metadata, citations, topics, institutions, and the works graph.
 * **API key — REQUIRED (since 2026-02-13)**: every request needs
   `OPENALEX_API_KEY`. OpenAlex retired the email "polite pool"; without a
   key you get 100 free credits/day and then **HTTP 409**. A free key
-  (openalex.org/settings/api) gives standard limits — 100,000 credits/day
-  (singleton GETs cost 0 credits, list requests 1 each), at a typical
-  ~10 req/s. Set it in `.env` or via
+  (openalex.org/settings/api) gives 10,000 credits/day, reset at 00:00 UTC
+  (singleton GETs cost 0 credits, list requests 1 each, `?search=` requests
+  10), at a typical ~10 req/s. Every ALMa instance using the same key draws on
+  that one pool, which is why only the prod profile runs scheduled network
+  work by default (`ALMA_UNATTENDED_NETWORK`). Set the key in `.env` or via
   **Settings → Connections → OpenAlex**.
 * **Contact email (optional)**: `OPENALEX_EMAIL` no longer affects rate
   limits (the polite pool is gone) but still sets a courteous User-Agent
@@ -294,6 +296,26 @@ metadata fallback when OpenAlex doesn't have a paper.
   **3 polite / 1 anonymous** (`core/http_sources.py`).
 * **Used as a fallback**, not the primary path. Most papers resolve
   through OpenAlex first.
+
+## DataCite
+
+[DataCite](https://api.datacite.org/) registers the DOIs Crossref does
+not: datasets, software, and the supplementary material deposited with
+Zenodo, figshare, Dryad and OSF.
+
+* **Endpoint used**: `/dois/{doi}` — one lookup per DOI
+  (`discovery.datacite.fetch_parent_dois`).
+* **What it is for**: the `IsSupplementTo` relation names the article a
+  deposit belongs to. That is the only relation trusted — `IsPartOf`
+  usually names the collection or the journal, which would turn a real
+  article into a component (the same decision Crossref's
+  `is-supplement-to` rule documents).
+* **When it runs**: Phase 2 of the corpus rehydrator, for DOIs Crossref
+  did not resolve, capped per sweep. A paper Crossref knows never
+  reaches DataCite.
+* **No key, no quota**: politeness only — paced like Crossref
+  (`core/http_sources.py`). A registry outage is logged and the DOI is
+  retried on a later sweep; it never fails the sweep.
 
 ## Europe PMC
 

@@ -265,12 +265,16 @@ def _count_publications_via_publication_authors(
     if not _table_exists(db, "publication_authors"):
         return 0
 
+    # An authorship row survives on a version or a component (the merge keeps
+    # provenance), so the count has to ask the paper, not the authorship, what a
+    # work is — otherwise one paper with a preprint and a figure reads as three.
     if openalex_id:
         row = db.execute(
-            """
+            f"""
             SELECT COUNT(DISTINCT pa.paper_id) AS count
             FROM publication_authors pa
-            WHERE pa.openalex_id = ?
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE pa.openalex_id = ? AND {standalone_paper_sql('p')}
             """,
             (openalex_id,),
         ).fetchone()
@@ -279,10 +283,12 @@ def _count_publications_via_publication_authors(
 
     if author_name:
         row = db.execute(
-            """
+            f"""
             SELECT COUNT(DISTINCT pa.paper_id) AS count
             FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
             WHERE lower(trim(pa.display_name)) = lower(trim(?))
+              AND {standalone_paper_sql('p')}
             """,
             (author_name,),
         ).fetchone()
@@ -324,7 +330,8 @@ def _count_publications_via_legacy_papers(
     if not where:
         return 0
     row = db.execute(
-        f"SELECT COUNT(DISTINCT p.id) AS count FROM papers p WHERE {where}",
+        f"SELECT COUNT(DISTINCT p.id) AS count FROM papers p "
+        f"WHERE ({where}) AND {standalone_paper_sql('p')}",
         params,
     ).fetchone()
     return int((row["count"] if row else 0) or 0)

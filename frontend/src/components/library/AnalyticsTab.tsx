@@ -1,3 +1,4 @@
+import { useAsyncRefresh } from '@/hooks/useAsyncRefresh'
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
@@ -5,6 +6,7 @@ import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
 import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import {
   api,
@@ -37,7 +39,7 @@ export function AnalyticsTab() {
     // Task 50 M3: the Map section left this tab — send its deep links to the
     // top-level Map page instead of silently landing on Overview.
     if (routeSection === 'map') {
-      window.location.hash = buildHashRoute('map')
+      window.location.hash = buildHashRoute('discovery')
       return
     }
     setSection((SECTIONS as readonly string[]).includes(routeSection) ? routeSection : 'overview')
@@ -45,10 +47,17 @@ export function AnalyticsTab() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['insights'],
-    queryFn: () => api.get<InsightsData>('/insights'),
+    enabled: section === 'overview',
+    queryFn: () => api.get<InsightsData | null>('/insights'),
     staleTime: 60_000,
     retry: 1,
   })
+  const { building, buildError, refresh } = useAsyncRefresh({
+    queryKey: ['insights'],
+    enabled: section === 'overview',
+    request: force => api.post<{ job_id: string | null }>(`/insights/refresh?force=${force}`),
+  })
+
   const { data: aiStatus } = useQuery({
     queryKey: ['ai-status'],
     queryFn: () => api.get<AIStatus>('/ai/status'),
@@ -74,9 +83,8 @@ export function AnalyticsTab() {
     enabled: activeReport === 'impact',
   })
 
-  const showStatsSkeleton = isLoading && !data
-  const showStatsError = isError && !data
-  const isRefreshing = Boolean(data?.stale || data?.rebuilding)
+  const statsError = buildError || (isError ? 'Failed to load analytics data.' : null)
+  const showStatsSkeleton = !data && !statsError && (isLoading || building)
 
   return (
     <div className="space-y-6">
@@ -93,21 +101,19 @@ export function AnalyticsTab() {
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
           </TabsList>
-          {isRefreshing ? (
-            <span
-              className="inline-flex items-center gap-1.5 rounded-full border border-control-edge bg-control-quiet px-2.5 py-1 text-xs text-alma-700"
-              title="Analytics are being recomputed in the background. This view is from the previous snapshot."
-            >
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-alma-folio" aria-hidden />
-              Refreshing…
-            </span>
-          ) : null}
+          {section === 'overview' && (
+            <Button variant="outline" size="sm" disabled={building} onClick={refresh}>
+              {building ? 'Refreshing…' : 'Refresh analytics'}
+            </Button>
+          )}
         </div>
         <TabsContent value="overview" className="mt-4 space-y-6">
+          {statsError && (
+            <ErrorState message={statsError} actionLabel="Retry" onAction={refresh} actionPending={building} />
+          )}
+          {building && data && <p role="status" className="text-sm text-slate-500">Refreshing analytics. Showing the previous snapshot.</p>}
           {showStatsSkeleton ? (
-            <LoadingState message="Loading analytics..." />
-          ) : showStatsError ? (
-            <ErrorState message="Failed to load analytics data." />
+            <LoadingState message="Building analytics…" />
           ) : data ? (
             <InsightsOverviewTab data={data} aiStatus={aiStatus} colors={COLORS} tooltipStyle={TOOLTIP_STYLE} />
           ) : null}

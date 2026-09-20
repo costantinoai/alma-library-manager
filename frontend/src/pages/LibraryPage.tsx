@@ -32,7 +32,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { type TabId, type TabDefinition } from '@/components/library/types'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 
 // Analytics is lazy — Library pays nothing for the charts/graph stack until
@@ -218,7 +218,7 @@ export function LibraryPage() {
     mutationFn: ({ paperId, readingStatus }: { paperId: string; readingStatus: 'reading' | 'done' | 'excluded' | null }) =>
       updateReadingStatus(paperId, readingStatus),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['library-workflow-summary'], ['reading-queue'], ['papers'], ['library-saved'])
+      await invalidateAfterPaperMutation(queryClient)
     },
     onError: () => errorToast('Reading status update failed'),
   })

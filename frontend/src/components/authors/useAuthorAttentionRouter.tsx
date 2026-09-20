@@ -14,6 +14,7 @@ import {
   ReviewProfilesDialog,
 } from '@/components/authors/AuthorsNeedsAttentionSection'
 import { errorToast, useToast } from '@/hooks/useToast'
+import { describeJobLaunch } from '@/lib/activity'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
 export interface AuthorAttentionRouter {
@@ -77,11 +78,7 @@ export function useAuthorAttentionRouter(
         ['activity-operations'],
         ['author-detail', authorId],
       )
-      toast({
-        title:
-          data?.status === 'already_running' ? 'Refresh already running' : 'Refresh queued',
-        description: data?.job_id ? `Job ${data.job_id} will update this author.` : undefined,
-      })
+      toast(describeJobLaunch(data, 'Author refresh'))
     },
     onError: () => errorToast('Error', 'Could not queue refresh.'),
   })

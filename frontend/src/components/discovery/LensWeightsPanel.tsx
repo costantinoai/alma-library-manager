@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, HelpCircle } from 'lucide-react'
 
-import { api, type Lens, type AIStatus } from '@/api/client'
+import { api, getChannelYield, type Lens, type AIStatus } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 
 interface LensWeightsPanelProps {
+  enabled?: boolean
   lens: Lens | null
   onSave: (weights: Record<string, number>) => void
 }
@@ -20,7 +21,7 @@ const CHANNEL_DESCRIPTIONS: Record<string, string> = {
   external: 'OpenAlex related/citing/topic works for out-of-library discovery',
 }
 
-export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
+export function LensWeightsPanel({ lens, onSave, enabled = true }: LensWeightsPanelProps) {
   const [weights, setWeights] = useState<Record<string, number>>({
     lexical: 0.25,
     vector: 0.25,
@@ -28,11 +29,17 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
     external: 0.25,
   })
 
-  const { data: aiStatus } = useQuery({
+  const { data: aiStatus, isError, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['ai-status'],
+    enabled: enabled && !!lens,
+    retry: 1,
     queryFn: () => api.get<AIStatus>('/ai/status'),
     staleTime: 30_000,
   })
+
+  // What the refresh will actually use: these weights scaled by each channel's
+  // measured yield. Read only while the panel is open.
+  const yieldQuery = useQuery({ queryKey: ['channel-yield'], queryFn: getChannelYield, enabled: enabled && !!lens })
 
   const vectorEnabled = aiStatus?.capability_tiers?.tier1_embeddings?.ready ?? false
   const activeModel = aiStatus?.capability_tiers?.tier1_embeddings?.active_model ?? aiStatus?.embeddings?.model
@@ -54,6 +61,10 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
     setWeights((prev) => ({ ...prev, [channel]: value }))
   }
 
+  const learned = yieldQuery.data?.enabled ? yieldQuery.data.channels : null
+  const scaledTotal = CHANNELS.reduce((acc, key) => acc + Number(weights[key] ?? 0) * (learned?.[key]?.multiplier ?? 1), 0)
+  const moved = learned != null && CHANNELS.some((key) => Math.abs((learned[key]?.multiplier ?? 1) - 1) > 0.005)
+
   const normalizeAndSave = () => {
     const total = CHANNELS.reduce((acc, key) => acc + Number(weights[key] ?? 0), 0)
     if (total <= 0) return
@@ -69,6 +80,12 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
       <div className="font-brand text-sm font-semibold text-alma-800">
         Lens Weights
       </div>
+      {isError && (
+        <div role="alert" className="space-y-2 text-sm text-critical-700">
+          <p>Could not check embedding availability.</p>
+          <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>Retry</Button>
+        </div>
+      )}
       <div className="space-y-4">
         {CHANNELS.map((channel) => {
           const isVectorChannel = channel === 'vector'
@@ -102,6 +119,13 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
                   {value.toFixed(2)}
                 </span>
               </div>
+              {moved && learned?.[channel] && scaledTotal > 0 && (
+                <p className="mt-0.5 text-xs text-slate-500" data-testid={`channel-yield-${channel}`}>
+                  {learned[channel].surfaced > 0
+                    ? `${learned[channel].kept} of ${learned[channel].surfaced} surfaced papers kept → ×${learned[channel].multiplier.toFixed(2)}, used as ${((value * learned[channel].multiplier) / scaledTotal).toFixed(2)}`
+                    : `nothing surfaced yet → ×1.00, used as ${(value / scaledTotal).toFixed(2)}`}
+                </p>
+              )}
               <Slider
                 className="mt-2"
                 min={0}
@@ -115,7 +139,7 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
               {disabled && (
                 <p className="mt-1 flex items-center gap-1 text-xs text-warning-600">
                   <AlertCircle className="h-3 w-3" />
-                  Fetch vectors or configure embeddings in Settings
+                  {isLoading ? 'Checking embedding availability…' : isError ? 'Embedding availability unknown' : 'Fetch vectors or configure embeddings in Settings'}
                   {activeModel ? ` (${activeModel})` : ''}
                 </p>
               )}
@@ -123,6 +147,13 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
           )
         })}
       </div>
+      {learned != null && (
+        <p className="text-xs text-slate-500" data-testid="channel-yield-note">
+          {moved
+            ? 'Each refresh scales these weights by how often the papers a channel surfaced were kept (×0.5–×1.5). Switch it off under Settings → Discovery → Retrieval Strategies.'
+            : 'Your history does not yet show the channels differing in what you keep, so these weights are used as set.'}
+        </p>
+      )}
       <Button type="button" size="sm" onClick={normalizeAndSave}>
         Save Weights
       </Button>

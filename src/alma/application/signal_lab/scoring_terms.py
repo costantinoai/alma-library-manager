@@ -48,6 +48,30 @@ to be felt, never enough to replace what your Library said.
 """
 
 
+#: Categorical head → the ranking family whose affinity it folds into.
+CATEGORICAL_HEAD_FAMILY = {"author": "author", "venue": "venue"}
+
+
+def categorical_head_reach_points(settings: dict[str, str] | None) -> dict[str, float]:
+    """The most score points each categorical head can move, at its ceiling
+    setting, under the CURRENT Discovery weights.
+
+    A folded head does not own points the way the region and utility heads do:
+    it moves an affinity by at most :data:`CATEGORICAL_HEAD_MAX_AFFINITY`, and
+    that affinity then counts for its family's weight. So its reach is the
+    family weight's to give — and is 0 when that family's weight is 0. Served
+    with the Lab settings so the card states this number instead of promising
+    the ceiling (it promised "up to 10 points" for a head that could move 1.6).
+    """
+    from alma.application.discovery.ranker import resolve_family_weights
+
+    weights = resolve_family_weights(settings)
+    return {
+        head: round(100.0 * float(weights.get(family, 0.0)) * CATEGORICAL_HEAD_MAX_AFFINITY, 2)
+        for head, family in CATEGORICAL_HEAD_FAMILY.items()
+    }
+
+
 def fold_lab_offsets(
     conn: sqlite3.Connection,
     affinity: dict[str, float],
@@ -88,8 +112,6 @@ def fold_lab_offsets(
     # "the Lab contributes 0" (an unreadable state impersonating an empty one).
     settings = read_settings(conn)
 
-    if str(settings.get("signal_lab.enabled", "true")).lower() != "true":
-        return 0
     points = lab_head_points(settings, weight_key)
     if points <= 0:
         return 0
@@ -120,11 +142,7 @@ def load_lab_scoring_context(
 ) -> dict[str, Any] | None:
     """One-shot load of everything scoring needs. None ⇒ lab contributes 0."""
     from alma.application.discovery.ranker import resolve_lab_points
-    from alma.application.signal_lab.map_terms import utility_confidence
-    from alma.application.signal_lab.settings import is_enabled
-
-    if not is_enabled(conn):
-        return None
+    from alma.application.signal_lab.utility import utility_confidence
     # Same parser the ranker weights with, so the gate and the score can never
     # disagree about whether a head is on.
     if not any(points > 0 for points in resolve_lab_points(settings).values()):

@@ -41,6 +41,7 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
+import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { dimensionBadgeTone, severityLabel } from './healthFormat'
 
@@ -217,10 +218,7 @@ export function HealthDimensionDrilldown({
     onSuccess: async (res) => {
       setSelected(new Set())
       await refreshHealth()
-      toast({
-        title: res.job_id ? 'Fix queued' : 'Nothing to run',
-        description: res.job_id ? `${res.key} on the selected papers (${res.job_id}).` : undefined,
-      })
+      toast(describeMaintenanceLaunch(res, 'Fix for the selected papers'))
     },
     onError: (err) => errorToast('Could not queue fix', String(err)),
   })

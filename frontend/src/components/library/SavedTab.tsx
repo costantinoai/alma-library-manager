@@ -18,12 +18,15 @@ import {
 } from 'lucide-react'
 import {
   api,
+  applyPaperAction,
   bulkAddToCollection,
   bulkRemoveFromLibrary,
   bulkClearRating,
   discoverSimilar,
+  getApiErrorMessage,
   listCollections,
   listSavedPapers,
+  onlineImportSave,
   type Publication,
   type SimilarityResultItem,
   type SimilarityResponse,
@@ -59,10 +62,10 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import {
   invalidateAfterPaperMutation,
-  invalidatePaperSignalFields,
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -314,7 +317,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           ? invalidateQueries(queryClient, ['library-saved'])
           : Promise.all([
               invalidateQueries(queryClient, ['library-saved']),
-              invalidatePaperSignalFields(queryClient),
             ])
       )
       setEditingLike(null)
@@ -344,7 +346,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     onSuccess: (data) => {
       void Promise.all([
         invalidateQueries(queryClient, ['library-saved']),
-        invalidatePaperSignalFields(queryClient),
       ])
       clearSelection()
       toast({ title: 'Rating cleared', description: `${data.affected} paper(s) set to no rating.` })
@@ -379,7 +380,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     mutationFn: ({ paperId, readingStatus }: { paperId: string; readingStatus: '' | 'reading' | 'done' | 'excluded' }) =>
       updateReadingStatus(paperId, readingStatus || null),
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['library-saved'], ['papers'], ['library-workflow-summary'], ['reading-queue'])
+      void invalidateAfterPaperMutation(queryClient)
     },
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })
@@ -416,20 +417,20 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     }
   }, [selectedKeys])
 
+  // "Like" on a similar paper is the `like` action — 4★ plus its feedback
+  // signal — like everywhere else. It used to POST the metadata to
+  // `/library/saved` at 0★ with no signal. A local candidate goes through the
+  // one paper-action route; a network-only candidate through the Find & Add
+  // save route, which resolves it and applies the same contract.
   const handleLikeSimilar = useCallback((item: SimilarityResultItem) => {
-    api.post('/library/saved', {
-      title: item.title,
-      authors: item.authors ?? 'Unknown',
-      year: item.year,
-      url: item.url,
-      doi: item.doi,
-      rating: 0,
-      added_from: 'library_similarity',
-    }).then(() => {
-      void invalidateQueries(queryClient, ['library-saved'], ['papers'], ['library-workflow-summary'])
-      toast({ title: 'Saved', description: `"${item.title}" added to the library.` })
-    }).catch(() => {
-      errorToast('Error', 'Failed to save to the library.')
+    const save = item.paper_id
+      ? applyPaperAction(item.paper_id, 'like', { surface: 'library' })
+      : onlineImportSave({ action: 'like', doi: item.doi, link: item.url, title: item.title })
+    save.then(() => {
+      void invalidateAfterPaperMutation(queryClient)
+      toast({ title: 'Liked', description: `"${item.title}" added to the library.` })
+    }).catch((err: unknown) => {
+      errorToast('Could not like the paper', getApiErrorMessage(err))
     })
   }, [queryClient, toast])
 
@@ -572,7 +573,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 onPivot={() => navigateTo('discovery', { seed: like.id, seedTitle: like.title })}
                 dismissLabel="Remove"
                 dismissTitle="Remove from library"
-                reaction={(like.rating ?? 0) >= 5 ? 'love' : (like.rating ?? 0) === 4 ? 'like' : null}
+                reaction={reactionFromRating(like.rating)}
                 isSaved={like.status === 'library'}
               >
                 {/* No date row here: the card prints the publication date

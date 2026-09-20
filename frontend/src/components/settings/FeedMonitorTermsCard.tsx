@@ -50,6 +50,7 @@ import {
 import { StatusBadge } from '@/components/ui/status-badge'
 import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { describeJobLaunch } from '@/lib/activity'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn, formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
@@ -135,19 +136,15 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
         ['activity-operations'],
       )
       const status = String(result?.status ?? result?.operation?.status ?? '')
-      toast({
-        title:
-          status === 'already_running'
-            ? 'Monitor refresh already running'
-            : status === 'completed' || status === 'noop'
-              ? 'Monitor refreshed'
-              : 'Monitor refresh queued',
-        description:
-          result?.message ||
-          (status === 'completed' || status === 'noop'
-            ? 'Recent matching papers were checked.'
-            : 'Track the refresh in Activity. Feed data will update automatically when it finishes.'),
-      })
+      // A small monitor can refresh inline and come back `completed`; only a
+      // queued run is a launch.
+      toast(
+        status === 'completed' || status === 'noop'
+          ? { title: 'Monitor refreshed', description: result?.message || 'Recent matching papers were checked.' }
+          : describeJobLaunch({ ...result, status }, 'Monitor refresh', {
+              startedDetail: 'Feed data will update automatically when it finishes.',
+            }),
+      )
     },
     onError: () => errorToast('Could not refresh monitor'),
   })

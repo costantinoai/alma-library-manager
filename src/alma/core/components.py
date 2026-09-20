@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Callable
+from contextlib import nullcontext
 
 from alma.core.paper_groups import (
     absorb_paper_group,
@@ -266,7 +268,10 @@ def link_orphan_components(
     return linked
 
 
-def backfill_components(conn: sqlite3.Connection) -> dict:
+def backfill_components(
+    conn: sqlite3.Connection, *, section=None, on_error: Callable[[str, Exception], None] | None = None,
+    normalize: bool = True,
+) -> dict:
     """One-time reconcile of existing rows into the part-of model.
 
     For every paper: (1) classify it (set ``component_type`` /
@@ -284,6 +289,8 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
         "SELECT id, doi, work_type, title, parent_paper_id, component_type FROM papers"
     ).fetchall()
     classified = linked = cleaned = 0
+    errors = 0
+    scope = section or (lambda _name: nullcontext())
     for row in rows:
         sets: list[str] = []
         params: list[object] = []
@@ -295,11 +302,9 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             if component_type is not None:
                 sets.append("component_type = ?")
                 params.append(component_type)
-                classified += 1
                 if parent_paper_id and row["parent_paper_id"] is None:
                     sets.append("parent_paper_id = ?")
                     params.append(parent_paper_id)
-                    linked += 1
         elif row["parent_paper_id"] is None:
             # Already classified but unlinked — a suffix-orphan whose parent may
             # have entered the corpus since. Re-derive the parent from its own
@@ -310,7 +315,6 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             if parent_paper_id:
                 sets.append("parent_paper_id = ?")
                 params.append(parent_paper_id)
-                linked += 1
 
         title = row["title"]
         if title:
@@ -318,11 +322,30 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             if cleaned_title and cleaned_title != title:
                 sets.append("title = ?")
                 params.append(cleaned_title)
-                cleaned += 1
 
         if sets:
             params.append(row["id"])
-            conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
+            try:
+                with scope("classify:" + str(row["id"])):
+                    conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
+                    current = conn.execute("SELECT component_type, parent_paper_id FROM papers WHERE id = ?", (row["id"],)).fetchone()
+                    if current["component_type"]:
+                        if current["parent_paper_id"]:
+                            absorb_paper_group(conn, str(row["id"]), str(current["parent_paper_id"]), reason="component_reconcile")
+                        else:
+                            purge_orphan_subordinate_state(conn, str(row["id"]))
+                classified += int("component_type = ?" in sets)
+                linked += int("parent_paper_id = ?" in sets)
+                cleaned += int("title = ?" in sets)
+            except Exception as exc:
+                if on_error is None:
+                    raise
+                errors += 1
+                on_error(str(row["id"]), exc)
+
+    if not normalize:
+        return {"scanned": len(rows), "classified": classified, "linked": linked,
+                "cleaned": cleaned, "errors": errors}
 
     # Normalize every relationship and strip all independent app state now —
     # not only vectors/clusters and not on a later maintenance run.

@@ -370,10 +370,15 @@ def load_library_preference_inputs(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Load the whole-Library taste inputs (used by the ``library_global`` lens).
 
-    Library-wide heuristic: ratings ≥4 (and unrated, 0) are positive, 1-2 are
-    negative, and lukewarm rating-3 papers are excluded so they don't dominate
-    the Library's taste. Context-scoped lenses use :func:`split_preference_pubs`
-    instead — see the caller in ``refresh_lens_recommendations``.
+    ONE rule with every other lens (:func:`split_preference_pubs`): a paper in
+    the Library is an endorsement unless it was explicitly rated down (1-2).
+
+    Until 2026-09-18 rating-3 papers were excluded as "lukewarm" — but a plain
+    Save stamps rating 3 (``ACTION_RATINGS["add"]``), so the default way of
+    keeping a paper contributed nothing: on the dev Library 106 of 141 saves
+    were invisible to the centroid, exemplars and lexical profile, and taste was
+    learned from 35 papers. Product decision (user, 2026-09-18): an unrated save
+    is a positive.
     """
     rows = db.execute(
         f"""SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
@@ -383,10 +388,7 @@ def load_library_preference_inputs(
            ORDER BY COALESCE(added_at, '') DESC"""
     ).fetchall()
     library_pubs = [dict(r) for r in rows]
-    positive_pubs = [dict(r) for r in rows if (r["rating"] or 0) >= 4 or (r["rating"] or 0) == 0]
-    negative_pubs = [dict(r) for r in rows if 1 <= int(r["rating"] or 0) <= 2]
-    if library_pubs and not any((r["rating"] or 0) >= 4 for r in rows):
-        positive_pubs = list(library_pubs)
+    positive_pubs, negative_pubs = split_preference_pubs(library_pubs)
     return library_pubs, positive_pubs, negative_pubs
 
 

@@ -342,3 +342,46 @@ def count_outcomes(records: Iterable[RecommendationOutcome]) -> OutcomeCounts:
         saved=saved,
         seen_action=seen_action,
     )
+
+
+def recommendation_engagement(db: sqlite3.Connection) -> dict:
+    """Read Discovery engagement without building or persisting Insights."""
+    rec_data = {
+        "total": 0,
+        "seen": 0,
+        "liked": 0,
+        "dismissed": 0,
+        "engagement_rate": 0.0,
+        "by_lens": [],
+    }
+    if table_exists(db, "recommendations"):
+        # I-21/D6: `liked`/`dismissed` come from the authoritative outcome
+        # projection (feedback/ratings/lifecycle), not the like/dismiss
+        # user_action that D6 never stamps. `seen` is recorded exposure
+        # from discovery_impressions. `by_lens` (volume + avg score) is provenance, not
+        # engagement, so it stays a plain group-by.
+        counts = count_outcomes(build_recommendation_outcomes(db))
+
+        rows = db.execute(
+            f"""
+            SELECT COALESCE(r.lens_id, 'unknown') AS lens_id,
+                   COUNT(*) AS count,
+                   ROUND(AVG(r.score), 3) AS avg_score
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE {standalone_paper_sql_for_db(db, "p")}
+            GROUP BY r.lens_id
+            ORDER BY count DESC
+            """
+        ).fetchall()
+        by_lens = [dict(r) for r in rows]
+
+        rec_data = {
+            "total": counts.total,
+            "seen": counts.seen,
+            "liked": counts.positive,
+            "dismissed": counts.dismissed,
+            "engagement_rate": counts.engagement_rate,
+            "by_lens": by_lens,
+        }
+    return rec_data

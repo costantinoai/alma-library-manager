@@ -99,6 +99,15 @@ export function ApiBudgetCard({
           </AlertDescription>
         </Alert>
       ) : null}
+      {/* Task 85: on a dev or worktree copy the scheduler starts no network work,
+          so say so instead of leaving its background repairs looking stalled. */}
+      {policy && !policy.unattended_enabled ? (
+        <p className="text-xs text-slate-500">
+          Scheduled network work is off on this copy (profile “{policy.profile}”): background
+          refreshes and repairs that call external services won’t start on their own. Runs you
+          start still work. Set ALMA_UNATTENDED_NETWORK=1 to allow them here.
+        </p>
+      ) : null}
       {/* 42.6: a background op that yielded to user activity — informational, so a
           paused system reads as "paused, resumes when idle", not stalled. */}
       {pause ? (

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Search, XCircle } from 'lucide-react'
 
 import {
-  addToLibrary,
+  applyPaperAction,
   getReadingQueue,
   type Publication,
   updateReadingStatus,
@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { MetricTile, PaperCard, type PaperCardPaper } from '@/components/shared'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterPaperMutation } from '@/lib/queryHelpers'
 import { formatDate } from '@/lib/utils'
 
 type ReadingStatusValue = 'clear' | 'reading' | 'done' | 'excluded'
@@ -85,7 +85,7 @@ export function ReadingListTab() {
     mutationFn: ({ paperId, nextStatus }: { paperId: string; nextStatus: Exclude<ReadingStatusValue, 'clear'> | null }) =>
       updateReadingStatus(paperId, nextStatus),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['reading-queue'], ['library-workflow-summary'], ['papers'], ['library-saved'])
+      await invalidateAfterPaperMutation(queryClient)
     },
     onError: () => {
       errorToast('Error', 'Failed to update reading status.')
@@ -93,9 +93,11 @@ export function ReadingListTab() {
   })
 
   const saveToLibraryMutation = useMutation({
-    mutationFn: (paperId: string) => addToLibrary(paperId, 0),
+    // "Save" is the `add` action on the one paper-action route: 3★ and a save
+    // event, as everywhere else. It used `POST /library/saved` at 0★.
+    mutationFn: (paperId: string) => applyPaperAction(paperId, 'add', { surface: 'library' }),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['reading-queue'], ['library-workflow-summary'], ['papers'], ['library-saved'])
+      await invalidateAfterPaperMutation(queryClient)
       toast({ title: 'Saved', description: 'Paper added to the saved library.' })
     },
     onError: () => {

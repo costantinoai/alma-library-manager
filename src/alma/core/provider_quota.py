@@ -4,11 +4,18 @@ Planning, UI disablement, scheduler admission, and transport hard stops consume
 this module. OpenAlex exposes a finite daily pool in credit units; other sources
 currently expose only rate limits and therefore report an unknown/unbounded
 daily pool.
+
+An unattended run also HOLDS BACK part of that pool for the user
+(:func:`background_reserve`). The reserve is bound for the length of the run and
+read by the transport hard stop, so it applies to every call the run makes
+rather than to the handful of loops that remember to ask.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import contextvars
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -243,8 +250,54 @@ def refresh_quota_forecast(
     )
 
 
+# Credits an UNATTENDED run must leave for the user, bound for the length of that
+# run (task 85). Zero on the interactive path and on a run the user asked for, so
+# their own work may spend the pool down to the provider's real limit.
+_background_reserve: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "alma_background_reserve", default=0
+)
+
+
+@contextmanager
+def background_reserve(reserve: int) -> Iterator[None]:
+    """Hold back *reserve* credits for the user while an unattended run works.
+
+    The scheduler binds this around a run it starts by itself
+    (`scheduler.scheduled_network_job`), and every paid call that run makes —
+    directly or through a fanned-out worker, which
+    `core.concurrency.bounded_thread_pool` republishes it into — then stops that
+    many credits early.
+
+    Why a bound context rather than a check in each loop: the admission gate only
+    answers "may this run START". A sweep admitted with headroom could still
+    spend the pool to zero, and the periodic runners had no mid-run check at all.
+    A loop that must remember to ask is a loop that will forget.
+
+    Deliberately NOT bound around the sweeps the hydration drain and the idle
+    healer schedule. Those already stop at this same reserve through
+    `scheduler.make_background_cancel_check`, and they stop GRACEFULLY: they
+    finish the item in hand, stamp a retryable `credit_limit` outcome and leave
+    their pending work in the pool. Binding a hard stop over that would turn a
+    clean yield into a failed job mid-batch, which is worse, not safer.
+    """
+    token = _background_reserve.set(max(0, int(reserve)))
+    try:
+        yield
+    finally:
+        _background_reserve.reset(token)
+
+
+def active_background_reserve() -> int:
+    """Credits the current run must leave for the user (0 off the unattended path)."""
+    return max(0, int(_background_reserve.get()))
+
+
 def provider_can_start(source: str, *, required: int = 1) -> bool:
-    """Cheap source-lane admission used by interactive fallback search."""
+    """Cheap source-lane admission used by interactive fallback search.
+
+    Inside an unattended run the active reserve is added to what this call
+    needs, so the run stops while the user's headroom is still intact.
+    """
 
     if not network_access_enabled():
         return False
@@ -253,7 +306,9 @@ def provider_can_start(source: str, *, required: int = 1) -> bool:
     from alma.core.http_sources import provider_remaining_credits
 
     remaining = provider_remaining_credits(OPENALEX)
-    return remaining is None or remaining >= max(0, int(required))
+    if remaining is None:
+        return True
+    return remaining >= max(0, int(required)) + active_background_reserve()
 
 
 def require_provider_quota(source: str, *, required: int = 1) -> None:
@@ -264,7 +319,11 @@ def require_provider_quota(source: str, *, required: int = 1) -> None:
     from alma.core.http_sources import provider_remaining_credits
 
     remaining = provider_remaining_credits(source)
+    reserve = active_background_reserve()
+    held = (
+        f", {reserve} reserved for your own operations" if reserve else ""
+    )
     raise ProviderQuotaExceededError(
         f"{source} quota cannot cover this request "
-        f"({max(0, int(required))} required, {remaining or 0} remaining)."
+        f"({max(0, int(required))} required, {remaining or 0} remaining{held})."
     )

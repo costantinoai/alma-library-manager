@@ -133,7 +133,7 @@ export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
   'lab-author-down': { tone: 'warning', icon: Users, hint: 'An author your answers steer away from' },
   'lab-boundary': { tone: 'accent', icon: Split, hint: 'Region boundaries your answers moved' },
   'lab-fit': { tone: 'accent', icon: Scale, hint: 'What the current fit was trained on' },
-  'lab-coverage': { tone: 'accent', icon: Compass, hint: 'How much of the map the rounds have visited' },
+  'lab-coverage': { tone: 'accent', icon: Compass, hint: 'How many of the corpus regions the rounds have visited' },
 
   pdf: { tone: 'neutral', icon: FileCheck, hint: 'A PDF is kept for this paper; its text names this paper' },
   'pdf-unverified': {

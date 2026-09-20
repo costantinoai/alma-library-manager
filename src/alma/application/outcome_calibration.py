@@ -1,17 +1,14 @@
-"""Outcome-based reweighting of retrieval sources.
+"""Outcome-based reweighting from observed follow / reject outcomes.
 
-Each recommendation row is stamped with `source_type`, `source_api`,
-`source_key`, `branch_mode` at retrieval time. Each downstream user
-action lands in `feedback_events` keyed by paper_id. Joining the two
-gives a count of positive vs negative outcomes per source attribute.
-We smooth with Bayesian priors so a fresh DB (zero traffic) returns a
-neutral 1.0 multiplier — no behavior change until enough events exist
-to move the prior. Old events fall outside the window and stop counting.
+Today this owns the **author-suggestion bucket** calibration: each suggestion
+bucket's smoothed follow rate becomes a multiplier in ``MULTIPLIER_BAND``. A
+fresh DB returns a neutral 1.0 — no behaviour change until events exist.
 
-The output is a `{source_key: multiplier}` map in `[lo, hi]` (default
-`[0.5, 1.5]`) intended to multiply `source_relevance` before the
-family ranker runs. The cap stops a single bad week from killing a
-source; the floor stops a hot week from making one source dominate.
+The paper side lives elsewhere since 2026-07-27: how a paper reached the user
+is exposure and stays out of the score, so the per-source score multiplier
+that used to be computed here is gone. Its successor scales *retrieval*
+channel weights instead — ``application/discovery/channel_yield.py`` — and
+shares this module's band.
 """
 
 from __future__ import annotations
@@ -20,10 +17,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from alma.application.signal_projection import normalize_feedback_event_value
 from alma.core.scoring_math import age_decay, clamp
 from alma.core.scoring_math import days_since as _days_since
-from alma.core.sql_helpers import standalone_paper_sql
 
 # Bayesian priors. α=β means the prior peaks at 0.5 (no opinion); a
 # higher sum means more "data" is needed to move the smoothed estimate
@@ -36,6 +31,9 @@ _DEFAULT_WINDOW_DAYS = 180.0
 _DEFAULT_HALF_LIFE_DAYS = 60.0
 _DEFAULT_MULTIPLIER_LO = 0.5
 _DEFAULT_MULTIPLIER_HI = 1.5
+#: The band every outcome-derived multiplier stays in: a bad week cannot kill a
+#: source and a hot week cannot make one dominate.
+MULTIPLIER_BAND = (_DEFAULT_MULTIPLIER_LO, _DEFAULT_MULTIPLIER_HI)
 
 
 @dataclass
@@ -52,20 +50,6 @@ class OutcomeCalibration:
     positive_counts: dict[str, float] = field(default_factory=dict)
     negative_counts: dict[str, float] = field(default_factory=dict)
     impressions: dict[str, int] = field(default_factory=dict)
-
-
-_SOURCE_KEY_EXPR = (
-    "COALESCE(NULLIF(TRIM(source_api), ''), NULLIF(TRIM(source_type), ''))"
-)
-# Calibration dimensions supported on the recommendations table. Each
-# maps a logical name to the SQL key expression that picks the column
-# (or composite COALESCE) used as the calibration key. Add new
-# dimensions here, not by writing parallel functions.
-_DIMENSION_KEY_EXPR: dict[str, str] = {
-    "source_api": _SOURCE_KEY_EXPR,
-    "branch_mode": "NULLIF(TRIM(branch_mode), '')",
-    "branch_id": "NULLIF(TRIM(branch_id), '')",
-}
 
 
 def _finalize_calibration(out, *, multiplier_lo: float, multiplier_hi: float):
@@ -85,103 +69,6 @@ def _finalize_calibration(out, *, multiplier_lo: float, multiplier_hi: float):
         multiplier = center + spread * ((quality * 2.0) - 1.0)
         out.multipliers[key] = clamp(multiplier, multiplier_lo, multiplier_hi)
     return out
-
-
-def compute_outcome_calibration(
-    db: sqlite3.Connection,
-    *,
-    dimension: str = "source_api",
-    window_days: float = _DEFAULT_WINDOW_DAYS,
-    half_life_days: float = _DEFAULT_HALF_LIFE_DAYS,
-    multiplier_lo: float = _DEFAULT_MULTIPLIER_LO,
-    multiplier_hi: float = _DEFAULT_MULTIPLIER_HI,
-) -> OutcomeCalibration:
-    """Compute per-key quality multipliers from observed outcomes.
-
-    `dimension` selects the calibration axis: `source_api` (default,
-    paper-Discovery API quality), `branch_mode` (retrieval lane:
-    `core` / `explore` / `safe`), or `branch_id` (per-branch outcome
-    quality). All three share the same Bayesian smoothing and time-
-    decay shape — the dimension just changes which column groups
-    the events.
-
-    Returns an empty result when the necessary tables are missing
-    (fresh DB, mid-migration) or the dimension is unknown. Callers
-    default missing keys to a 1.0 multiplier — "no opinion" rather
-    than "downweight".
-    """
-    out = OutcomeCalibration()
-    key_expr = _DIMENSION_KEY_EXPR.get(dimension)
-    if key_expr is None:
-        return out
-    # Both queries reference the recommendations columns by bare name —
-    # `feedback_events` doesn't share any of (source_api, source_type,
-    # branch_mode, branch_id) so SQLite resolves the bare references
-    # unambiguously without needing the `r.` prefix.
-    try:
-        rows = db.execute(
-            f"""
-            SELECT
-                {key_expr} AS dim_key,
-                fe.event_type AS event_type,
-                fe.value      AS event_value,
-                fe.created_at AS created_at
-            FROM recommendations r
-            JOIN papers p ON p.id = r.paper_id
-            JOIN feedback_events fe
-              ON fe.entity_id = r.paper_id
-             AND fe.entity_type IN ('publication', 'paper')
-            WHERE {key_expr} IS NOT NULL
-              AND {standalone_paper_sql('p')}
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return out
-
-    now = datetime.now(timezone.utc)
-    impression_rows = []
-    try:
-        impression_rows = db.execute(
-            f"""
-            SELECT
-                {key_expr} AS dim_key,
-                COUNT(*) AS impressions
-            FROM recommendations r
-            JOIN papers p ON p.id = r.paper_id
-            WHERE {key_expr} IS NOT NULL
-              AND {standalone_paper_sql('p')}
-            GROUP BY 1
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        impression_rows = []
-    for row in impression_rows:
-        key = str(row["dim_key"] or "").strip().lower()
-        if key:
-            out.impressions[key] = int(row["impressions"] or 0)
-
-    for row in rows:
-        dim_key = str(row["dim_key"] or "").strip().lower()
-        if not dim_key:
-            continue
-        signal = normalize_feedback_event_value(row["event_type"], row["event_value"])
-        if signal == 0.0:
-            continue
-        age_days = _days_since(row["created_at"], now)
-        if age_days is not None and age_days > window_days:
-            continue
-        weight = age_decay(age_days, half_life_days=half_life_days)
-        if signal > 0:
-            out.positive_counts[dim_key] = (
-                out.positive_counts.get(dim_key, 0.0) + signal * weight
-            )
-        else:
-            out.negative_counts[dim_key] = (
-                out.negative_counts.get(dim_key, 0.0) + abs(signal) * weight
-            )
-
-    return _finalize_calibration(out, multiplier_lo=multiplier_lo, multiplier_hi=multiplier_hi)
-
 
 
 def compute_author_bucket_calibration(
@@ -281,49 +168,3 @@ def compute_author_bucket_calibration(
             out.impressions[bucket] = int(row["n"] or 0)
 
     return _finalize_calibration(out, multiplier_lo=multiplier_lo, multiplier_hi=multiplier_hi)
-
-
-def compose_calibration_multipliers(
-    *multipliers: float,
-    multiplier_lo: float = _DEFAULT_MULTIPLIER_LO,
-    multiplier_hi: float = _DEFAULT_MULTIPLIER_HI,
-) -> float:
-    """Combine N independent calibration multipliers into one band-limited value.
-
-    Each individual multiplier sits in `[lo, hi]` (default `[0.5, 1.5]`).
-    Naively multiplying three of them could overshoot to `3.375x` or
-    crash to `0.125x`. We compose in log-space so neutral inputs (1.0)
-    are identity, then clamp the result back into the same band so a
-    candidate hot on three independent axes still maxes at `1.5x` —
-    the same ceiling a single-axis hot signal would have. This keeps
-    one axis from quietly dominating the overall multiplier when N>1.
-    """
-    import math
-
-    log_sum = 0.0
-    for m in multipliers:
-        if m <= 0:
-            continue
-        log_sum += math.log(m)
-    composite = math.exp(log_sum) if multipliers else 1.0
-    return clamp(composite, multiplier_lo, multiplier_hi)
-
-
-def calibration_multiplier_for(
-    calibration: OutcomeCalibration | None,
-    source_api: str | None,
-    source_type: str | None,
-) -> float:
-    """Return the multiplier for a single candidate.
-
-    Falls through `source_api` → `source_type` → 1.0 (no calibration).
-    Callers thread this in once per candidate.
-    """
-    if calibration is None or not calibration.multipliers:
-        return 1.0
-    for key in (source_api, source_type):
-        if key:
-            normalized = str(key).strip().lower()
-            if normalized in calibration.multipliers:
-                return calibration.multipliers[normalized]
-    return 1.0
