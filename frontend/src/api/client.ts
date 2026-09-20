@@ -3149,9 +3149,12 @@ export function paperPdfUrl(paperId: string): string {
 }
 
 /** The paper's PDF state, read from its `/details` payload (one owner). */
+export function getPaperPdfDetails(paperId: string): Promise<{ title: string; pdf: PaperPdfState }> {
+  return api.get(`/papers/${encodeURIComponent(paperId)}/details`)
+}
+
 export async function getPaperPdfState(paperId: string): Promise<PaperPdfState> {
-  const details = await api.get<{ pdf: PaperPdfState }>(`/papers/${encodeURIComponent(paperId)}/details`)
-  return details.pdf
+  return (await getPaperPdfDetails(paperId)).pdf
 }
 
 export function fetchPaperPdf(paperId: string): Promise<JobEnvelope> {
@@ -3174,6 +3177,26 @@ export function importPdf(file: File): Promise<JobEnvelope> {
 
 export function retryPdfImport(uploadId: string, hint: { doi?: string; title?: string }): Promise<JobEnvelope> {
   return api.post<JobEnvelope>(`/library/import/pdf/uploads/${encodeURIComponent(uploadId)}`, hint)
+}
+
+/** A dropped PDF ALMa could not identify, kept server-side until it is retried or given up. */
+export interface PendingPdfUpload {
+  upload_id: string
+  filename: string
+  sha256: string
+  bytes: number
+  staged_at: string
+}
+
+/** The unresolved uploads still waiting for a DOI or title (newest first). */
+export async function listPendingPdfUploads(): Promise<PendingPdfUpload[]> {
+  const resp = await api.get<{ uploads: PendingPdfUpload[] }>('/library/import/pdf/uploads')
+  return resp.uploads ?? []
+}
+
+/** Give up on an unresolved upload: the staged file and its sidecar go. */
+export function discardPdfUpload(uploadId: string): Promise<{ status: string; upload_id: string }> {
+  return api.delete(`/library/import/pdf/uploads/${encodeURIComponent(uploadId)}`)
 }
 
 export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {

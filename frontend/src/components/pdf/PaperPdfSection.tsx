@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { FileSearch, Loader2, Paperclip } from 'lucide-react'
 
 import {
   deletePaperPdf,
   fetchPaperPdf,
-  getPaperPdfState,
   paperPdfUrl,
   uploadPaperPdf,
   type PaperPdfState,
@@ -17,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { usePdfFetchEnabled } from '@/hooks/usePdfSources'
+import { usePaperPdf } from '@/hooks/usePaperPdf'
 import { usePdfJob } from '@/hooks/usePdfJob'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { pdfChip, pdfSourceLabel } from '@/lib/pdf'
@@ -43,17 +43,9 @@ export function PaperPdfSection({ paperId, pdf }: PaperPdfSectionProps) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
-  const [state, setState] = useState<PaperPdfState | null>(pdf ?? null)
-
-  useEffect(() => setState(pdf ?? null), [pdf])
-
-  const refresh = async () => {
-    try {
-      setState(await getPaperPdfState(paperId))
-    } finally {
-      void queryClient.invalidateQueries({ queryKey: ['paper-pdf', paperId] })
-    }
-  }
+  const pdfQuery = usePaperPdf(paperId, pdf)
+  const state = pdfQuery.data?.pdf
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['paper-pdf', paperId] })
 
   const find = async () => {
     try {
@@ -140,6 +132,9 @@ export function PaperPdfSection({ paperId, pdf }: PaperPdfSectionProps) {
           <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
           {job.message ?? 'Working…'}
         </p>
+      )}
+      {pdfQuery.isError && (
+        <p role="alert" className="mt-2 text-xs text-critical-700">Could not refresh PDF status. Reopen this paper to retry.</p>
       )}
       {state?.file_missing && (
         <p className="mt-2 text-xs text-slate-500">The kept file is missing — find or attach it again.</p>

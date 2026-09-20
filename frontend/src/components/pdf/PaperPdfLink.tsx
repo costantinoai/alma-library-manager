@@ -1,6 +1,5 @@
 import { FileText } from 'lucide-react'
 
-import { usePdfFetchEnabled } from '@/hooks/usePdfSources'
 import { buildReaderHref } from '@/lib/hashRoute'
 
 interface PaperPdfLinkProps {
@@ -11,15 +10,14 @@ interface PaperPdfLinkProps {
 
 /**
  * The one "open this paper's PDF" link, for card headers and table title
- * cells alike. Renders nothing unless a PDF source plugin is on.
+ * cells alike. Local files remain accessible with every fetch plugin off.
  *
  * A real link, not a button: it opens the PDF handoff page in a NEW tab from
  * the tap itself (phones block tabs opened after an async wait). That page
  * opens the kept PDF at once, or finds it first.
  */
 export function PaperPdfLink({ paperId, className, iconClassName = 'h-3 w-3' }: PaperPdfLinkProps) {
-  const enabled = usePdfFetchEnabled()
-  if (!enabled || !paperId) return null
+  if (!paperId) return null
   return (
     <a
       href={buildReaderHref(paperId)}

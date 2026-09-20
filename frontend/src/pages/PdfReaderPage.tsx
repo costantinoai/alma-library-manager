@@ -2,18 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileSearch, Loader2, Paperclip, RotateCw } from 'lucide-react'
 
 import {
-  api,
   ApiError,
   fetchPaperPdf,
   paperPdfUrl,
   uploadPaperPdf,
-  type PaperPdfState,
   type PdfFetchResult,
 } from '@/api/client'
 import { PdfAttemptItem } from '@/components/pdf/PdfAttemptItem'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SurfaceProvider } from '@/components/ui/surface'
+import { usePaperPdf } from '@/hooks/usePaperPdf'
 import { usePdfJob } from '@/hooks/usePdfJob'
 
 type Phase = 'loading' | 'opening' | 'working' | 'not-found' | 'no-source' | 'error'
@@ -31,8 +30,10 @@ type Phase = 'loading' | 'opening' | 'working' | 'not-found' | 'no-source' | 'er
  */
 export function PdfReaderPage({ paperId }: { paperId: string }) {
   const [phase, setPhase] = useState<Phase>('loading')
-  const [title, setTitle] = useState('')
-  const [pdf, setPdf] = useState<PaperPdfState | null>(null)
+  const pdfQuery = usePaperPdf(paperId)
+  const { refetch } = pdfQuery
+  const title = pdfQuery.data?.title
+  const pdf = pdfQuery.data?.pdf
   const [error, setError] = useState('')
   const job = usePdfJob()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -44,13 +45,9 @@ export function PdfReaderPage({ paperId }: { paperId: string }) {
   }, [paperId])
 
   const load = useCallback(async () => {
-    const details = await api.get<{ title: string; pdf: PaperPdfState }>(
-      `/papers/${encodeURIComponent(paperId)}/details`,
-    )
-    setTitle(details.title)
-    setPdf(details.pdf)
-    return details.pdf
-  }, [paperId])
+    const result = await refetch({ throwOnError: true })
+    return result.data!.pdf
+  }, [refetch])
 
   const find = useCallback(async () => {
     setPhase('working')
@@ -87,20 +84,24 @@ export function PdfReaderPage({ paperId }: { paperId: string }) {
     [job, open, paperId],
   )
 
+  // The shared query owns the read; its FIRST settled result decides the page.
+  // (Fetching again here would mean two `/details` calls on every reader open.)
   useEffect(() => {
     if (started.current) return
+    if (pdfQuery.isError) {
+      started.current = true
+      const err = pdfQuery.error
+      setError(err instanceof ApiError && err.status === 404 ? 'This paper is not in ALMa.' : String(err))
+      setPhase('error')
+      return
+    }
+    const state = pdfQuery.data?.pdf
+    if (!state) return
     started.current = true
-    load()
-      .then((state) => {
-        if (state.url) open()
-        else if (state.attempts.length === 0) void find()
-        else setPhase('not-found')
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError && err.status === 404 ? 'This paper is not in ALMa.' : String(err))
-        setPhase('error')
-      })
-  }, [find, load, open])
+    if (state.url) open()
+    else if (state.attempts.length === 0) void find()
+    else setPhase('not-found')
+  }, [find, open, pdfQuery.data, pdfQuery.error, pdfQuery.isError])
 
   return (
     <div className="grid min-h-[100dvh] place-items-center p-4">

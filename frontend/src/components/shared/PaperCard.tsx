@@ -15,14 +15,12 @@ import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
 import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/api/client'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
-import { usePdfFetchEnabled } from '@/hooks/usePdfSources'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 
 /** The card header's small round icon controls (PDF link, Discover similar).
- *  The PDF link renders only when a PDF source is on; `pdfFetchEnabled`
- *  keeps the header slot from collapsing around it. */
+ *  Local PDF access is independent of fetch plugins. */
 const HEADER_ICON_BUTTON = cn(
   'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-sm transition-colors duration-150',
   'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
@@ -260,7 +258,6 @@ export function PaperCard({
   const isCompact = effectiveSize === 'compact'
   const isDetailed = effectiveSize === 'detailed'
   const showAbstractByDefault = forceShowAbstract || isDetailed
-  const pdfFetchEnabled = usePdfFetchEnabled()
   const [showBreakdown, setShowBreakdown] = useState(isDetailed)
   const [showAbstract, setShowAbstract] = useState(showAbstractByDefault)
 
@@ -442,12 +439,12 @@ export function PaperCard({
           <div className="min-w-0 flex-1">
             {/* Title */}
             <div className="flex items-start gap-1.5">
-              {/* Trailing header slot — pivot ("Discover similar") sits here as
-                  a small icon button so it never costs a full action row. Any
-                  caller-supplied trailingHeader (e.g. Library's reading-status
-                  pill) renders alongside it; if neither is present the slot
-                  collapses entirely. */}
-              {(onPivot || trailingHeader || pdfFetchEnabled) && (
+              {/* Trailing header slot — the PDF link and the pivot ("Discover
+                  similar") sit here as small icon buttons so they never cost a
+                  full action row. Any caller-supplied trailingHeader (e.g.
+                  Library's reading-status pill) renders alongside them; with no
+                  paper id and nothing supplied, the slot collapses entirely. */}
+              {(onPivot || trailingHeader || paper.id) && (
                 <div
                   className="ml-auto order-last flex shrink-0 items-center gap-1.5"
                   onClick={(e) => e.stopPropagation()}
