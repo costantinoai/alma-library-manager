@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e:home": "node e2e/home-desk.spec.mjs",
+    "e2e:plugins": "node e2e/plugins-catalogue.spec.mjs",
     "e2e:signal-lab": "node e2e/signal-lab.spec.mjs"
   },
   "dependencies": {

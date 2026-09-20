@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -126,6 +125,10 @@ class EmailNotifier:
     # ---- SMTP plumbing ---------------------------------------------------
     def _connect(self):
         """Open an SMTP connection (implicit-TLS on 465, STARTTLS otherwise)."""
+        # Imported here, not at module scope: reading "is email set up?" must
+        # not pull the transport in. A switched-off plugin loads no mail stack.
+        import smtplib
+
         from alma.core.network_policy import require_network_access
 
         require_network_access("email")
