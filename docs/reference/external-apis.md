@@ -297,6 +297,26 @@ metadata fallback when OpenAlex doesn't have a paper.
 * **Used as a fallback**, not the primary path. Most papers resolve
   through OpenAlex first.
 
+## DataCite
+
+[DataCite](https://api.datacite.org/) registers the DOIs Crossref does
+not: datasets, software, and the supplementary material deposited with
+Zenodo, figshare, Dryad and OSF.
+
+* **Endpoint used**: `/dois/{doi}` — one lookup per DOI
+  (`discovery.datacite.fetch_parent_dois`).
+* **What it is for**: the `IsSupplementTo` relation names the article a
+  deposit belongs to. That is the only relation trusted — `IsPartOf`
+  usually names the collection or the journal, which would turn a real
+  article into a component (the same decision Crossref's
+  `is-supplement-to` rule documents).
+* **When it runs**: Phase 2 of the corpus rehydrator, for DOIs Crossref
+  did not resolve, capped per sweep. A paper Crossref knows never
+  reaches DataCite.
+* **No key, no quota**: politeness only — paced like Crossref
+  (`core/http_sources.py`). A registry outage is logged and the DOI is
+  retried on a later sweep; it never fails the sweep.
+
 ## Europe PMC
 
 [Europe PMC](https://europepmc.org/RestfulWebService) indexes PubMed/MEDLINE,

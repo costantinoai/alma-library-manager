@@ -424,6 +424,14 @@ def init_db_schema() -> None:
             ]:
                 _safe_execute(conn, idx_sql)
 
+            # The relationship pointers guard themselves: no self-link, no
+            # pointer to a paper that is not there. One owner for the DDL,
+            # shared with migration 42 (`core.paper_groups`).
+            from alma.core.paper_groups import PAPER_GROUP_POINTER_DDL
+
+            for trigger_sql in PAPER_GROUP_POINTER_DDL:
+                _safe_execute(conn, trigger_sql)
+
             # ==============================================================
             # CORE: Authors
             # ==============================================================

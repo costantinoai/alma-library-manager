@@ -1580,6 +1580,28 @@ def _m_0041_fitted_default_signal_weights(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE discovery_settings SET value = ? WHERE key = ?", (str(value), f"weights.{key}"))
 
 
+def _m_0042_paper_group_pointer_guards(conn: sqlite3.Connection) -> None:
+    """Let the schema refuse a self-link or a pointer to a missing paper (task 45).
+
+    Until now nothing but application code stopped `papers.canonical_paper_id` /
+    `parent_paper_id` naming the row itself or a paper that is not in the corpus,
+    and both are silent: a self-link is an infinite walk without the resolver's
+    cycle guard, and a dangling pointer hides a paper from every standalone read.
+
+    SQLite cannot add a CHECK or a foreign key in place, so the rule is two
+    triggers. Existing bad rows are NOT rewritten here — a migrator repairing
+    data would hide the defect; Health counts them and Reconcile clears them.
+    The update trigger only fires when a pointer changes, so those rows stay
+    writable until then.
+    """
+    from alma.core.paper_groups import install_paper_group_pointer_guards
+
+    tables = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "papers" not in tables:
+        return
+    install_paper_group_pointer_guards(conn)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1622,6 +1644,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (39, "author_works_fetch_ledger", _m_0039_author_works_fetch_ledger),
     (40, "semantic_partition", _m_0040_semantic_partition),
     (41, "fitted_default_signal_weights", _m_0041_fitted_default_signal_weights),
+    (42, "paper_group_pointer_guards", _m_0042_paper_group_pointer_guards),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

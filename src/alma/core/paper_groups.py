@@ -243,6 +243,60 @@ def choose_paper_group_root(
     return str(max(candidates, key=key)["id"])
 
 
+#: The schema's own guard on the two relationship pointers. SQLite cannot add a
+#: CHECK or a foreign key to an existing table without rebuilding it (`papers` is
+#: the largest table in the database), so the rule is expressed as triggers —
+#: the one form SQLite can add in place.
+#:
+#: Two things are refused, matching the invariant this module exists to hold:
+#: a row that names ITSELF as its version or parent, and a pointer to a paper
+#: that is not in the corpus. Both used to be reachable, and both survive as
+#: silent corruption: `resolve_paper_root_id` walks a self-link forever without
+#: its cycle guard, and a dangling pointer hides a paper from every standalone
+#: read while nothing owns it.
+#:
+#: The UPDATE trigger fires only when a pointer actually CHANGES. A database
+#: repaired later must stay writable in the meantime: rating a paper that
+#: already carries a legacy dangling pointer is not the moment to refuse a
+#: write. Reconcile clears those, and Health counts them until it does.
+_POINTER_VIOLATION = (
+    "paper group pointer must name a different paper that exists "
+    "(see Health -> paper groups)"
+)
+_POINTER_INVALID_SQL = """
+    (NEW.{column} IS NOT NULL AND TRIM(NEW.{column}) <> '' AND (
+        NEW.{column} = NEW.id
+        OR NOT EXISTS (SELECT 1 FROM papers WHERE id = NEW.{column})
+    ))
+"""
+PAPER_GROUP_POINTER_DDL: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS papers_group_pointer_insert",
+    "DROP TRIGGER IF EXISTS papers_group_pointer_update",
+    f"""CREATE TRIGGER IF NOT EXISTS papers_group_pointer_insert
+        BEFORE INSERT ON papers
+        WHEN {_POINTER_INVALID_SQL.format(column='canonical_paper_id')}
+          OR {_POINTER_INVALID_SQL.format(column='parent_paper_id')}
+        BEGIN
+            SELECT RAISE(ABORT, '{_POINTER_VIOLATION}');
+        END""",
+    f"""CREATE TRIGGER IF NOT EXISTS papers_group_pointer_update
+        BEFORE UPDATE OF canonical_paper_id, parent_paper_id ON papers
+        WHEN (NEW.canonical_paper_id IS NOT OLD.canonical_paper_id
+              OR NEW.parent_paper_id IS NOT OLD.parent_paper_id)
+         AND ({_POINTER_INVALID_SQL.format(column='canonical_paper_id')}
+              OR {_POINTER_INVALID_SQL.format(column='parent_paper_id')})
+        BEGIN
+            SELECT RAISE(ABORT, '{_POINTER_VIOLATION}');
+        END""",
+)
+
+
+def install_paper_group_pointer_guards(conn: sqlite3.Connection) -> None:
+    """Create the pointer triggers. Idempotent; used by bootstrap and migration."""
+    for statement in PAPER_GROUP_POINTER_DDL:
+        conn.execute(statement)
+
+
 def _table_has_paper_id(conn: sqlite3.Connection, table: str) -> bool:
     try:
         return any(str(row[1]) == "paper_id" for row in conn.execute(f"PRAGMA table_info({table})"))
@@ -802,7 +856,9 @@ def _has_pointer_cycle(paper_id: str, by_id: dict[str, Any]) -> bool:
     return False
 
 
-def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+def paper_group_defect_map(
+    conn: sqlite3.Connection, *, preprint_index: PreprintTitleIndex | None = None
+) -> dict[str, dict[str, int]]:
     """Row-level relationship-defect ledger: ``paper_id -> {defect_key: count}``.
 
     The single detection pass behind BOTH ``relationship_integrity_counts`` (its
@@ -876,16 +932,22 @@ def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]
             continue
         for sidecar in sidecar_rows:
             flag(str(sidecar["paper_id"]), "subordinate_sidecars", int(sidecar["c"] or 0))
-    for pair in build_preprint_title_index(conn).pairs(require_doi=True):
+    # The caller may already hold the index (the repair preview builds one to
+    # plan with): scanning and re-normalizing every title a second time is the
+    # most expensive thing this function could do twice.
+    index = preprint_index if preprint_index is not None else build_preprint_title_index(conn)
+    for pair in index.pairs(require_doi=True):
         if pair["ambiguous"]:
             flag(pair["preprint_id"], "ambiguous_preprints")
     return ledger
 
 
-def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def relationship_integrity_counts(
+    conn: sqlite3.Connection, *, preprint_index: PreprintTitleIndex | None = None
+) -> dict[str, int]:
     """Return relationship defects used by Health and reconciliation previews."""
     counts = {key: 0 for key in PAPER_GROUP_DEFECT_KEYS}
-    for defects in paper_group_defect_map(conn).values():
+    for defects in paper_group_defect_map(conn, preprint_index=preprint_index).values():
         for key, occurrences in defects.items():
             counts[key] += int(occurrences or 0)
     return counts

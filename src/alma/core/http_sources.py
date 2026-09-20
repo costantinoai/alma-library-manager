@@ -267,6 +267,17 @@ _POLICIES: dict[str, SourcePolicy] = {
         min_interval_factory=_crossref_min_interval,
         max_concurrency_factory=_crossref_max_concurrency,
     ),
+    "datacite": SourcePolicy(
+        name="datacite",
+        base_url="https://api.datacite.org",
+        # DataCite asks for "reasonable" use and publishes no hard figure; this
+        # matches the Crossref pacing we already consider polite. The lookup is
+        # only ever made for DOIs Crossref does not know, which is a small tail.
+        min_interval_seconds=0.25,
+        max_concurrency=1,
+        max_retries=3,
+        default_headers=(("Accept", "application/json"),),
+    ),
     "arxiv": SourcePolicy(
         name="arxiv",
         base_url="https://export.arxiv.org",
