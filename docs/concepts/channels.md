@@ -1,23 +1,32 @@
 ---
 title: External integrations
-description: How optional Slack, SMTP, and future adapters connect ALMa's core Inbox and Alerts to other services.
+description: How optional plugins connect ALMa's core Alerts, Inbox and paper PDFs to outside services.
 ---
 
 # External integrations
 
-**Inbox and Alerts are core ALMa features.** They do not become optional merely
-because no external service is connected. Integration plugins are the adapters
-that let those core features exchange information with Slack, SMTP, or a future
-channel.
+**Alerts, the Inbox and a paper's PDF are core ALMa features.** They do not
+become optional merely because no external service is connected. Integration
+plugins are the adapters that let those core features reach outside — to Slack,
+to an SMTP server, to a PDF host.
+
+Each plugin declares which of three capabilities it implements:
 
 | Capability | Core owner | Integration responsibility |
 |---|---|---|
 | `send` | [Alerts](alerts.md) selects papers, schedules, deduplicates, and records outcomes | Render and deliver the finished digest |
 | `receive` | [Inbox](inbox.md) resolves papers, lands corpus rows, deduplicates, and owns triage | Fetch external messages and acknowledge outcomes |
+| `pdf_source` | [Paper PDFs](../user-guide/reading-pdfs.md) runs the sources in order, verifies the file against the paper, and stores it | Contribute candidate sources and fetch a file from each |
 
-Slack implements both directions. SMTP currently implements `send` only. One
-Slack activation controls both adapters because they share one external
-integration and credential; status still reports each direction separately.
+Four ship: [Slack](../plugins/slack.md) (`send` + `receive`),
+[Email](../plugins/email.md) (`send`), and two PDF sources,
+[Open-access PDFs](../plugins/open-access-pdfs.md) and
+[Shadow libraries](../plugins/shadow-libraries.md). One Slack activation
+controls both of its directions because they share one integration and one
+credential; status still reports each direction separately.
+
+Every plugin's own setup lives on its page. [Plugins](../plugins/index.md) is
+the index, and states the rules that hold for all of them.
 
 ## One explicit manifest registry
 
@@ -25,31 +34,42 @@ integration and credential; status still reports each direction separately.
 a `PluginManifest` with:
 
 - stable identity and version;
-- `send` / `receive` capabilities;
+- its declared capabilities;
 - one explicit activation flag;
 - one strict Pydantic configuration model;
 - generated JSON Schema, storage mapping, masked secret reads, and status;
-- optional Alert sender, Inbox adapter, and connectivity-test action.
+- optional Alert sender, Inbox adapter, PDF sources, and connectivity-test
+  action.
 
 Registration is explicit. An unregistered id cannot enter an Alert row, deliver
-a digest, or put a message into Inbox. Signal Lab is not in this registry: it is
-a native intelligence feature.
+a digest, put a message into Inbox, or be asked for a PDF. Signal Lab is not in
+this registry: it is a native intelligence feature.
 
 The capability protocols remain separate. Outbound integrations implement the
 manifest's `AlertSender` callback; inbound integrations implement
-`alma.application.inbox_schema.InboundChannel`. A send-only integration does not
+`alma.application.inbox_schema.InboundChannel`; PDF integrations return
+`PdfSource` values from `pdf_source_factory`. A send-only integration does not
 grow fake receive methods.
 
 ## Activation is not deletion
 
-Turning an integration off in **Settings → Plugins** retains its
-configuration and secrets. ALMa then:
+Every plugin ships switched off, and `PluginManifest` enforces that itself
+rather than trusting each package to check: while a plugin is off,
+`inbound_channel()` yields nothing and `send_alert()` / `test_connection()`
+raise `PluginDisabledError`, which the API returns as **409**. Only
+self-description, configuration and `status()` stay available — and
+`status_factory` must be local and side-effect-free, so listing plugins never
+loads a transport.
+
+Turning one off again in **Settings → Plugins** retains its configuration and
+secrets. ALMa then:
 
 - excludes it from new delivery choices and automated Alert sends;
 - excludes its inbound adapter from Inbox capture sweeps;
+- excludes its sources from PDF fetches;
 - hides its direction-status pills on Home.
 
-A manual connectivity test remains available after reactivation. Activation
+Switch it back on and the connectivity test is available again. Activation
 never purges Inbox papers or Alert history.
 
 ## One transport and one credential
@@ -80,5 +100,6 @@ runtime code.
 The same Pydantic model validates writes and produces `config_schema`; the
 frontend does not maintain a duplicate field list.
 
-For the package contract and extension checklist, see
+For each plugin's setup, see the [plugin pages](../plugins/index.md). For the
+package contract and extension checklist, see
 [Building an integration](../development/integrations.md).

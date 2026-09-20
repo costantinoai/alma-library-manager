@@ -98,10 +98,12 @@ Supported UI extensions are:
 | `x-alma-order` | Stable field order |
 | `x-alma-advanced` | Put behind advanced disclosure |
 | `x-alma-step` | Numeric input step |
-| `x-alma-links` | Help links under the field, `[{"label", "url"}]`. A `url` starting with `/` is a path on the documentation site (e.g. `/user-guide/reading-pdfs/#shadow-libraries`); anything else opens as given. Use it wherever a value has to be looked up elsewhere (addresses, keys) |
+| `x-alma-links` | Help links under the field, `[{"label", "url"}]`. A `url` starting with `/` is a path on the documentation site (e.g. `/plugins/shadow-libraries/#add-them`); anything else opens as given. Use it wherever a value has to be looked up elsewhere (addresses, keys) |
 
 The manifest's `docs_path` becomes the card's **Guide** link, on the same
-documentation site.
+documentation site. Every plugin points at its own page under
+[Plugins](../plugins/index.md); a plugin's setup is documented there and
+nowhere else.
 
 ## Add capabilities
 

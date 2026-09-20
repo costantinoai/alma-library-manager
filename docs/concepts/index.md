@@ -64,7 +64,7 @@ else assumes you've read it.
 
     ---
 
-    Composable rules delivered as Slack digests.
+    Composable rules delivered as Slack or email digests.
 
 -   :material-chip:{ .lg .middle } **[AI capabilities](ai.md)**
 

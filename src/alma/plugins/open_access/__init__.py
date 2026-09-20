@@ -74,7 +74,7 @@ OPEN_ACCESS_PLUGIN = PluginManifest(
     read_config=read_config,
     write_config=write_config,
     status_factory=status,
-    docs_path="/user-guide/reading-pdfs/",
+    docs_path="/plugins/open-access-pdfs/",
     pdf_source_factory=_sources,
 )
 

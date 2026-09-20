@@ -43,6 +43,16 @@ Concept pages explain *what* something is. The pages here explain
 
 -   **[Setting up alerts](setting-up-alerts.md)**
 
-    Build a Slack digest from rules.
+    Build a digest from rules and deliver it to Slack or email.
+
+-   **[Reading PDFs](reading-pdfs.md)**
+
+    How a paper's PDF arrives, where it is kept, and reading it on
+    your phone.
+
+-   **[Plugins](../plugins/index.md)**
+
+    Slack, email and the two PDF sources — each switched on and set
+    up on its own page.
 
 </div>

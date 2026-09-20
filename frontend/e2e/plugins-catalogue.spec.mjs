@@ -33,9 +33,17 @@ const card = page.locator('[data-anchor="plugins"]')
 await card.scrollIntoViewIfNeeded()
 await page.waitForTimeout(500)
 
-check(await card.getByText('Slack', { exact: true }).count() === 1, 'the catalogue lists Slack as a row')
-check(await card.getByText('Email', { exact: true }).count() === 1, 'the catalogue lists Email as a row')
-check(await card.getByText('Off', { exact: true }).count() === 2, 'both ship switched off')
+// One row per shipped plugin, each with its own switch.
+const switches = card.getByRole('switch')
+const rowCount = await switches.count()
+check(rowCount >= 4, `the catalogue lists every plugin as a row (${rowCount})`)
+for (const name of ['Slack', 'Email', 'Open-access PDFs', 'Shadow libraries']) {
+  check((await card.getByLabel(`Switch on ${name}`).count()) === 1, `${name} has a row, switched off`)
+}
+check(
+  (await card.getByText('Off', { exact: true }).count()) === rowCount,
+  'every plugin ships switched off',
+)
 check(await card.getByRole('button', { name: /save plugin settings/i }).count() === 0, 'an off plugin offers no Save')
 check(await card.getByRole('button', { name: /test connection/i }).count() === 0, 'an off plugin offers no Test')
 check(await card.locator('input[type="password"], input[type="text"]').count() === 0, 'an off plugin shows no setup fields')

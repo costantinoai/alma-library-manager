@@ -1,94 +1,27 @@
 ---
 title: Setting up alerts
-description: Configure Slack credentials in Settings, build a digest from your feed monitors, and verify it end to end.
+description: Build a digest from your feed monitors, deliver it through Slack or email, and verify it end to end.
 ---
 
 # Setting up alerts
 
-Alerts deliver new papers from your monitors to Slack on a schedule
-(or on demand). The whole flow lives inside ALMa — there's no `.env`
-hand-editing.
+Alerts deliver new papers from your monitors to Slack or email on a
+schedule (or on demand). The whole flow lives inside ALMa — there's no
+`.env` hand-editing.
 
-## 1. Connect Slack
+## 1. Set up a delivery channel
 
-Register the ALMa app, grant `chat:write`, install it, and save the token:
+Alerts are core; the delivery is a plugin. Set up at least one — or both, and
+tick both on a digest:
 
-**→ [Connecting Slack](connecting-slack.md)**
+* **[Slack](../plugins/slack.md)** — digests posted to a channel or a DM.
+* **[Email](../plugins/email.md)** — digests over SMTP.
 
-For alerts you need `chat:write`. Add `channels:read` + `groups:read` too if you
-want to name the destination channel rather than paste its ID, and
-`users:read` + `im:write` if you want digests delivered as a DM.
+Each page ends with a connection test. Get that test green before going on: a
+digest whose channels are all unconfigured or switched off evaluates and
+delivers nothing.
 
-Then invite the bot to the channel you want digests in (`/invite @ALMa`), or
-point ALMa at a user to DM instead.
-
-## 2. Configure Slack in ALMa
-
-Go to **Settings → Plugins → Slack** and fill:
-
-- **Slack Bot Token** — paste the `xoxb-…` token. ALMa stores it in
-  the unified secret store at `data/secrets.json` (gitignored,
-  permission `0o600`). It is masked everywhere except inside that
-  file. The token is **never** written to `.env`.
-- **Default Slack Channel** — accepts any of:
-  - a channel name: `general` or `#general`
-  - a user display name: `Andrea Costantino` (resolves to a DM)
-  - a Slack ID: `C0123…` (channel) or `U0123…` (user, resolves to
-    DM via `conversations.open`)
-
-  Resolution happens at send time and is cached for the lifetime
-  of the backend process.
-- **Check Interval (hours)** — how often the scheduler sweeps for
-  due alerts. Default 24; set to 1 if you have any daily-schedule
-  alerts that need to fire close to their configured time.
-
-Save the form, then click **Test Slack Connection**. ALMa queues an
-async job (visible in the **Activity** tab as
-`integrations.slack.test`) that sends a "ALMa — Connection Test" message
-through the same code path real alerts use. The toast reports the
-resolved target on success or a precise `channel_not_found` on
-failure.
-
-## Configure Email in ALMa (optional)
-
-Email is a second working delivery channel — pick it instead of, or
-alongside, Slack. Go to **Settings → Plugins → Email** and fill:
-
-- **SMTP host** — your provider's mail server (e.g.
-  `smtp.gmail.com`, `smtp.fastmail.com`).
-- **Port** — `587` for STARTTLS (the default) or `465` for implicit
-  TLS. ALMa picks the right transport from the port: port 465 opens
-  an SSL connection directly; any other port issues `STARTTLS` when
-  the **Use STARTTLS** switch is on.
-- **Username** — the SMTP auth user (often your full email address).
-  Leave blank for an unauthenticated relay.
-- **Password** — your app password or SMTP key. ALMa stores it in the
-  unified secret store at `data/secrets.json` (gitignored, permission
-  `0o600`, key `smtp.password`) — **never** in `settings.json`. It is
-  masked everywhere except inside that file; leave the masked value
-  in place to keep the existing password.
-- **From address** — the sender address. Defaults to the username
-  when blank.
-- **Send digests to** — one or more recipient addresses, separated by
-  commas, semicolons, or newlines.
-- **Use STARTTLS** — recommended for port 587; ignored on port 465.
-
-Everything except the password is written to `data/settings.json`
-(`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`,
-`smtp_use_tls`). Each field also accepts an environment-variable
-override (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM`,
-`SMTP_TO`, `SMTP_PASSWORD`) for headless setups.
-
-Save the form, then click **Send test email**. ALMa runs the test on
-the scheduler pool (Activity op key `integrations.email.test`) using the
-same `EmailNotifier` real digests use; the toast reports the
-recipients on success or the SMTP error on failure.
-
-Email digests are capped at 50 papers per message; a larger fire is
-truncated with an "…and N more" line rather than split into multiple
-emails.
-
-## 3. Make sure you have feed monitors
+## 2. Make sure you have feed monitors
 
 Alerts read from the **Feed**. If you have no feed monitors yet,
 nothing will match. Two ways to create monitors:
@@ -113,7 +46,7 @@ become a duplicate factory. Suggestions are delivery-aware: they
 propose exactly the channels you have configured, and the card is
 empty until at least one channel (Slack or email) is set up.
 
-## 4. Create a rule
+## 3. Create a rule
 
 A **rule** is the matching predicate for one source. Delivery
 (channels, schedule) belongs entirely to the **digest** — rules
@@ -146,7 +79,7 @@ tab to assign it.
 You can create as many rules as you want — typically one per
 monitor you care about.
 
-## 5. Create the digest
+## 4. Create the digest
 
 A **digest** (UI label) / **alert** (data-model label) is the
 delivery config. **Alerts → Digests tab → + Create Digest**:
@@ -158,7 +91,7 @@ delivery config. **Alerts → Digests tab → + Create Digest**:
 - **Schedule** — `manual`, `daily`, or `weekly`.
   - For daily: set the time of day (UTC).
   - For weekly: set the day and time of day (UTC).
-- **Rules** — assign one or more of the rules from step 4.
+- **Rules** — assign one or more of the rules from step 3.
 - **Enabled** — on.
 
 Leaving both channels unticked is allowed but warned about, in the
@@ -173,7 +106,7 @@ run, so a failed email is never hidden behind a successful Slack
 send). Clicking the chip opens the History tab pre-filtered to that
 digest.
 
-## 6. Fire it
+## 5. Fire it
 
 Two ways:
 
@@ -298,20 +231,12 @@ of starting a duplicate.
 
 ## Troubleshooting
 
-**"Slack test failed" toast on the test button.**
+**A channel's connection test fails.**
 
-Check the Activity row for the precise error:
-
-- `Slack token not configured` — go back to Settings → Plugins → Slack
-  channels and save the token.
-- `channel_not_found: '…'` — the resolver tried `conversations.list`
-  then `users.list` and didn't find a match. Verify (a) the bot is
-  in the channel for channel-name targets, and (b) the
-  `channels:read` / `users:read` scopes are granted.
-- `Slack API rejected the test message` — token is valid and
-  resolution succeeded, but the bot can't post to the resolved
-  target. Most often the bot isn't a member of the channel; for
-  user DMs check `im:write` scope.
+That is a plugin problem, not an alert one. The Activity row carries
+the precise error; each plugin page lists them —
+[Slack](../plugins/slack.md#troubleshooting),
+[Email](../plugins/email.md#check-it-works).
 
 **Evaluate completes but `papers_new = 0` and you expected papers.**
 

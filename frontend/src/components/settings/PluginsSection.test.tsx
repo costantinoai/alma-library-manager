@@ -42,7 +42,7 @@ function plugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
     },
     status: {},
     actions: ['test', 'capture'],
-    docs_path: '/user-guide/connecting-slack/',
+    docs_path: '/plugins/slack/',
     ...overrides,
   } as PluginInfo
 }
@@ -96,7 +96,7 @@ describe('PluginsSection', () => {
     expect(screen.getByRole('button', { name: /test connection/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /guide/i })).toHaveAttribute(
       'href',
-      expect.stringContaining('/user-guide/connecting-slack/'),
+      expect.stringContaining('/plugins/slack/'),
     )
     expect(screen.getByText('Ready')).toBeInTheDocument()
     await waitFor(() => expect(getPluginConfig).toHaveBeenCalledWith('slack'))

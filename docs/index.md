@@ -92,7 +92,7 @@ recommends papers adjacent to the Library (probabilistic, ranked).
 Every save, rating, removal, and tracked interaction strengthens the
 feedback loop that tunes Discovery over time. **Insights** projects the
 Library into charts and a clustered SPECTER2 graph. **Alerts** turns
-rules into Slack digests.
+rules into Slack or email digests.
 
 ## License
 

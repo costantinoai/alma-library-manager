@@ -1,14 +1,14 @@
 ---
 title: Alerts
-description: Scheduled (or manual) Slack digests of new papers from a chosen subset of feed monitors. Two-layer cold-start filter, per-alert dedup, async-enveloped delivery.
+description: Scheduled (or manual) digests of new papers from a chosen subset of feed monitors. Two-layer cold-start filter, per-alert dedup, async-enveloped delivery.
 ---
 
 # Alerts
 
 **Alerts** turn the Feed into a push channel. You pick a subset of your
 feed monitors (or all of them), pick a schedule (daily / weekly /
-manual), and ALMa drops a Slack DM with the new papers each time it
-fires.
+manual), and ALMa delivers the new papers to the channels you ticked
+each time it fires.
 
 The model is intentionally close to the older `scholar-slack-bot`
 script — small, opinionated, and bounded. Alerts are not a generic
@@ -19,7 +19,7 @@ to watch."
 
 ```
    feed_monitors ─┐
-                  ├─► Alert (digest) ─► schedule fires ─► Slack DM
+                  ├─► Alert (digest) ─► schedule fires ─► Slack / email
    alert_rules  ──┘
 ```
 
@@ -179,54 +179,35 @@ rejects unknown or receive-only ids before they reach durable Alert state.
 
 Alerts remain core: rules, schedules, matching, deduplication, history, and
 Activity live here. Integration plugins only render and deliver through the
-manifest's `AlertSender` seam. See [External integrations](channels.md).
+manifest's `AlertSender` seam. See [External integrations](channels.md)
+and the [plugin pages](../plugins/index.md).
 
 ### Slack
 
-Delivery via a Slack Bot User OAuth Token through `SlackNotifier`.
-The bot token is stored in the unified secret store
-(`data/secrets.json`, key `slack.bot_token`). The DM target lives
-in `data/settings.json` under `slack_channel`. Both are editable
-from **Settings → Plugins**; no environment variable hand-edits
-needed.
+`SlackNotifier` posts Block-Kit messages with a bot token. The target
+is one string — a channel name, a user display name, or a Slack ID —
+resolved to an ID at send time and cached for the lifetime of the
+process, so a wrong name produces a precise `channel_not_found` in the
+Activity row rather than a generic "API failed."
 
 ### Email
 
-Delivery via `EmailNotifier` (`alma.mailer.client`), a stdlib
-`smtplib` digest sender that mirrors `SlackNotifier`: an
-`is_configured` gate (host + from + recipients), an async
-`send_paper_alert`, a `send_test_message`, and a `test_connection`
-handshake. It renders the same paper-dict shape Slack does into a
-combined HTML + plaintext email, capped at **50 papers per email**.
-Transport is STARTTLS on port 587 (the default) or implicit TLS on
-port 465.
+`EmailNotifier` (`alma.mailer.client`) is a stdlib `smtplib` sender
+that mirrors `SlackNotifier`: an `is_configured` gate (host + from +
+recipients), an async `send_paper_alert`, a `send_test_message`, and a
+`test_connection` handshake. It renders the same paper-dict shape Slack
+does into a combined HTML + plaintext email, capped at **50 papers per
+email**. Transport is STARTTLS on port 587 (the default) or implicit
+TLS on port 465.
 
-SMTP host, port, username, from, recipient list, and the STARTTLS
-toggle are stored in `data/settings.json` (keys `smtp_host`,
-`smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`,
-`smtp_use_tls`). The SMTP **password** is held in the unified secret
-store (`data/secrets.json`, key `smtp.password`) — never in
-`settings.json`. All are editable from **Settings → Plugins → Email**;
-each also has an env-var override (`SMTP_HOST`, `SMTP_PORT`,
-`SMTP_USERNAME`, `SMTP_FROM`, `SMTP_TO`, `SMTP_PASSWORD`). See the
-[Configuration reference](../reference/configuration.md#email-smtp).
-
-`slack_channel` accepts:
-
-- a public/private channel name (`general`, `#general`),
-- a user display name (`Andrea Costantino`),
-- a Slack ID (`C0123…`, `U0123…`).
-
-Resolution to a channel ID happens at send time and the result is
-cached for the lifetime of the process. A wrong name produces a
-precise `channel_not_found` error in the Activity row, not a
-generic "API failed."
+Both are configured in **Settings → Plugins**, each on its own page:
+[Slack](../plugins/slack.md), [Email](../plugins/email.md).
 
 ## Current limits
 
-- Single global Slack DM target. Per-alert channel override is on
-  the roadmap — today every alert delivers to whatever
-  `slack_channel` is set in Settings.
+- Single global Slack target. Per-alert channel override is on the
+  roadmap — today every alert delivers to whatever **Send alerts to**
+  is set to on the Slack plugin.
 - Schedule times are timezone-naive (UTC). A daily 09:00 alert
   fires at 09:00 UTC, which is 11:00 in CET / 10:00 in CEST.
 - Only `feed_monitor` rules are exposed in the v1 dialog. The other

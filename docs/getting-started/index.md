@@ -84,8 +84,8 @@ server, no Redis, no message broker.
 * A free [Semantic Scholar API key](https://www.semanticscholar.org/product/api) —
   **strongly recommended**. Without it S2 shares the anonymous worldwide
   pool and 429s often, which stalls Discovery's graph lane.
-* (Optional) A [Slack bot token](https://api.slack.com/apps) if you
-  want digest alerts.
+* (Optional) A Slack bot token if you want digest alerts — see the
+  [Slack plugin](../plugins/slack.md).
 * (Optional) An `OPENAI_API_KEY` if you want OpenAI as an embedding
   provider.
 

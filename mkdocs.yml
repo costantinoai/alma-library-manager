@@ -140,13 +140,18 @@ nav:
       - Reading workflow: user-guide/reading-workflow.md
       - Reading PDFs: user-guide/reading-pdfs.md
       - Browser connector: user-guide/browser-connector.md
-      - Connecting Slack: user-guide/connecting-slack.md
       - Capturing from your phone: user-guide/capturing-from-your-phone.md
       - Importing from Zotero / BibTeX: user-guide/importing.md
       - Tracking authors: user-guide/tracking-authors.md
       - Tuning Discovery: user-guide/tuning-discovery.md
       - Configuring AI providers: user-guide/configuring-ai.md
       - Setting up alerts: user-guide/setting-up-alerts.md
+  - Plugins:
+      - plugins/index.md
+      - Slack: plugins/slack.md
+      - Email: plugins/email.md
+      - Open-access PDFs: plugins/open-access-pdfs.md
+      - Shadow libraries: plugins/shadow-libraries.md
   - Reference:
       - reference/index.md
       - REST API: reference/api.md

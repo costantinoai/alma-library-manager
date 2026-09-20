@@ -160,12 +160,8 @@ invited costs one habit change and keeps the token narrow.
 
 ### Setup
 
-1. Create a private channel, e.g. `#alma-inbox`, and invite the ALMa bot.
-2. Add these bot scopes alongside the `chat:write` alerts already use:
-     - `groups:history` + `groups:read` (private channel), or
-       `channels:history` + `channels:read` (public)
-     - `reactions:write` — the receipt on your message
-3. Set the channel in Settings → Plugins → Slack.
+The app, the scopes, the channel and the token are one page:
+[the Slack plugin](../plugins/slack.md).
 
 Capture stays **off** until a channel is nominated, and it is deliberately a
 separate setting from the alert channel: polling the channel ALMa *posts* to
@@ -208,3 +204,4 @@ schema, activation, secret-storage, and test contract.
 * [Home](home.md) — where Inbox items surface
 * [Library](library.md) — where triaged papers land
 * [External integrations](channels.md) — adapters for both directions
+* [Slack](../plugins/slack.md) — the plugin that feeds it today

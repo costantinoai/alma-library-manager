@@ -23,7 +23,7 @@ PLUGIN_ID = "shadow_libraries"
 # Where a reader finds working addresses. Third-party status pages and
 # encyclopaedia entries outlive any one mirror domain, so the app links those;
 # the guide (a docs-relative path) keeps the current list and the how-to.
-_GUIDE = "/user-guide/reading-pdfs/#shadow-libraries"
+_GUIDE = "/plugins/shadow-libraries/#add-them"
 _SCIHUB_LINKS = [
     {"label": "Which addresses are up now (SLUM)", "url": "https://open-slum.org/scihub.html"},
     {"label": "Official addresses (Wikipedia)", "url": "https://en.wikipedia.org/wiki/Sci-Hub"},
@@ -35,7 +35,7 @@ _ANNAS_LINKS = [
     {"label": "How to add them", "url": _GUIDE},
 ]
 _MEMBER_KEY_LINKS = [
-    {"label": "Where to find your key", "url": "/user-guide/reading-pdfs/#annas-archive-member-key"},
+    {"label": "Where to find your key", "url": "/plugins/shadow-libraries/#annas-archive-member-key"},
 ]
 
 
@@ -214,7 +214,7 @@ SHADOW_LIBRARIES_PLUGIN = PluginManifest(
     read_config=read_config,
     write_config=write_config,
     status_factory=status,
-    docs_path="/user-guide/reading-pdfs/",
+    docs_path="/plugins/shadow-libraries/",
     connection_tester=test_connection,
     pdf_source_factory=_sources,
     action_ids=("test",),
