@@ -26,6 +26,7 @@ from alma.config import (
     get_crossref_mailto,
     get_semantic_scholar_api_key,
 )
+from alma.core.http_deadline import deadline_sleep, release_socket, remaining_timeout, watch_socket
 from alma.core.redaction import redact_sensitive_text
 from alma.core.url_safety import VettedUrl, clean_remote_text
 
@@ -153,7 +154,12 @@ def _pinned(session: Any, pin: VettedUrl | None) -> Iterator[None]:
 
     addresses = ",".join(f"[{address}]" if ":" in address else address for address in pin.addresses)
     saved = session.curl_options
-    session.curl_options = {**(saved or {}), CurlOpt.RESOLVE: [f"{pin.host}:{pin.port}:{addresses}"]}
+    options = {**(saved or {}), CurlOpt.RESOLVE: [f"{pin.host}:{pin.port}:{addresses}"]}
+    remaining = remaining_timeout()
+    if remaining is not None:
+        # curl_cffi stream mode otherwise sets only a LOW_SPEED timeout.
+        options[CurlOpt.TIMEOUT_MS] = max(1, int(remaining * 1000))
+    session.curl_options = options
     try:
         yield
     finally:
@@ -189,6 +195,21 @@ def _guarded_connection(base: type) -> type:
     from urllib3.util.connection import create_connection
 
     class _Guarded(base):  # type: ignore[misc, valid-type]
+        def connect(self):
+            super().connect()
+            watch_socket(self.sock)
+
+        def request(self, *args, **kwargs):
+            # Reused pooled sockets need the new caller's deadline too.
+            watch_socket(self.sock)
+            return super().request(*args, **kwargs)
+
+        def close(self):
+            # Stop watching before the descriptor goes: the watchdog must not
+            # be left holding sockets this connection has finished with.
+            release_socket(self.sock)
+            super().close()
+
         def _new_conn(self):  # noqa: ANN202 — urllib3's own signature
             from alma.core.url_safety import public_addresses
 
@@ -631,7 +652,7 @@ class SourceHttpClient:
     def _concurrency_slot(self) -> Iterator[None]:
         with self._concurrency_cond:
             while self._active_requests >= self._current_max_concurrency():
-                self._concurrency_cond.wait()
+                self._concurrency_cond.wait(timeout=remaining_timeout())
             self._active_requests += 1
         try:
             yield
@@ -646,7 +667,7 @@ class SourceHttpClient:
             now = time.monotonic()
             wait = max(0.0, self._next_request_at - now)
             if wait > 0:
-                time.sleep(wait)
+                deadline_sleep(wait)
             self._next_request_at = time.monotonic() + interval
 
     def _retry_wait(self, response: requests.Response | None, attempt: int) -> float:
@@ -771,7 +792,7 @@ class SourceHttpClient:
                             headers=request_headers,
                             json=json,
                             data=data,
-                            timeout=timeout_value,
+                            timeout=remaining_timeout(timeout_value),
                             stream=stream,
                             allow_redirects=allow_redirects,
                         )
@@ -811,7 +832,7 @@ class SourceHttpClient:
                         exc,
                         wait,
                     )
-                    time.sleep(wait)
+                    deadline_sleep(wait)
                     continue
 
             if response.status_code not in _RETRYABLE_STATUSES:
@@ -840,7 +861,7 @@ class SourceHttpClient:
                 # The body was never read; release the connection before the
                 # retry sleep instead of pinning it for the whole backoff.
                 response.close()
-            time.sleep(wait)
+            deadline_sleep(wait)
 
         if last_resp is not None:
             return last_resp

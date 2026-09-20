@@ -43,6 +43,7 @@ from alma.application.pdfs.verify import (
     looks_like_challenge,
 )
 from alma.core.html_meta import parse_html, pdf_urls
+from alma.core.http_deadline import HttpDeadlineExceededError, http_deadline, watch_socket
 from alma.core.http_sources import describe_transport_error, iter_body
 from alma.core.redaction import redact_sensitive_text
 from alma.core.url_safety import MAX_URL_CHARS, UnsafeUrlError, clean_remote_text, safe_charset
@@ -59,7 +60,7 @@ HTML_HOP_LINKS = 3
 _ACCEPT = "application/pdf,text/html;q=0.9,*/*;q=0.5"
 
 
-class DownloadTimeoutError(TimeoutError):
+class DownloadTimeoutError(HttpDeadlineExceededError):
     """The candidate's :data:`DOWNLOAD_DEADLINE` passed mid-body."""
 
 
@@ -93,6 +94,21 @@ def download_candidate(
 ) -> DownloadResult:
     """Fetch ``candidate`` and stage it if it is a PDF (see module docstring)."""
     deadline = deadline if deadline is not None else time.monotonic() + DOWNLOAD_DEADLINE
+    result: DownloadResult | None = None
+    try:
+        with http_deadline(deadline):
+            result = _download_candidate(candidate, max_bytes=max_bytes, html_hops=html_hops, deadline=deadline)
+        return result
+    except HttpDeadlineExceededError:
+        # The budget can expire between the last byte and the scope's exit
+        # check. A file staged from a body the watchdog may have cut short is
+        # not trustworthy — and must not be left behind either.
+        if result is not None and result.staged is not None:
+            result.staged.discard()
+        return DownloadResult(Outcome.ERROR, detail="The download took too long", final_url=candidate.url)
+
+
+def _download_candidate(candidate: PdfCandidate, *, max_bytes: int, html_hops: int, deadline: float) -> DownloadResult:
     if candidate.opener is not None:
         # A trusted provider API that is not a plain GET (OpenAlex content);
         # it owns its own transport. Its bytes are still judged below.
@@ -100,6 +116,10 @@ def download_candidate(
             response = candidate.opener()
         except Exception as exc:  # noqa: BLE001 — a transport failure is an outcome
             return DownloadResult(Outcome.ERROR, detail=describe_transport_error(exc), final_url=candidate.url)
+        # Trusted API openers have their own transport, but their streamed
+        # requests body must still obey the same total budget.
+        connection = getattr(getattr(response, "raw", None), "_connection", None)
+        watch_socket(getattr(connection, "sock", None))
         final_url = candidate.url
     else:
         opened = _open(candidate)
