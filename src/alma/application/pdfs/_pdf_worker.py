@@ -164,6 +164,12 @@ class _Walker:
         for key, label in (("/AA", "automatic action"), ("/JS", "JavaScript")):
             if key in node:
                 self._drop(node, key, label)
+        # Associated files can hang off the catalog, a page or any structure
+        # element, without appearing in the EmbeddedFiles name tree. Strip
+        # the association AND embedded-file dictionaries wherever found.
+        for key in ("/AF", "/EF"):
+            if key in node:
+                self._drop(node, key, "embedded file")
         if "/OpenAction" in node:
             opening = self._resolve(node["/OpenAction"])
             harmless = isinstance(opening, ArrayObject) or (
@@ -242,6 +248,50 @@ def _facts(reader, pages: int) -> dict:
     }
 
 
+def _drop_orphans(writer) -> bool:
+    """Delete every object the document can no longer reach; False if not provable.
+
+    Removing a reference does not remove what it pointed at: the writer was
+    cloned from the untrusted file, so an attachment's payload stream is still
+    written out unless it is dropped here. pypdf's own
+    ``compress_identical_objects(remove_orphans=True)`` does not do this job —
+    it keeps any object that ANY object points at, including the orphan that
+    was just cut off, so the payload of a dropped file specification survives.
+    Reachability from the catalog is transitive by construction, so this does.
+
+    The seeds are what the trailer keeps alive on its own: the catalog, the
+    document information dictionary and the file identifier.
+    """
+    from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject
+
+    reachable: set[int] = set()
+    stack = [getattr(holder, "indirect_reference", None) or holder
+             for holder in (writer.root_object, writer._info, writer._ID) if holder is not None]
+    budget = WALK_BUDGET
+    while stack:
+        budget -= 1
+        if budget < 0:
+            return False  # Unproven: keep every object rather than cut a live one.
+        node = stack.pop()
+        if isinstance(node, IndirectObject):
+            if node.idnum in reachable:
+                continue
+            reachable.add(node.idnum)
+            try:
+                node = node.get_object()
+            except Exception:  # noqa: BLE001 — a broken reference leads nowhere
+                continue
+        if isinstance(node, DictionaryObject):  # a stream is a dictionary too
+            stack.extend(node.values())
+        elif isinstance(node, ArrayObject):
+            stack.extend(node)
+    # `_objects` is 0-based, object numbers are 1-based; None writes a free slot.
+    for index, held in enumerate(writer._objects):
+        if held is not None and (index + 1) not in reachable:
+            writer._objects[index] = None
+    return True
+
+
 def _clean(reader, out_path: str) -> str:
     """Write ``reader`` to ``out_path`` without active content; '' or an error."""
     from pypdf import PdfReader, PdfWriter
@@ -250,6 +300,8 @@ def _clean(reader, out_path: str) -> str:
     fixer = _Walker(fix=True)
     fixer.walk(writer.root_object)
     if fixer.exhausted:
+        return "Too complex to check for active content"
+    if not _drop_orphans(writer):
         return "Too complex to check for active content"
     with open(out_path, "wb") as handle:
         writer.write(handle)
