@@ -178,7 +178,10 @@ downloads left* means today's download allowance is used up.
 
 * **On a paper card or a table row**, tap the small **document icon**. It opens
   a new tab: if ALMa already has the PDF, the tab becomes the PDF at once;
-  otherwise it shows each source being asked, then opens the file.
+  otherwise it shows each source being asked, then opens the file. The icon is
+  always there, whether or not a PDF source is switched on: a file ALMa already
+  keeps opens either way, and with every source off the tab offers **Attach a
+  PDF…** instead of searching.
 * **In a paper's details**, the **PDF** section shows the kept file (pages,
   size, and whether its text confirmed the paper) with **Open PDF**, or
   **Find PDF** if there is none yet.
@@ -209,7 +212,11 @@ ALMa:
 4. keeps the PDF with it.
 
 A file it cannot place (a scan with no text, for example) waits on its row:
-type its DOI or title and press **Retry**. The upload is kept for a day.
+type its DOI or title and press **Retry**, or press **Give up** to drop it.
+The upload is kept on the server for a day, so the row survives switching to
+another import tab, closing the dialog, and reloading the page — it is waiting
+for you when you come back, with whatever you had already typed. Imports still
+running keep running while the dialog is shut.
 
 ## Where the files live
 

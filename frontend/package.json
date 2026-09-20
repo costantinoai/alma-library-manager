@@ -15,6 +15,7 @@
     "e2e:maps": "node e2e/map-region-selection.spec.mjs",
     "e2e:home": "node e2e/home-desk.spec.mjs",
     "e2e:pdf": "node e2e/pdf-reader.spec.mjs",
+    "e2e:pdf-local": "node e2e/pdf-local-and-imports.spec.mjs",
     "e2e:signal-lab": "node e2e/signal-lab.spec.mjs"
   },
   "dependencies": {
