@@ -26,7 +26,7 @@ exactly the direction that inflates missing-evidence papers.
 How it is used: loaded ONCE per scoring pass (:func:`load_calibration` — a pure
 row read — or :func:`ensure_calibration` inside a background job, which also
 builds/refreshes it) and passed explicitly to ``measure_candidate`` and the
-ranker, the same way the Signal Lab context travels. Every ranking snapshot
+ranker. Every ranking snapshot
 records the tables it was scored with, so a replay is exact even after the
 calibration has been rebuilt.
 

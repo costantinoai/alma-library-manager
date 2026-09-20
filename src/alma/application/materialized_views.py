@@ -189,8 +189,8 @@ def _read_row(conn: sqlite3.Connection, view_key: str) -> dict | None:
     answer" indistinguishable from "nothing has been built yet" — and every
     consumer inherited that lie. A locked, corrupted or partially-migrated DB
     read as: 0 critical health dimensions on Home, an empty-but-coherent Health
-    operations plan, "map not built yet" on the graph routes, Signal Lab quietly
-    off, and — worst — `_graph_view_staleness` reporting `never_built`, which is
+    operations plan, "map not built yet" on the graph routes, and — worst —
+    `_graph_view_staleness` reporting `never_built`, which is
     an URGENT stale reason, so a bad read escalated past the idle gate and forced
     full layout rebuilds.
 
@@ -448,7 +448,7 @@ def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
     """Delete the stored row for ``view_key`` so ``get_stored`` returns ``None``.
 
     The row-lifecycle complement to ``_write_row``: callers that destroy a
-    view's *inputs* (e.g. Signal Lab purge deleting every round) must also
+    view's *inputs* (e.g. a purge deleting every source row) must also
     drop the derived payload in the SAME transaction, because consumers on
     the ``get_stored`` path never check the fingerprint (task 50 ownership
     split) and would keep serving the stale artifact until an unrelated

@@ -42,8 +42,8 @@ a `PluginManifest` with:
   action.
 
 Registration is explicit. An unregistered id cannot enter an Alert row, deliver
-a digest, put a message into Inbox, or be asked for a PDF. Signal Lab is not in
-this registry: it is a native intelligence feature.
+a digest, put a message into Inbox, or be asked for a PDF. Not in this
+registry: anything that is a native intelligence feature.
 
 The capability protocols remain separate. Outbound integrations implement the
 manifest's `AlertSender` callback; inbound integrations implement

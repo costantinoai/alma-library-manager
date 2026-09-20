@@ -104,7 +104,6 @@ function PluginRow({ plugin }: { plugin: PluginInfo }) {
         ['plugins'],
         ['home'],
         ['home-brief'],
-        ['signal-lab'],
         ['inbox-status'],
       )
     },

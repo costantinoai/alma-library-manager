@@ -122,7 +122,7 @@ nav:
       - Home: concepts/home.md
       - Paper lifecycle: concepts/paper-lifecycle.md
       - Inbox: concepts/inbox.md
-      - Signal Lab: concepts/signal-lab.md
+      - Signal Lab (moved to a branch): concepts/signal-lab.md
       - Feed: concepts/feed.md
       - Library: concepts/library.md
       - Discovery: concepts/discovery.md
@@ -175,6 +175,10 @@ nav:
       - Testing: development/testing.md
       - Contributing: development/contributing.md
   - Releases:
+      - v0.24.0: releases/v0.24.0.md
+      - v0.23.4: releases/v0.23.4.md
+      - v0.23.3: releases/v0.23.3.md
+      - v0.23.2: releases/v0.23.2.md
       - v0.23.1: releases/v0.23.1.md
       - v0.23.0: releases/v0.23.0.md
       - v0.22.0: releases/v0.22.0.md

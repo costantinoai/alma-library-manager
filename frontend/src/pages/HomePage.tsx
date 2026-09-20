@@ -48,7 +48,6 @@ import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { Meter } from '@/components/ui/meter'
 import { PageSection } from '@/components/ui/page-section'
-import { SignalLabSheet } from '@/components/home/SignalLabSheet'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Surface } from '@/components/ui/surface'
@@ -640,11 +639,6 @@ export function HomePage() {
       >
         <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
       </DisclosurePanel>
-
-      {/* Signal Lab (task 58, D20) — the day's response sheet. Sits above
-          Inbox as a distinct printed artifact, not another card; renders
-          nothing until the substrate and at least 10 rounds exist. */}
-      <SignalLabSheet />
 
       {/* D13 Inbox — papers you sent yourself from another device, awaiting
           triage. Home IS the Inbox's surface, so there is no "open elsewhere"

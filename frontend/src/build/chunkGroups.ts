@@ -10,18 +10,18 @@ const GROUPS: ReadonlyArray<readonly [chunk: string, packages: readonly string[]
     ],
   ],
   [
+    // d3 modules reached through recharts. The force-graph spatial indices
+    // (`d3-force-3d`, `d3-binarytree`, `d3-octree`) left with the map (D24) and
+    // live on `feature/maps-plugin`.
     'vendor-d3',
     [
       'd3-array',
-      'd3-binarytree',
       'd3-color',
       'd3-dispatch',
       'd3-drag',
       'd3-ease',
-      'd3-force-3d',
       'd3-format',
       'd3-interpolate',
-      'd3-octree',
       'd3-path',
       'd3-quadtree',
       'd3-scale',

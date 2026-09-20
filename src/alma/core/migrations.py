@@ -43,7 +43,6 @@ so fresh installs get the new shape directly.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -1477,74 +1476,27 @@ def _m_0039_author_works_fetch_ledger(conn: sqlite3.Connection) -> None:
 
 
 def _m_0040_semantic_partition(conn: sqlite3.Connection) -> None:
-    """Core-owned semantic partition tables, seeded from the map's layout (2026-09-06).
+    """Retired no-op (was: core-owned semantic partition tables, 2026-09-06).
 
-    Decision D24: learning must work without a map. Until now "which papers
-    group together" lived only in `publication_clusters`, the map's layout
-    table, beside the coordinates — so super-regions and the Signal Lab could
-    not exist without a layout. This creates the membership + state tables
-    (`semantic_partition.DDL`, the same statements the bootstrap runs) and:
+    It created `semantic_partition_members` + state and seeded them from the
+    map's `publication_clusters`, so that super-regions and the Signal Lab
+    could exist without a map (D24). Both consumers have since left main — the
+    map under D24, the Lab and the partition itself under D25 — so this
+    migration has nothing left to build and its only remaining effect would be
+    to create tables no code reads.
 
-    1. copies the corpus-scope layout memberships (cluster, label, explicit
-       outliers) as generation 1 with provenance `legacy_layout_import` — a
-       record of where they came from, never passed off as a fresh fit;
-    2. copies the stored `graph:super_regions` payload to the new
-       `semantic:regions` key with `x`/`y` stripped and an empty fingerprint,
-       so the first build under the new key finds a PREVIOUS payload and
-       carries every region id forward instead of renumbering the Lab's
-       evidence.
+    It stays in the ledger because the ledger is append-only: numbers are never
+    reused and entries are never removed, or a DB that already recorded 40
+    would re-run a different migration under the same number. It is a no-op,
+    not a deletion.
 
-    A DB with no layout gets the tables and nothing else: unbuilt is a
-    legitimate state, not an error. Repeat-safe.
+    Existing installs keep the tables they already have; `paper_groups` still
+    purges their rows with the paper (they are in `_ALL_PAPER_SIDECAR_TABLES`),
+    and every read of them is guarded for absence. Fresh installs never get
+    them. To bring the partition back, recover it from `feature/signal-lab` and
+    add a NEW migration — do not revive this one.
     """
-    from alma.application.semantic_partition import (
-        DDL,
-        MEMBERS_TABLE,
-        PARTITION_VERSION,
-        PROVENANCE_LEGACY,
-        _write_partition,
-        embedding_set_fingerprint,
-        legacy_layout_members,
-        strip_coordinates,
-    )
-
-    for statement in DDL:
-        conn.execute(statement)
-    if conn.execute(f"SELECT COUNT(*) FROM {MEMBERS_TABLE}").fetchone()[0] == 0:
-        members = legacy_layout_members(conn)
-        if members:
-            from alma.discovery.similarity import get_active_embedding_model
-
-            model = get_active_embedding_model(conn)
-            _write_partition(
-                conn,
-                members,
-                generation=1,
-                model=model,
-                input_fingerprint=embedding_set_fingerprint(conn, model),
-                provenance=PROVENANCE_LEGACY,
-                algorithm_version=PARTITION_VERSION,
-            )
-    tables = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-    }
-    if "materialized_views" not in tables:
-        return
-    exists = conn.execute(
-        "SELECT 1 FROM materialized_views WHERE view_key = 'semantic:regions'"
-    ).fetchone()
-    old = conn.execute(
-        "SELECT payload, computed_at, compute_ms FROM materialized_views "
-        "WHERE view_key = 'graph:super_regions'"
-    ).fetchone()
-    if exists is None and old is not None and old[0]:
-        payload = strip_coordinates(json.loads(old[0]))
-        conn.execute(
-            "INSERT INTO materialized_views (view_key, fingerprint, payload, computed_at, compute_ms) "
-            "VALUES ('semantic:regions', '', ?, ?, ?)",
-            (json.dumps(payload), old[1], old[2]),
-        )
+    return
 
 
 def _m_0041_fitted_default_signal_weights(conn: sqlite3.Connection) -> None:

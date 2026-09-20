@@ -415,19 +415,6 @@ def run_embedding_computation(
                             "author centroid refresh skipped after batch insert",
                             exc_info=True,
                         )
-                    # Give freshly embedded papers a semantic membership right away
-                    # (task 67 C2: what learning and regions read — core first),
-                    # then a map position (the extension's concern; leaves core
-                    # at C5). Non-fatal; the owners' ticks catch anything missed.
-                    try:
-                        from alma.application.semantic_partition import assign_missing_members
-
-                        assign_missing_members(conn, inserted_paper_ids)
-                    except Exception:
-                        logger.debug(
-                            "substrate placement skipped after batch insert",
-                            exc_info=True,
-                        )
                 except Exception as batch_exc:
                     add_job_log(
                         job_id,

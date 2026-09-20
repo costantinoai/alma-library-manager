@@ -397,9 +397,7 @@ def library_taste_direction(db: sqlite3.Connection) -> np.ndarray | None:
     negative centroid (or the positive centroid alone when nothing was rated
     down). ``None`` without an embedded positive set.
 
-    One owner for "which way does the user's taste point in embedding space":
-    the Signal Lab fits its utility head as a delta from this, so what the Lab
-    learns is what your ordinary saves and ratings do NOT already say.
+    One owner for "which way does the user's taste point in embedding space".
     """
     from alma.discovery.similarity import compute_embedding_centroid
 
@@ -865,7 +863,7 @@ def _seed_strength(seed: dict) -> float:
     when callers have stamped it on the seed via
     `_attach_signal_scores_to_seeds` — that read-once batch covers
     rating, topic alignment, embedding similarity, author alignment,
-    signal-lab swipes, and recency through one shared primitive.
+    feedback events, and recency through one shared primitive.
     Falls back to the legacy rating + citation + recency heuristic
     when the stamp is missing (ad-hoc callers, tests, or pipelines
     that have not yet been threaded through the batch).

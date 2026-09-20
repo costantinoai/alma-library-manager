@@ -15,7 +15,6 @@ import { BackgroundOpsCard } from '@/components/settings/BackgroundOpsCard'
 import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { PluginsSection } from '@/components/settings/PluginsSection'
-import { SignalLabSettingsCard } from '@/components/settings/SignalLabSettingsCard'
 import { UserProfileCard } from '@/components/settings/UserProfileCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
@@ -60,7 +59,6 @@ type AnchorId =
   | 'feed-monitors'
   | 'feed-auto-refresh'
   | 'ai-config'
-  | 'signal-lab'
   | 'background-ops'
   | 'data-management'
   | 'library-management'
@@ -91,7 +89,6 @@ const TOC: TocEntry[] = [
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
   { id: 'feed-auto-refresh', label: 'Feed auto-refresh', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
-  { id: 'signal-lab', label: 'Signal Lab', section: 'intelligence' },
   { id: 'background-ops', label: 'Background operations', section: 'system' },
   { id: 'data-management', label: 'Data management', section: 'system' },
   { id: 'library-management', label: 'Library maintenance', section: 'system' },
@@ -345,7 +342,6 @@ export function SettingsPage() {
             <Anchor id="feed-monitors"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
             <Anchor id="feed-auto-refresh"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Set the Feed refresh schedule</Button></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
-            <Anchor id="signal-lab"><SignalLabSettingsCard /></Anchor>
           </SettingsSection>
 
           {/* -- Data & system -- */}

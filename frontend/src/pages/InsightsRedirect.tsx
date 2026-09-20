@@ -24,7 +24,8 @@ export function InsightsRedirect() {
       navigateTo('health', params)
       return
     }
-    // Task 50 M3 (50-A): the graph moved again — to the top-level Map page.
+    // Task 50 M3 (50-A): the graph moved to the Map page, which then left main
+    // under D24 — so an old `?tab=graph` link lands on Discovery.
     if (tab === 'graph') {
       navigateTo('discovery')
       return

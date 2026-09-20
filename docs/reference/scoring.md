@@ -15,7 +15,7 @@ each family is built from.
 > architecture this sits inside: how lanes retrieve, how their ranks are fused
 > (two-level RRF), which features are admissible as *reward* versus *exposure*,
 > why the ranker is a prior-centred linear model rather than a bigger one, how
-> exploration keeps the feedback loop honest, and where Signal Lab enters.
+> exploration keeps the feedback loop honest.
 
 ## One ranker, ten families
 
@@ -31,7 +31,7 @@ together:
 
 Keeping them apart is the point. Until 2026-07-28 the scorer *also* combined
 its own measurements into a composite — nine weights, a consensus bonus, a
-citation-fabric bonus, a Signal Lab bonus and a 30-point dismissal penalty —
+citation-fabric bonus and a 30-point dismissal penalty —
 and the ranker then discarded that number and replaced it. The composite was
 dead on Discovery and live on Feed and Online Search, so the same paper scored
 differently depending on which page you opened, and the UI drew the discarded
@@ -356,14 +356,6 @@ This is a log-prevalence scheme — sharing the user's #1 venue gets
 weight 1.0, and a venue that only appears in 5/50 of the user's
 papers gets ~0.42 (versus ~0.10 under naive linear normalization).
 
-**Second, gated input: Signal Lab's venue head.** Prevalence answers which
-venues you save *from*. Signal Lab's *Same field* rounds — two papers on one
-topic, differing on journal — answer which you would *choose between* at equal
-topic, which nothing else in the ranker can learn (SPECTER2 does not encode the
-journal). The fitted offsets are ADDED into this same map after normalisation,
-behind `signal_lab.enabled` and `weights.lab_venue_offset`; at zero weight the
-model view is never even read. There is deliberately no parallel `lab_venue`
-signal — one question, one signal.
 Long-tail venues stay visible in scoring instead of being drowned
 by the dominant outlet. Same shape as `topic_score` and the
 author-rail prevalence pattern.

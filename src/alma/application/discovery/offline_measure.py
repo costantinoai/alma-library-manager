@@ -80,7 +80,6 @@ def measure_corpus_papers(
     inputs: ProfileInputs,
     *,
     calibration: Any,
-    lab_ctx: dict[str, Any] | None = None,
 ) -> Iterator[tuple[str, dict, dict]]:
     """Yield ``(paper_id, score_breakdown, reward_features)`` per paper.
 
@@ -125,7 +124,6 @@ def measure_corpus_papers(
                 candidate_embedding=vectors.get(candidate["paper_id"]),
                 lexical_profile=inputs.lexical_profile,
                 positive_example_embeddings=inputs.exemplars,
-                lab_ctx=lab_ctx,
                 calibration=calibration,
             )
             candidate["score_breakdown"] = breakdown

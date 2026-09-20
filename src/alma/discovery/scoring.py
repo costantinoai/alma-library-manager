@@ -15,11 +15,11 @@ Nine measured signals:
   6. recency_boost     — preference for recent publications
   7. citation_quality  — log-scaled citation count
   8. feedback_adj      — adjustment from explicit paper preference history
-  9. preference_affinity — Signal Lab swipe/game feedback
+  9. preference_affinity — accumulated swipe / rating feedback
 
 plus the finer-grained atoms the ranker's families are actually built from
 (the three semantic similarity views, the three lexical views, citation-fabric
-coupling / co-citation strengths, Signal Lab terms).
+coupling / co-citation strengths).
 
 All functions are stateless — they take a DB connection and settings dict
 rather than depending on class state.
@@ -34,7 +34,6 @@ import sqlite3
 from typing import Any
 
 from alma.application.author_signal import build_discovery_author_affinity
-from alma.application.signal_lab.scoring_terms import fold_lab_offsets
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
@@ -437,23 +436,6 @@ def compute_preference_profile(
     topic_weights = log_prevalence_weights(topic_weights)
     journal_affinity = log_prevalence_weights(journal_affinity)
 
-    # Signal Lab's venue head, folded into the SAME map (task 65). Everything
-    # above is Library prevalence — which venues you save FROM. Matched-pair
-    # rounds are the only source of the other half: at equal topic, which venue
-    # you would rather READ. SPECTER2 does not encode the journal, so no other
-    # signal in the ranker can learn it.
-    #
-    # Folded after normalisation on purpose: the offset is a win rate on the
-    # same [-1, 1] scale the normalised prevalence weights now live on, so the
-    # two are commensurable. Folding before would have put a raw count and a
-    # win rate through one log curve together.
-    fold_lab_offsets(
-        conn,
-        journal_affinity,
-        head="venue_offsets",
-        weight_key="weights.lab_venue_offset",
-    )
-
     # Author affinity is the canonical author signal (one definition, shared
     # with the Authors page, suggestions, and rankings — see
     # `alma.application.author_signal`). We take its STABLE preference
@@ -587,7 +569,6 @@ def measure_candidate(
     preloaded_preference_profile: dict[str, Any] | None = None,
     topic_provider: Any = _PROVIDER_UNSET,
     citation_fabric: dict[str, Any] | None = None,
-    lab_ctx: dict[str, Any] | None = None,
     calibration: Any = None,
 ) -> dict[str, Any]:
     """Measure every observable signal for a candidate paper.
@@ -934,7 +915,7 @@ def measure_candidate(
     feedback_adj = max(-1.0, min(1.0, feedback_adj))
     feedback_adj_norm = (feedback_adj + 1.0) / 2.0  # Shift to [0, 1]
 
-    # -- 9. Preference affinity (Signal Lab) --
+    # -- 9. Preference affinity --
     pref_affinity_raw = 0.0
     try:
         # D-AUDIT-10a (2026-04-24): prefer the caller-supplied preload
@@ -955,18 +936,6 @@ def measure_candidate(
     cf = citation_fabric or {}
     coupling_strength = max(0.0, min(1.0, float(cf.get("coupling_strength") or 0.0)))
     cocitation_strength = max(0.0, min(1.0, float(cf.get("cocitation_strength") or 0.0)))
-
-    # -- Signal Lab per-candidate terms (task 54, D20). `lab_ctx` is loaded once
-    # per scoring pass by the caller (None unless the Lab is enabled, a weight
-    # is > 0 AND a fitted model exists), so with the Lab off this block adds
-    # no breakdown keys — byte-identical to a lab-less build. Measured here,
-    # weighted in the ranker (`LAB_ADJUSTMENTS`). --
-    if lab_ctx is not None:
-        from alma.application.signal_lab.scoring_terms import compute_lab_adjustments
-
-        lab_offset_raw, lab_utility_raw = compute_lab_adjustments(
-            candidate_embedding, lab_ctx
-        )
 
     # -- The nine measured signals. Values only: this function MEASURES, it does
     # not combine. `alma.application.discovery.ranker` owns every weight that
@@ -1042,13 +1011,6 @@ def measure_candidate(
     # papers"). Strengths are always emitted; counts/partners only when non-zero.
     breakdown["coupling_strength"] = round(coupling_strength, 4)
     breakdown["cocitation_strength"] = round(cocitation_strength, 4)
-    # Signed Lab inputs, read by `ranker.LAB_ADJUSTMENTS`; written ONLY when a
-    # usable model was loaded so their absence means "not measured". The
-    # generation stamp travels with them into the immutable snapshot.
-    if lab_ctx is not None:
-        breakdown["lab_region_offset_raw"] = round(float(lab_offset_raw), 4)
-        breakdown["lab_utility_raw"] = round(float(lab_utility_raw), 4)
-        breakdown["lab_generation"] = lab_ctx.get("generation")
     if cf.get("coupling_count"):
         breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
         if cf.get("coupling_partner_id"):

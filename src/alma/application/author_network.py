@@ -7,7 +7,7 @@ Library signal.
 
 Architecture:
   - Seed selection uses the composite `paper_signal.score_papers_batch`
-    — so we seed on topic + embedding + author + signal-lab + rating,
+    — so we seed on topic + embedding + author + feedback + rating,
     not just "rating >= 4". This breaks the recency-locked feedback
     loop where unrated-but-strong Library papers couldn't drive
     author suggestions.

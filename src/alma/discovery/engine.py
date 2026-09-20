@@ -11,7 +11,7 @@ have in their database:
 
 Candidates are scored with an 8-signal system (source relevance, topic overlap,
 semantic text similarity, author affinity, journal affinity, recency boost,
-citation quality, preference affinity from Signal Lab) plus a feedback
+citation quality, preference affinity) plus a feedback
 adjustment from past recommendation interactions.  A diversity interleaver
 ensures the final list draws from multiple source types rather than being
 dominated by a single strategy.

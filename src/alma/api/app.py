@@ -47,7 +47,6 @@ from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
 from alma.api.routes.settings import router as settings_router
-from alma.api.routes.signal_lab import router as signal_lab_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
@@ -608,7 +607,6 @@ app.include_router(home_router, prefix="/api/v1/home", tags=["home"])
 app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
 app.include_router(inbox_router, prefix="/api/v1/inbox", tags=["inbox"])
-app.include_router(signal_lab_router, prefix="/api/v1/signal-lab", tags=["signal-lab"])
 app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
 
 # ============================================================================

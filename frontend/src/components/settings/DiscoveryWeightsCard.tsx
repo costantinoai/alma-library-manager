@@ -55,7 +55,7 @@ const WEIGHT_LABELS: {
   { key: 'recency_boost', label: 'Recency', families: ['recency'], description: 'How recently it was published.' },
   { key: 'citation_quality', label: 'Citation', families: ['citation'], description: 'Citation weight, and citation-graph proximity to your library.' },
   { key: 'feedback_adj', label: 'Feedback', families: ['feedback'], description: 'Your explicit verdicts on similar papers.' },
-  { key: 'preference_affinity', label: 'Preference', families: ['preference'], description: 'The taste profile accumulated from Signal Lab and your history.' },
+  { key: 'preference_affinity', label: 'Preference', families: ['preference'], description: 'The taste profile accumulated from your ratings and history.' },
   { key: 'journal_affinity', label: 'Venue', families: ['venue'], description: 'Journals and conferences you read.' },
 ]
 

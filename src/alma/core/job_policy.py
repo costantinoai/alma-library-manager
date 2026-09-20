@@ -178,17 +178,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             max_concurrency=1,
             may_overlap_maintenance=False,
         ),
-        # The semantic partition + regions refresh (`semantic.partition.refresh`):
-        # local clustering and membership writes, no network, no model. Shared
-        # by the periodic tick and the Health repair `learning_partition`.
-        _p(
-            "semantic",
-            JobClass.MAINTENANCE,
-            30,
-            {_R.DB_WRITER},
-            max_concurrency=1,
-            may_overlap_maintenance=False,
-        ),
         _p(
             "materialize",
             JobClass.MAINTENANCE,
@@ -330,14 +319,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             coalescing=True,
             max_concurrency=1,
             may_overlap_maintenance=False,
-            destructive=True,
-        ),
-        _p(
-            "signal_lab",
-            JobClass.DATA_MANAGEMENT,
-            50,
-            {_R.DB_WRITER},
-            max_concurrency=1,
             destructive=True,
         ),
         # ---- Housekeeping (DB-exclusive, quiet slot) ---------------------------

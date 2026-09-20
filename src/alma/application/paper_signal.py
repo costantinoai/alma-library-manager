@@ -3,7 +3,7 @@
 Used anywhere we need a single "how strong is this paper as a signal
 right now" number. Today that's seed selection for the D12 network
 author-suggestion buckets; the same helper is reusable from Discovery
-lens seeding and Signal Lab priority queueing.
+lens seeding.
 
 Design rationale (2026-04-24):
   - Rating alone is too discrete (five buckets) and misses every
@@ -26,8 +26,6 @@ Signals blended:
   author_alignment— max cos(author_centroid, library_centroid) over
                     this paper's authors that have cached centroids
   feedback_events — net decayed positive feedback events on the paper
-                    (named `signal_lab` until 2026-07-27, which was simply
-                    wrong: it never read a Signal Lab round)
   recency         — half-life decay over publication_date (2yr)
 """
 
@@ -444,7 +442,7 @@ def score_papers_batch(
             if sim > prev:
                 author_align[pid] = sim
 
-    # --- signal-lab (feedback_events) --------------------------------
+    # --- feedback_events ---------------------------------------------
     sig_lab: dict[str, float] = {}
     try:
         fe_rows = db.execute(

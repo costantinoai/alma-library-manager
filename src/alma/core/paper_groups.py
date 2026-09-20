@@ -60,7 +60,12 @@ _PREPRINT_TO_PAPER_MIGRATE_TABLES = (
 _ALL_PAPER_SIDECAR_TABLES = frozenset(
     {
         *_PREPRINT_TO_PAPER_MIGRATE_TABLES,
+        # Both are artifacts of features that left main: the map (D24) and the
+        # semantic partition (D25). Their tables stay on existing installs and
+        # nothing reads them, but a merge or a purge must still take their rows
+        # with the paper, or dead state outlives the row it described.
         "publication_clusters",
+        "semantic_partition_members",
         "publication_embedding_fetch_status",
         "paper_enrichment_status",
         "paper_network_cache",
@@ -495,7 +500,7 @@ def _invalidate_group_caches(conn: sqlite3.Connection, root_id: str) -> int:
                 conn.execute(
                     "DELETE FROM materialized_views WHERE view_key IN "
                     "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield', "
-                    "'signal_lab:model', 'semantic:regions')"
+                    "'discovery:channel_yield')"
                 ).rowcount
                 or 0
             ),
@@ -538,7 +543,7 @@ def _group_is_normalized(
     if not subordinate_ids:
         return False
     placeholders = ",".join("?" for _ in subordinate_ids)
-    for table in _ALL_PAPER_SIDECAR_TABLES | {"semantic_partition_members"}:
+    for table in _ALL_PAPER_SIDECAR_TABLES:
         if not _table_has_paper_id(conn, table):
             continue
         try:
@@ -592,10 +597,7 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
     ``papers`` row; everything that could make it independently interactive is
     removed.  A later authoritative parent link starts from this inert state.
     """
-    from alma.application.semantic_partition import forget_members
-
     cleaned = _clear_subordinate_user_state(conn, paper_id)
-    cleaned += forget_members(conn, [paper_id])
     for table in _ALL_PAPER_SIDECAR_TABLES:
         cleaned += _delete_table_rows(conn, table, paper_id)
     try:
@@ -698,9 +700,6 @@ def absorb_paper_group(
             migrated[table] = migrated.get(table, 0) + count
         feedback_migrated += _merge_feedback(conn, pid, root_id)
         preferences_migrated += _merge_preference_profile(conn, pid, root_id)
-        from alma.application.semantic_partition import forget_members
-
-        cleaned += forget_members(conn, [pid])
         cleaned += _clear_subordinate_user_state(conn, pid)
         # Anything not deliberately migrated must not remain on an inert child.
         for table in _ALL_PAPER_SIDECAR_TABLES - set(tables):
@@ -926,7 +925,7 @@ def paper_group_defect_map(
         for row in rows
         if str(row["canonical_paper_id"] or "").strip() or is_component_row(row)
     ]
-    for table in _ALL_PAPER_SIDECAR_TABLES | {"semantic_partition_members"}:
+    for table in _ALL_PAPER_SIDECAR_TABLES:
         if not subordinate_ids or not _table_has_paper_id(conn, table):
             continue
         placeholders = ",".join("?" for _ in subordinate_ids)

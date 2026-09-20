@@ -334,20 +334,11 @@ background jobs share that one writer, so a burst of work can collide as
 * **Feed/Discovery paper actions are one transaction** —
   `application.paper_actions.apply_paper_action` owns the membership,
   surface-row settlement, and ordinary feedback writes inside one
-  `run_write_unit`. Signal Lab game rounds use their own one-row writer and
-  never enter this path.
+  `run_write_unit`.
 * **Map selection is one compound transaction** —
   `application.map_selection.create_collection_lens` re-validates the current
   Library/Corpus scope, then creates collection, Library promotions,
   memberships, and collection-backed lens under one `run_write_unit`.
-* **Signal Lab sheets are active-design reads** —
-  `application.signal_lab.policy.build_queue` reads the complete judgeable
-  super-region pool, generates a bounded representative candidate set, and
-  designs one diverse sheet with full-outcome expected information gain,
-  cooldown, staleness, answerability, and protected exploration. The GET writes
-  nothing. Its signed nonce makes answer POST retries idempotent; the first
-  valid answer is one row, and the derived utility/metric heads refit wholesale
-  in the background.
 * **Fetch/write decoupling for network sweeps** — per-item network jobs
   (identity resolution, abstract recovery) run through
   `core.fetch_pipeline`: bounded concurrent fetch pools do the network (no DB
