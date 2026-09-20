@@ -23,20 +23,12 @@ import re
 from dataclasses import dataclass
 from pathlib import PurePath
 
-from alma.application.pdfs.verify import PdfFacts
+from alma.application.pdfs.verify import PdfFacts, plausible_title, text_before_references
 from alma.core.utils import find_dois_in_text
 
 # First-page DOIs considered: the article's own is near the top or in the
 # footer; more than a few means we are into a reference-like list.
 _MAX_TEXT_DOIS = 3
-_REFERENCES_RE = re.compile(
-    r"\n\s*(references|bibliography|literature cited|works cited|reference list)\s*:?\s*\n",
-    re.IGNORECASE,
-)
-_JUNK_TITLE_RE = re.compile(r"^(microsoft word|untitled|document\d*|\s*$)", re.IGNORECASE)
-_FILELIKE_RE = re.compile(r"\.(pdf|docx?|tex|dvi|ps|odt)$", re.IGNORECASE)
-
-
 @dataclass(frozen=True)
 class IdentityHint:
     """One way to look the paper up; exactly one identifier field is set."""
@@ -50,29 +42,6 @@ class IdentityHint:
     def describe(self) -> str:
         value = self.doi or self.arxiv_id or self.openalex_id or self.title or ""
         return f"{self.source}: {value}"
-
-
-def text_before_references(text: str) -> str:
-    """The text up to the first references-style heading (or all of it)."""
-    match = _REFERENCES_RE.search(text or "")
-    return (text or "")[: match.start()] if match else (text or "")
-
-
-def plausible_title(value: str, *, filename: str = "") -> str | None:
-    """A metadata ``/Title`` worth searching for, or ``None``.
-
-    Word/LaTeX tooling fills ``/Title`` with junk ("Microsoft Word - draft3",
-    "untitled", the file name); those identify nothing.
-    """
-    title = " ".join((value or "").split())
-    if len(title) < 12 or len(title.split()) < 3:
-        return None
-    if _JUNK_TITLE_RE.match(title) or _FILELIKE_RE.search(title):
-        return None
-    stem = PurePath(filename or "").stem.lower()
-    if stem and title.lower() == stem:
-        return None
-    return title
 
 
 def _identifiers_in(text: str) -> tuple[str | None, str | None, str | None]:

@@ -21,7 +21,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from alma.application.pdf_schema import Verification
 from alma.core.utils import (
@@ -188,22 +188,93 @@ def title_matches(title: str, text: str) -> bool:
     return len(wanted & title_tokens(text)) / len(wanted) >= _TOKEN_CONTAINMENT
 
 
-def verify_identity(facts: PdfFacts, *, dois: Iterable[str], title: str) -> Verification:
-    """Which of the paper's identities the file's own text confirms.
+_JUNK_TITLE_RE = re.compile(r"^(microsoft word|untitled|document\d*|\s*$)", re.IGNORECASE)
+_FILELIKE_RE = re.compile(r"\.(pdf|docx?|tex|dvi|ps|odt)$", re.IGNORECASE)
 
-    ``dois`` are the paper's DOIs (its own plus its group's — a preprint's
-    PDF carries the preprint DOI). A DOI match is the strongest proof; the
-    title is next. No text at all is ``UNVERIFIED``; text that names neither
-    is ``MISMATCH``.
+
+def plausible_title(value: str, *, filename: str = "") -> str | None:
+    """A metadata ``/Title`` worth searching for, or ``None``.
+
+    Word/LaTeX tooling fills ``/Title`` with junk ("Microsoft Word - draft3",
+    "untitled", the file name); those identify nothing.
     """
-    wanted = {canonical_lookup_doi(d) for d in dois if d}
-    wanted.discard(None)
-    if wanted:
-        present = {canonical_lookup_doi(d) for d in (*find_dois_in_text(facts.text), *facts.metadata_dois)}
-        if wanted & present:
+    title = " ".join((value or "").split())
+    if len(title) < 12 or len(title.split()) < 3:
+        return None
+    if _JUNK_TITLE_RE.match(title) or _FILELIKE_RE.search(title):
+        return None
+    stem = PurePath(filename or "").stem.lower()
+    if stem and title.lower() == stem:
+        return None
+    return title
+
+
+_REFERENCES_RE = re.compile(
+    r"(?:^|\n)\s*(references|bibliography|literature cited|works cited|reference list)\s*:?\s*(?:\n|$)",
+    re.IGNORECASE,
+)
+
+
+def text_before_references(text: str) -> str:
+    """Exclude bibliography identifiers from both discovery and verification."""
+    match = _REFERENCES_RE.search(text or "")
+    return (text or "")[:match.start()] if match else (text or "")
+
+
+def verify_identity(facts: PdfFacts, *, dois: Iterable[str], title: str) -> Verification:
+    """Verify publisher metadata first; incidental citation DOIs are not identity.
+
+    Metadata identifiers outrank body identifiers. Without them, conflicting
+    metadata titles or multiple body DOIs need title corroboration. Bibliography
+    text never supplies identity evidence. Group DOIs still support preprints.
+    """
+    wanted = {canonical_lookup_doi(d) for d in dois if d} - {None}
+    metadata = {canonical_lookup_doi(d) for d in facts.metadata_dois} - {None}
+    body = text_before_references(facts.text)
+    if metadata and wanted:
+        if wanted & metadata:
             return Verification.DOI
-    if not facts.text.strip():
-        return Verification.UNVERIFIED
-    if title and title_matches(title, facts.text):
+        return Verification.MISMATCH
+    # Tool-generated titles are not evidence of either identity or conflict.
+    metadata_title = plausible_title(facts.metadata_title)
+    if metadata_title and title and not title_matches(title, metadata_title):
+        return Verification.MISMATCH
+    present = {canonical_lookup_doi(d) for d in find_dois_in_text(body)} - {None}
+    corroborated = bool(title and title_matches(title, metadata_title or body))
+    if wanted & present and (len(present) == 1 or corroborated):
+        return Verification.DOI
+    if corroborated:
         return Verification.TITLE
+    if not body.strip() and not metadata and not metadata_title:
+        return Verification.UNVERIFIED
+    return Verification.MISMATCH
+
+
+#: Hint sources whose identifier was READ OUT OF the body text (see
+#: :func:`verify_chosen_identity`). ``identify`` stamps them on the hint.
+CIRCULAR_EVIDENCE = frozenset({"first_page"})
+
+
+def verify_chosen_identity(facts: PdfFacts, *, dois: Iterable[str], title: str, evidence: str) -> Verification:
+    """Verification for a paper the file itself CHOSE (import), not one it was fetched for.
+
+    Fetching and attaching know the paper already, so a DOI in the body is
+    independent confirmation. Importing does not: the paper was looked up
+    *from* that same body DOI, so finding it there again proves nothing — a
+    manuscript citing someone else's DOI in its introduction would "confirm"
+    as that paper and take over its stored file.
+
+    So when the hint came out of the body (``evidence`` in
+    :data:`CIRCULAR_EVIDENCE`), a DOI needs support that did NOT pick the
+    paper: publisher metadata, or the title reading as this paper's.
+    """
+    verification = verify_identity(facts, dois=dois, title=title)
+    if verification is not Verification.DOI or evidence not in CIRCULAR_EVIDENCE:
+        return verification
+    wanted = {canonical_lookup_doi(d) for d in dois if d} - {None}
+    if wanted & ({canonical_lookup_doi(d) for d in facts.metadata_dois} - {None}):
+        return verification  # the publisher's own stamp, not the body
+    metadata_title = plausible_title(facts.metadata_title)
+    if title and title_matches(title, metadata_title or text_before_references(facts.text)):
+        return verification  # the page reads as this paper, DOI and all
     return Verification.MISMATCH

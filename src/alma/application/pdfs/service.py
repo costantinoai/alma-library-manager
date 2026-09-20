@@ -33,6 +33,7 @@ from alma.application.pdfs.verify import (
     PdfFacts,
     classify_head,
     facts_from,
+    verify_chosen_identity,
     verify_identity,
 )
 from alma.core.db_write import write_section
@@ -547,9 +548,13 @@ def _arxiv_candidate(hint: IdentityHint) -> dict | None:
     return fetch_work_by_id(arxiv_id) if arxiv_id else None
 
 
-def _accepts(facts: PdfFacts, *, dois: list[str], title: str) -> Verification | None:
-    """The verification if the file plausibly IS this paper, else ``None``."""
-    verification = verify_identity(facts, dois=dois, title=title)
+def _accepts(facts: PdfFacts, *, dois: list[str], title: str, hint: IdentityHint) -> Verification | None:
+    """The verification if the file plausibly IS this paper, else ``None``.
+
+    ``hint`` is what picked the paper: evidence read out of the body cannot
+    then confirm itself (see :func:`verify_chosen_identity`).
+    """
+    verification = verify_chosen_identity(facts, dois=dois, title=title, evidence=hint.source)
     return None if verification is Verification.MISMATCH else verification
 
 
@@ -582,10 +587,28 @@ def import_upload(
 
     same = store.find_by_sha(conn, staged.sha256)
     if same is not None:
-        store.release_staged(staged)
-        title = str((conn.execute("SELECT title FROM papers WHERE id = ?", (same.paper_id,)).fetchone() or [""])[0])
-        log("dedupe", f"Already stored for “{title}”")
-        return {"outcome": "already_stored", "paper_id": same.paper_id, "title": title}
+        ref = build_paper_ref(conn, same.paper_id)
+        if ref is not None:
+            # Identical bytes still express an import: promotion belongs to
+            # the same canonical path as newly identified files (D4).
+            ref, promoted = _promote_import_target(conn, ref)
+            try:
+                available = store.absolute_path(same.rel_path).is_file()
+            except store.UnsafeStorePathError:
+                available = False
+            if available and ref.paper_id == same.paper_id:
+                store.release_staged(staged)
+                log("dedupe", f"Already stored for “{ref.title}”", data={"promoted_to_library": promoted})
+                return {"outcome": "already_stored", "paper_id": ref.paper_id,
+                        "title": ref.title, "promoted_to_library": promoted}
+            # Missing files (including seeded dev rows) must be repaired from
+            # the upload; a DB hash alone never proves readable availability.
+            result = _attach_imported(conn, ref=ref, staged=staged, facts=facts,
+                                      filename=filename, verification=verify_identity(
+                                          facts, dois=paper_dois(ref), title=ref.title),
+                                      created=False, log=log)
+            result["promoted_to_library"] = promoted or result["promoted_to_library"]
+            return result
 
     hints = identify(facts, filename=filename)
     if user_hint is not None:
@@ -600,7 +623,7 @@ def import_upload(
         ref = build_paper_ref(conn, paper_id)
         if ref is None:
             continue
-        verification = _accepts(facts, dois=paper_dois(ref), title=ref.title)
+        verification = _accepts(facts, dois=paper_dois(ref), title=ref.title, hint=hint)
         if verification is None and hint is not user_hint:
             log("match", f"Skipped “{ref.title}” ({hint.describe()}): the file names another paper")
             continue
@@ -628,7 +651,7 @@ def import_upload(
             continue
         record = work or candidate
         work_title = str(record.get("title") or "")
-        verification = _accepts(facts, dois=[str(record.get("doi") or "")], title=work_title)
+        verification = _accepts(facts, dois=[str(record.get("doi") or "")], title=work_title, hint=hint)
         if verification is None and hint is not user_hint:
             log("resolve", f"Skipped “{work_title}” ({hint.describe()}): the file names another paper")
             continue
@@ -657,6 +680,17 @@ def import_upload(
             "hints": [h.describe() for h in hints]}
 
 
+def _promote_import_target(conn: sqlite3.Connection, ref: PaperRef) -> tuple[PaperRef, bool]:
+    """Apply canonical import membership, following any dedup survivor."""
+    from alma.library.importer import promote_existing_import_target
+
+    with write_section(conn, label="pdf.import.promote"):
+        save_id, promoted = promote_existing_import_target(conn, ref.paper_id, added_from="import")
+    if save_id != ref.paper_id:
+        ref = build_paper_ref(conn, save_id) or ref
+    return ref, promoted
+
+
 def _attach_imported(
     conn: sqlite3.Connection,
     *,
@@ -669,14 +703,9 @@ def _attach_imported(
     log: StepLog,
 ) -> dict:
     """Promote the matched paper into the Library (D4) and store the file on it."""
-    from alma.library.importer import promote_existing_import_target
-
     promoted = False
     if not created:
-        with write_section(conn, label="pdf.import.promote"):
-            save_id, promoted = promote_existing_import_target(conn, ref.paper_id, added_from="import")
-        if save_id != ref.paper_id:  # a Library duplicate absorbed it: attach to the survivor
-            ref = build_paper_ref(conn, save_id) or ref
+        ref, promoted = _promote_import_target(conn, ref)
     outcome = store_file(
         conn,
         staged=staged,

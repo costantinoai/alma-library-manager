@@ -31,6 +31,7 @@ import unicodedata
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from alma.core.author_names import parse_author_names, surname
@@ -82,6 +83,7 @@ DDL: tuple[str, ...] = (
 INCOMING_DIRNAME = ".incoming"
 UNDATED_DIRNAME = "undated"
 _TITLE_MAX_CHARS = 90
+_FILENAME_MAX_BYTES = 255
 #: Largest PDF ALMa accepts from any source (download, upload, import).
 MAX_PDF_BYTES = 100 * 1024 * 1024
 
@@ -145,6 +147,13 @@ def _short_title(title: str) -> str:
     return (cut or clean[:_TITLE_MAX_CHARS]).strip(" .")
 
 
+def _bounded_filename(stem: str, suffix: str = ".pdf", tag: str = "") -> str:
+    """Bound the entire UTF-8 filename, reserving extension and collision tag."""
+    tail = f"{tag}{suffix}"
+    budget = _FILENAME_MAX_BYTES - len(tail.encode("utf-8"))
+    return stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" .") + tail
+
+
 def filename_for(*, title: str, year: int | None, authors: str) -> str:
     """The relative path a paper's PDF is stored under (before clash handling).
 
@@ -153,11 +162,11 @@ def filename_for(*, title: str, year: int | None, authors: str) -> str:
     """
     names = parse_author_names(authors or "")
     lead = _clean_component(surname(names[0])) if names else ""
-    lead = lead or "Unknown"
+    lead = (lead or "Unknown").encode("utf-8")[:80].decode("utf-8", errors="ignore").rstrip(" .")
     short = _short_title(title)
     if year:
-        return f"{int(year)}/{lead} {int(year)} - {short}.pdf"
-    return f"{UNDATED_DIRNAME}/{lead} - {short}.pdf"
+        return f"{int(year)}/" + _bounded_filename(f"{lead} {int(year)} - {short}")
+    return f"{UNDATED_DIRNAME}/" + _bounded_filename(f"{lead} - {short}")
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +296,76 @@ def release_staged(staged: StagedFile) -> None:
     staged.path.with_suffix(".json").unlink(missing_ok=True)
 
 
+@dataclass(frozen=True)
+class StagedUpload:
+    """A kept upload awaiting an identity, as the pending list reports it."""
+
+    token: str
+    filename: str
+    sha256: str
+    bytes: int
+    #: When the body finished staging (the ``.part`` file's mtime), ISO-8601 UTC.
+    staged_at: str
+
+    def to_wire(self) -> dict:
+        return {
+            "upload_id": self.token,
+            "filename": self.filename,
+            "sha256": self.sha256,
+            "bytes": self.bytes,
+            "staged_at": self.staged_at,
+        }
+
+
+def list_staged() -> list[StagedUpload]:
+    """Every kept upload still worth retrying, newest first.
+
+    The sidecar written by :func:`keep_staged` is the marker: a ``.part``
+    without one is a body mid-write, not a decision the user owes. Entries
+    past :data:`STAGING_TTL_SECONDS` are skipped so the list never advertises
+    an upload :func:`prune_orphan_files` is about to remove. Pure read.
+    """
+    import time
+
+    incoming = store_root(create=False) / INCOMING_DIRNAME
+    if not incoming.is_dir():
+        return []
+    clock = time.time()
+    uploads: list[tuple[float, StagedUpload]] = []
+    for meta_path in incoming.glob("*.json"):
+        # load_staged owns token validation and sidecar parsing — one reader.
+        loaded = load_staged(meta_path.stem)
+        if loaded is None:
+            continue
+        staged, filename = loaded
+        try:
+            mtime = staged.path.stat().st_mtime
+        except OSError:
+            continue
+        if clock - mtime > STAGING_TTL_SECONDS:
+            continue
+        uploads.append((
+            mtime,
+            StagedUpload(
+                token=staged_token(staged),
+                filename=filename,
+                sha256=staged.sha256,
+                bytes=staged.bytes,
+                staged_at=datetime.fromtimestamp(mtime, tz=timezone.utc).replace(tzinfo=None).isoformat(),
+            ),
+        ))
+    return [upload for _, upload in sorted(uploads, key=lambda pair: pair[0], reverse=True)]
+
+
+def discard_staged(token: str) -> bool:
+    """Give up a kept upload; ``False`` when the token addresses nothing."""
+    loaded = load_staged(token)
+    if loaded is None:
+        return False
+    release_staged(loaded[0])
+    return True
+
+
 def read_head(path: Path, size: int = 1024) -> bytes:
     with path.open("rb") as fh:
         return fh.read(size)
@@ -303,9 +382,9 @@ def place(staged: StagedFile, rel_path: str, *, paper_id: str) -> str:
     store_root()  # ensure the tree exists
     base = Path(rel_path)
     stem, suffix = base.stem, base.suffix or ".pdf"
-    tag = paper_id.replace("-", "")[:8]
-    names = [base.name, f"{stem} [{tag}]{suffix}"]
-    names += [f"{stem} [{tag}-{n}]{suffix}" for n in range(2, 100)]
+    tag = _clean_component(paper_id.replace("-", ""))[:8]
+    names = [_bounded_filename(stem, suffix), _bounded_filename(stem, suffix, f" [{tag}]")]
+    names += [_bounded_filename(stem, suffix, f" [{tag}-{n}]") for n in range(2, 100)]
     for name in names:
         target_rel = str(base.with_name(name))
         target = absolute_path(target_rel)
