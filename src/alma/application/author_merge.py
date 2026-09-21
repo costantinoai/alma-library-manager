@@ -1048,6 +1048,7 @@ def record_orcid_aliases(
 # ``datetime('now', …)`` so storage + comparison share one format (see
 # ``_stamp_orcid_swept``).
 ORCID_RESWEEP_WINDOW = "-30 days"
+ORCID_SWEEP_LEDGER_PURPOSE = "orcid_duplicate_scan"
 
 # The ONE predicate for "this followed author still needs an ORCID sweep" —
 # never scanned, or last scanned longer ago than the re-sweep window. Used
@@ -1056,7 +1057,14 @@ ORCID_RESWEEP_WINDOW = "-30 days"
 # what a dry-run previews. ``a`` must be aliased to the ``authors`` row; the
 # caller binds ``ORCID_RESWEEP_WINDOW`` as the single ``?`` parameter.
 _SWEEP_PENDING_SQL = (
-    "(a.orcid_swept_at IS NULL OR a.orcid_swept_at < datetime('now', ?))"
+    "(a.orcid_swept_at IS NULL OR a.orcid_swept_at < datetime('now', ?)) "
+    "AND NOT EXISTS ("
+    "SELECT 1 FROM author_enrichment_status aes "
+    "WHERE aes.author_id = a.id AND aes.source = 'openalex' "
+    f"AND aes.purpose = '{ORCID_SWEEP_LEDGER_PURPOSE}' "
+    "AND aes.status = 'retryable_error' "
+    "AND datetime(aes.next_retry_at) > datetime('now')"
+    ")"
 )
 
 
@@ -1070,6 +1078,9 @@ def count_dedup_orcid_candidates(db: sqlite3.Connection) -> int:
     forever. Counting the unswept remainder instead means a full run drives it to
     zero, and newly-followed or stale authors re-arm it — the honest "remaining
     work" signal a repair card promises (see migration 24 / ``orcid_swept_at``)."""
+    from alma.services.author_hydrate import ensure_author_hydration_tables
+
+    ensure_author_hydration_tables(db)
     row = db.execute(
         f"""
         SELECT COUNT(DISTINCT fa.author_id) AS c
@@ -1312,6 +1323,9 @@ def scan_duplicate_candidates(
        "skipped_no_orcid", "sample"[:25], "message"}.
     """
     ensure_alt_identifiers_table(db)
+    from alma.services.author_hydrate import ensure_author_hydration_tables
+
+    ensure_author_hydration_tables(db)
 
     # Build a `by_oid` lookup of every ACTIVE local author with an
     # openalex_id — followed AND background. The sweep iterates only
@@ -1421,11 +1435,29 @@ def scan_duplicate_candidates(
 
             if isinstance(exc, ExternalAccessError):
                 raise
-            # A network/lookup FAILURE is the only case we leave unstamped, so the
-            # author is retried next run (don't `continue` past the stamp for the
-            # success cases below).
+            # A network/lookup failure remains pending, but receives the shared
+            # six-hour transient backoff. Without this ledger stamp, every manual
+            # run immediately hammered the same unreachable author again.
             logger.warning("ORCID discovery failed for %s: %s", target["author_id"], exc)
             summary["errors"] += 1
+            if not dry_run:
+                from alma.services.author_hydrate import (
+                    OPENALEX_SOURCE,
+                    RETRYABLE_STATUS,
+                    _upsert_enrichment_status,
+                )
+
+                with write_section(db, label="author_dedup_retry"):
+                    _upsert_enrichment_status(
+                        db,
+                        author_id=target["author_id"],
+                        source=OPENALEX_SOURCE,
+                        purpose=ORCID_SWEEP_LEDGER_PURPOSE,
+                        lookup_key=f"openalex:{target['openalex_id'].lower()}",
+                        fields_key="orcid_duplicate_scan_v1",
+                        status=RETRYABLE_STATUS,
+                        reason=str(exc),
+                    )
             continue
         shared_orcid = discovery.get("orcid")
         # A successful scan that finds no ORCID is still a completed scan — it gets
@@ -1490,6 +1522,11 @@ def scan_duplicate_candidates(
                 db.execute(
                     "UPDATE authors SET orcid_swept_at = datetime('now') WHERE id = ?",
                     (target["author_id"],),
+                )
+                db.execute(
+                    "DELETE FROM author_enrichment_status "
+                    "WHERE author_id = ? AND source = 'openalex' AND purpose = ?",
+                    (target["author_id"], ORCID_SWEEP_LEDGER_PURPOSE),
                 )
 
         if sleep_between_calls > 0:

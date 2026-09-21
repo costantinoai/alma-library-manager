@@ -290,6 +290,8 @@ class MaintenanceTask:
     unlocks: tuple[str, ...] = ()
     optional: bool = False
     manual_gate: bool = False
+    routine: bool = False
+    requirements: tuple[str, ...] = ()
     default_auto_enabled: bool = False
     default_auto_daily_cap: int = 200
     max_auto_daily_cap: int = 100_000

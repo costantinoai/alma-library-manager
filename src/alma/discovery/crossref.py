@@ -188,7 +188,9 @@ def fetch_work_by_doi(doi: str) -> dict | None:
     return _crossref_to_candidate(message, score=1.0)
 
 
-def _fetch_works_chunk(chunk: list[str]) -> dict[str, dict]:
+def _fetch_works_chunk(
+    chunk: list[str], *, raise_on_error: bool = False
+) -> dict[str, dict]:
     """Single-chunk worker for `fetch_works_by_dois`. Public via the
     parallel orchestrator below; otherwise treat as private."""
     if not chunk:
@@ -208,6 +210,8 @@ def _fetch_works_chunk(chunk: list[str]) -> dict[str, dict]:
         logger.warning(
             "Crossref batch DOI lookup failed for %d DOIs: %s", len(chunk), exc
         )
+        if raise_on_error:
+            raise
         return {}
     if resp.status_code != 200:
         logger.debug(
@@ -215,11 +219,15 @@ def _fetch_works_chunk(chunk: list[str]) -> dict[str, dict]:
             resp.status_code,
             len(chunk),
         )
+        if raise_on_error:
+            raise RuntimeError(f"Crossref batch DOI lookup returned HTTP {resp.status_code}")
         return {}
     try:
         items = (((resp.json() or {}).get("message") or {}).get("items")) or []
     except Exception as exc:
         logger.warning("Crossref batch JSON decode failed: %s", exc)
+        if raise_on_error:
+            raise
         return {}
     out: dict[str, dict] = {}
     for item in items:
@@ -236,7 +244,8 @@ def _fetch_works_chunk(chunk: list[str]) -> dict[str, dict]:
 
 
 def fetch_works_by_dois(
-    dois: list[str], *, batch_size: int = 50, max_workers: int = 3
+    dois: list[str], *, batch_size: int = 50, max_workers: int = 3,
+    raise_on_error: bool = False,
 ) -> dict[str, dict]:
     """Fetch multiple Crossref works in one HTTP call per chunk.
 
@@ -293,7 +302,7 @@ def fetch_works_by_dois(
     out: dict[str, dict] = {}
     if workers == 1 or len(chunks) == 1:
         for chunk in chunks:
-            out.update(_fetch_works_chunk(chunk))
+            out.update(_fetch_works_chunk(chunk, raise_on_error=raise_on_error))
         return out
 
     from concurrent.futures import as_completed
@@ -301,12 +310,17 @@ def fetch_works_by_dois(
     from alma.core.concurrency import bounded_thread_pool
 
     with bounded_thread_pool(workers) as ex:
-        futures = [ex.submit(_fetch_works_chunk, chunk) for chunk in chunks]
+        futures = [
+            ex.submit(_fetch_works_chunk, chunk, raise_on_error=raise_on_error)
+            for chunk in chunks
+        ]
         for fut in as_completed(futures):
             try:
                 out.update(fut.result())
             except Exception as exc:
                 logger.warning("Crossref batch chunk failed in pool: %s", exc)
+                if raise_on_error:
+                    raise
     return out
 
 

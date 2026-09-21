@@ -12,7 +12,6 @@
  */
 import { navigateTo } from '@/lib/hashRoute'
 import type { HealthDimension } from '@/api/client'
-import { canDrilldown } from './healthFormat'
 import { StatusRow } from '@/components/shared/StatusRow'
 import { Meter } from '@/components/ui/meter'
 
@@ -102,7 +101,7 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   // fold and the gap reads as "nothing to fix". The param tells AuthorsPage to
   // scroll it into view and flash it, so the drilldown lands on the card that
   // actually resolves the gap (retry / pick affiliation / accept-unidentified).
-  const handleOpen = canDrilldown(dim.key)
+  const handleOpen = dim.has_drilldown
     ? onOpen
     : isAuthorDim && dim.actions.some((action) => action.kind === 'link')
       ? () => navigateTo('authors', { focus: 'needs-attention' })

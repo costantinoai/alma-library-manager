@@ -273,6 +273,8 @@ export interface HealthDimension {
   breakdown?: HealthDimensionDefect[] | null
   repair_task: string | null
   actions: HealthAction[]
+  /** True when the API exposes affected-item rows for this dimension. */
+  has_drilldown: boolean
   scope: 'corpus' | 'library' | string
   /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
   exhausted: number | null
@@ -417,6 +419,18 @@ export interface MaintenanceOperation {
   unlocks: string[]
   optional: boolean
   manual_gate: boolean
+  /** Routine pipeline work stays available but does not become a Health alarm. */
+  routine: boolean
+  /** Backend-owned verdict used to decide whether this repair needs a full card. */
+  attention_required: boolean
+  attention_reason: string
+  availability_blocker: {
+    code: string
+    message: string
+    owner: string
+    href: string
+    action: string
+  } | null
   readiness: 'healthy' | 'blocked' | 'blocked_external' | 'manual_review' | 'optional' | 'ready' | 'assessment_failed'
   recommended: boolean
   repairs: string[]

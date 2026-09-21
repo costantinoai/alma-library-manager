@@ -2214,32 +2214,35 @@ def _trigger_background_enrichment(
         """
         from alma.api.routes.authors import _resolve_identifiers_bulk_optimized
 
+        # Imported coauthors are represented in publication_authors; only the
+        # selected primary also appears in papers.author_id. Treat either link as
+        # evidence, or every non-primary coauthor is skipped and becomes later
+        # maintenance debt despite arriving with the paper.
+        linked_publication_sql = """
+            EXISTS (SELECT 1 FROM papers p WHERE p.author_id = a.id)
+            OR EXISTS (
+                SELECT 1 FROM publication_authors pa
+                WHERE lower(trim(pa.display_name)) = lower(trim(a.name))
+            )
+        """
         unresolved_no_publications = int(
             conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS c
                 FROM authors a
                 WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM papers p
-                    WHERE p.author_id = a.id
-                  )
+                  AND NOT ({linked_publication_sql})
                 """
             ).fetchone()["c"] or 0
         )
         unresolved_placeholder_no_publications = int(
             conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS c
                 FROM authors a
                 WHERE a.id LIKE 'import_author_%'
                   AND COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM papers p
-                    WHERE p.author_id = a.id
-                  )
+                  AND NOT ({linked_publication_sql})
                 """
             ).fetchone()["c"] or 0
         )
@@ -2248,15 +2251,11 @@ def _trigger_background_enrichment(
             unresolved_no_publications - unresolved_placeholder_no_publications,
         )
         rows = conn.execute(
-            """
+            f"""
             SELECT a.id, a.name
             FROM authors a
             WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-              AND EXISTS (
-                SELECT 1
-                FROM papers p
-                WHERE p.author_id = a.id
-              )
+              AND ({linked_publication_sql})
             ORDER BY a.name
             LIMIT 5000
             """
@@ -2311,14 +2310,14 @@ def _trigger_background_enrichment(
         refs = imported_refs or []
         # Targeted plan: enrich → paper_groups → author_linking → resolve_ids →
         # dedup (+ embeddings). Full plan drops author_linking.
-        pipeline_total = 6 if refs else 5
+        pipeline_total = 5 if refs else 4
         set_job_status(
             job_id,
             status="running",
             started_at=utcnow().isoformat(),
             operation_key="imports.postprocess",
             trigger_source="user",
-            message="Post-import pipeline: enrich, resolve IDs, dedup, embeddings",
+            message="Post-import pipeline: enrich, resolve IDs, and deduplicate",
             processed=0,
             total=pipeline_total,
         )
@@ -2327,7 +2326,7 @@ def _trigger_background_enrichment(
             (
                 f"Post-import pipeline started for {result.imported} imported items "
                 "(stages: enrichment -> paper groups -> author linking -> author ID resolution "
-                "-> dedup -> embeddings)"
+                "-> dedup; enrichment queues downstream vectors automatically)"
             ),
             step="start",
         )
