@@ -383,15 +383,12 @@ def _refresh_lens_recommendations(
     else:
         positive_pubs, negative_pubs = split_preference_pubs(seeds)
         scope_paper_ids = {str(s["id"]) for s in seeds if s.get("id")}
-    # Build the read-only preference projection alongside the local retrieval
-    # lanes. On the dev corpus this substrate takes about as long as graph
-    # retrieval; doing them serially doubled warm refresh latency.
+    # Preference projection is a prerequisite of the external lane, not work
+    # controlled by that lane. Finish it before starting lane deadlines. When
+    # this ran in a separate future, the external lane spent ~5 s of its 30 s
+    # budget awaiting the shared result; cold branch clustering plus frontier
+    # search then pushed an otherwise healthy local read past the deadline.
     from alma.api.deps import open_db_connection as _open_lane_conn
-
-    profile_pool = bounded_thread_pool(
-        1,
-        thread_name_prefix="lens-preference",
-    )
 
     def _build_preference_profile():
         conn = _open_lane_conn()
@@ -406,10 +403,11 @@ def _refresh_lens_recommendations(
         finally:
             conn.close()
 
-    profile_future = profile_pool.submit(_build_preference_profile)
-
-    def _await_preference_profile():
-        return profile_future.result()
+    profile_started = perf_counter()
+    profile = _build_preference_profile()
+    timings_ms["preference_profile"] = int(
+        round((perf_counter() - profile_started) * 1000)
+    )
     # A collection lens is *tied* to its collection: it excludes only papers
     # already in that collection, and still surfaces Library papers that live in
     # OTHER collections (so the user can pull them into this one). Non-collection
@@ -543,7 +541,7 @@ def _refresh_lens_recommendations(
         ("external", "Taste/branch (offline frontier)",
          lambda c: _retrieve_external_channel(
              c, lens, seeds, limit=limit,
-             preference_profile=_await_preference_profile(),
+             preference_profile=profile,
              positive_pubs=positive_pubs)),
     )
     # A running Future cannot be cancelled. Once the parent has abandoned a
@@ -567,7 +565,7 @@ def _refresh_lens_recommendations(
     # binding constraint on the external lane. Read through the canonical
     # settings reader; there is exactly one of those.
     lane_deadline_s = setting_float(
-        scoring_settings, "limits.lane_deadline_seconds", 30.0, 5.0, 300.0
+        scoring_settings, "limits.lane_deadline_seconds", 60.0, 5.0, 300.0
     )
 
     def _fail_lane_subtask(lane_name: str, reason: str) -> None:
@@ -642,10 +640,6 @@ def _refresh_lens_recommendations(
                 )
     finally:
         lane_pool.shutdown(wait=False)
-    try:
-        profile = _await_preference_profile()
-    finally:
-        profile_pool.shutdown(wait=False)
 
     lexical = lane_results.get("lexical") or []
     vector = lane_results.get("vector") or []

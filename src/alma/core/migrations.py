@@ -118,8 +118,6 @@ def _m_0001_papers_columns(conn: sqlite3.Connection) -> None:
             "influential_citation_count": "INTEGER DEFAULT 0",
         },
     )
-
-
 def _m_0002_papers_status_relabels(conn: sqlite3.Connection) -> None:
     """One-shot lifecycle relabels (D2): candidate→tracked, legacy import
     promotion, disliked→tracked, queued→reading."""
@@ -1585,6 +1583,20 @@ def _m_0044_inbox_message_review(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0045_discovery_lane_deadline(conn: sqlite3.Connection) -> None:
+    """Give local retrieval one minute on installs still using old default.
+
+    Preserve deliberate user tuning: only exact old default moves. Fresh
+    databases receive 60 seconds from ``DISCOVERY_SETTINGS_DEFAULTS``.
+    """
+    if not _table_exists(conn, "discovery_settings"):
+        return
+    conn.execute(
+        "UPDATE discovery_settings SET value = '60' "
+        "WHERE key = 'limits.lane_deadline_seconds' AND value = '30'"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1630,6 +1642,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (42, "paper_group_pointer_guards", _m_0042_paper_group_pointer_guards),
     (43, "paper_pdfs", _m_0043_paper_pdfs),
     (44, "inbox_message_review", _m_0044_inbox_message_review),
+    (45, "discovery_lane_deadline", _m_0045_discovery_lane_deadline),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

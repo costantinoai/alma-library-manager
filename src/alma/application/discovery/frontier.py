@@ -57,6 +57,46 @@ class FrontierBuildResult:
         }
 
 
+@dataclass(frozen=True)
+class FrontierSearchRow:
+    """One frontier candidate with query-invariant text prepared once."""
+
+    candidate: dict[str, Any]
+    title_norm: str
+    strong_tokens: frozenset[str]
+    abstract_norm: str
+    abstract_tokens: frozenset[str]
+
+
+def build_frontier_search_index(
+    candidates: Iterable[dict[str, Any]],
+) -> list[FrontierSearchRow]:
+    """Prepare frontier text once before a refresh's many branch queries.
+
+    A Library refresh runs roughly 20–30 taste queries over the same frontier.
+    Normalising title/authors/abstract inside every query made this O(queries ×
+    frontier text); the index keeps comparisons identical while making text
+    normalisation O(frontier text).
+    """
+    from alma.core.scoring_math import prepare_query_match_candidate
+
+    indexed: list[FrontierSearchRow] = []
+    for candidate in candidates:
+        title, strong, abstract, abstract_tokens = prepare_query_match_candidate(
+            candidate
+        )
+        indexed.append(
+            FrontierSearchRow(
+                candidate=candidate,
+                title_norm=title,
+                strong_tokens=strong,
+                abstract_norm=abstract,
+                abstract_tokens=abstract_tokens,
+            )
+        )
+    return indexed
+
+
 def run_frontier_maintenance(
     db: sqlite3.Connection,
     *,
@@ -816,24 +856,40 @@ def load_live_frontier(db: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def search_frontier(
-    candidates: Iterable[dict[str, Any]],
+    candidates: Iterable[dict[str, Any]] | Iterable[FrontierSearchRow],
     query: str,
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
     """Pure local query over a preloaded frontier candidate list."""
 
-    from alma.core.scoring_math import query_match_score, query_tokens
+    from alma.core.scoring_math import (
+        prepare_query_match_candidate,
+        query_match_score_prepared,
+        query_tokens,
+    )
 
     normalized, tokens = query_tokens(query)
     ranked: list[dict[str, Any]] = []
-    for raw in candidates:
-        score = query_match_score(normalized, tokens, raw)
+    for item in candidates:
+        if isinstance(item, FrontierSearchRow):
+            row = item
+        else:
+            title, strong, abstract, abstract_tokens = prepare_query_match_candidate(item)
+            row = FrontierSearchRow(item, title, strong, abstract, abstract_tokens)
+        score = query_match_score_prepared(
+            normalized,
+            tokens,
+            title_norm=row.title_norm,
+            strong_tokens=row.strong_tokens,
+            abstract_norm=row.abstract_norm,
+            abstract_tokens=row.abstract_tokens,
+        )
         if score <= 0.0:
             continue
         ranked.append(
             {
-                **raw,
+                **row.candidate,
                 "score": score,
                 "source_type": "frontier_search",
                 "source_api": "local",

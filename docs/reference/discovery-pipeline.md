@@ -332,16 +332,16 @@ build on the dev corpus: **0 → 479 leads, 394 with vectors.**
 ### The lane deadline
 
 The four lanes run concurrently under `limits.lane_deadline_seconds`
-(default 30). It is a backstop against pathological *local* computation —
+(default 60). It is a backstop against pathological *local* computation —
 network collection belongs to the offline builder, so no lane should come close.
 
 It was a hardcoded 8.0 and that made it a binding constraint rather than a
-backstop. The external lane's first act is to wait for the shared preference
-profile; that profile took 7.8 s, so external burned its whole budget waiting
-and was abandoned **on every refresh**, by construction. The deck was quietly
-built from three lanes. Fixing the profile's quadratic author scan (7.8 s →
-3.6 s) and raising the ceiling to a setting fixed it; external now completes in
-~18–20 s.
+backstop. The external lane used to wait for the shared preference profile;
+that profile took 7.8 s, so external burned its whole budget waiting and was
+abandoned **on every refresh**, by construction. The deck was quietly built
+from three lanes. The profile is now completed before lane clocks begin. The
+frontier search also normalises each candidate once per refresh instead of once
+per query; this matters when 20–30 branch queries scan thousands of leads.
 
 A lane that misses the deadline now writes an Activity entry and marks its
 subtask failed, naming the lane, the deadline, and the consequence. Previously

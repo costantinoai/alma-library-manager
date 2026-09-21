@@ -8,7 +8,7 @@ from typing import Any
 
 from alma.core.settings_helpers import setting_int
 
-from ..frontier import load_live_frontier, search_frontier
+from ..frontier import build_frontier_search_index, load_live_frontier, search_frontier
 from ..lens_crud import (
     _apply_branch_controls,
     _resolve_lens_branch_controls,
@@ -47,6 +47,7 @@ def _retrieve_external_channel(
             "network_calls": 0,
             "frontier_size": 0,
         }
+    frontier_search = build_frontier_search_index(frontier)
 
     settings = read_settings(db)
     controls = _resolve_lens_branch_controls(lens)
@@ -104,7 +105,7 @@ def _retrieve_external_channel(
                     (
                         mode,
                         query,
-                        search_frontier(frontier, query, limit=max(8, limit // 2)),
+                        search_frontier(frontier_search, query, limit=max(8, limit // 2)),
                         {
                             "branch_id": str(branch.get("id") or ""),
                             "branch_mode": mode.removeprefix("branch_"),
@@ -127,7 +128,7 @@ def _retrieve_external_channel(
             (
                 "taste_topic",
                 topic,
-                search_frontier(frontier, topic, limit=max(8, limit // 2)),
+                search_frontier(frontier_search, topic, limit=max(8, limit // 2)),
                 {},
             )
         )
@@ -140,7 +141,7 @@ def _retrieve_external_channel(
             (
                 "recent_win",
                 query,
-                search_frontier(frontier, query, limit=max(8, limit // 2)),
+                search_frontier(frontier_search, query, limit=max(8, limit // 2)),
                 {},
             )
         )
@@ -244,5 +245,4 @@ def _retrieve_external_channel(
         "network_calls": 0,
         "frontier_size": len(frontier),
     }
-
 

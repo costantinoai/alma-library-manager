@@ -12,7 +12,7 @@ default) takes effect everywhere by construction.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from datetime import datetime, timezone
 
 from alma.core.utils import normalize_text
@@ -93,13 +93,43 @@ def query_match_score(query_norm: str, tokens: list[str], candidate: Mapping) ->
     ordering has to be reconstructed locally from text. Importing it from
     `source_search` would be circular — that module imports the adapter.
     """
-    if not tokens:
-        return 0.0
+    title_norm, strong_tokens, abstract_norm, abstract_tokens = prepare_query_match_candidate(
+        candidate
+    )
+    return query_match_score_prepared(
+        query_norm,
+        tokens,
+        title_norm=title_norm,
+        strong_tokens=strong_tokens,
+        abstract_norm=abstract_norm,
+        abstract_tokens=abstract_tokens,
+    )
+
+
+def prepare_query_match_candidate(
+    candidate: Mapping,
+) -> tuple[str, frozenset[str], str, frozenset[str]]:
+    """Normalise one candidate once for one or many query comparisons."""
     title_norm = normalize_text(str(candidate.get("title") or ""))
     authors_norm = normalize_text(str(candidate.get("authors") or ""))
     abstract_norm = normalize_text(str(candidate.get("abstract") or ""))
-    strong_tokens = set(title_norm.split()) | set(authors_norm.split())
-    abstract_tokens = set(abstract_norm.split())
+    strong_tokens = frozenset(title_norm.split()) | frozenset(authors_norm.split())
+    abstract_tokens = frozenset(abstract_norm.split())
+    return title_norm, strong_tokens, abstract_norm, abstract_tokens
+
+
+def query_match_score_prepared(
+    query_norm: str,
+    tokens: list[str],
+    *,
+    title_norm: str,
+    strong_tokens: Set[str],
+    abstract_norm: str,
+    abstract_tokens: Set[str],
+) -> float:
+    """Score against pre-normalised text, preserving `query_match_score`."""
+    if not tokens:
+        return 0.0
 
     covered = sum(
         1.0 if token in strong_tokens else (0.5 if token in abstract_tokens else 0.0)

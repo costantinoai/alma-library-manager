@@ -90,9 +90,9 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # a backstop: the external lane waits on the shared preference profile,
     # which took 7.8 s, so external was cut on EVERY refresh and the deck
     # silently lost a whole retrieval family (measured 2026-07-27). The profile
-    # is now ~3.6 s and the ceiling is a setting, so a slow box can raise it
-    # instead of quietly shipping three-quarters of a deck.
-    "limits.lane_deadline_seconds": "30",
+    # is now a prerequisite completed before lane clocks begin. 60 s leaves
+    # cold-start headroom while remaining a finite pathological-work backstop.
+    "limits.lane_deadline_seconds": "60",
     "limits.taste_topic_queries": "3",
     "limits.taste_author_queries": "3",
     "limits.taste_venue_queries": "2",
