@@ -17,15 +17,132 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import Literal
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.operations.activity import record_foreground_action
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class CaptureMessageAction(BaseModel):
+    """One explicit decision on a failed capture record."""
+
+    action: Literal["archive", "retry"]
+    replacement_link: str | None = None
+
+
+@router.get(
+    "/messages",
+    summary="List capture messages that need attention (pure read)",
+    description=(
+        "Returns the durable failed-capture ledger for review. By default, "
+        "archived records are omitted. Never writes."
+    ),
+)
+def list_capture_messages(
+    include_archived: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.inbound_capture import list_attention_messages
+
+    return list_attention_messages(
+        db,
+        include_archived=include_archived,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/messages/{message_id}/action",
+    summary="Archive or retry a failed capture",
+    description=(
+        "The single mutation route for capture review. Archive keeps the audit "
+        "record but removes it from attention. Retry uses a replacement paper "
+        "link, resolves outside the SQLite write window, and updates the same "
+        "ledger record."
+    ),
+)
+def apply_capture_message_action(
+    message_id: str,
+    payload: CaptureMessageAction,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.inbound_capture import (
+        archive_attention_message,
+        message_for_retry,
+        persist_attention_retry,
+        resolve_message,
+    )
+
+    try:
+        if payload.action == "archive":
+            result = run_write_unit(
+                db,
+                lambda: archive_attention_message(db, message_id),
+                label="inbox_message_archive",
+            )
+            record_foreground_action(
+                db,
+                operation_key="inbox.capture.archive",
+                message="Archived a capture that could not be identified",
+                result=result,
+            )
+            return {"action": "archive", **result}
+
+        replacement_link = str(payload.replacement_link or "").strip()
+        parsed = urlparse(replacement_link)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Provide a complete http:// or https:// link to the paper")
+
+        # Pure reads + upstream resolution happen before the write unit. The
+        # short gated unit below contains only the paper + ledger writes.
+        message = message_for_retry(db, message_id, replacement_link)
+        resolved = resolve_message(message)
+        capture = run_write_unit(
+            db,
+            lambda: persist_attention_retry(
+                db,
+                message_id=message_id,
+                message=message,
+                replacement_link=replacement_link,
+                resolved=resolved,
+            ),
+            label="inbox_message_retry",
+        )
+        result = {
+            "id": message_id,
+            "action": "retry",
+            "outcome": capture.outcome,
+            "paper_id": capture.paper_id,
+            "title": capture.title,
+            "error": capture.error,
+        }
+        record_foreground_action(
+            db,
+            operation_key="inbox.capture.retry",
+            message=(
+                f"Retried a capture: {capture.title or capture.outcome}"
+            ),
+            result=result,
+            status="completed" if capture.outcome in {"resolved", "duplicate"} else "failed",
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get(
@@ -66,7 +183,9 @@ def inbox_status(
     if table_exists(db, "inbox_messages"):
         unresolved = int(
             db.execute(
-                "SELECT COUNT(*) AS c FROM inbox_messages WHERE outcome IN ('unresolved', 'error')"
+                """SELECT COUNT(*) AS c FROM inbox_messages
+                   WHERE outcome IN ('unresolved', 'error')
+                     AND archived_at IS NULL"""
             ).fetchone()["c"]
             or 0
         )

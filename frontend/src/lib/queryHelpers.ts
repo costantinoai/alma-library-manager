@@ -85,6 +85,17 @@ export function invalidateAfterPaperMutation(
   return invalidateQueries(qc, ...keys)
 }
 
+/** After archiving or retrying a failed capture record. */
+export function invalidateAfterCaptureMutation(qc: QueryClient): Promise<void[]> {
+  return invalidateQueries(
+    qc,
+    ['capture-attention'],
+    ['inbox-status'],
+    ['home-brief'],
+    ['papers'],
+  )
+}
+
 /**
  * After the Feed inbox has been (successfully) refreshed. Invalidates the
  * inbox list, the monitor list, the last-refresh status, and the sidebar

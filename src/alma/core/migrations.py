@@ -1568,6 +1568,23 @@ def _m_0043_paper_pdfs(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _m_0044_inbox_message_review(conn: sqlite3.Connection) -> None:
+    """Keep failed captures reviewable without erasing their audit record."""
+    _add_columns(
+        conn,
+        "inbox_messages",
+        {
+            "archived_at": "TEXT",
+            "retry_input": "TEXT",
+            "updated_at": "TEXT",
+        },
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbox_messages_attention "
+        "ON inbox_messages(archived_at, outcome, received_at DESC)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1612,6 +1629,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (41, "fitted_default_signal_weights", _m_0041_fitted_default_signal_weights),
     (42, "paper_group_pointer_guards", _m_0042_paper_group_pointer_guards),
     (43, "paper_pdfs", _m_0043_paper_pdfs),
+    (44, "inbox_message_review", _m_0044_inbox_message_review),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

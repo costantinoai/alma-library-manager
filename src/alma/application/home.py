@@ -282,7 +282,9 @@ def _attention(db: sqlite3.Connection) -> dict[str, int | None]:
     if _table_exists(db, "inbox_messages"):
         inbox_unresolved = int(
             db.execute(
-                "SELECT COUNT(*) AS c FROM inbox_messages WHERE outcome IN ('unresolved', 'error')"
+                """SELECT COUNT(*) AS c FROM inbox_messages
+                   WHERE outcome IN ('unresolved', 'error')
+                     AND archived_at IS NULL"""
             ).fetchone()["c"]
             or 0
         )

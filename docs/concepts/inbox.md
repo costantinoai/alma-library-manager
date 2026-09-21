@@ -181,6 +181,23 @@ alerts.
 A successful capture is **silent** apart from the reaction. ALMa only speaks up
 in-thread when something needs you.
 
+### Reviewing captures ALMa could not identify
+
+When a message resolves to no paper, Home shows a yellow **Captures** status
+chip. It opens the recorded messages in place; it does not send you back to
+plugin configuration. Each record keeps the original message and failure
+reason. You can either:
+
+- **Archive** it. The audit record remains, but it no longer contributes to the
+  Home attention count.
+- **Try another paper link.** ALMa resolves the replacement link and updates the
+  same record. A successful retry lands the paper in the Inbox; a paper already
+  saved stays in the Library.
+
+The list endpoint is a pure read. Archive and retry share the canonical capture
+message action route; retry performs network resolution before its short,
+gated SQLite write.
+
 ### What gets recognised
 
 DOIs in any form (bare, `doi:`, `https://doi.org/…`), arXiv links and ids

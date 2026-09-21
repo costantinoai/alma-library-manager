@@ -8,10 +8,14 @@ import { HOME_SECTION_THEMES } from '@/lib/palette'
 
 const getHomeBrief = vi.fn()
 const applyPaperAction = vi.fn().mockResolvedValue({})
+const getCaptureAttentionMessages = vi.fn().mockResolvedValue([])
+const applyCaptureMessageAction = vi.fn().mockResolvedValue({ action: 'archive', status: 'archived' })
 vi.mock('@/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   getHomeBrief: (...args: unknown[]) => getHomeBrief(...args),
   applyPaperAction: (...args: unknown[]) => applyPaperAction(...args),
+  getCaptureAttentionMessages: (...args: unknown[]) => getCaptureAttentionMessages(...args),
+  applyCaptureMessageAction: (...args: unknown[]) => applyCaptureMessageAction(...args),
   listCollections: () => Promise.resolve([]),
 }))
 
@@ -294,6 +298,55 @@ describe('HomePage', () => {
     expect(screen.queryByText('2 to review')).not.toBeInTheDocument()
     expect(screen.queryByText('Feed monitors')).not.toBeInTheDocument()
     expect(screen.queryByText('Health')).not.toBeInTheDocument()
+  })
+
+  it('opens failed capture records on Home and exposes archive and retry actions', async () => {
+    getHomeBrief.mockResolvedValue({
+      ...QUIET,
+      attention: { ...QUIET.attention, inbox_unresolved: 1 },
+    })
+    getCaptureAttentionMessages.mockResolvedValue([
+      {
+        id: 'message-1',
+        channel: 'slack',
+        external_id: '1.2',
+        received_at: '2026-09-20T10:00:00+00:00',
+        raw_text: 'Can you save the paper Andrea mentioned?',
+        extracted: {},
+        outcome: 'unresolved',
+        error: 'No DOI, arXiv id, OpenAlex id or link found in the message.',
+        created_at: '2026-09-20T10:01:00+00:00',
+        archived_at: null,
+        retry_input: null,
+        updated_at: null,
+      },
+    ])
+    renderHome()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Captures: 1 not identified/i }))
+    expect(await screen.findByRole('heading', { name: 'Capture review' })).toBeInTheDocument()
+    expect(
+      await screen.findByText('Can you save the paper Andrea mentioned?'),
+    ).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/home?captures=attention')
+
+    fireEvent.change(screen.getByLabelText('Try another paper link'), {
+      target: { value: 'https://doi.org/10.1/example' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Try capture' }))
+    await waitFor(() =>
+      expect(applyCaptureMessageAction).toHaveBeenCalledWith('message-1', {
+        action: 'retry',
+        replacement_link: 'https://doi.org/10.1/example',
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    await waitFor(() =>
+      expect(applyCaptureMessageAction).toHaveBeenCalledWith('message-1', {
+        action: 'archive',
+      }),
+    )
   })
 
   // Collapsed sections show whole rows of the MEASURED grid. Under jsdom no

@@ -5023,6 +5023,56 @@ export function getInboxStatus(): Promise<InboxStatus> {
   return api.get<InboxStatus>('/inbox/status')
 }
 
+export interface CaptureAttentionMessage {
+  id: string
+  channel: string
+  external_id: string
+  received_at: string
+  raw_text: string
+  extracted: {
+    doi?: string
+    arxiv_id?: string
+    openalex_id?: string
+    url?: string
+    title?: string
+  }
+  outcome: 'unresolved' | 'error'
+  error: string | null
+  created_at: string
+  archived_at: string | null
+  retry_input: string | null
+  updated_at: string | null
+}
+
+/** The durable capture records that still need a human decision. Pure read. */
+export function getCaptureAttentionMessages(): Promise<CaptureAttentionMessage[]> {
+  return api.get<CaptureAttentionMessage[]>('/inbox/messages')
+}
+
+export interface CaptureMessageActionResult {
+  id: string
+  action: 'archive' | 'retry'
+  status?: 'archived'
+  outcome?: 'resolved' | 'duplicate' | 'unresolved' | 'error'
+  paper_id?: string | null
+  title?: string | null
+  error?: string | null
+  archived_at?: string
+}
+
+/** One canonical mutation route for a failed capture record. */
+export function applyCaptureMessageAction(
+  messageId: string,
+  action:
+    | { action: 'archive' }
+    | { action: 'retry'; replacement_link: string },
+): Promise<CaptureMessageActionResult> {
+  return api.post<CaptureMessageActionResult>(
+    `/inbox/messages/${encodeURIComponent(messageId)}/action`,
+    action,
+  )
+}
+
 /** Poll the capture channels now instead of waiting for the scheduled tick.
  *  Idempotent — messages already captured are skipped on their
  *  `(channel, external_id)` key, so pressing twice cannot duplicate a paper. */

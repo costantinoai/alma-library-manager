@@ -36,6 +36,7 @@ import {
   type OnboardingPaperAction,
 } from '@/api/client'
 import { AttentionChips } from '@/components/home/AttentionChips'
+import { CaptureReviewDialog } from '@/components/home/CaptureReviewDialog'
 import { HomeStatusRail } from '@/components/home/HomeStatusRail'
 import { InflowStrip } from '@/components/home/InflowStrip'
 import { PaperActionBar } from '@/components/discovery/PaperActionBar'
@@ -361,6 +362,25 @@ export function HomePage() {
   const route = useHashRoute()
   const routeQuery = route.params.get('query')?.trim() ?? ''
   const routeAction = route.params.get('action')?.trim() ?? ''
+  const routeCaptures = route.params.get('captures')?.trim() ?? ''
+  const [captureReviewOpen, setCaptureReviewOpen] = useState(
+    routeCaptures === 'attention',
+  )
+  useEffect(() => {
+    setCaptureReviewOpen(routeCaptures === 'attention')
+  }, [routeCaptures])
+
+  const setCaptureReviewRoute = (open: boolean) => {
+    setCaptureReviewOpen(open)
+    const next = new URLSearchParams(route.params)
+    if (open) next.set('captures', 'attention')
+    else next.delete('captures')
+    window.history.replaceState(
+      null,
+      '',
+      buildHashRoute('home', Object.fromEntries(next)),
+    )
+  }
   const briefQuery = useQuery({
     queryKey: ['home-brief'],
     queryFn: () => getHomeBrief(),
@@ -590,7 +610,10 @@ export function HomePage() {
             {attentionTotal > 0 && brief.status.length > 0 && (
               <span className="h-3 w-px bg-control-edge" aria-hidden />
             )}
-            <AttentionChips attention={brief.attention} />
+            <AttentionChips
+              attention={brief.attention}
+              onOpenCaptures={() => setCaptureReviewRoute(true)}
+            />
           </div>
           {carryoverTotal > 0 && (
             <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
@@ -795,6 +818,10 @@ export function HomePage() {
           Your workspace is quiet. Start by finding a paper or following an author.
         </p>
       )}
+      <CaptureReviewDialog
+        open={captureReviewOpen}
+        onOpenChange={setCaptureReviewRoute}
+      />
     </div>
   )
 }

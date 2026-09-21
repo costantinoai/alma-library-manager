@@ -175,8 +175,9 @@ def record_message(
         """
         INSERT OR REPLACE INTO inbox_messages (
             id, channel, external_id, received_at, raw_text,
-            extracted_json, outcome, paper_id, error, metadata_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            extracted_json, outcome, paper_id, error, metadata_json, created_at,
+            archived_at, retry_input, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
         """,
         (
             str(uuid.uuid4()),
@@ -190,8 +191,138 @@ def record_message(
             result.error,
             json.dumps(message.metadata or {}),
             utcnow().isoformat(),
+            utcnow().isoformat(),
         ),
     )
+
+
+def list_attention_messages(
+    db: sqlite3.Connection,
+    *,
+    include_archived: bool = False,
+    limit: int = 100,
+) -> list[dict]:
+    """Return failed capture records for human review. Pure read."""
+    archived_clause = "" if include_archived else "AND archived_at IS NULL"
+    rows = db.execute(
+        f"""
+        SELECT id, channel, external_id, received_at, raw_text, extracted_json,
+               outcome, error, created_at, archived_at, retry_input, updated_at
+        FROM inbox_messages
+        WHERE outcome IN ('unresolved', 'error')
+          {archived_clause}
+        ORDER BY received_at DESC, created_at DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit), 500)),),
+    ).fetchall()
+    messages: list[dict] = []
+    for row in rows:
+        try:
+            extracted = json.loads(row["extracted_json"] or "{}")
+        except (TypeError, ValueError):
+            extracted = {}
+        messages.append(
+            {
+                "id": row["id"],
+                "channel": row["channel"],
+                "external_id": row["external_id"],
+                "received_at": row["received_at"],
+                "raw_text": row["raw_text"] or "",
+                "extracted": extracted if isinstance(extracted, dict) else {},
+                "outcome": row["outcome"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+                "archived_at": row["archived_at"],
+                "retry_input": row["retry_input"],
+                "updated_at": row["updated_at"],
+            }
+        )
+    return messages
+
+
+def archive_attention_message(db: sqlite3.Connection, message_id: str) -> dict:
+    """Archive one active failed capture. Caller owns the write unit."""
+    row = db.execute(
+        """SELECT id FROM inbox_messages
+           WHERE id = ? AND outcome IN ('unresolved', 'error')
+             AND archived_at IS NULL""",
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError("Capture message not found or no longer needs attention")
+    now = utcnow().isoformat()
+    db.execute(
+        "UPDATE inbox_messages SET archived_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, message_id),
+    )
+    return {"id": message_id, "status": "archived", "archived_at": now}
+
+
+def message_for_retry(
+    db: sqlite3.Connection,
+    message_id: str,
+    replacement_link: str,
+) -> InboundMessage:
+    """Build a retry input while preserving the originally captured message."""
+    row = db.execute(
+        """SELECT channel, external_id, received_at, metadata_json
+           FROM inbox_messages
+           WHERE id = ? AND outcome IN ('unresolved', 'error')
+             AND archived_at IS NULL""",
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError("Capture message not found or no longer needs attention")
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except (TypeError, ValueError):
+        metadata = {}
+    return InboundMessage(
+        channel=str(row["channel"]),
+        external_id=str(row["external_id"]),
+        received_at=str(row["received_at"]),
+        text=replacement_link,
+        urls=(replacement_link,),
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+
+
+def persist_attention_retry(
+    db: sqlite3.Connection,
+    *,
+    message_id: str,
+    message: InboundMessage,
+    replacement_link: str,
+    resolved: ResolvedCapture,
+) -> CaptureResult:
+    """Land a retry result and update its ledger row in the same write unit."""
+    exists = db.execute(
+        """SELECT id FROM inbox_messages
+           WHERE id = ? AND outcome IN ('unresolved', 'error')
+             AND archived_at IS NULL""",
+        (message_id,),
+    ).fetchone()
+    if exists is None:
+        raise LookupError("Capture message not found or no longer needs attention")
+
+    result = persist_capture(db, message, resolved)
+    db.execute(
+        """UPDATE inbox_messages
+           SET extracted_json = ?, outcome = ?, paper_id = ?, error = ?,
+               retry_input = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            json.dumps(result.extracted.as_dict()),
+            result.outcome,
+            result.paper_id,
+            result.error,
+            replacement_link,
+            utcnow().isoformat(),
+            message_id,
+        ),
+    )
+    return result
 
 
 @dataclass(frozen=True, slots=True)

@@ -26,7 +26,7 @@ interface AttentionSpec {
   metric: (count: number) => string
   /** The full explanation, on hover — what happened and what happens next. */
   title: (count: number) => string
-  href: string
+  href?: string
   /**
    * How to render when the backend could not MEASURE this kind (count `null`).
    *
@@ -81,7 +81,7 @@ const ATTENTION: Record<AttentionKey, AttentionSpec> = {
     metric: (n) => `${n} not identified`,
     title: (n) =>
       `${n} captured ${n === 1 ? 'message' : 'messages'} reached ALMa but resolved to no paper — a link with no DOI, or an upstream failure. Recorded rather than dropped.`,
-    href: buildHashRoute('settings', { anchor: 'plugins' }),
+    href: buildHashRoute('home', { captures: 'attention' }),
   },
   author_decisions: {
     icon: Users,
@@ -105,6 +105,7 @@ const ATTENTION: Record<AttentionKey, AttentionSpec> = {
 
 export interface AttentionChipsProps {
   attention: HomeBrief['attention']
+  onOpenCaptures?: () => void
 }
 
 /**
@@ -127,7 +128,7 @@ export interface AttentionChipsProps {
  * absence here reads as "all clear", an unmeasurable kind renders its own chip
  * saying so, rather than disappearing into the same silence as zero.
  */
-export function AttentionChips({ attention }: AttentionChipsProps) {
+export function AttentionChips({ attention, onOpenCaptures }: AttentionChipsProps) {
   const items = (Object.keys(ATTENTION) as AttentionKey[])
     .map((key) => {
       const spec = ATTENTION[key]
@@ -164,6 +165,7 @@ export function AttentionChips({ attention }: AttentionChipsProps) {
             severity={severity}
             name={spec.label(count)}
             href={spec.href}
+            onClick={key === 'inbox_unresolved' ? onOpenCaptures : undefined}
             title={`${metric}. ${title}`}
             ariaLabel={`${spec.label(count)}: ${metric}`}
           />

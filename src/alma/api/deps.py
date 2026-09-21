@@ -588,6 +588,9 @@ def init_db_schema() -> None:
                     error TEXT,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
+                    archived_at TEXT,
+                    retry_input TEXT,
+                    updated_at TEXT,
                     UNIQUE(channel, external_id)
                 )"""
             )
@@ -598,6 +601,10 @@ def init_db_schema() -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_inbox_messages_outcome "
                 "ON inbox_messages(outcome, received_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inbox_messages_attention "
+                "ON inbox_messages(archived_at, outcome, received_at DESC)"
             )
 
             conn.execute(
