@@ -3107,6 +3107,29 @@ _RESUMABLE_OPERATION_KEYS = frozenset({
 # auto-resumed.
 _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
 
+
+def _mark_orphan_handed_off(conn: sqlite3.Connection, marker_ids: list[str], continuation: str) -> None:
+    """Consume the old orphan marker after its replacement is scheduled.
+
+    Keep the cancelled Activity row, but make the exact resume selector a
+    one-shot token. A later restart must not relaunch the same old orphan after
+    the replacement finishes while pending work remains.
+    """
+    from alma.core.db_write import run_write_unit
+    from alma.core.time import utcnow
+
+    placeholders = ", ".join("?" for _ in marker_ids)
+    run_write_unit(
+        conn,
+        lambda: conn.execute(
+            "UPDATE operation_status SET message = ?, updated_at = ? "
+            f"WHERE job_id IN ({placeholders}) AND status = 'cancelled' AND message = ?",
+            (f"{_ORPHAN_REAP_MESSAGE}; resumed as {continuation}", utcnow().isoformat(),
+             *marker_ids, _ORPHAN_REAP_MESSAGE),
+        ),
+        label="orphan handoff",
+    )
+
 # Cap the per-restart resume session budget so a single orphaned run can't
 # re-launch an unbounded drain; the runner's per-run cap + continuation-depth
 # cap bound it further, and the next restart resumes any remainder.
@@ -3141,7 +3164,7 @@ def resume_orphaned_sweeps() -> int:
     try:
         rows = conn.execute(
             """
-            SELECT operation_key, trigger_source
+            SELECT job_id, operation_key, trigger_source
             FROM operation_status
             WHERE status = 'cancelled'
               AND message = ?
@@ -3158,22 +3181,24 @@ def resume_orphaned_sweeps() -> int:
         from alma.api.scheduler import ONBOARDING_KICK_TRIGGER
 
         orphaned: dict[str, str] = {}
-        converge_orphaned = False
+        marker_ids: dict[str, list[str]] = {}
         for r in rows:
             key = str(r["operation_key"])
             if key == ONBOARDING_CONVERGE_OPERATION_KEY:
-                converge_orphaned = True
+                marker_ids.setdefault(key, []).append(str(r["job_id"]))
                 continue
             if key not in _RESUMABLE_OPERATION_KEYS:
                 continue
+            marker_ids.setdefault(key, []).append(str(r["job_id"]))
             trig = str(r["trigger_source"] or "").strip().lower()
             if orphaned.get(key) != ONBOARDING_KICK_TRIGGER:
                 orphaned[key] = trig
         # A restart mid-convergence must not silently end the MANDATORY
         # onboarding chain — relaunch the coordinator; it re-derives its next
         # step from live counts, so resuming is idempotent.
-        if converge_orphaned and not find_active_job(ONBOARDING_CONVERGE_OPERATION_KEY):
+        if marker_ids.get(ONBOARDING_CONVERGE_OPERATION_KEY) and not find_active_job(ONBOARDING_CONVERGE_OPERATION_KEY):
             if schedule_onboarding_convergence():
+                _mark_orphan_handed_off(conn, marker_ids[ONBOARDING_CONVERGE_OPERATION_KEY], "onboarding convergence")
                 resumed += 1
                 logger.warning("auto-resume: re-launched onboarding convergence chain")
         if not orphaned:
@@ -3222,6 +3247,7 @@ def resume_orphaned_sweeps() -> int:
                 health_payload=payload,
             )
             if job_id:
+                _mark_orphan_handed_off(conn, marker_ids[opkey], str(job_id))
                 resumed += 1
                 logger.warning(
                     "auto-resume: re-launched orphaned %s (job=%s, pending=%d, budget=%d)",

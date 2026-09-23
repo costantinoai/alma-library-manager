@@ -65,6 +65,7 @@ RETRYABLE_STATUS = "retryable_error"
 TERMINAL_NO_MATCH_STATUS = "terminal_no_match"
 TERMINAL_STATUSES = {"enriched", "unchanged", TERMINAL_NO_MATCH_STATUS}
 UNCHANGED_RETRY_AFTER = timedelta(days=30)
+RETRYABLE_RETRY_AFTER = timedelta(hours=6)
 
 # -- author works fetch outcomes -------------------------------------
 #
@@ -190,15 +191,16 @@ def _upsert_enrichment_status(
 ) -> None:
     """Record one (author, source, purpose) fetch outcome.
 
-    `retry_after` overrides the profile-hydration `UNCHANGED_RETRY_AFTER`
-    cadence for callers whose purpose has its own horizon (the works
-    expansion). Passing it keeps ONE upsert for every enrichment ledger row
-    instead of growing a second, drifting writer per purpose.
+    `retry_after` overrides the profile-hydration cadence for callers whose
+    purpose has its own horizon (the works expansion). A transient failure
+    retries sooner than an unchanged response. Passing an override keeps ONE
+    upsert for every enrichment ledger row instead of growing a second writer.
     """
     now = _utcnow_iso()
     next_retry_at = None
     if status in {RETRYABLE_STATUS, "unchanged"}:
-        next_retry_at = (_utcnow() + (retry_after or UNCHANGED_RETRY_AFTER)).isoformat()
+        cadence = RETRYABLE_RETRY_AFTER if status == RETRYABLE_STATUS else UNCHANGED_RETRY_AFTER
+        next_retry_at = (_utcnow() + (retry_after if retry_after is not None else cadence)).isoformat()
     conn.execute(
         """
         INSERT INTO author_enrichment_status (

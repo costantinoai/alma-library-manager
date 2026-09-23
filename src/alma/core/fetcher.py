@@ -114,6 +114,7 @@ def _init_db(db_path: str) -> sqlite3.Connection:
     """
 
     conn = sqlite3.connect(db_path, timeout=SQLITE_CONNECT_TIMEOUT_S)
+    conn.row_factory = sqlite3.Row
     # Wait for the single SQLite writer rather than erroring instantly under
     # contention (mirrors alma.api.deps.open_db_connection).
     apply_busy_timeout(conn)
@@ -457,6 +458,7 @@ def save_updated_cache(
         # 2026-04-24 — previously this whole loop ran under one transaction.
         commit_batch = 25
         processed = 0
+        hydration_ids: set[str] = set()
 
         for pub in fetched_pubs:
             title = (pub["bib"].get("title") or "").strip()
@@ -552,12 +554,27 @@ def save_updated_cache(
                    VALUES (?, ?, '')""",
                 (paper_id, author_id),
             )
+            hydration_ids.add(paper_id)
 
             processed += 1
             if processed % commit_batch == 0:
                 conn.commit()
 
+        from alma.services.corpus_rehydrate import (
+            enqueue_pending_hydration,
+            schedule_pending_hydration_sweep,
+        )
+
+        # The Scholar path also creates corpus papers. Enter each root in the
+        # same hydration ledger as Library/Feed/Discovery, then commit before
+        # the scheduler writes its Activity row through another connection.
+        queued = False
+        for paper_id in hydration_ids:
+            if enqueue_pending_hydration(conn, paper_id, auto_schedule=False):
+                queued = True
         conn.commit()
+        if queued:
+            schedule_pending_hydration_sweep(reason="paper_insert")
     finally:
         conn.close()
 
