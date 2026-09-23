@@ -87,8 +87,8 @@ Carrying both adds complexity nobody benefits from.
 Before opening a PR:
 
 ```bash
-# python
-pytest tests/test_<the_thing_you_changed>.py
+# python, when the local backend test repository is available
+python scripts/test_local.py changed --base main
 ruff check .
 black --check .
 
@@ -98,6 +98,10 @@ npm run typecheck
 npm run build
 cd ..
 ```
+
+The backend `tests/` directory is kept in a separate local Git repository and
+is not included in the public source checkout. The scoped runner needs that
+local test repository; source changes still need normal lint and type checks.
 
 For changes to the recommender or scheduler, exercise a real
 refresh and inspect **Activity → Operations** for per-source timing.

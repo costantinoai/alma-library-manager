@@ -22,7 +22,8 @@ venv*/
 .coverage
 .pytest_cache/
 htmlcov/
-# Tests are kept local-only; never commit to any branch.
+# Backend tests have their own local Git repository and no remote; the product
+# repository never tracks or uploads them.
 tests/
 frontend/tests/
 pytest.ini
@@ -120,6 +121,8 @@ frontend/snap.mjs
 scripts/*
 !scripts/release.sh
 !scripts/deploy-prod.sh
+!scripts/test_local.py
+!scripts/test_groups.toml
 
 # Local docker-compose override (e.g. to use a published image instead of local build)
 docker-compose.override.yml

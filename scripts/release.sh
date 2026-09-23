@@ -102,8 +102,8 @@ if [ "$SKIP_TESTS" -eq 1 ]; then
 elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   say "resume mode — tests already gated this version, skipping"
 else
-  say "backend suite (this takes ~20 min)…"
-  .venv/bin/python -m pytest tests -q -m "not network" || fail "backend suite red"
+  say "backend suite (four local test processes)…"
+  .venv/bin/python scripts/test_local.py full --workers 4 || fail "backend suite red"
   say "frontend typecheck + tests…"
   # `npm run typecheck`, NOT bare `npx tsc --noEmit`: tsconfig.json is a
   # references-only project ("files": []), so the bare form type-checks NOTHING

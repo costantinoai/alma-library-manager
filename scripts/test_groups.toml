@@ -1,0 +1,63 @@
+# Backend test groups. Patterns match filenames in the local tests/ repository.
+# A test can protect several components; list it in each relevant group.
+# `scripts/test_local.py check` rejects any test file with no group.
+
+[policy]
+full_suite_paths = [
+  "pyproject.toml", "scripts/test_groups.toml", "scripts/test_local.py",
+  "src/alma/api/app.py", "src/alma/api/deps.py", "src/alma/config.py",
+  "src/alma/core/db_write.py", "src/alma/core/migrations.py",
+  "tests/conftest.py", "tests/_cassette.py", "tests/_helpers.py",
+]
+
+[groups.authors]
+tests = ["test_author_*.py", "test_authors_*.py", "test_affiliation_*.py", "test_follow_author_*.py", "test_dedup_orcid_*.py", "test_secondary_author_*.py", "test_suggestion_dedup.py", "test_get_purity_followed_authors.py"]
+sources = ["src/alma/api/routes/authors.py", "src/alma/application/author*.py", "src/alma/application/followed_authors.py", "src/alma/services/author*.py", "src/alma/core/author*.py", "src/alma/core/fetcher.py"]
+
+[groups.discovery]
+tests = ["test_discovery_*.py", "test_branch_*.py", "test_recommendation_*.py", "test_retrieval_*.py", "test_ranking_*.py", "test_ranker_*.py", "test_scoring_*.py", "test_score_*.py", "test_outcome_*.py", "test_default_weights_*.py", "test_exemplar_*.py", "test_directions.py", "test_citation_fabric.py", "test_neighbor_graph.py", "test_cluster_*.py", "test_clustering_*.py", "test_cooccurrence.py", "test_signal_*.py", "test_corpus_paper_feedback.py", "test_venue_monitors.py", "test_find_and_add_ranking.py", "test_dismiss_scope_and_valence.py"]
+sources = ["src/alma/discovery/**", "src/alma/application/discovery/**", "src/alma/application/seed_profile.py", "src/alma/application/lens*.py", "src/alma/application/semantic_partition.py", "src/alma/application/paper_actions.py", "src/alma/application/signal_projection.py", "src/alma/application/recommendation_outcomes.py", "src/alma/application/outcome_calibration.py", "src/alma/application/gap_radar.py", "src/alma/ai/clustering.py", "src/alma/ai/cooccurrence.py", "src/alma/ai/neighbor_graph.py", "src/alma/ai/semantic_search.py", "src/alma/api/routes/discovery.py", "src/alma/api/routes/lenses.py", "src/alma/api/routes/feedback.py", "src/alma/api/routes/search.py", "src/alma/core/scoring_math.py"]
+
+[groups.feed]
+tests = ["test_feed_*.py", "test_venue_monitors.py", "test_fetch_*.py", "test_staged_fetch_pipeline.py"]
+sources = ["src/alma/application/feed*.py", "src/alma/application/paper_actions.py", "src/alma/api/routes/feed.py", "src/alma/services/feed*.py"]
+
+[groups.library]
+tests = ["test_library_*.py", "test_paper_collection_*.py", "test_collection_*.py", "test_reading_status_*.py", "test_hide_library_*.py", "test_rating_contract_*.py"]
+sources = ["src/alma/application/library*.py", "src/alma/application/paper_actions.py", "src/alma/api/routes/library.py", "src/alma/library/**"]
+
+[groups.imports]
+tests = ["test_import_*.py", "test_importer_*.py", "test_pdf_attach_import.py", "test_pdf_pending_imports.py", "test_import_real_exports.py"]
+sources = ["src/alma/application/import*.py", "src/alma/api/routes/import*.py", "src/alma/library/import*.py", "src/alma/ai/import_state.py"]
+
+[groups.inbox]
+tests = ["test_inbox_*.py", "test_inbound_*.py", "test_extension_save.py", "test_email_digest.py", "test_home_brief.py"]
+sources = ["src/alma/application/inbox*.py", "src/alma/application/inbound*.py", "src/alma/application/home*.py", "src/alma/services/inbox*.py", "src/alma/services/inbox_channels/**", "src/alma/api/routes/inbox*.py", "src/alma/api/routes/home.py", "src/alma/api/routes/extension.py"]
+
+[groups.papers]
+tests = ["test_paper_*.py", "test_duplicate_identity_*.py", "test_doi_*.py", "test_identifier_*.py", "test_title_*.py", "test_normalize_openalex_id_*.py", "test_source_identifier_*.py", "test_scope_primitive.py", "test_api_e2e_signal_work.py"]
+sources = ["src/alma/application/paper*.py", "src/alma/application/preprint_dedup.py", "src/alma/core/paper*.py", "src/alma/core/fetcher.py", "src/alma/api/routes/publications.py", "src/alma/services/title*.py", "src/alma/services/paper_group_reconcile.py"]
+
+[groups.embeddings]
+tests = ["test_embedding_*.py", "test_vector_*.py", "test_s2_*.py", "test_semantic_*.py"]
+sources = ["src/alma/services/embedding*.py", "src/alma/services/s2_vectors.py", "src/alma/application/semantic_partition.py", "src/alma/ai/embedding_sources.py", "src/alma/ai/providers.py", "src/alma/ai/auto_tagger.py"]
+
+[groups.health]
+tests = ["test_health_*.py", "test_integration_health.py", "test_diagnostics_*.py", "test_startup_health_async.py", "test_p0_network_health.py", "test_insights_*.py", "test_reports_phase4.py"]
+sources = ["src/alma/services/health*.py", "src/alma/services/maintenance.py", "src/alma/api/routes/health*.py", "src/alma/api/routes/insights*.py", "src/alma/api/routes/reports.py", "src/alma/application/insights*.py", "src/alma/application/diagnostics_stats.py", "src/alma/application/reports.py"]
+
+[groups.operations]
+tests = ["test_activity_*.py", "test_background_*.py", "test_job_*.py", "test_maintenance_*.py", "test_manual_*.py", "test_materialized_*.py", "test_nested_*.py", "test_no_raw_*.py", "test_post_hydration_*.py", "test_scheduled_*.py", "test_variant_*.py", "test_write_*.py", "test_idle_*.py", "test_graceful_*.py", "test_eta_*.py", "test_pending_*.py", "test_reference_backfill_*.py", "test_path_connections_*.py", "test_sqlite_*.py", "test_settings_reader_*.py", "test_channel_yield.py", "test_hydration_chain_*.py", "test_hydration_coalescing.py", "test_fanout_budget.py"]
+sources = ["src/alma/api/scheduler.py", "src/alma/core/db_write.py", "src/alma/core/job*.py", "src/alma/core/fetcher.py", "src/alma/services/maintenance*.py", "src/alma/services/background_settings.py", "src/alma/services/eta.py", "src/alma/services/embedding_chain.py", "src/alma/application/materialized_views.py", "src/alma/api/routes/scheduler.py", "src/alma/api/routes/settings.py", "src/alma/api/routes/activity.py", "src/alma/api/routes/logs.py", "src/alma/api/routes/backup.py"]
+
+[groups.sources]
+tests = ["test_openalex_*.py", "test_open_access_*.py", "test_shadow_*.py", "test_unpaywall_*.py", "test_europe_*.py", "test_preprint_*.py", "test_datacite_*.py", "test_http_*.py", "test_url_*.py", "test_source_identifier_*.py", "test_text_repair.py", "test_html_meta.py", "test_fetch_pipeline.py", "test_doi_hygiene_*.py", "test_enrich_*.py", "test_p0_network_health.py"]
+sources = ["src/alma/openalex/**", "src/alma/application/openalex_manual.py", "src/alma/services/corpus_rehydrate.py", "src/alma/services/*source*.py", "src/alma/services/preprint_abstract.py", "src/alma/core/fetcher.py", "src/alma/core/url_safety.py", "src/alma/services/pdf*.py"]
+
+[groups.plugins]
+tests = ["test_plugin_*.py", "test_integration_plugins_*.py", "test_channel_registry.py", "test_alerts_*.py", "test_pdf_*.py", "test_shadow_libraries.py", "test_open_access_sources.py", "test_redaction_*.py", "test_core_map_extraction_contract.py", "test_signal_lab_extraction_contract.py"]
+sources = ["src/alma/plugins/**", "src/alma/application/alerts.py", "src/alma/application/pdf_schema.py", "src/alma/application/pdfs/**", "src/alma/services/pdf*.py", "src/alma/services/inbox_channels/**", "src/alma/mailer/**", "src/alma/slack/**", "src/alma/api/routes/plugins.py", "src/alma/api/routes/alerts.py"]
+
+[groups.core]
+tests = ["test_api_helpers.py", "test_core_*.py", "test_keywords.py", "test_topics.py", "test_compression_passthrough.py", "test_raise_internal_passthrough.py", "test_view_read_failure_propagates.py", "test_onboarding.py", "test_signal_projection.py", "test_api_e2e_signal_work.py", "test_db_write_guardrails.py", "test_no_raw_commit_guard.py", "test_rating_contract_one_owner.py"]
+sources = ["src/alma/api/app.py", "src/alma/api/deps.py", "src/alma/api/helpers.py", "src/alma/api/models.py", "src/alma/api/http_cache.py", "src/alma/api/compression.py", "src/alma/api/routes/onboarding.py", "src/alma/api/routes/bootstrap.py", "src/alma/api/routes/ai.py", "src/alma/api/routes/topics.py", "src/alma/api/routes/tags.py", "src/alma/api/routes/library_mgmt.py", "src/alma/core/**", "src/alma/config.py", "src/alma/application/paper_actions.py", "src/alma/ai/environment.py"]
