@@ -9,6 +9,7 @@ from typing import Any
 
 from alma.application.feed_query_language import normalize_keyword_expression
 from alma.core.db_write import commit_unless_gated, run_write_unit
+from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
@@ -217,6 +218,21 @@ def _monitor_health(row: sqlite3.Row) -> tuple[str, str | None]:
     if last_status == "failed":
         return "degraded", str(row["last_error"] or "operation_failed").strip() or "operation_failed"
     return "ready", None
+
+
+def author_monitor_can_fetch(monitor: dict[str, Any]) -> bool:
+    """Whether a refresh should ask OpenAlex for this author monitor's works.
+
+    Not the same as ``health == "ready"``: health also reads ``degraded`` after
+    any failed refresh. Skipping those re-wrote the same ``failed`` status every
+    run, so one DNS outage parked every author monitor for good. A past failure
+    is a reason to try again; only a missing author or OpenAlex id makes the
+    fetch impossible.
+    """
+    return bool(
+        str(monitor.get("author_id") or "").strip()
+        and str(monitor.get("openalex_id") or "").strip()
+    )
 
 
 def list_feed_monitors(db: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -542,6 +558,12 @@ def update_feed_monitor_result(
     error: str | None = None,
 ) -> None:
     now = utcnow().isoformat()
+    # Errors carry request URLs, and OpenAlex URLs carry `api_key=`; this row is
+    # served back by GET /feed/monitors.
+    if error:
+        error = redact_sensitive_text(error)
+    if result:
+        result = redact_sensitive_data(result)
     db.execute(
         """
         UPDATE feed_monitors

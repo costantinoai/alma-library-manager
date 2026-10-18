@@ -1862,7 +1862,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     # writes below are unaffected. The cache lives on the client instance, so
     # the Phase A pool threads share it too.
     with get_openalex_client().operation_cache("feed_refresh"), source_diagnostics_scope() as source_diag:
-        author_ready = [m for m in author_monitors if m.get("health") == "ready" and m.get("openalex_id")]
+        author_ready = [m for m in author_monitors if monitor_app.author_monitor_can_fetch(m)]
         author_by_openalex = {
             str(m.get("openalex_id") or "").strip(): m for m in author_ready
         }
@@ -1973,7 +1973,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     )
 
         for monitor in author_monitors:
-            if monitor.get("health") == "ready":
+            if monitor_app.author_monitor_can_fetch(monitor):
                 continue
             diag = {
                 "monitor_id": monitor["id"],
@@ -2305,7 +2305,7 @@ def refresh_feed_monitor(
     usage_before = openalex_usage_snapshot()
     with source_diagnostics_scope() as source_diag:
         if monitor.get("monitor_type") == "author":
-            if monitor.get("health") != "ready" or not monitor.get("openalex_id"):
+            if not monitor_app.author_monitor_can_fetch(monitor):
                 diag = {
                     "monitor_id": monitor["id"],
                     "monitor_type": "author",
