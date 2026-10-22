@@ -26,6 +26,7 @@ from alma.core.http_sources import (
 )
 from alma.core.paper_groups import settle_new_paper_group
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
 )
@@ -484,12 +485,15 @@ def _upsert_candidate_paper(
     *,
     now: str,
     pending_hydration_ids: set[str] | None = None,
+    candidate_outcomes: dict[str, int] | None = None,
 ) -> str | None:
     # Clean the display fields at the boundary: figure / SI titles arrive
     # HTML-wrapped (`<p>…</p>`). The fill_only_update_paper path re-cleans
     # (idempotent), but the direct INSERT below relies on this.
     title = clean_display_text(str(candidate.get("title") or "").strip())
     if not title:
+        if candidate_outcomes is not None:
+            candidate_outcomes["invalid_candidate"] = candidate_outcomes.get("invalid_candidate", 0) + 1
         return None
 
     openalex_id = str(candidate.get("openalex_id") or "").strip()
@@ -644,6 +648,7 @@ def _insert_feed_item(
     monitor_id: str | None,
     monitor_type: str | None,
     monitor_label: str | None,
+    candidate_outcomes: dict[str, int] | None = None,
 ) -> bool:
     # Components (figures / SI / datasets / author responses) live in the
     # corpus but never enter the Feed inbox — they're shown inside their parent
@@ -655,6 +660,8 @@ def _insert_feed_item(
         (paper_id,),
     ).fetchone()
     if row is None:
+        if candidate_outcomes is not None:
+            candidate_outcomes["non_standalone"] = candidate_outcomes.get("non_standalone", 0) + 1
         return False
 
     feed_id = uuid.uuid4().hex
@@ -664,7 +671,18 @@ def _insert_feed_item(
            VALUES (?, ?, ?, ?, ?, ?, ?, 'new', 0)""",
         (feed_id, paper_id, author_id, monitor_id, monitor_type, monitor_label, fetched_at),
     )
-    return db.execute("SELECT changes()").fetchone()[0] > 0
+    created = db.execute("SELECT changes()").fetchone()[0] > 0
+    if candidate_outcomes is not None:
+        if created:
+            reason = "created"
+        else:
+            existing = db.execute(
+                "SELECT status FROM feed_items WHERE paper_id = ? AND author_id = ?",
+                (paper_id, author_id),
+            ).fetchone()
+            reason = f"existing_feed_{existing['status']}" if existing else "insert_conflict"
+        candidate_outcomes[reason] = candidate_outcomes.get(reason, 0) + 1
+    return created
 
 
 def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | None]:
@@ -1862,7 +1880,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     # writes below are unaffected. The cache lives on the client instance, so
     # the Phase A pool threads share it too.
     with get_openalex_client().operation_cache("feed_refresh"), source_diagnostics_scope() as source_diag:
-        author_ready = [m for m in author_monitors if m.get("health") == "ready" and m.get("openalex_id")]
+        author_ready = [m for m in author_monitors if monitor_app.author_monitor_can_fetch(m)]
         author_by_openalex = {
             str(m.get("openalex_id") or "").strip(): m for m in author_ready
         }
@@ -1890,10 +1908,10 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     per_author_limit=author_per_refresh,
                 )
             except Exception as exc:
-                logger.error("Feed author batch fetch failed: %s", exc)
+                logger.error("Feed author batch fetch failed: %s", redact_sensitive_text(str(exc)))
                 author_works = {}
                 for monitor in author_ready:
-                    error_text = str(exc)
+                    error_text = redact_sensitive_text(str(exc))
                     diag = {
                         "monitor_id": monitor["id"],
                         "monitor_type": "author",
@@ -1912,11 +1930,12 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         error=error_text,
                     )
                 commit_with_retry(db, label="feed refresh")
-                _log("author_fetch_error", f"Feed refresh: author monitor batch fetch failed: {exc}")
+                _log("author_fetch_error", f"Feed refresh: author monitor batch fetch failed: {redact_sensitive_text(str(exc))}")
             else:
                 for oa_author_id, monitor in author_by_openalex.items():
                     works = author_works.get(oa_author_id) or []
                     author_items = 0
+                    candidate_outcomes: dict[str, int] = {}
                     found = 0
                     for raw_work in works:
                         try:
@@ -1927,7 +1946,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         papers_found += 1
                         candidate = _normalize_author_work_to_candidate(work)
                         paper_id = _upsert_candidate_paper(
-                            db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                            db, candidate, now=now, pending_hydration_ids=pending_hydration_ids, candidate_outcomes=candidate_outcomes
                         )
                         if not paper_id:
                             continue
@@ -1939,6 +1958,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                             monitor_id=str(monitor.get("id") or ""),
                             monitor_type="author",
                             monitor_label=str(monitor.get("label") or ""),
+                            candidate_outcomes=candidate_outcomes,
                         ):
                             items_created += 1
                             author_items += 1
@@ -1954,6 +1974,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         "reason": None,
                         "papers_found": found,
                         "items_created": author_items,
+                        "candidate_outcomes": candidate_outcomes,
                         "openalex_id": oa_author_id,
                     }
                     monitor_diagnostics.append(diag)
@@ -1973,7 +1994,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     )
 
         for monitor in author_monitors:
-            if monitor.get("health") == "ready":
+            if monitor_app.author_monitor_can_fetch(monitor):
                 continue
             diag = {
                 "monitor_id": monitor["id"],
@@ -2022,7 +2043,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     search_temperature=search_temperature,
                 )
             except FeedQuerySyntaxError as exc:
-                return {"error_reason": str(exc)}
+                return {"error_reason": redact_sensitive_text(str(exc))}
             if not monitor_query or not search_query:
                 return {"error_reason": "missing_query"}
             try:
@@ -2037,8 +2058,8 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     semantic_scholar_bulk=semantic_scholar_bulk,
                 )
             except Exception as exc:
-                logger.debug("Non-author monitor refresh failed for %s: %s", monitor["label"], exc)
-                return {"error_reason": str(exc)}
+                logger.debug("Non-author monitor refresh failed for %s: %s", monitor["label"], redact_sensitive_text(str(exc)))
+                return {"error_reason": redact_sensitive_text(str(exc))}
             candidates, filter_stats = _filter_monitor_candidates(
                 monitor=monitor,
                 query=monitor_query,
@@ -2072,7 +2093,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     try:
                         plan_by_monitor[mid] = future.result()
                     except Exception as exc:  # defensive; _plan_and_search already guards
-                        plan_by_monitor[mid] = {"error_reason": str(exc)}
+                        plan_by_monitor[mid] = {"error_reason": redact_sensitive_text(str(exc))}
 
         # Phase B — sequential DB writes, original monitor order preserved so
         # Activity progress + monitor_idx stay deterministic.
@@ -2119,13 +2140,14 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
             found = len(candidates)
             papers_found += found
             monitor_items = 0
+            candidate_outcomes = {}
             source_counts: dict[str, int] = {}
             for candidate in candidates:
                 source_name = str(candidate.get("source_api") or "").strip()
                 if source_name:
                     source_counts[source_name] = int(source_counts.get(source_name) or 0) + 1
                 paper_id = _upsert_candidate_paper(
-                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids, candidate_outcomes=candidate_outcomes
                 )
                 if not paper_id:
                     continue
@@ -2137,6 +2159,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     monitor_id=str(monitor.get("id") or ""),
                     monitor_type=str(monitor.get("monitor_type") or ""),
                     monitor_label=str(monitor.get("label") or ""),
+                    candidate_outcomes=candidate_outcomes,
                 ):
                     items_created += 1
                     monitor_items += 1
@@ -2153,6 +2176,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 "reason": None,
                 "papers_found": found,
                 "items_created": monitor_items,
+                "candidate_outcomes": candidate_outcomes,
                 "query": monitor_query,
                 "search_query": search_query,
                 "search_limit": search_limit_for_monitor,
@@ -2229,6 +2253,28 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
             "http": http_source_diagnostics,
         },
     }
+    outcomes: dict[str, int] = {}
+    for diagnostic in monitor_diagnostics:
+        for reason, count in diagnostic.get("candidate_outcomes", {}).items():
+            outcomes[reason] = outcomes.get(reason, 0) + count
+    summary["candidate_outcomes"] = outcomes
+    failures = sum(d.get("status") in {"failed", "degraded"} for d in monitor_diagnostics)
+    summary["monitors_failed"] = failures
+    previous_runs = int(discovery_settings.get("feed.zero_yield_runs") or 0)
+    zero_yield = papers_found > 0 and items_created == 0 and failures == 0
+    runs = previous_runs + 1 if zero_yield else 0
+    with write_section(db, label="feed refresh health"):
+        from alma.application.discovery.lens_crud import upsert_setting
+
+        upsert_setting(db, "feed.zero_yield_runs", str(runs))
+    summary["zero_yield_runs"] = runs
+    if runs >= monitor_app.ZERO_YIELD_WARNING_RUNS:
+        summary["health_warning"] = (
+            f"Sources returned candidates but no new items in {runs} consecutive refreshes; "
+            "see candidate outcomes for duplicates, dismissals and components"
+        )
+    _, message = feed_refresh_outcome(summary)
+    _log("refresh_outcome", message, data=redact_sensitive_data(summary))
     logger.info(
         "Feed refresh: monitors=%d papers=%d items=%d scored=%d",
         len(monitors),
@@ -2237,6 +2283,27 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         scored,
     )
     return summary
+
+
+def feed_refresh_outcome(result: dict) -> tuple[str, str]:
+    """Keep Activity honest when retrieval failed or repeatedly yields duplicates."""
+    if result.get("monitor_type") and result.get("status") in {"failed", "degraded"}:
+        reason = redact_sensitive_text(str(result.get("reason") or "source unavailable"))
+        return "failed", f"Feed monitor refresh failed: {reason}"
+    failures = int(result.get("monitors_failed") or 0)
+    total = int(result.get("monitors_total") or 0)
+    created = int(result.get("items_created") or 0)
+    if failures and failures == total:
+        return "failed", f"All {failures} feed monitors failed; retry after checking source errors"
+    status = "completed" if created else "noop"
+    message = f"Added {created} new papers to feed inbox" if created else "No new papers found from active monitors"
+    if failures:
+        message += f"; {failures} monitors failed (see diagnostics)"
+    if result.get("health_warning"):
+        message += f"; Warning: {result['health_warning']}"
+    elif int(result.get("zero_yield_runs") or 0) >= monitor_app.ZERO_YIELD_WARNING_RUNS:
+        message += "; Warning: candidates repeatedly produced no new items; see monitor diagnostics"
+    return status, message
 
 
 def refresh_feed_monitor(
@@ -2267,6 +2334,10 @@ def refresh_feed_monitor(
         monitor = next((item for item in monitors if str(item.get("id") or "") == str(monitor_id or "")), None)
     if monitor is None:
         return None
+
+    # The author-mirror prune above opens a write transaction even when it
+    # deletes nothing. Release it before source I/O (including retry backoff).
+    _commit_if_pending(db)
 
     # S-4: collect hydration targets for one post-refresh sweep (see refresh_feed_inbox).
     pending_hydration_ids: set[str] = set()
@@ -2305,7 +2376,7 @@ def refresh_feed_monitor(
     usage_before = openalex_usage_snapshot()
     with source_diagnostics_scope() as source_diag:
         if monitor.get("monitor_type") == "author":
-            if monitor.get("health") != "ready" or not monitor.get("openalex_id"):
+            if not monitor_app.author_monitor_can_fetch(monitor):
                 diag = {
                     "monitor_id": monitor["id"],
                     "monitor_type": "author",
@@ -2339,7 +2410,7 @@ def refresh_feed_monitor(
                 # escape would surface the error on the operation but leave this
                 # monitor wearing its previous status, and Health counts broken
                 # monitors from that column.
-                error_text = str(exc)
+                error_text = redact_sensitive_text(str(exc))
                 logger.error("Author monitor %s fetch failed: %s", monitor["id"], error_text)
                 diag = {
                     "monitor_id": monitor["id"],
@@ -2361,6 +2432,7 @@ def refresh_feed_monitor(
                 return diag
             found = 0
             items_created = 0
+            candidate_outcomes = {}
             for raw_work in works:
                 try:
                     work = _normalize_work(raw_work)
@@ -2369,7 +2441,7 @@ def refresh_feed_monitor(
                 found += 1
                 candidate = _normalize_author_work_to_candidate(work)
                 paper_id = _upsert_candidate_paper(
-                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids, candidate_outcomes=candidate_outcomes
                 )
                 if not paper_id:
                     continue
@@ -2381,6 +2453,7 @@ def refresh_feed_monitor(
                     monitor_id=str(monitor.get("id") or ""),
                     monitor_type="author",
                     monitor_label=str(monitor.get("label") or ""),
+                    candidate_outcomes=candidate_outcomes,
                 ):
                     items_created += 1
                 # S-8: commit moved to the single per-monitor commit below.
@@ -2393,6 +2466,7 @@ def refresh_feed_monitor(
                 "reason": None,
                 "papers_found": found,
                 "items_created": items_created,
+                "candidate_outcomes": candidate_outcomes,
                 "openalex_id": openalex_id,
             }
         else:
@@ -2403,7 +2477,7 @@ def refresh_feed_monitor(
                     search_temperature=search_temperature,
                 )
             except FeedQuerySyntaxError as exc:
-                error_text = str(exc)
+                error_text = redact_sensitive_text(str(exc))
                 diag = {
                     "monitor_id": monitor["id"],
                     "monitor_type": monitor["monitor_type"],
@@ -2466,13 +2540,14 @@ def refresh_feed_monitor(
             )
             found = len(candidates)
             items_created = 0
+            candidate_outcomes = {}
             source_counts: dict[str, int] = {}
             for candidate in candidates:
                 source_name = str(candidate.get("source_api") or "").strip()
                 if source_name:
                     source_counts[source_name] = int(source_counts.get(source_name) or 0) + 1
                 paper_id = _upsert_candidate_paper(
-                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids, candidate_outcomes=candidate_outcomes
                 )
                 if not paper_id:
                     continue
@@ -2484,6 +2559,7 @@ def refresh_feed_monitor(
                     monitor_id=str(monitor.get("id") or ""),
                     monitor_type=str(monitor.get("monitor_type") or ""),
                     monitor_label=str(monitor.get("label") or ""),
+                    candidate_outcomes=candidate_outcomes,
                 ):
                     items_created += 1
                 # S-8: commit moved to the single per-monitor commit below.
@@ -2496,6 +2572,7 @@ def refresh_feed_monitor(
                 "reason": None,
                 "papers_found": found,
                 "items_created": items_created,
+                "candidate_outcomes": candidate_outcomes,
                 "query": monitor_query,
                 "search_query": search_query,
                 "search_limit": search_limit_for_monitor,

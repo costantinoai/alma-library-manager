@@ -870,6 +870,7 @@ def _register_interval_job(
     enabled: bool,
     interval_hours: int = 0,
     interval_minutes: int = 0,
+    next_run_time: datetime | None = None,
 ) -> bool:
     """Register (or remove) an interval-triggered job from one place.
 
@@ -883,6 +884,8 @@ def _register_interval_job(
     the first such job: a phone capture that took an hour to appear would not
     feel like a capture at all, so it polls on a minutes cadence. Exactly one of
     the two should be set; ``interval_minutes`` wins if both are.
+    ``next_run_time`` preserves a caller's durable cadence across restarts;
+    other callers retain APScheduler's default first run after one interval.
     """
     try:
         sched.remove_job(job_id)
@@ -901,6 +904,7 @@ def _register_interval_job(
             id=job_id,
             name=name,
             replace_existing=True,
+            **({"next_run_time": next_run_time} if next_run_time is not None else {}),
         )
         with _job_lock:
             _job_meta[job_id] = {
@@ -914,6 +918,37 @@ def _register_interval_job(
 
     logger.info("%s disabled (auto-refresh opt-in OFF)", job_id)
     return False
+
+
+def _feed_refresh_next_run(interval_hours: int) -> datetime:
+    """Keep Feed's first due time anchored to its last successful full refresh.
+
+    A fresh interval starts at registration time, so restarting more often
+    than the interval could postpone Feed forever. Manual full refreshes also
+    satisfy the cadence. An overdue or never-refreshed Feed catches up once;
+    the registered runner still applies the normal network admission gate.
+    """
+    now = utcnow()
+    last_refresh = None
+    try:
+        from alma.api.deps import open_db_connection
+
+        conn = open_db_connection()
+        try:
+            row = conn.execute(
+                """SELECT finished_at FROM operation_status
+                   WHERE operation_key IN ('feed.refresh_inbox', 'feed.refresh_periodic')
+                     AND status IN ('completed', 'noop') AND finished_at IS NOT NULL
+                   ORDER BY julianday(finished_at) DESC LIMIT 1"""
+            ).fetchone()
+            if row:
+                last_refresh = _parse_activity_time(row["finished_at"])
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Feed cadence history unavailable (%s); scheduling catch-up", type(exc).__name__)
+    due = last_refresh + timedelta(hours=interval_hours) if last_refresh else now
+    return max(now, due).replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -1659,14 +1694,8 @@ def setup_scheduler() -> None:
     feed_refresh_hours = _discovery_schedule_interval_hours(
         "schedule.feed_refresh_interval_hours", 6
     )
-    _register_interval_job(
-        sched,
-        job_id="refresh_feed_inbox",
-        func=refresh_feed_inbox_periodic,
-        name="Periodic feed refresh",
-        description=f"Refreshes the feed inbox every {feed_refresh_hours}h",
-        enabled=_schedule_flag_enabled("schedule.feed_refresh_enabled"),
-        interval_hours=feed_refresh_hours,
+    reschedule_feed_refresh(
+        _schedule_flag_enabled("schedule.feed_refresh_enabled"), feed_refresh_hours
     )
 
     # -- Inbox capture sweep (interval, minutes) ---------------------------
@@ -2373,12 +2402,7 @@ def refresh_feed_inbox_periodic() -> None:
             conn.close()
 
         items_created = int((result or {}).get("items_created") or 0)
-        final_status = "noop" if items_created == 0 else "completed"
-        final_message = (
-            "No new papers found from active monitors"
-            if items_created == 0
-            else f"Added {items_created} new papers to feed inbox"
-        )
+        final_status, final_message = feed_app.feed_refresh_outcome(result)
         set_job_status(
             job_id,
             status=final_status,
@@ -3460,6 +3484,9 @@ def reschedule_feed_refresh(enabled: bool, interval_hours: int) -> None:
         description=f"Refreshes the feed inbox every {interval_hours}h",
         enabled=enabled,
         interval_hours=interval_hours,
+        next_run_time=(
+            _feed_refresh_next_run(interval_hours) if enabled and interval_hours > 0 else None
+        ),
     )
 
 

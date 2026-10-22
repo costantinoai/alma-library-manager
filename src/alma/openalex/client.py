@@ -1293,6 +1293,7 @@ def batch_fetch_recent_works_for_authors(
     )
 
     for chunk_ids in chunks:
+        chunk_by_lower = {aid.lower(): aid for aid in chunk_ids}
         # Build piped author filter
         author_filter = "author.id:" + "|".join(chunk_ids)
         filter_parts = [author_filter]
@@ -1341,17 +1342,14 @@ def batch_fetch_recent_works_for_authors(
                     if not work_aid_raw:
                         continue
                     work_aid = _normalize_openalex_author_id(work_aid_raw)
-                    if work_aid.lower() in seen and work_aid not in matched_aids:
-                        matched_aids.add(work_aid)
-                for matched in matched_aids:
-                    # Find the canonical-cased ID from clean_ids
-                    canonical = matched
-                    for cid in chunk_ids:
-                        if cid.lower() == matched.lower():
-                            canonical = cid
-                            break
-                    if len(author_works.get(canonical, [])) < per_author_limit:
-                        author_works.setdefault(canonical, []).append(work)
+                    canonical = chunk_by_lower.get(work_aid.lower())
+                    if canonical:
+                        matched_aids.add(canonical)
+                for canonical in matched_aids:
+                    # Other-chunk coauthors must wait for their own sorted
+                    # query, or an older shared work can consume their cap.
+                    if len(author_works[canonical]) < per_author_limit:
+                        author_works[canonical].append(work)
 
             works_fetched += len(results)
             cursor = (data.get("meta") or {}).get("next_cursor")
@@ -1366,6 +1364,47 @@ def batch_fetch_recent_works_for_authors(
             )
             if all_full:
                 break
+
+        # The global page cap bounds cost, not any individual author's
+        # catalogue. A prolific author's newest works can consume every page
+        # before an older work by another author is reached. Resolve each
+        # underfilled author separately when that cap truncates the batch;
+        # otherwise an unvisited author is silently reported as having no work.
+        if cursor and works_fetched >= max_works:
+            for aid in chunk_ids:
+                if len(author_works[aid]) >= per_author_limit:
+                    continue
+                author_filter_parts = [f"author.id:{aid}"]
+                if from_year:
+                    author_filter_parts.append(f"from_publication_date:{from_year}-01-01")
+                recent: list[dict] = []
+                author_cursor: str | None = "*"
+                # At most ceil(limit / 100) pages per underfilled author.
+                # Replace the partial batch list so cursor restarts cannot
+                # double-count works already seen in the shared response.
+                for _ in range((per_author_limit + 99) // 100):
+                    resp = client.get(
+                        "/works",
+                        params={
+                            "filter": ",".join(author_filter_parts),
+                            "sort": "publication_date:desc",
+                            "per-page": min(100, per_author_limit - len(recent)),
+                            "cursor": author_cursor,
+                            "select": discovery_select,
+                        },
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    op_stats = getattr(client, "_op_stats", None)
+                    if op_stats is not None:
+                        op_stats.batch_requests += 1
+                        op_stats.batch_items += 1
+                    data = resp.json() or {}
+                    recent.extend(data.get("results") or [])
+                    author_cursor = (data.get("meta") or {}).get("next_cursor")
+                    if not author_cursor or len(recent) >= per_author_limit:
+                        break
+                author_works[aid] = recent[:per_author_limit]
 
     # Remove empty entries
     result = {aid: works for aid, works in author_works.items() if works}
