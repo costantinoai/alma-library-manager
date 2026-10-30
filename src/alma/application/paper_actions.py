@@ -198,11 +198,10 @@ def defer_from_inbox(db: sqlite3.Connection, paper_id: str) -> bool:
 
     This is why it cannot reuse `dismiss`. `library.dismiss_paper` sets
     `status='dismissed'` and leaves the rating alone, but that status is a
-    global hide, and Discovery sends dismissed papers to Semantic Scholar as
-    negative seeds — so routing the X button through it would teach Discovery
-    to avoid papers whose only sin was being uninteresting on a Tuesday. Under
-    the amended D6, negative opinion is `dislike`; "bad and gone" is dislike +
-    dismiss, two verbs the user composes deliberately.
+    global hide, so routing the X button through it would hide papers whose
+    only sin was being uninteresting on a Tuesday. Under the amended D6,
+    negative opinion is `dislike`; "bad and gone" is dislike + dismiss, two
+    verbs the user composes deliberately.
 
     Idempotent: a paper not in the Inbox is left alone and False is returned.
     The caller owns the transaction.
