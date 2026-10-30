@@ -5,8 +5,9 @@ exists (follow + backfill, author suggestions, keyword monitors, library lens,
 lens refresh, paper triage). This router owns only the small pieces with no
 home elsewhere:
 
-- onboarding *state* (`onboarding.completed`, `user.name`) in the
-  `discovery_settings` key/value table;
+- onboarding *state*: `user.name`, and the routes over walkthrough state, whose
+  one owner is `alma.application.walkthroughs` (first-run wizard, page tours and
+  new-feature walkthroughs, all stored in `discovery_settings`);
 - the "you at the centre" owner-ingest (resolve identity → follow → mark owner
   → schedule the historical backfill → promote the owner's papers to Library).
 
@@ -23,12 +24,15 @@ the frontend against the existing endpoints — see ``tasks/02_ONBOARDING.md``.
 
 import logging
 import sqlite3
+from dataclasses import asdict
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
 from alma.application import library as library_app
+from alma.application import walkthroughs
 from alma.application.discovery.lens_crud import upsert_setting
 from alma.application.followed_authors import (
     apply_follow_state,
@@ -37,7 +41,6 @@ from alma.application.followed_authors import (
 )
 from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
-from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import (
     _normalize_openalex_author_id,
@@ -54,8 +57,6 @@ router = APIRouter(
     responses={401: {"description": "Unauthorized"}},
 )
 
-_COMPLETED_KEY = "onboarding.completed"
-_COMPLETED_AT_KEY = "onboarding.completed_at"
 _USER_NAME_KEY = "user.name"
 
 
@@ -81,10 +82,6 @@ def _get_kv(db: sqlite3.Connection, key: str) -> str | None:
     return None if value is None else str(value)
 
 
-def _truthy(value: str | None) -> bool:
-    return bool(value) and str(value).strip().lower() in ("1", "true", "yes")
-
-
 def _count(db: sqlite3.Connection, sql: str) -> int:
     try:
         return int(db.execute(sql).fetchone()[0])
@@ -101,6 +98,35 @@ class OnboardingStatusResponse(BaseModel):
     library_count: int
     followed_count: int
     user_name: str | None = None
+
+
+class WalkthroughStateResponse(BaseModel):
+    """One walkthrough. `pending` is the only field the UI decides on."""
+
+    id: str
+    current_version: int
+    pending: bool
+    outcome: str | None = None
+    recorded_version: int | None = None
+    at: str | None = None
+    source: str | None = None
+
+
+class WalkthroughListResponse(BaseModel):
+    walkthroughs: list[WalkthroughStateResponse]
+
+
+class WalkthroughOutcomeRequest(BaseModel):
+    outcome: Literal["done", "skipped"]
+
+
+class WalkthroughImportRequest(BaseModel):
+    ids: list[str] = Field(max_length=100)
+
+
+class WalkthroughImportResponse(BaseModel):
+    imported: list[str]
+    ignored: list[str]
 
 
 class ProfileRequest(BaseModel):
@@ -162,7 +188,7 @@ def get_onboarding_status(
 ):
     """First-run state + the counts the gate and step copy read."""
     return OnboardingStatusResponse(
-        completed=_truthy(_get_kv(db, _COMPLETED_KEY)),
+        completed=not walkthroughs.get_walkthrough(db, walkthroughs.WELCOME_ID).pending,
         has_owner=_count(db, "SELECT COUNT(*) FROM followed_authors WHERE is_owner = 1") > 0,
         library_count=_count(
             db,
@@ -247,6 +273,7 @@ def clear_owner(
 
 @router.post("/complete", status_code=204)
 def complete_onboarding(
+    payload: WalkthroughOutcomeRequest | None = None,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -257,14 +284,16 @@ def complete_onboarding(
     labels → topic normalization — until nothing actionable remains, so the
     fresh library ends healthy, not "queued". Its `auto:onboarding_complete`
     trigger is user-facing (never yields to the idle gate) and survives
-    restarts via the orphan-resume path."""
-    completed_at = utcnow().isoformat()
+    restarts via the orphan-resume path.
 
-    def _persist() -> None:
-        upsert_setting(db, _COMPLETED_KEY, "true")
-        upsert_setting(db, _COMPLETED_AT_KEY, completed_at)
-
-    run_write_unit(db, _persist, label="onboarding_complete")
+    `outcome` tells a finished wizard from a dismissed one; both close it and
+    both start the chain, so the wizard has this one closing route."""
+    outcome = payload.outcome if payload else "done"
+    run_write_unit(
+        db,
+        lambda: walkthroughs.record_outcome(db, walkthroughs.WELCOME_ID, outcome),
+        label="onboarding_complete",
+    )
 
     # Post-commit: scheduling in-transaction self-deadlocks against the
     # scheduler's own connection (see ingest_owner).
@@ -285,18 +314,86 @@ def reset_onboarding(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Clear the completed flag so Settings → Restart re-shows the flow."""
-    try:
-        run_write_unit(
-            db,
-            lambda: db.execute(
-                "DELETE FROM discovery_settings WHERE key IN (?, ?)",
-                (_COMPLETED_KEY, _COMPLETED_AT_KEY),
-            ),
-            label="onboarding_reset",
-        )
-    except sqlite3.OperationalError:
-        pass
+    """Settings → Restart: ask for the wizard and every walkthrough again."""
+    run_write_unit(
+        db,
+        lambda: walkthroughs.request_replay(db, list(walkthroughs.WALKTHROUGH_VERSIONS)),
+        label="onboarding_reset",
+    )
+
+
+@router.get("/walkthroughs", response_model=WalkthroughListResponse)
+def list_walkthrough_state(
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Every walkthrough's stored state. The UI shows an overlay only from this."""
+    return WalkthroughListResponse(
+        walkthroughs=[
+            _state_response(db, walkthrough_id)
+            for walkthrough_id in walkthroughs.WALKTHROUGH_VERSIONS
+        ]
+    )
+
+
+@router.post("/walkthroughs/import", response_model=WalkthroughImportResponse)
+def import_walkthrough_state(
+    payload: WalkthroughImportRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Take a browser's old page-tour flags, one way. Repeating it changes nothing."""
+    imported, ignored = run_write_unit(
+        db,
+        lambda: walkthroughs.import_browser_verdicts(db, payload.ids),
+        label="walkthrough_import",
+    )
+    return WalkthroughImportResponse(imported=imported, ignored=ignored)
+
+
+def _state_response(db: sqlite3.Connection, walkthrough_id: str) -> WalkthroughStateResponse:
+    return WalkthroughStateResponse(**asdict(walkthroughs.get_walkthrough(db, walkthrough_id)))
+
+
+def _require_walkthrough(walkthrough_id: str) -> None:
+    if not walkthroughs.is_known(walkthrough_id):
+        raise HTTPException(status_code=404, detail=f"Unknown walkthrough: {walkthrough_id}")
+
+
+@router.post("/walkthroughs/{walkthrough_id}/outcome", response_model=WalkthroughStateResponse)
+def record_walkthrough_outcome(
+    walkthrough_id: str,
+    payload: WalkthroughOutcomeRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Record that a walkthrough was finished or dismissed."""
+    _require_walkthrough(walkthrough_id)
+    if walkthrough_id == walkthroughs.WELCOME_ID:
+        # Closing the wizard also starts the convergence chain.
+        raise HTTPException(status_code=409, detail="Close the wizard with /onboarding/complete.")
+    run_write_unit(
+        db,
+        lambda: walkthroughs.record_outcome(db, walkthrough_id, payload.outcome),
+        label="walkthrough_outcome",
+    )
+    return _state_response(db, walkthrough_id)
+
+
+@router.post("/walkthroughs/{walkthrough_id}/replay", response_model=WalkthroughStateResponse)
+def replay_walkthrough(
+    walkthrough_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Ask for one walkthrough again. It stays pending until it is closed."""
+    _require_walkthrough(walkthrough_id)
+    run_write_unit(
+        db,
+        lambda: walkthroughs.request_replay(db, [walkthrough_id]),
+        label="walkthrough_replay",
+    )
+    return _state_response(db, walkthrough_id)
 
 
 # --------------------------------------------------------------------------- #

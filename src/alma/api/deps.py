@@ -1613,6 +1613,13 @@ def init_db_schema() -> None:
                 logger.exception("maintenance config migration failed")
                 raise
 
+            # Forward-only walkthrough state migration: the old
+            # `onboarding.completed` keys become walkthrough records. Their
+            # presence is the trigger, so it runs once and needs no version.
+            from alma.application.walkthroughs import migrate_walkthrough_state
+
+            migrate_walkthrough_state(conn)
+
             # Pin PRAGMA user_version for fresh databases — the bootstrap
             # DDL above just created the current shape, so the legacy
             # migrations must never replay against it. No-op on DBs that
