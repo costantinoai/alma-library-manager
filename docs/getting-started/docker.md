@@ -483,6 +483,12 @@ right image for a Pi.
     keep the container on `127.0.0.1` behind a reverse proxy with
     HTTPS + auth.
 
+!!! note "Opening it by name"
+    An IP address works as is. If you open ALMa by a hostname
+    (`http://raspberrypi.local:8000`), add it to
+    `ALMA_ALLOWED_ORIGINS`, or saving will fail with `403`. See
+    [Browser origins](../operations/deployment.md#browser-origins).
+
 ## After it starts
 
 Open <http://localhost:8000>. The first run lands you on the Library

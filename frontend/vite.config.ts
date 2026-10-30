@@ -54,7 +54,12 @@ export default defineConfig({
     // hardcoded :8000 which may be the production container.
     port: Number(process.env.FRONTEND_PORT) || 5173,
     proxy: {
-      '/api': `http://localhost:${Number(process.env.BACKEND_PORT) || 8000}`,
+      // Keep the browser's Host: the backend's origin guard compares it with
+      // Origin, and a string target here would rewrite it to the backend port.
+      '/api': {
+        target: `http://localhost:${Number(process.env.BACKEND_PORT) || 8000}`,
+        changeOrigin: false,
+      },
     },
   },
 })

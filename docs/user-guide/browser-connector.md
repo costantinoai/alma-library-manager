@@ -20,7 +20,7 @@ It talks **only** to your own running ALMa (by default a local install at
   listens on `http://localhost:8000`. If you use the dev server it
   listens on `http://localhost:8001` — you'll set that in the
   connector's Settings (below).
-* **Firefox 115 or newer.**
+* **Firefox 128 or newer.**
 * **The signed connector `.xpi`** from your ALMa release (see Install
   below) — nothing to build or clone.
 

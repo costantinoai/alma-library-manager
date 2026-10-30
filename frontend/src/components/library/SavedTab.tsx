@@ -327,6 +327,22 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     },
   })
 
+  // Like and Love are the `like` / `love` actions, as on every other surface:
+  // the one action route owns the rating and records the verb. The star widget
+  // and the edit dialog stay on `updateLikeMutation`, because an explicit star
+  // value is a `rate`, not a reaction.
+  const reactMutation = useMutation({
+    mutationFn: ({ paperId, action }: { paperId: string; action: 'like' | 'love' }) =>
+      applyPaperAction(paperId, action, { surface: 'library' }),
+    onSuccess: (_data, { action }) => {
+      void invalidateAfterPaperMutation(queryClient)
+      toast({ title: action === 'love' ? 'Loved' : 'Liked', description: 'Saved paper updated successfully.' })
+    },
+    onError: (err: unknown, { action }) => {
+      errorToast(`Could not ${action} the paper`, getApiErrorMessage(err))
+    },
+  })
+
   const addToCollectionMutation = useMutation({
     mutationFn: ({ collectionId, pubKey }: { collectionId: string; pubKey: string }) =>
       api.post(`/library/collections/${collectionId}/items`, { paper_id: pubKey }),
@@ -567,8 +583,8 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 onFollowVenue={followVenue}
                 onRate={(rating) => updateLikeMutation.mutate({ pubKey: like.id, rating })}
                 onDismiss={() => setDeleteKey(like.id)}
-                onLike={() => updateLikeMutation.mutate({ pubKey: like.id, rating: 4 })}
-                onLove={() => updateLikeMutation.mutate({ pubKey: like.id, rating: 5 })}
+                onLike={() => reactMutation.mutate({ paperId: like.id, action: 'like' })}
+                onLove={() => reactMutation.mutate({ paperId: like.id, action: 'love' })}
                 onUndo={(aspect) => undoMutation.mutate({ paperId: like.id, aspect })}
                 onPivot={() => navigateTo('discovery', { seed: like.id, seedTitle: like.title })}
                 dismissLabel="Remove"

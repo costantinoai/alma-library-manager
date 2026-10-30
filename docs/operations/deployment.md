@@ -48,6 +48,50 @@ server {
 }
 ```
 
+## Browser origins
+
+ALMa refuses any `POST`, `PUT`, `PATCH` or `DELETE` that a browser sends
+from another website, so that a page you happen to have open cannot
+wipe your data. It works without configuration on `localhost`,
+`127.0.0.1` and any IP address.
+
+**If you open ALMa at a hostname, list it.** That covers a reverse proxy
+domain, a Tailscale name and a `.local` name:
+
+```bash
+# .env
+ALMA_ALLOWED_ORIGINS=https://alma.example.com
+```
+
+Several origins are comma-separated. Each is a scheme and a host, with a
+port if it is not the default, and no path. A malformed entry or a `*`
+stops ALMa at startup.
+
+Without this, pages load but every save, like and setting fails with
+`403`, and the log shows `Refused cross-site POST` with the origin to
+add. Hostnames must be listed because a hostile domain can be re-pointed at
+your machine (DNS rebinding) and then look like ALMa's own address.
+Only IP addresses and `localhost` are safe from that.
+
+**Containers.** `docker-compose.yml` reads the value from `.env`.
+`scripts/deploy-prod.sh` keeps it from the running container, and takes
+it from the calling shell on a first deploy:
+
+```bash
+ALMA_ALLOWED_ORIGINS=https://alma.example.com scripts/deploy-prod.sh 0.25.0
+```
+
+Older images ignore the variable, so you can set it before upgrading.
+Do that first if Watchtower updates ALMa for you: the new image will
+otherwise arrive without it, and your hostname will be refused until
+you add it.
+
+The browser connector, curl and scripts need nothing here. Extensions
+are recognised by their `moz-extension://` or `chrome-extension://`
+origin, and clients with no `Origin` header pass. That second case is
+why this is not authentication: it stops other websites, not other
+programs that can reach the port. Use an `API_KEY` for those.
+
 ## API key
 
 When ALMa is reachable from outside `127.0.0.1`, set an API key:

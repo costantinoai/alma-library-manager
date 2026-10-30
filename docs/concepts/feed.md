@@ -45,6 +45,19 @@ the monitor's `health` / `health_reason` / `last_error` fields, so the
 strip is a quick read on which sources are failing without leaving the
 Feed.
 
+A monitor that returns only papers you already have is **quiet**, not
+degraded: a candidate that already has a Feed row (in any state) or is
+stored as a part of another paper counts as known. A monitor reads
+degraded when three consecutive checks created nothing **and** dropped
+candidates that were neither stored nor known, such as a work with no
+title or one that could not be parsed. `candidate_outcomes` in the
+monitor's `last_result` shows the breakdown. One created paper resets the
+count, as does a check with no drops.
+
+The refresh-wide Activity note is separate: it warns after three
+consecutive refreshes in which sources returned candidates and no monitor
+created anything, but it never changes a monitor's health.
+
 ## Window and ordering
 
 The Feed is bounded to roughly the **last 60 days** by publication

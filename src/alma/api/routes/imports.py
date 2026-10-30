@@ -78,6 +78,7 @@ class ImportPreflightResponse(BaseModel):
     dedup: dict
     likely_source_calls: dict
     eta: dict
+    quota: dict
 
 
 class ConfirmStagedImportResponse(BaseModel):

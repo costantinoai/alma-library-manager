@@ -15,6 +15,11 @@ from alma.core.time import utcnow
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
 AUTHOR_MONITOR_PREFIX = "author:"
 ZERO_YIELD_WARNING_RUNS = 3
+#: `candidate_outcomes` keys for a candidate the run accounted for: it became a
+#: Feed row, a Feed row already holds it (`existing_feed_<status>`), or it lives
+#: in the corpus as a part of another paper. Every other key is a drop.
+KNOWN_CANDIDATE_OUTCOMES = frozenset({"created", "non_standalone"})
+EXISTING_FEED_OUTCOME_PREFIX = "existing_feed_"
 
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -97,6 +102,20 @@ def _clean_filter_keywords(raw: Any) -> list[str]:
         seen.add(key)
         out.append(token)
     return out
+
+
+def dropped_candidates(outcomes: dict[str, int] | None) -> int:
+    """Count candidates a run neither stored nor already knew.
+
+    An unknown outcome counts as a drop, so a new way to lose a candidate warns
+    until someone decides it is harmless.
+    """
+    return sum(
+        int(count or 0)
+        for reason, count in (outcomes or {}).items()
+        if reason not in KNOWN_CANDIDATE_OUTCOMES
+        and not reason.startswith(EXISTING_FEED_OUTCOME_PREFIX)
+    )
 
 
 def _fetch_monitor_row(db: sqlite3.Connection, monitor_id: str) -> sqlite3.Row | None:
@@ -218,9 +237,9 @@ def _monitor_health(row: sqlite3.Row) -> tuple[str, str | None]:
     last_status = str(row["last_status"] or "").strip().lower()
     if last_status == "failed":
         return "degraded", str(row["last_error"] or "operation_failed").strip() or "operation_failed"
-    runs = int(_json_loads(row["last_result_json"]).get("zero_yield_runs") or 0)
+    runs = int(_json_loads(row["last_result_json"]).get("drop_runs") or 0)
     if runs >= ZERO_YIELD_WARNING_RUNS:
-        return "degraded", f"Candidates returned but no new items in {runs} consecutive checks; see monitor diagnostics"
+        return "degraded", f"Candidates dropped and no new items in {runs} consecutive checks; see monitor diagnostics"
     return "ready", None
 
 
@@ -567,12 +586,17 @@ def update_feed_monitor_result(
             "SELECT last_result_json FROM feed_monitors WHERE id = ?", (monitor_id,)
         ).fetchone()
         previous_result = _json_loads(previous["last_result_json"]) if previous else {}
-        zero_yield = (
+        # A quiet source whose candidates are all known is healthy. Only a run
+        # that yielded nothing AND lost candidates counts towards the warning.
+        # The key is `drop_runs`, not the older `zero_yield_runs`: those stored
+        # counts also counted quiet runs, so they must not feed this rule.
+        dropped = dropped_candidates(result.get("candidate_outcomes"))
+        lost_yield = (
             status in {"completed", "noop"}
-            and int(result.get("papers_found") or 0) > 0
+            and dropped > 0
             and int(result.get("items_created") or 0) == 0
         )
-        result["zero_yield_runs"] = int(previous_result.get("zero_yield_runs") or 0) + 1 if zero_yield else 0
+        result["drop_runs"] = int(previous_result.get("drop_runs") or 0) + 1 if lost_yield else 0
     # Errors carry request URLs, and OpenAlex URLs carry `api_key=`; this row is
     # served back by GET /feed/monitors.
     if error:
