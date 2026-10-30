@@ -2,11 +2,12 @@ import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { invalidateAfterPaperMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
-import { isBackgroundTriggerSource } from '@/lib/activity'
+import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
 
 interface JobStatus {
+  result?: { batch?: unknown }
   job_id: string
   status: string // 'running' | 'completed' | 'failed' | 'cancelled' | 'cancelling' | 'queued'
   operation_key?: string
@@ -23,7 +24,10 @@ const POLL_INTERVAL = 12000 // 12 seconds
  * operation_key domain. The job's own `message` carries the detail (e.g.
  * "Lens 'Library': 50 recommendations generated"), shown as the description.
  */
-function operationToastTitle(operationKey: string | undefined, failed: boolean): string {
+function operationToastTitle(
+  operationKey: string | undefined,
+  outcome: 'complete' | 'partial' | 'failed',
+): string {
   const key = (operationKey ?? '').trim()
   const domain =
     key === 'papers.reconcile_groups' ? 'Paper groups' :
@@ -38,7 +42,8 @@ function operationToastTitle(operationKey: string | undefined, failed: boolean):
     key.startsWith('ai.') ? 'AI' :
     key.startsWith('pdf.') ? 'PDF' :
     'Operation')
-  return failed ? `${domain} failed` : `${domain} complete`
+  if (outcome === 'failed') return `${domain} failed`
+  return outcome === 'partial' ? `${domain} partly done` : `${domain} complete`
 }
 
 function rootsForOperation(operationKey?: string): string[] {
@@ -257,11 +262,14 @@ export function useOperationToasts() {
     for (const op of toToast.slice(0, 3)) {
       if (op.status === 'completed') {
         toast({
-          title: operationToastTitle(op.operation_key, false),
+          title: operationToastTitle(
+            op.operation_key,
+            runDisplayStatus(op.status, op.result?.batch) === 'partial' ? 'partial' : 'complete',
+          ),
           description: op.message || op.job_id,
         })
       } else {
-        errorToast(operationToastTitle(op.operation_key, true), op.message || undefined)
+        errorToast(operationToastTitle(op.operation_key, 'failed'), op.message || undefined)
       }
     }
   }, [operations, queryClient])
