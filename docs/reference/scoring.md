@@ -506,11 +506,9 @@ breakdowns may still carry the key).
 * **Family → channel** has one owner, `retrieval/_common.CHANNEL_BY_FAMILY`
   (semantic → `vector`, citation → `graph`, taste → `external`), read by the
   fusion and by the yield.
-* **Surface.** The lens's **Tune this lens → Lens Weights** prints, per
-  channel, "k of n surfaced papers kept → ×m, used as w". Switch:
-  Settings → Discovery → Retrieval Strategies → *Adaptive Channel Weights*
-  (`strategies.adaptive_channels`, default on). `GET /discovery/channel-yield`
-  is a row read.
+* **Surface.** Diagnostic only since task 92: a lens refresh uses its declared
+  channel weights, because yield pools outcomes across lenses and would let one
+  branch tilt another (D26). `GET /discovery/channel-yield` is a row read.
 
 Measured 2026-09-19 — prod snapshot: lexical 3/36 → ×0.85, vector 15/68 →
 ×1.13, graph 10/62 → ×0.98 (external: nothing surfaced, ×1.00). Dev: lexical
