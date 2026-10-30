@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from alma.application.signal_projection import normalize_feedback_event_value
 from alma.core.time import utcnow
 
 from .exploration import POLICY_VERSION
@@ -150,7 +151,7 @@ def record_impressions(
             FROM recommendations r
             LEFT JOIN discovery_ranking_candidates rc
               ON rc.suggestion_set_id = r.suggestion_set_id
-             AND rc.paper_id = r.paper_id
+             AND rc.final_position = r.rank
              AND rc.selected = 1
             WHERE r.id IN ({placeholders})
             """,
@@ -213,7 +214,14 @@ def load_ltr_observations(
     Historical ranks never receive invented propensities.  Feedback is joined
     through the recommendation id stamped by the canonical Discovery action
     path, preventing a later reaction to the same paper from labeling every
-    earlier exposure.
+    earlier exposure. That id alone identifies the paper: an event moves to the
+    group root on a merge while the snapshot keeps the id it was scored under.
+
+    Order is compared at second precision on one spelling:
+    ``feedback_events.created_at`` is SQLite's ``YYYY-MM-DD HH:MM:SS`` while
+    ``seen_at`` and ``feature_timestamp`` are ISO with a ``T`` and microseconds.
+    Compared raw, a space sorts before ``T``, so every reaction on the day of
+    its own impression read as happening before it.
     """
 
     sql = """
@@ -236,9 +244,8 @@ def load_ltr_observations(
           ON json_extract(fe.context_json, '$.recommendation_id')
              = di.recommendation_id
          AND fe.entity_type IN ('publication', 'paper')
-         AND fe.entity_id = rc.paper_id
-         AND fe.created_at >= di.seen_at
-         AND fe.created_at >= rc.feature_timestamp
+         AND substr(replace(fe.created_at, ' ', 'T'), 1, 19) >= substr(di.seen_at, 1, 19)
+         AND substr(replace(fe.created_at, ' ', 'T'), 1, 19) >= substr(rc.feature_timestamp, 1, 19)
         WHERE rc.selected = 1
           AND rc.feature_schema_version = ?
           AND rc.inclusion_probability > 0
@@ -263,7 +270,9 @@ def load_ltr_observations(
             value = json.loads(row["value"] or "{}")
         except (TypeError, ValueError):
             continue
-        signal = float(value.get("signal_value") or 0.0)
+        # The one normaliser, so a legacy Dismiss payload (rating 1,
+        # signal_value -1) reads as the visibility action it was (D6).
+        signal = normalize_feedback_event_value("paper_action", value)
         action = str(value.get("action") or "").strip().lower()
         if signal > 0 or action in {"save", "like", "love"}:
             label = 1

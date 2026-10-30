@@ -222,7 +222,7 @@ def build_recommendation_outcomes(
         ) imp ON imp.recommendation_id = r.id
         LEFT JOIN discovery_ranking_candidates rc
           ON rc.suggestion_set_id = r.suggestion_set_id
-         AND rc.paper_id = r.paper_id
+         AND rc.final_position = r.rank
          AND rc.selected = 1
     """
     params: tuple = ()
