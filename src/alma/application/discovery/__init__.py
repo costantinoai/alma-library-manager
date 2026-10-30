@@ -664,6 +664,12 @@ def _refresh_lens_recommendations(
             "external_lanes": external_summary.get("external_lanes") or {},
         },
     )
+    if not int(external_summary.get("frontier_size") or 0):
+        _log(
+            "retrieval_detail",
+            f"Lens '{lens_name}': external lane skipped, the offline frontier has no live leads",
+            data={"frontier_size": 0},
+        )
     if external_summary.get("lane_runs") or []:
         _log(
             "retrieval_detail",
@@ -1327,6 +1333,9 @@ def _refresh_lens_recommendations(
         "negative_profile": external_summary.get("negative_profile") or {},
         "budgets": external_summary.get("budgets") or {},
         "lane_runs": external_summary.get("lane_runs") or [],
+        # How many live offline leads the external lane had to search. Zero
+        # means the frontier is empty or expired, not that no lane matched.
+        "frontier_size": int(external_summary.get("frontier_size") or 0),
         "diversity": diversity_summary,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_timestamp": feature_timestamp,

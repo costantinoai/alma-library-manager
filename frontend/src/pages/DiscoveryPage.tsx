@@ -1140,11 +1140,14 @@ export function DiscoveryPage() {
                     ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
                     [
                       'Lanes',
-                      String(
-                        Object.keys(
-                          (selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {},
-                        ).length,
-                      ),
+                      // Old summaries lack `frontier_size`; only an explicit 0 says empty.
+                      selectedLensSummary.frontier_size === 0
+                        ? 'no frontier'
+                        : String(
+                            Object.keys(
+                              (selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {},
+                            ).length,
+                          ),
                     ],
                   ] as const
                 ).map(([label, value]) => (
