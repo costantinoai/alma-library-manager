@@ -9,8 +9,25 @@ from __future__ import annotations
 from collections import defaultdict
 
 
+def _strongest_lane_mode(candidate: dict, branch_id: str) -> str:
+    """Return the core/explore mode of the branch's best-ranked hit that has one."""
+    hits = [
+        hit for hit in candidate.get("retrieval_hits") or []
+        if str(hit.get("branch_id") or "") == branch_id and hit.get("branch_mode")
+    ]
+    if not hits:
+        return "branch"
+    return str(min(hits, key=lambda hit: int(hit.get("rank") or 1))["branch_mode"])
+
+
 def attribute_candidate(candidate: dict, branches: list[dict]) -> None:
-    """Choose a dominant active branch without depending on lane merge order."""
+    """Choose a dominant active branch without depending on lane merge order.
+
+    The branch context travels as one unit. Lanes stamp `branch_id`, topics and
+    `matched_query` together, so whatever replaces the id must settle the rest:
+    otherwise a card explains itself with the branch that lost.
+    """
+    stamped_branch_id = str(candidate.get("branch_id") or "")
     active = {
         str(branch["id"]): branch
         for branch in branches
@@ -31,6 +48,9 @@ def attribute_candidate(candidate: dict, branches: list[dict]) -> None:
     candidate["branch_id"] = None
     candidate["branch_label"] = None
     candidate["branch_mode"] = None
+    candidate["branch_core_topics"] = []
+    candidate["branch_explore_topics"] = []
+    matched_query = candidate.pop("matched_query", None)
     if not scores:
         candidate["branch_attribution"] = "lens_wide"
         return
@@ -44,5 +64,9 @@ def attribute_candidate(candidate: dict, branches: list[dict]) -> None:
     branch = active[winner]
     candidate["branch_id"] = winner
     candidate["branch_label"] = branch.get("label")
-    candidate["branch_mode"] = "branch"
+    candidate["branch_mode"] = _strongest_lane_mode(candidate, winner)
+    candidate["branch_core_topics"] = list(branch.get("core_topics") or [])
+    candidate["branch_explore_topics"] = list(branch.get("explore_topics") or [])
+    if matched_query and stamped_branch_id == winner:
+        candidate["matched_query"] = matched_query
     candidate["branch_attribution"] = "retrieval_evidence"

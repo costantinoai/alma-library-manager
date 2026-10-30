@@ -920,16 +920,22 @@ def apply_branch_control_action(
     if action not in {"pin", "boost", "mute", "reset"}:
         raise ValueError(f"Unsupported branch action: {action}")
 
+    # The identity table owns "which lens has this branch". Recommendations alone
+    # cannot answer it: a branch can exist with none attributed to it, and an
+    # action on it must not silently match nothing. Historic branch ids predate
+    # the table, so recommendations remain the second source.
     lens_rows = db.execute(
         f"""
-        SELECT DISTINCT r.lens_id
+        SELECT lens_id FROM discovery_branches WHERE id = ?
+        UNION
+        SELECT r.lens_id
         FROM recommendations r
         JOIN papers p ON p.id = r.paper_id
         WHERE r.branch_id = ?
           AND COALESCE(r.lens_id, '') <> ''
           AND {standalone_paper_sql('p')}
         """,
-        (branch_id,),
+        (branch_id, branch_id),
     ).fetchall()
     lens_ids = [str(row["lens_id"] or "").strip() for row in lens_rows if str(row["lens_id"] or "").strip()]
     updated_lenses: list[str] = []
@@ -1070,6 +1076,23 @@ def _decay_factor(action_iso: str, *, today_julian: float, half_life: float) -> 
     return math.exp(-age_days / max(1.0, half_life))
 
 
+def _new_outcome_bucket(branch_id: str | None, branch_label: str) -> dict[str, Any]:
+    """Return an empty per-branch outcome tally."""
+    return {
+        "branch_id": branch_id,
+        "branch_label": branch_label,
+        "total": 0,
+        "positive": 0,
+        "dismissed": 0,
+        "negative": 0,
+        "unseen": 0,
+        "weighted_positive": 0.0,
+        "weighted_negative": 0.0,
+        "score_sum": 0.0,
+        "source_types": set(),
+    }
+
+
 def _aggregate_branch_outcomes(
     db: sqlite3.Connection,
     *,
@@ -1098,7 +1121,8 @@ def _aggregate_branch_outcomes(
             SELECT value, context_json, created_at
             FROM feedback_events
             WHERE event_type = 'paper_action'
-              AND substr(created_at, 1, 10) >= ?
+              AND created_at >= ?
+              AND json_extract(context_json, '$.surface') = 'discovery'
             ORDER BY created_at, rowid
             """,
             (since,),
@@ -1168,19 +1192,7 @@ def _aggregate_branch_outcomes(
         decay = _decay_factor(acted_at, today_julian=today_julian, half_life=_AUTO_WEIGHT_HALF_LIFE_DAYS)
         bucket = grouped.setdefault(
             branch_id or f"label:{branch_label.lower()}",
-            {
-                "branch_id": branch_id or None,
-                "branch_label": branch_label,
-                "total": 0,
-                "positive": 0,
-                "dismissed": 0,
-                "negative": 0,
-                "unseen": 0,
-                "weighted_positive": 0.0,
-                "weighted_negative": 0.0,
-                "score_sum": 0.0,
-                "source_types": set(),
-            },
+            _new_outcome_bucket(branch_id or None, branch_label),
         )
         bucket["total"] += 1
         bucket["score_sum"] += float(row["score"] or 0.0)
@@ -1207,19 +1219,7 @@ def _aggregate_branch_outcomes(
         branch_label = str(context.get("branch_label") or branch_id)
         bucket = grouped.setdefault(
             branch_id,
-            {
-                "branch_id": branch_id,
-                "branch_label": branch_label,
-                "total": 0,
-                "positive": 0,
-                "dismissed": 0,
-                "negative": 0,
-                "unseen": 0,
-                "weighted_positive": 0.0,
-                "weighted_negative": 0.0,
-                "score_sum": 0.0,
-                "source_types": set(),
-            },
+            _new_outcome_bucket(branch_id, branch_label),
         )
         bucket["total"] += 1
         bucket["source_types"].add("discovery_feedback")
