@@ -1747,6 +1747,8 @@ def _m_0049_discovery_branch_structure(conn: sqlite3.Connection) -> None:
     The lens records the structure itself, so existing rows count as one built
     structure and an ordinary refresh after this migration does not recluster.
     """
+    if not _table_exists(conn, "discovery_lenses"):
+        return
     for table, columns in (
         ("discovery_lenses", {"branch_structure": "TEXT"}),
         (
