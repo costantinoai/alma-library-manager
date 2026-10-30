@@ -43,13 +43,8 @@ container with the
 [`docker run` command](../getting-started/docker.md#or-run-docker-run-directly)
 and that flag.
 
-**If you skip step 2**, the address does not work, in one of two ways:
-
-* The page shows one line of JSON containing `UnknownHostRefused` and
-  your address.
-* Or, when a proxy replaces the address on the way in, pages load but
-  every save, like and setting fails with `403`, and the log shows
-  `Refused cross-site POST`.
+**If you skip step 2**, the address does not work: the page shows one
+line of JSON containing `UnknownHostRefused` and your address.
 
 Everyone on that private network can use your ALMa, so limit who is on
 it.
@@ -60,11 +55,12 @@ it.
 addresses. It decides two things.
 
 **Which addresses ALMa answers to, on every request.** The `Host`
-header must be `localhost`, an IP address, `alma:8000` (the container's
-name on a Docker network) or a listed address. Anything else gets
-`403`, reads included. This stops DNS rebinding: a hostile domain can
-be re-pointed at your machine and then look to your browser like
-ALMa's own address, so only the name it arrived under gives it away.
+header must be `localhost`, an IP address or a listed address. Anything
+else gets `403`, reads included. This stops DNS rebinding: a hostile
+domain can be re-pointed at your machine and then look to your browser
+like ALMa's own address, so only the name it arrived under gives it
+away. One exception: `/api/v1/health` also answers to `alma:8000`, so a
+sidecar on the Docker network can check on the container.
 
 **Which pages may change data.** `POST`, `PUT`, `PATCH` and `DELETE`
 from a browser must come from ALMa's own page on `localhost` or an IP
@@ -76,11 +72,14 @@ a port if it is not the default, and nothing else. A malformed entry,
 a `*`, a username, a path, a query or a fragment stops ALMa at startup
 with an error naming the entry. `FRONTEND_URL` counts as one more entry.
 
-**Behind your own proxy on a private network**, one entry is enough if
-the proxy keeps the `Host` the browser sent, or sends `alma:8000` or an
-IP address. If it sends another upstream name, list that too, for
-example `http://my-upstream:8000`. ALMa ignores `X-Forwarded-Host`
-and the like, because any client can write them.
+**Behind your own proxy on a private network**, list the address you
+open and make the proxy keep the `Host` the browser sent. Tailscale
+Serve does this already. nginx does not by default, so add
+`proxy_set_header Host $host;`, and accept only your own name with
+`server_name`. Never list the proxy's upstream name, and never point a
+proxy at ALMa by IP address without keeping `Host`: either way ALMa can
+no longer tell a hostile page from its own. ALMa ignores
+`X-Forwarded-Host` and the like, because any client can write them.
 
 **Containers.** `docker-compose.yml` reads the value from `.env`.
 `scripts/deploy-prod.sh` keeps it from the running container, and takes

@@ -9,8 +9,9 @@ ALMa's own page, a configured origin, or a non-browser client.
 
 The decision, in order:
 
-1. ``Host``, on every method: it must name loopback, an IP literal, the internal
-   service name, or an address the deployer listed. This closes DNS rebinding. An
+1. ``Host``, on every method: it must name loopback, an IP literal or an address
+   the deployer listed, the health route also answers to the internal service
+   name. This closes DNS rebinding. An
    attacker's domain can be re-pointed at 127.0.0.1, and then its page is genuinely
    same-origin with the server: the browser sends no ``Origin`` on a read, and CORS
    never applies. Only the ``Host`` still names the attacker. Loopback names and IP
@@ -25,11 +26,11 @@ The decision, in order:
    (``allowed_origins``), or the same origin as ``Host`` on a host DNS rebinding
    cannot reach. ``null`` matches none of these, so it is refused.
 
-Proxies. A proxy either keeps the ``Host`` the browser sent, which is then the
-listed address, or replaces it with its upstream, which is ``alma:8000`` when it
-reaches the container by its service name (``INTERNAL_SERVICE_AUTHORITY``). Both
-work with one ``ALMA_ALLOWED_ORIGINS`` entry. Forwarded headers are never read: any
-client can write them, so they cannot vouch for anything.
+Proxies must keep the ``Host`` the browser sent, which is then the listed address.
+Tailscale Serve does. A proxy that replaces ``Host`` erases the one fact that gives
+a rebound page away, so its upstream name is not accepted for the API, and listing
+that name reopens the hole. Forwarded headers are never read: any client can write
+them, so they cannot vouch for anything.
 
 It is a pure ASGI middleware, not ``BaseHTTPMiddleware``, so request and response
 bodies (uploads, NDJSON streams, ranged PDFs) pass through untouched.
@@ -48,12 +49,13 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_ORIGINS_ENV = "ALMA_ALLOWED_ORIGINS"
 
-# The address containers on the same Docker network use for this one: every shipped
-# launcher names the container `alma`, and the image listens on 8000. It is built in
-# so a proxy or sidecar health check needs no entry. Public DNS cannot serve a
-# dotless name, so it is no route for rebinding. It opens reads only: it is not
-# `_rebinding_safe`, so a page claiming this origin must still be listed to write.
+# The address a sidecar on the same Docker network uses to check on this container:
+# every shipped launcher names it `alma`, and the image listens on 8000. It reaches
+# the health route and nothing else. A proxy with a default config sends this same
+# Host for whatever page reached it, so on any other route it proves nothing, and
+# the health route holds no private data.
 INTERNAL_SERVICE_AUTHORITY = "alma:8000"
+INTERNAL_HEALTH_PATH = "/api/v1/health"
 
 # Firefox sends `moz-extension://<uuid>` and Chromium `chrome-extension://<id>`.
 # The per-install id cannot be listed, so the scheme is what is matched. A web
@@ -151,6 +153,11 @@ def host_allowed(host: str, authorities: frozenset[str]) -> bool:
     return _rebinding_safe(hostname) or host in authorities
 
 
+def _internal_health_check(host: str, path: str) -> bool:
+    """True for a container on the Docker network asking whether ALMa is up."""
+    return host.lower() == INTERNAL_SERVICE_AUTHORITY and path == INTERNAL_HEALTH_PATH
+
+
 def origin_allowed(origin: str, host: str, allowed: frozenset[str]) -> bool:
     """Decide whether a browser request from ``origin`` may change state."""
     try:
@@ -176,7 +183,7 @@ class OriginGuardMiddleware:
         self.app = app
         self.allowed = frozenset(origins)
         self.authorities = frozenset(
-            {INTERNAL_SERVICE_AUTHORITY}.union(*map(_origin_authorities, origins))
+            authority for origin in origins for authority in _origin_authorities(origin)
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -188,7 +195,8 @@ class OriginGuardMiddleware:
         # would let the guard and the app read different addresses.
         hosts = [value for name, value in scope["headers"] if name == b"host"]
         host = hosts[0].decode("latin-1") if len(hosts) == 1 else ""
-        if not host_allowed(host, self.authorities):
+        known = host_allowed(host, self.authorities)
+        if not known and not _internal_health_check(host, scope["path"]):
             logger.warning(
                 "Refused %s %s: unknown Host=%r. If this is your own ALMa address, "
                 "add it to %s.",

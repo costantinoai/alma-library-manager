@@ -32,8 +32,7 @@ a login, and it does not make ALMa safe to put on the internet. See
 ## Cross-site requests
 
 With or without an API key, every request must name a known address: a
-`Host` other than `localhost`, an IP address, `alma:8000` or an address
-listed in
+`Host` other than `localhost`, an IP address or an address listed in
 [`ALMA_ALLOWED_ORIGINS`](../operations/deployment.md#browser-origins)
 gets `403` with `"error": "UnknownHostRefused"`, on every method.
 
