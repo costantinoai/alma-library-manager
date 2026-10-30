@@ -60,8 +60,8 @@ export const FEED_TOUR: TourStep[] = [
   },
 ]
 
-// The author MAP is not here any more — it moved to the Map page behind the
-// Papers / Authors switcher (2026-07-27). This tour is about managing people.
+// The author map is not in this line (D24, kept on `feature/maps-plugin`).
+// This tour is about managing people.
 export const AUTHORS_TOUR: TourStep[] = [
   {
     target: '[data-tour="authors-suggestions"]',

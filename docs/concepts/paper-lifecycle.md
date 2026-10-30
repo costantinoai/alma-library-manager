@@ -48,7 +48,7 @@ Consequences worth knowing:
   the paper everywhere.
 * **`status='dismissed'` carries no valence.** It is the global *hide* — a
   visibility choice. It is not in `signal_valence.NEGATIVE_STATUSES`, so tidying
-  your surfaces cannot poison a paper's map colour.
+  your surfaces cannot count against a paper.
 * **Negative opinion is `dislike`.** "Bad and gone" is dislike **plus** dismiss:
   two verbs, composed deliberately.
 * **`defer` is not a verdict**, it is the absence of one — which is why the

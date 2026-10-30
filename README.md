@@ -30,8 +30,6 @@ what you keep, **Control** how it runs.
 - **Discovery** — papers related to your library that the Feed never saw,
   ranked by one auditable scorer. Every suggestion can show you exactly
   what made its score.
-- **Map** — the whole corpus laid out by meaning. Lasso a region to see
-  what lives there and adopt it as a direction.
 
 **Manage**
 
@@ -54,7 +52,7 @@ what you keep, **Control** how it runs.
 </p>
 <p align="center">
   <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
-  <img src="docs/screenshots/desktop-map.png" alt="Map" width="49%">
+  <img src="docs/screenshots/desktop-health.png" alt="Health" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
