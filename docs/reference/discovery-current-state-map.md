@@ -41,7 +41,7 @@ does not move after a preference action (D6, D24, D26, D27).
 
 ```mermaid
 flowchart TD
-  X[Library papers / collections / tags<br/>corpus metadata / vectors / citations] --> L[Lens scope SQL<br/>top 500 by default]
+  X[Library papers / collections / tags<br/>corpus metadata / vectors / citations] --> L[Lens scope SQL<br/>every member]
   L --> B[UMAP/HDBSCAN or lexical branch builder<br/>up to 6 displayed branches]
   B --> BC[(discovery_branches<br/>written on successful refresh)]
   X --> G[Periodic graph/frontier maintenance<br/>global Library seeds and top 6 topics]
@@ -110,9 +110,9 @@ canonical identity, provenance and scope contracts.
 | Stage | Current code and durable state | What happens now | Missing contract or measurement |
 |---|---|---|---|
 | Lens and controls | `routes/lenses.py`, `lens_crud.py`; `discovery_lenses` | Global Library, collection, text keyword, or tag context; channel weights and branch controls live on lens row. | Distinguish structural membership from liked examples and candidate eligibility; revision each. |
-| Seed selection | `seed_profile._load_seed_papers_for_lens` | Default 500, setting clamped 50–5,000. Global/collection order by rating then citations; keyword/tag by citations. Text keyword scans title/abstract and can include non-Library corpus papers. Zero seeds ends refresh. | Exact membership/count, long-tail coverage, intentional cold-start acquisition. A higher cap still changes the lens's meaning. |
-| Structure | `seed_profile.resolve_lens_branches`, `branch_identity.py`, `discovery_branches` | Vector-capable seeds are clustered; lexical fallback; overflow/noise assigned; max six in refresh; IDs matched to persisted seed sets, then controls/outcome lifecycle applied. Preview uses a separate cached job. | Complete scope, embedding coverage and unassigned count; stable revisions and split/merge lineage; preview and refresh parity on the same revision. |
-| Acquisition | `frontier.py`, `source_search.py`, scheduler; `discovery_frontier`, `_edges` | Up to six strongest global Library topic queries × 40 results, fixed six-year query horizon; up to 150 global S2 seeds, top six related papers, top four citing seeds; coupling default 1,500. Providers include OpenAlex, S2, Crossref, arXiv, bioRxiv, Europe PMC. Frontier entries expire at 30 days. | Per-branch query plan, source/page/seed provenance, coverage, exhaustion and budget. A branch query cannot find a paper absent from the prefetched frontier. Dismiss is still included in S2 negative seeds, violating D6. |
+| Seed selection | `seed_profile._load_seed_papers_for_lens` | Every member, no cap (2026-10-30). Global/collection order by rating then citations; keyword/tag by citations. Text keyword scans title/abstract across the corpus, minus dismissed and removed papers. Zero seeds ends refresh. | Intentional cold-start acquisition. See [every Library paper counts](discovery-scope-and-learning-audit.md#every-library-paper-counts-2026-10-30). |
+| Structure | `seed_profile.resolve_lens_branches`, `branch_identity.py`, `discovery_branches` | Vector-capable seeds are clustered; lexical fallback; overflow/noise assigned, and a seed with no vector joins the branch sharing the most terms; max six in refresh; IDs matched to persisted seed sets, then controls/outcome lifecycle applied. Preview uses a separate cached job. | Complete scope, embedding coverage and unassigned count; stable revisions and split/merge lineage; preview and refresh parity on the same revision. |
+| Acquisition | `frontier.py`, `source_search.py`, scheduler; `discovery_frontier`, `_edges` | Six global Library topic queries × 40 results, fixed six-year query horizon; all saved papers as S2 seeds up to the API's 500 per list; six per-paper S2 seeds, four citing seeds; coupling 1,500 per pass. Each of these is a rotating window over the whole pool (`core/rotation.py`). Providers include OpenAlex, S2, Crossref, arXiv, bioRxiv, Europe PMC. Frontier entries expire at 30 days. | Per-branch query plan, source/page/seed provenance, coverage, exhaustion and budget. A branch query cannot find a paper absent from the prefetched frontier. Dismiss is still included in S2 negative seeds, violating D6. |
 | Retrieval | `retrieval/{lexical,vector,graph,external}.py` | Lexical takes at most eight lens-wide query terms. Vector searches up to six resolved branch centroids. Graph traverses lens seed references/coupling/co-citation but PPR starts from global Library/Loved. External searches local frontier for first four active branches and lens/global taste variants. | Every active branch needs its own candidate allocation, graph/lexical context and per-lane recall. A bounded search budget should be explicit, not a hidden first-four branch cutoff. |
 | Merge and identity | `retrieval/merge.py`, `branch_attribution.py` | Canonical-key dedup retains retrieval hits; family RRF then per-lens channel weights. A dominant branch may be assigned from hit evidence; overlap or no branch hit stays unattributed. | Canonical paper ID before selection, all candidate–branch contexts, attribution confidence, duplicate/identity-loss counts. |
 | Features | `scoring_loop.py`, `features.py`; `discovery_ranking_candidates` | Candidate measurement, reward vs exposure features, availability flags, hit provenance, policy and schema versions are stored for staged candidates. | One versioned feature builder for retrieve/rank/reason/learn; stable author, venue, topic, phrase, method and embedding identities; no training on absent values. |
@@ -126,7 +126,7 @@ canonical identity, provenance and scope contracts.
 
 | Measure | Produced from | Used for / limitation |
 |---|---|
-| Seed count, rating, citations, topics, embedding availability | Lens SQL + corpus | Branch inputs and priors. Rating/citation ordering truncates scope at 500; membership is not a preference label. |
+| Seed count, rating, citations, topics, embedding availability | Lens SQL + corpus | Branch inputs and priors. Membership is not a preference label. |
 | Cluster membership, centroid, core/explore topics, branch score, outcome share | Seed vectors/text and 60-day branch action aggregation | Preview, vector search, frontier query strings and automatic controls. Structure and preference-driven allocation are partly mixed; small outcome samples can auto-mute. |
 | Source/query/graph hits, rank, RRF, channel weights | Four retrieval lanes | Candidate inclusion and fused retrieval score. Multiple hits may be correlated; a hit is evidence of reach/relevance, not user taste. |
 | Semantic/lexical similarity, topic, author, venue, recency, citation, feedback, preference | Candidate scorer and profile | Ten-family score. The current global learned profile is not branch-independent. Exact-value availability does not imply a learned coefficient. |
@@ -150,9 +150,9 @@ paper at different stages; their individual effects need separate ablations.
 ## Concrete failure chain
 
 Suppose a user makes a methods lens from a large collection and wants a novel
-paper at its edge. The first 500 highly rated/cited papers define branches;
-the method in paper 501 may not participate. The maintenance job searches six
-global Library topics, which may never include that method. The refresh's
+paper at its edge. Since 2026-10-30 every member defines branches, so the
+method is present. The maintenance job searches six global Library topics per
+pass, three of them rotating, so that method waits for its turn. The refresh's
 branch query only searches the already built frontier. Lexical and graph lanes
 search lens-wide; vector can retrieve a local semantic neighbour of an included
 branch; external searches only four branches. Even if the desired paper is in
@@ -294,7 +294,6 @@ refresh" means the key changes the active pipeline.
 | `weights.*` | `application/discovery/ranker.py:626` | Yes, global (D92-01) |
 | `limits.min_score` | `application/discovery/__init__.py:1466` | Yes |
 | `limits.lane_deadline_seconds` | `application/discovery/__init__.py:570` | Yes; absent from the settings route |
-| `lens.max_seeds` | `application/discovery/seed_profile.py:156` | Yes; absent from the settings route |
 | `limits.recency_window_years` | `discovery/scoring.py:605` | Yes |
 | `schedule.refresh_enabled`, `refresh_interval_hours`, `graph_maintenance_interval_hours` | `api/scheduler.py:1680`, `api/scheduler.py:1687`, `api/scheduler.py:1740` | Scheduling only |
 | `cache.similarity_ttl_hours` | `api/routes/discovery.py:502` | Similar search only |

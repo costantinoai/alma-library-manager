@@ -116,7 +116,7 @@ than borrowing another branch's preferences.
 
 | Control or stage | What current code actually does | Design consequence |
 |---|---|---|
-| `lens.max_seeds` (500 default; clamped 50–5,000) | `_load_seed_papers_for_lens` truncates global/collection membership by rating then citations, and topic/tag membership by citations. | This changes lens structure and retrieval context, and excludes the long tail. Remove the fixed count; represent every eligible member. |
+| `lens.max_seeds` (500 default; clamped 50–5,000) | `_load_seed_papers_for_lens` truncates global/collection membership by rating then citations, and topic/tag membership by citations. | This changes lens structure and retrieval context, and excludes the long tail. Remove the fixed count; represent every eligible member. Done 2026-10-30, see below. |
 | Branch temperature | `_resolve_branch_temperature` prefers per-lens override, then global `branches.temperature`, then a mode-based fallback. Since the global default exists, the rank mode usually does not determine temperature. `_build_seed_branches` changes core/explore topic counts and jumps from nearest to farthest cluster at 0.5; query planning also switches a word at 0.4. | It is neither a smooth semantic-distance control nor a deck exploration share. Replace with a measurable reach policy and keep structural resolution independent. |
 | Rank `recommendation_mode` | `explore` and `exploit` multiply family weights before normalization; default author and recency are zero, so multipliers on them do nothing. The mode does not change the selector's fixed four random exploration slots. | Remove or unify with the reach policy after measuring impact; do not advertise it as actual exploratory coverage. |
 | Branch count and coverage | Branch display defaults to six; external retrieval processes only the first four active branches. Lexical and graph lanes use lens-wide seeds, and graph PPR uses global Library/Loved seeds. | Every active branch needs a nonzero candidate budget and its own browsable, paginated stream. Avoid a shared 50-card ceiling and hidden first-four cutoff. |
@@ -375,6 +375,102 @@ commits. This is not reproduced and not fixed; the overlap is a correlation only
 
 The frozen baseline and judged-pool rules are in the
 [baseline and relevance protocol](discovery-baseline-and-relevance-protocol.md).
+
+## Every Library paper counts (2026-10-30)
+
+User rule: no low caps, and never always the same subset, because part of the
+Library then stays silent. The local path has no cap. A true limit, an external
+API's or a network budget, keeps the strongest half and walks the rest over
+successive runs (`core/rotation.py`). A window is a pure function of the ranked
+pool, the budget and the cursor; the job result records pool and cursors, and a
+source that failed keeps its window. The ring is ordered by a hash of each item,
+so a new paper never makes it skip another.
+
+Shares are read-only from prod (547 Library papers, 538 embedded) and dev (141,
+139). "Always" means the same papers on every run.
+
+| Site | Was | Silent on prod | Silent on dev | Rating | Now |
+|---|---|---:|---:|---|---|
+| `seed_profile._load_seed_papers_for_lens` | 500, clamp 50 to 5,000, rating then citations | 47, always | 0 | Silent forever | No cap, for all four lens types |
+| Branch clustering, seed with no vector | Left out of every branch | 9, until embedded | 2 | Silent in branches | Joins the branch sharing most terms |
+| `similarity.load_publication_example_embeddings` | First 400 vectors, newest added | 137 of 537, always | 0 | Silent as exemplars; still in the centroid | Every vector |
+| `frontier._s2_seed_identifiers`, positives | Rating 4+ only, 150 shared with negatives, 100 per list | 460 of 540, always | 105 of 140 | Silent forever | Every saved paper, rotating 500 |
+| `frontier`, per-paper S2 neighbours | `positive[:6]` | 534 of 540, always | 134 of 140 | Silent forever | Rotating 6 |
+| `frontier._positive_openalex_seed_ids` | 4 newest of rating 4+ | 221 of 225, always | 80 of 84 | Silent forever | Rotating 4 of all saved |
+| `frontier.build_discovery_frontier`, topic queries | 6 strongest | 152 of 158 topics; 267 papers hold none of the 6 | 86 of 92; 33 papers | Silent forever | Rotating 6 |
+| `frontier.coupling_candidates` | 1,500 by overlap | 222 of 1,722 pending works when the top never resolves | 3,720 of 5,220 | Starvable: unresolved works hold their rank | Rotating 1,500 |
+| `feed.score_feed_items` taste | Rating 4+ only; no score at all without one | 467 of 547, always | 106 of 141 | Silent forever | `load_library_preference_inputs` |
+| `author_network._select_seed_authors` | 20 of authors of papers with signal 0.45+ | At least 1,057 of 1,077 authors, always | At least 391 of 411 | Silent forever | Rotating 20 of every Library author; 0.45 now orders the pool |
+| `author_network._select_seed_dois` | 20 of papers with signal 0.50+ | 517 of 537, always | 119 of 139 | Silent forever | Rotating 20 of every DOI |
+| `author_network` `topic_weights[:25]` | First 25 keys of a `GROUP BY`, 9.6% of the Library's topic weight; the true top 25 hold 76.9% | 133 of 158 topics, always | 67 of 92 | Silent, and not the top | Share of the candidate's topics found in the Library |
+| `paper_signal._load_library_centroid`, `author_signal.library_centroid` | `LIMIT 2000`, `LIMIT 1000`, no order | 0 | 0 | Silent past the limit | No limit |
+| `signal_projection.load_paper_verdicts` | Newest 5,000 events | 0 of 407 | 0 of 199 | Silent past the limit | No limit |
+| `branch` `ranked_cluster[:3]`, `[:6]`, `seed_context[:3]` | Display and query text | 0 | 0 | Narrowed: every seed sets centroid, topics and identity | Unchanged |
+| `retrieval/lexical.py` 8 terms | Query budget over terms counted from all seeds | 0 | 0 | Narrowed | Unchanged |
+| `retrieval/external.py` first 4 active branches | Query budget, D92-11 | 0 | 0 | Narrowed: vector lane reads every branch | Unchanged |
+| `seed_profile._top_preferred_authors` | First followed authors with no order, ranked taste authors | Authors, not papers | Same | Narrowed: `author_affinity` still scores all | Unchanged |
+| `_recent_positive_publications` | Recent wins | 0 | 0 | Narrowed by design: the lexical profile reads all | Unchanged |
+| `authors.py` adjacent bucket, 16 topics, 10 venues | Fallback bucket only | 0 | 0 | Narrowed: core and cited buckets read all | Unchanged |
+| `compute_ppr_variants` `top_k` | Output length; restart set is the whole Library | 0 | 0 | Not a cap on seeds | Unchanged |
+| `calibration.SAMPLE_SIZE` 600 | Sample of non-Library corpus; positives all read | 0 | 0 | Not Library | Unchanged |
+| Partition, `signal-lab` | Not in this line (D24, D25) | n/a | n/a | n/a | n/a |
+
+The keyword lens matches the whole local corpus. Every match counts, because the
+corpus is local and bounded and the cost below holds at 10,000. Dismissed and
+removed papers are excluded, as in lexical retrieval, because each seed is a
+positive for that lens. On dev the broadest real words match 3,117 (`neural`) to
+4,371 (`visual`).
+
+`lens.max_seeds` is gone; migrator 48 deletes its row. No UI ever showed it.
+
+### Cost, measured 2026-10-30
+
+Copies of dev with real embedded corpus papers promoted to the Library, prod's
+rating shares, in one process. Branches is the warm second build. A
+cold process adds about 15 s of JIT. Old code stayed at 500 seeds on each copy.
+At 10,000 only 162 embedded papers remained as vector candidates, so that refresh
+is a cost figure, not a deck. These refreshes ran before the block matrix change
+below; the 547 copy read 53 to 54 s on both sides of it.
+
+| Library | Seed load | Branches | Exemplars | Refresh | Peak RSS |
+|---:|---:|---:|---:|---:|---:|
+| 141 | 0.00 s | 0.3 s | 0.01 s | 36 s | 0.61 GB |
+| 547 | 0.00 s | 1.9 s | 0.07 s | 53 s | 0.61 GB |
+| 2,000 | 0.02 s | 11.7 s | 0.32 s | 54 s | 0.71 GB |
+| 10,000 | 0.11 s | 32.0 s | 3.2 s | 84 s | 2.0 GB |
+
+Clustering scales without a cap. The one quadratic Python loop on this path,
+`_project_semantic_neighbors`, is now a block matrix product.
+
+### Stability, measured on a prod-shaped copy
+
+Dev promoted to 547 with prod's ratings; refreshes run in sequence on one copy.
+
+| Runs | Branches | Identities kept | Cards in common, non-exploration |
+|---|---:|---:|---:|
+| Old 1 to old 2 | 6, 6 | 6 of 6 | 40 of 46 |
+| Old 2 to new 1 | 6, 4 | 2 of 6 | 33 of 46 |
+| New 1 to new 2 | 4, 4 | 4 of 4 | 46 of 46 |
+
+The drop is not the rotation, because a refresh does not rotate, and it is not
+specific to the 47 papers. Starting from 500 random seeds, adding **one** paper
+gave adjusted Rand 0.32 to 0.36 against the base partition, five papers 0.32 to
+0.46, twenty 0.41, and forty-seven 0.13. UMAP plus excess-of-mass HDBSCAN reshuffles on
+any change to its input, and random subsets of the same copy ranged from 2 to 15
+clusters. So the 0.70 overlap rule fails after an ordinary Save, today and before
+this change: see D92-29.
+
+Each of the 47 joined a branch and moves its centroid: 2.1 degrees in the
+smallest branch that received them, 0.39 degrees in the largest.
+
+### Open items from this audit
+
+| ID | Status | Source | Note |
+|---|---|---|---|
+| D92-28 | fixed | Table above | Every Library paper is a seed; every external budget rotates. `test_discovery_every_library_paper_counts.py`, red then green. |
+| D92-29 | open | `ai/clustering.py:357`, `application/discovery/branch_identity.py:15` | Branch structure is not stable under small additions. Owner: G2, stable revisions and lineage. |
+| D92-30 | open | `core/rotation.py`, `application/author_network.py:162` | The author cache holds only the latest window, so a suggestion from a rotated seed lives for one TTL. |
+| D92-31 | open | `application/library.py:347` | Import title dedup reads 5,000 rows with no order. Harmless until the Library passes that size. |
 
 To refresh the aggregate evidence counts on a consistent SQLite copy, run
 `python scripts/discovery_evidence_audit.py --db /path/to/copy.db`. The command

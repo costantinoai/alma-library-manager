@@ -75,7 +75,9 @@ only for recent ingestion with an explicit `year` filter and
 `sort=publicationDate:desc`, then re-ranked locally. General Discovery uses the
 relevance-ranked `/paper/search`. The recommendations endpoints are separate
 sources: `POST /recommendations/v1/papers` returns brand-new work (pos + neg
-seeds), `GET /forpaper?from=all-cs` returns all-time related work.
+seeds), `GET /forpaper?from=all-cs` returns all-time related work. Every saved
+paper is a positive seed. S2 takes 500 per list, so the frontier job sends the
+strongest 250 and a rotating 250 (`core/rotation.py`).
 
 ### The hit contract
 

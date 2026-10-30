@@ -803,7 +803,7 @@ benchmark result alone.
 
 | Keep and strengthen | Replace or remove | Defer until a named failure justifies it |
 |---|---|---|
-| Canonical corpus identity, stored-vector reuse, async source collection, independent local lanes, immutable snapshots, canonical action route | Top-rated 500 seed scope; global taste leakage; first-four branch search; first-hit attribution; early top-200 starvation | Joint neural preference encoder; collaborative GNN/MMSSL as the default; unconstrained recursive LLM search |
+| Canonical corpus identity, stored-vector reuse, async source collection, independent local lanes, immutable snapshots, canonical action route | Global taste leakage; first-four branch search; first-hit attribution; early top-200 starvation | Joint neural preference encoder; collaborative GNN/MMSSL as the default; unconstrained recursive LLM search |
 | Durable branch lineage and D26 isolation, explicit dislike, visibility recording, central short writer units | Generic quality from citations/venue; multiple bonuses from one action; auto-mute from sparse selected outcomes; duplicate mode/temperature claims | ICA as taste ontology; 2-D map distances; large matrix/graph rebuilds per refresh |
 | Full vectors plus exact phrases/entities, transparent concept reasons, missingness/provenance | Whole-branch centroid as the sole interest representation; mandatory positive-negative pair before any feedback helps | Learned acquisition policy crossing branch budgets; automatic transfer of personal taste to new branches |
 

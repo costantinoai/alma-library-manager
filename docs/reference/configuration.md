@@ -214,6 +214,7 @@ Settings page.
 | Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.strategies.*`, `discovery.limits.*`) |
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
+| None, written by jobs | `discovery_settings` (`rotation.*`): the ring position of each rotating network budget, see `core/rotation.py` |
 | Settings → Plugins | Secret store for credentials; `settings.json` for non-secret integration config and activation |
 | Settings → Plugins → Email | `settings.json` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`, `smtp_use_tls`) and secret store (`smtp.password`) |
 | Settings → Data & system → Corpus Explorer | (no setting; opens modal) |
