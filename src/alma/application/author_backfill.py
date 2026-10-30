@@ -246,24 +246,29 @@ def _authors_needing_centroid_sql() -> str:
     # alias for `rowid`, so `GROUP BY oid` groups by the `authors` row id — two
     # author rows sharing one OpenAlex identity then produce two identical
     # groups and the pending count double-counts them.
+    # The DISTINCT subquery gives the join an automatic index: no index covers
+    # `lower(trim(authors.openalex_id))`, so joining the table scanned it per row.
     return f"""
-        SELECT lower(trim(a.openalex_id)) AS author_oid,
+        SELECT a.author_oid                AS author_oid,
                COUNT(DISTINCT pe.paper_id) AS emb_count,
                ac.paper_count             AS centroid_count,
                MAX(pe.created_at)         AS newest_emb,
                ac.updated_at              AS centroid_at,
                ac.author_openalex_id      AS centroid_oid
-        FROM authors a
+        FROM (
+            SELECT DISTINCT lower(trim(openalex_id)) AS author_oid
+            FROM authors
+            WHERE COALESCE(TRIM(openalex_id), '') <> ''
+        ) a
         JOIN publication_authors pa
-          ON lower(trim(pa.openalex_id)) = lower(trim(a.openalex_id))
+          ON lower(trim(pa.openalex_id)) = a.author_oid
         JOIN publication_embeddings pe
           ON pe.paper_id = pa.paper_id AND pe.model = ?
         JOIN papers p
           ON p.id = pa.paper_id
         LEFT JOIN author_centroids ac
-          ON ac.author_openalex_id = lower(trim(a.openalex_id)) AND ac.model = ?
-        WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
-          AND {standalone_paper_sql('p')}
+          ON ac.author_openalex_id = a.author_oid AND ac.model = ?
+        WHERE {standalone_paper_sql('p')}
         GROUP BY author_oid
         HAVING ac.author_openalex_id IS NULL
             OR ac.paper_count <> emb_count

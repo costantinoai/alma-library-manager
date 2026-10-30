@@ -11,6 +11,7 @@ from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
+from alma.services.retry_policy import WORKS_RECHECK_AFTER
 
 logger = logging.getLogger(__name__)
 # An author goes STALE when nothing has pulled them in over ~4 months —
@@ -610,6 +611,12 @@ def _backfill_status_from_inputs(
         pull_age_days = max(0, int((utcnow() - pulled_at).total_seconds() // 86400))
 
     thin = bool(expected_floor and background_count < expected_floor)
+    # A corpus can be thin because the source has no more, or because the papers
+    # sit in the Library, which `background_count` excludes. Fetching again repairs
+    # neither, so a good pull settles `thin` until the works window lapses.
+    thin_settled = bool(
+        thin and success_at is not None and utcnow() - success_at < WORKS_RECHECK_AFTER
+    )
     stale = bool(
         success_at is not None
         and pull_age_days is not None
@@ -630,6 +637,12 @@ def _backfill_status_from_inputs(
         detail = (
             f"No successful pull in {pull_age_days} days — no monitor refresh or "
             f"backfill has touched this author (last backfill {age_days} days ago)."
+        )
+    elif thin_settled:
+        state = "fresh"
+        detail = (
+            f"Pulled {age_days} days ago; {background_count}/{total_works} papers are "
+            "cached outside the Library, and another run would not add more."
         )
     elif thin:
         state = "thin"

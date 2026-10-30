@@ -44,6 +44,7 @@ from alma.openalex.client import (
 from alma.services.retry_policy import (
     TRANSIENT_RETRY_AFTER,
     UNCHANGED_RECHECK_AFTER,
+    WORKS_RECHECK_AFTER,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ RETRYABLE_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 # (30 d) is the profile-hydration cadence, and works coverage is re-checked
 # more often than a display name changes.
 WORKS_FIELDS_KEY = "openalex_author_works_v1"
-WORKS_STALE_AFTER = timedelta(days=14)
+WORKS_STALE_AFTER = WORKS_RECHECK_AFTER
 WORKS_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 WORKS_FETCHED_STATUS = "fetched"
 WORKS_SKIPPED_STATUS = "already_complete"
@@ -1122,7 +1123,12 @@ def _select_source_candidates(
 ) -> list[sqlite3.Row]:
     ensure_author_hydration_tables(conn)
     now = _utcnow_iso()
-    params: list[Any] = [source]
+    # Only this sweep's own purposes. A `works` row shares `source='openalex'` but
+    # only the works runner can settle it, so a lapsed works failure here reselects
+    # the author forever and, because metadata is a required predecessor of that
+    # runner, keeps the failure from ever being retried.
+    purposes = SOURCE_PURPOSES[source]
+    params: list[Any] = [source, *purposes]
     target_ids = normalize_id_list(target_author_ids)
     target_clause = ""
     if target_ids:
@@ -1158,6 +1164,7 @@ def _select_source_candidates(
         FROM author_enrichment_status es
         JOIN authors a ON a.id = es.author_id
         WHERE es.source = ?
+          AND es.purpose IN ({','.join('?' for _ in purposes)})
           AND COALESCE(a.status, 'active') != 'removed'
           {target_clause}
           AND {force_clause}
