@@ -40,14 +40,18 @@ $envFile   = Join-Path $almaHome ".env"
 
 function Get-Saved($name) {
     if (-not (Test-Path $envFile)) { return "" }
-    $line = Get-Content $envFile | Where-Object { $_ -like "$name=*" } | Select-Object -Last 1
+    $line = Get-Content $envFile -Encoding UTF8 | Where-Object { $_ -like "$name=*" } | Select-Object -Last 1
     if (-not $line) { return "" }
-    return ($line.Substring($name.Length + 1)).Trim("'")
+    $saved = $line.Substring($name.Length + 1)
+    if ($saved -match '^"(.*)"$') { return ($Matches[1] -replace '\\(.)', '$1') }
+    return $saved.Trim("'")
 }
 function Set-Saved($name, $value) {
-    $lines = @(Get-Content $envFile | Where-Object { $_ -notlike "$name=*" }) + "$name='$value'"
-    # Compose reads .env as UTF-8; ASCII keeps PowerShell 5.1 from adding a BOM.
-    Set-Content -Path $envFile -Value $lines -Encoding Ascii
+    # Double quotes with \ " $ escaped: Compose reads any value back as written.
+    $escaped = "$value" -replace '([\\"$])', '\$1'
+    $lines = @(Get-Content $envFile -Encoding UTF8 | Where-Object { $_ -notlike "$name=*" }) + "$name=`"$escaped`""
+    # Compose reads .env as UTF-8. .NET writes it without the BOM of PowerShell 5.1.
+    [IO.File]::WriteAllLines($envFile, [string[]]$lines, (New-Object Text.UTF8Encoding $false))
 }
 
 # ---- 1. Docker check -------------------------------------------------------
@@ -110,11 +114,19 @@ $container = (($config | Where-Object { $_ -match '^\s*container_name: ' } | Sel
 $project   = (($config | Where-Object { $_ -match '^name: ' } | Select-Object -First 1) -replace '^name: ', '').Trim()
 
 $older = ""
+$rollback = ""
 $carried = @{}
 $existing = (docker ps -a --format "{{.Names}}") -split "`n" | Where-Object { $_ -eq $container }
 if ($existing) {
     $owner = (docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $container | Out-String).Trim()
     if ($owner -ne $project) { $older = $container }
+    # The exact image it runs, as a tag value, for the way back if the new one
+    # fails. A moved tag such as `stable` would only find the new image again.
+    $running = ((docker inspect -f '{{.Config.Image}}' $container | Out-String).Trim() -split "/")[-1]
+    $running = (($running -split "@")[0] -split ":", 2)[-1]
+    $imageId = (docker inspect -f '{{.Image}}' $container | Out-String).Trim()
+    $digest = (docker image inspect -f '{{index .RepoDigests 0}}' $imageId 2>$null | Out-String).Trim()
+    if ($digest -match "@") { $rollback = "$running@" + ($digest -split "@")[-1] }
 }
 if ($older) {
     Write-Warn2 "Found an older '$older' container. Its settings will carry over."
@@ -225,6 +237,17 @@ $started = $LASTEXITCODE
 Pop-Location
 if ($started -ne 0) {
     Write-Err2 "ALMa did not become healthy. Check: docker logs $container"
+    if ($rollback) {
+        Write-Host "The previous container was replaced; your data is still in the volumes."
+        Write-Host "To go back to the image that was running:"
+        Write-Host "  cd `"$almaHome`""
+        Write-Host "  (Get-Content .env) -replace '^ALMA_IMAGE_TAG=.*', 'ALMA_IMAGE_TAG=`"$rollback`"' | Set-Content .env"
+        Write-Host "  docker compose up -d --wait"
+        Write-Host "That pins this exact image. To follow a tag again, re-run the installer with"
+        Write-Host "ALMA_IMAGE_TAG set to it."
+        Write-Host "If the new version already changed the database, the old one cannot use it:"
+        Write-Host "restore a backup, https://costantinoai.github.io/alma-library-manager/operations/backups/#restore"
+    }
     exit 1
 }
 Write-Ok "ALMa is up."

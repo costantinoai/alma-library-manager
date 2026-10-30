@@ -51,14 +51,22 @@ ALMA_HOME="${ALMA_HOME:-$HOME/alma-docker}"
 ENV_FILE="$ALMA_HOME/.env"
 
 # Compose runs from the folder, exactly as you would by hand: that is where it
-# finds the files and .env.
-compose() { (cd "$ALMA_HOME" && docker compose "$@"); }
+# finds the files and .env. Under `curl | bash` this script IS stdin, so nothing
+# it runs may read from there or the rest of the script is lost.
+compose() { (cd "$ALMA_HOME" && docker compose "$@") </dev/null; }
 
 env_get() {  # NAME: the value saved in .env, or nothing
-  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | sed "s/^'//; s/'\$//"
+  local value
+  value="$(sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1)"
+  case "$value" in
+    \"*) printf '%s' "$value" | sed -e 's/^"//' -e 's/"$//' -e 's/\\\(.\)/\1/g' ;;
+    *) printf '%s' "$value" | sed -e "s/^'//" -e "s/'\$//" ;;
+  esac
 }
-env_set() {  # NAME VALUE. Single quotes keep Compose from reading $ in a value.
-  { grep -v "^$1=" "$ENV_FILE" || true; printf "%s='%s'\n" "$1" "$2"; } > "$ENV_FILE.new"
+env_set() {  # NAME VALUE. Double quotes with \ " $ escaped: Compose reads any value back as written.
+  local value
+  value="$(printf '%s' "$2" | sed -e 's/[\\"$]/\\&/g')"
+  { grep -v "^$1=" "$ENV_FILE" || true; printf '%s="%s"\n' "$1" "$value"; } > "$ENV_FILE.new"
   mv "$ENV_FILE.new" "$ENV_FILE"
 }
 
@@ -110,9 +118,16 @@ CONFIG="$(compose config)"
 CONTAINER="$(printf '%s\n' "$CONFIG" | sed -n 's/^ *container_name: //p' | head -n 1)"
 PROJECT="$(printf '%s\n' "$CONFIG" | sed -n 's/^name: //p' | head -n 1)"
 OLDER=""
+ROLLBACK_TAG=""
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
   owner="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$CONTAINER")"
   [ "$owner" = "$PROJECT" ] || OLDER="$CONTAINER"
+  # The exact image it runs, as a tag value, for the way back if the new one
+  # fails. A moved tag such as `stable` would only find the new image again.
+  running="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
+  running="${running##*/}"; running="${running#*:}"; running="${running%%@*}"
+  digest="$(docker image inspect -f '{{index .RepoDigests 0}}' "$(docker inspect -f '{{.Image}}' "$CONTAINER")" 2>/dev/null || true)"
+  [ -z "$digest" ] || ROLLBACK_TAG="$running@${digest##*@}"
 fi
 
 declare -a CARRIED=()  # NAME=value lines from the older install, not yet saved
@@ -228,6 +243,19 @@ if ! compose up -d --wait --wait-timeout 300; then
   err "ALMa did not become healthy. UNHEALTHY — check: docker logs $CONTAINER"
   compose exec -T alma curl -sS -m 5 http://localhost:8000/api/v1/health >&2 || true
   echo >&2
+  if [ -n "$ROLLBACK_TAG" ]; then
+    {
+      echo "The previous container was replaced; your data is still in the volumes."
+      echo "To go back to the image that was running:"
+      echo "  cd \"$ALMA_HOME\""
+      echo "  sed -i.bak 's|^ALMA_IMAGE_TAG=.*|ALMA_IMAGE_TAG=\"$ROLLBACK_TAG\"|' .env"
+      echo "  docker compose up -d --wait"
+      echo "That pins this exact image. To follow a tag again, re-run the installer with"
+      echo "ALMA_IMAGE_TAG set to it, for example ALMA_IMAGE_TAG=${ROLLBACK_TAG%%@*}."
+      echo "If the new version already changed the database, the old one cannot use it:"
+      echo "restore a backup, https://costantinoai.github.io/alma-library-manager/operations/backups/#restore"
+    } >&2
+  fi
   exit 1
 fi
 ok "ALMa is up."
