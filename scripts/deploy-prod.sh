@@ -51,10 +51,14 @@ echo "[deploy] image: $IMAGE"
 # Carry over operator-set env from the running container (keys etc.).
 ENV_FLAGS=()
 if docker inspect alma >/dev/null 2>&1; then
-  for var in NUMBA_DISABLE_JITCACHE OPENALEX_API_KEY SEMANTIC_SCHOLAR_API_KEY API_KEY OPENALEX_EMAIL; do
+  for var in NUMBA_DISABLE_JITCACHE OPENALEX_API_KEY SEMANTIC_SCHOLAR_API_KEY API_KEY OPENALEX_EMAIL ALMA_ALLOWED_ORIGINS; do
     val="$(docker inspect alma --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E "^${var}=" || true)"
     [ -n "$val" ] && ENV_FLAGS+=(-e "$val")
   done
+fi
+# A value in the calling shell wins, so a first deploy can set it (docker -e: last one applies).
+if [ -n "${ALMA_ALLOWED_ORIGINS:-}" ]; then
+  ENV_FLAGS+=(-e "ALMA_ALLOWED_ORIGINS=$ALMA_ALLOWED_ORIGINS")
 fi
 
 docker pull "$IMAGE"
