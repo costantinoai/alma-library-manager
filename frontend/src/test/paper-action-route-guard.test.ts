@@ -38,4 +38,19 @@ describe('paper-action-route-guard', () => {
     }
     expect(offenders, `route through applyPaperAction / onlineImportSave: ${offenders.join(', ')}`).toEqual([])
   })
+
+  it('no Like or Love button picks its own star value', () => {
+    // A hand-picked rating goes `PUT /library/saved/{id}` and records `rate`, so
+    // a Library Like read differently from a Feed Like. Stars stay on `onRate`.
+    const offenders: string[] = []
+    for (const file of walk(ROOT)) {
+      const lines = readFileSync(file, 'utf8').split('\n')
+      lines.forEach((line, i) => {
+        if (/\bon(Like|Love)=\{[^\n]*\brating\b/.test(line)) {
+          offenders.push(`${relative(ROOT, file).split(sep).join('/')}:${i + 1}`)
+        }
+      })
+    }
+    expect(offenders, `route through applyPaperAction: ${offenders.join(', ')}`).toEqual([])
+  })
 })
