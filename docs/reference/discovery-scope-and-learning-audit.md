@@ -12,7 +12,8 @@ particular, durable `discovery_branches`, shared branch resolution, branch-aware
 vector retrieval, disabled global channel-yield application, and revised UI
 error/freshness behavior are now present as unverified working-tree changes;
 the defect ledger below retains their original findings until implementation
-is reviewed and verified. Measurements use private
+is reviewed and verified; the [reconciled ledger](#reconciled-ledger-2026-10-30)
+gives each one's status against source. Measurements use private
 read-only SQLite backups taken on 2026-09-23: production (4,175 papers) and
 the isolated dev profile (12,148 papers). Neither backup is part of Git.
 
@@ -295,6 +296,85 @@ identifiable evidence.
 
 Fixes should be checked at the primitive that owns each contract. Each ledger
 entry needs reproduction, regression guard and live recheck before closure.
+
+## Reconciled ledger (2026-10-30)
+
+Checked against `feature/discovery-g0` source on 2026-10-30, not against the
+table above, which stays as the audit record. Live means the isolated `g0`
+instance, a private copy of the dev database, driven through the HTTP API.
+Prod means read-only SQLite against the running container. "Owner" is the file
+that holds the contract, then the Task 92 gate that closes any remainder.
+Test file: `tests/test_discovery_g0_semantics.py` in the local test repository.
+
+**Status counts.** Original twelve: 7 fixed, 2 superseded, 3 open. Found during
+reconciliation: 6 fixed, 9 open.
+
+### Original entries
+
+| ID | Status | Current source | Proof and what remains |
+|---|---|---|---|
+| D92-01 | open, narrowed | `application/discovery/__init__.py:368`, `discovery/scoring.py:471`, `discovery/scoring.py:926`, `application/discovery/ranker.py:626` | Channel yield no longer reaches a lens: `yield_multipliers` is an empty dict and stays diagnostic. Global taste and global family weights still feed every branch. Owner: `ranker.py`, G3. |
+| D92-02 | fixed | `application/discovery/lens_crud.py:1110` | Verdicts come from linked events; Dismiss adds to no preference bucket. `test_dismiss_on_a_saved_paper_changes_no_branch_outcome`. Live: Dismiss wrote 0 events and engagement stayed 0. Prod copies predate linkage: 33 of 336 action events carry a recommendation id. |
+| D92-03 | fixed | `services/feedback_substrate.py:175` | A zero delta no longer raises `interaction_count` or `confidence`, on the paper or its topics and authors. `paper_action` keeps no delta on purpose, because a global profile would break D26. `test_zero_valued_action_is_not_tuning_evidence`. |
+| D92-04 | superseded | `application/discovery/branch_attribution.py:33`, `application/discovery/__init__.py:699` | Attribution reads all hits, ties stay unattributed, and hits survive in the snapshot. Keeping several candidate-branch contexts is G3 design. Live deck: 16 of 50 cards carried a branch. |
+| D92-05 | open, narrowed | `application/discovery/seed_profile.py:1311`, `application/discovery/branch_preview.py:26` | Preview and refresh share `resolve_lens_branches`. The preview key still omits seed and action revisions, so a Save can leave a preview stale until the next refresh changes the set id. Owner: `branch_preview.py`, G2. |
+| D92-06 | fixed | `application/discovery/branch_identity.py:29`, `application/discovery/lens_crud.py:1777` | `_load_branch_seed_history` is gone. A mutable-slug id is only a birth name; seed overlap in `discovery_branches` carries identity. Split and merge lineage stays G2. Test: `test_discovery_branch_identity.py`. |
+| D92-07 | fixed | `application/discovery/lens_crud.py:943`, `api/routes/insights.py:2648` | The route now finds a lens through the identity table, so a new branch can be controlled. No frontend caller remains; deleting the route is a product decision. Live on 2026-10-30, sprint item C0. |
+| D92-08 | fixed | `frontend/src/pages/DiscoveryPage.tsx:253`, `frontend/src/pages/DiscoveryPage.tsx:1382`, `frontend/src/pages/DiscoveryPage.tsx:1081` | Deep link applies once per route, errors show Retry, refresh time belongs to the lens. Browser pass recorded in sprint item A1. |
+| D92-09 | fixed | `frontend/src/pages/DiscoveryPage.tsx:688` | Year-only dates stay year-only. The selection controls are gone: no bulk state remains in the page. |
+| D92-10 | superseded | `application/discovery/retrieval/vector.py:213` | The refresh passes resolved branches. Positional ids survive only for direct lane callers. Lexical and graph lanes are still lens-wide, which belongs to G3. |
+| D92-11 | open | `application/discovery/frontier.py:301`, `application/discovery/frontier.py:330` | Queries still come from the strongest global Library topics at a fixed temperature. Owner: `frontier.py`, G2. |
+| D92-12 | fixed | `application/discovery/frontier.py:913` | `status='dismissed'` left the predicate. `test_dismissed_paper_is_not_an_s2_negative_seed`. History is not yet clean: see D92-13. |
+
+### Found during reconciliation
+
+| ID | Status | Source | Reproduction and guard |
+|---|---|---|---|
+| D92-13 | open, needs a decision | `application/discovery/frontier.py:914`, `application/signal_projection.py` (`_add_rating_signals`) | Dismiss wrote `rating=1` until July. Papers with a Dismiss event, rating 1 and no dislike event: dev 21, prod 18. All 25 dev and all 17 prod dismissed papers hold rating 1, so each still reaches the S2 negative list and outcome labels. Repair rewrites user ratings, so it was not run. Proposed migrator: reset rating where the only rating-bearing event is a legacy Dismiss. |
+| D92-14 | fixed | `application/discovery/observations.py:247` | Text comparison of a space against `T` dropped every reaction on the day of its impression. `test_an_action_on_the_day_it_was_seen_is_an_observation`, red then green. Live: 2 observations from Like and Dislike. |
+| D92-15 | fixed | `application/discovery/observations.py:275` | A legacy Dismiss payload (`signal_value=-1`) became a negative label, masked by D92-14 until that was fixed. `test_legacy_dismiss_event_is_not_a_negative_label`. Dev holds 52 such events and prod 80. |
+| D92-16 | fixed | `application/discovery/observations.py:154`, `application/recommendation_outcomes.py:225` | A snapshot scored under a paper later merged lost its link and failed the impression batch. Linked by set and position; 102 of 102 recent dev rows agree. `test_merged_paper_keeps_its_snapshot_impression_and_label`. |
+| D92-17 | fixed | `application/signal_projection.py:153` | Three Likes summed to 1.5 against 0.5, and a later Dislike could not overturn them. The newest verdict now stands. `test_repeated_like_is_one_effective_signal`, `test_changed_mind_is_the_latest_verdict_not_their_sum`. |
+| D92-18 | fixed | `application/discovery/lens_crud.py:1133` | One paper judged in two decks counted twice in a branch. `test_one_paper_liked_in_two_decks_is_one_branch_outcome`. |
+| D92-19 | fixed | `application/library.py:1234` | Leaving the Library cleared another lens's Dismiss, and undone Likes kept their lens signal. `test_undoing_a_save_keeps_another_lens_dismiss`, `test_undone_like_leaves_no_lens_signal`. |
+| D92-20 | open, cause known | `application/discovery/frontier.py:839`, `core/network_policy.py:59`, `api/scheduler.py:2433` | Dev's external lane returned 0 because its 427 leads expired on 2026-08-26 and the clock-started rebuild is off outside prod. Reviving them on a copy gave 50 candidates and 24 lane runs. Prod is healthy: 11,792 live leads, 50 candidates. Fixed part: `frontier_size` is stored and the chip says so. A dev rebuild needs the user's click or `ALMA_UNATTENDED_NETWORK=1`. |
+| D92-21 | open | `application/paper_signal.py:464` | The Library signal score still sums repeated events. Dividing by one verdict changes its scale, so it needs its own decision. |
+| D92-22 | open | `application/discovery/lens_crud.py:478` | Like on a Loved paper lowers its rating from 5 to 4 in Discovery, while `apply_valence` keeps 5 elsewhere. |
+| D92-23 | open | `application/alerts.py:513`, `application/discovery/lens_crud.py:675`, `services/feedback_substrate.py:957` | These counters read `user_action='like'`, which no path stamps, so `liked` is always 0. |
+| D92-24 | open | `application/discovery/__init__.py:1713` | A refresh deletes Like and Dislike rows, so `build_recommendation_outcomes` and every report on it lose those cards. Events survive, and branch outcomes already read them. |
+| D92-25 | open | `application/discovery/observations.py:169` | One deleted or unlinked recommendation fails a whole impression batch, and the page swallows the error. |
+| D92-26 | open | [Public controls](discovery-current-state-map.md#public-controls) | Seven `strategies.*` keys and two `limits.feedback_decay_*` keys change nothing in a lens refresh, yet Settings offers the strategies. G4. |
+| D92-27 | open, limit | `application/discovery/features.py:27` | Exact replay holds for the current ranker only; see below. |
+
+### Snapshot replay, measured 2026-10-30
+
+Each row re-scored from its stored features, stored weights and stored
+calibration, compared with its stored `prior_score`, tolerance 1e-6.
+
+| Feature schema / ranker | Dev rows | Exact | Prod rows | Exact |
+|---|---:|---:|---:|---:|
+| v6 / v8 | 288 | 288 | 1,068 | 1,068 |
+| v7 / v8 | 288 | 288 | absent | absent |
+| v5 / v7 | 2,289 | 64 | absent | absent |
+| v5 / v6 | 142 | 0 | absent | absent |
+| v5 and v4 / v5 | 852 | 0 | absent | absent |
+| v3 / v3 and v4 | 2,006 | no stored weights | 1,169 | no stored weights |
+
+Replay is exact for every row the current ranker wrote. Older rows keep their
+features, but today's code does not reproduce their scores, and rows before v4
+stored no weights. The cause of the older mismatches was not traced. Guard:
+`test_a_stored_snapshot_replays_its_exact_score`.
+
+### Unexplained
+
+Refresh `lens_refresh_5b20796b10` took 414 s, with scoring at 235 s against about
+0.5 s normally. Its window overlapped `papers.rehydrate_metadata` and
+`authors.rehydrate_metadata`. Three later refreshes on a fresh `g0` server took
+51 to 57 s with scoring 360 to 528 ms, one of them under 1,742 concurrent write
+commits. This is not reproduced and not fixed; the overlap is a correlation only.
+
+The frozen baseline and judged-pool rules are in the
+[baseline and relevance protocol](discovery-baseline-and-relevance-protocol.md).
 
 To refresh the aggregate evidence counts on a consistent SQLite copy, run
 `python scripts/discovery_evidence_audit.py --db /path/to/copy.db`. The command

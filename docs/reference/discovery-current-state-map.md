@@ -171,6 +171,147 @@ branch-learning labels. See the [evidence audit](discovery-scope-and-learning-au
 for exact counts and caveats. No claim of branch-local model accuracy follows
 from these data.
 
+## Public inventory (2026-10-30)
+
+Extracted from source on `feature/discovery-g0`. Paths are relative to
+`src/alma/` unless they start with `frontend/`. This supersedes the descriptive
+tables above wherever they differ.
+
+### Routes
+
+Prefix `/api/v1/discovery`, file `api/routes/discovery.py`:
+
+| Line | Method and path | Handler | Note |
+|---:|---|---|---|
+| 212 | GET `/status` | `get_discovery_status` | Read. |
+| 233 | GET `/settings` | `get_discovery_settings` | Read. |
+| 248 | GET `/outcome-evaluation` | `get_outcome_evaluation` | Read of a stored view. |
+| 262 | GET `/channel-yield` | `get_channel_yield` | Diagnostic; no frontend caller of `getChannelYield`. |
+| 281 | POST `/outcome-evaluation/refresh` | `refresh_outcome_evaluation` | Queues the view. |
+| 298 | PUT `/settings` | `update_discovery_settings` | One writer of the KV settings. |
+| 415 | POST `/settings/reset` | `reset_discovery_settings` | Writer. |
+| 525 | POST `/similar` | `discover_similar` | Live network, no lens or branch context, no exposure row. |
+| 670 | POST `/similarity-cache/clear` | `clear_similarity_cache` | Writer. |
+| 721 | POST `/manual-search` | `manual_discovery_search` | Background network job. No frontend caller of `manualDiscoverySearch`. |
+| 806 | POST `/manual-search/add` | `manual_discovery_add` | Writer. No frontend caller of `manualDiscoveryAdd`. |
+| 863 | POST `/impressions` | `record_discovery_impressions` | Visible cards; all or nothing per batch. |
+| 890 | GET `/recommendations` | `list_recommendations` | Generic list beside the lens route. |
+| 916 | POST `/recommendations/{rec_id}/seen` | `mark_seen` | Stamps `seen`; never preference. |
+| 951 | GET `/recommendations/{rec_id}/explain` | `explain_recommendation` | Read. |
+| 998 | DELETE `/recommendations` | `clear_recommendations` | Deletes every row (`application/discovery/lens_crud.py:657`). |
+| 1031 | POST `/frontier/rebuild` | `rebuild_frontier` | The manual acquisition trigger. |
+| 1095 | GET `/stats` | `discovery_stats` | Read. |
+
+Prefix `/api/v1/lenses`, file `api/routes/lenses.py`:
+
+| Line | Method and path | Handler |
+|---:|---|---|
+| 34 | GET `` | `list_lenses` |
+| 47 | POST `` | `create_lens` |
+| 90 | PUT `/order` | `reorder_lenses` |
+| 104 | GET `/{lens_id}` | `get_lens` |
+| 120 | POST `/{lens_id}/seen` | `mark_lens_seen` |
+| 146 | PUT `/{lens_id}` | `update_lens` |
+| 189 | DELETE `/{lens_id}` | `delete_lens` |
+| 220 | GET `/{lens_id}/signals` | `list_lens_signals` |
+| 238 | GET `/{lens_id}/recommendations` | `list_lens_recommendations` |
+| 263 | GET `/{lens_id}/branches` | `preview_lens_branches` |
+| 289 | POST `/{lens_id}/branches/refresh` | `refresh_lens_branches` |
+| 310 | POST `/{lens_id}/refresh` | `refresh_lens` |
+
+Other routes that act on Discovery state:
+
+| Location | Method and path | Note |
+|---|---|---|
+| `api/routes/publications.py:755` | POST `/api/v1/papers/{paper_id}/action` | The one action route. |
+| `api/routes/publications.py:798` | PUT `/api/v1/papers/{paper_id}/rate` | Library papers; event has no recommendation context. |
+| `api/routes/publications.py:840` | POST `/api/v1/papers/{paper_id}/undo-feedback` | Per-aspect undo; deletes events. |
+| `api/routes/insights.py:1792` | GET `/api/v1/insights/recommendations` | Engagement read. |
+| `api/routes/insights.py:2648` | POST `/api/v1/insights/discovery/branch-action` | No frontend caller found. |
+| `api/routes/feedback.py:52` | POST `/api/v1/feedback/track` | Direct `feedback_events` writer. |
+| `api/routes/feedback.py:104` | POST `/api/v1/feedback/reset` | Clears learning tables and `user_action`. |
+
+### Tables and writers
+
+| Table | DDL | Writers |
+|---|---|---|
+| `discovery_lenses` | `api/deps.py:732` | `application/discovery/lens_crud.py` (create, update, order, delete); `application/discovery/__init__.py` (`last_refreshed_at`) |
+| `discovery_branches` | `api/deps.py:750`, `core/migrations.py:1608` | `application/discovery/branch_identity.py` only |
+| `suggestion_sets` | `api/deps.py:767` | `application/discovery/__init__.py` only |
+| `recommendations` | `api/deps.py:786` | `application/discovery/__init__.py`, `application/discovery/lens_crud.py`, `application/library.py`, `services/feedback_substrate.py`, `api/routes/feedback.py`, `core/migrations.py`, and the legacy `discovery/engine.py` |
+| `discovery_ranking_candidates` | `api/deps.py:826` | `application/discovery/observations.py` only |
+| `discovery_impressions` | `api/deps.py:858` | `application/discovery/observations.py` only |
+| `discovery_frontier` | `api/deps.py:879` | `application/discovery/frontier.py`, `core/migrations.py` |
+| `discovery_frontier_edges` | `api/deps.py:909` | `application/discovery/frontier.py` only |
+| `lens_signals` | `api/deps.py:927` | `application/discovery/lens_crud.py`, `services/feedback_substrate.py`, `application/library.py` (undo). Read only for a count and a list; no scorer reads it. |
+| `feedback_events` | `api/deps.py:1318` | `services/feedback_substrate.py` (insert), `api/routes/feedback.py` (insert), `application/library.py` (undo deletes), `core/paper_groups.py` (merge), `api/routes/extension.py`, `core/migrations.py` |
+| `preference_profiles` | `api/deps.py:1336` | `services/feedback_substrate.py`, `core/paper_groups.py` |
+| `discovery_settings` | `api/deps.py:1389` | `application/discovery/lens_crud.py`, plus unrelated keys from `application/feed.py`, `application/walkthroughs.py`, `services/maintenance.py`, `core/secrets.py`, `api/routes/ai.py`, `core/migrations.py`, `api/deps.py` |
+| `similarity_cache` | `api/deps.py:1479` | `api/routes/discovery.py`, `core/paper_groups.py` |
+
+### Jobs
+
+| Job or operation key | Source | Trigger |
+|---|---|---|
+| `lens_refresh_<id>`, `discovery.lens.refresh:<lens>` | `api/routes/lenses.py:358`, `api/routes/lenses.py:458` | User, or the opt-in periodic job. |
+| `discovery.lens.refresh.lane.<lane>` | `application/discovery/__init__.py:446` | Inside a refresh. |
+| `refresh_recommendations` | `api/scheduler.py:1683` | Interval, off by default (`schedule.refresh_enabled`). |
+| `maintain_citation_graph` | `api/scheduler.py:1745`, `api/scheduler.py:2433` | Interval 24 h; refused unless `core/network_policy.py:59` admits it, which by default means prod only. |
+| `scoring_calibration_refresh` | `api/scheduler.py:1727` | Interval. |
+| Frontier rebuild | `api/routes/discovery.py:1086` | User. |
+| Similar search, manual search | `api/routes/discovery.py:660`, `api/routes/discovery.py:797` | User. |
+| `materialize.scoring.calibration` | `application/discovery/calibration.py:326` | View refresh. |
+| `materialize.scoring.outcome_eval` | `application/discovery/outcome_eval.py:471` | View refresh. |
+| `materialize.discovery.channel_yield` | `application/discovery/channel_yield.py:118` | View refresh; diagnostic. |
+| `materialize.variant:discovery:branches:...` | `application/discovery/branch_preview.py:62` | Branch preview. |
+
+### Cache keys
+
+| Key | Source | Invalidated by |
+|---|---|---|
+| `scoring:calibration` | `application/discovery/calibration.py:53` | View fingerprint. |
+| `scoring:outcome_eval` | `application/discovery/outcome_eval.py:446` | View fingerprint. |
+| `discovery:channel_yield` | `application/discovery/channel_yield.py:39` | View fingerprint. |
+| `discovery:branches:<lens>:v=<digest>` | `application/discovery/branch_preview.py:29` | Digest of version, options, controls, context and last set id, reused for 60 s. Seed and action revisions are absent (D92-05). |
+| `positive_centroid`, `negative_centroid`, `positive_exemplars`, `negative_exemplars` in `scoring_cache` | `application/discovery/__init__.py:750` to `application/discovery/__init__.py:813` | Library fingerprint. |
+| `similarity_cache` by seed ids | `api/routes/discovery.py:556` | `cache.similarity_ttl_hours`, manual clear, group merge. |
+| Topic embeddings in process memory | `application/discovery/__init__.py:1085` | Process lifetime. |
+
+### Public controls
+
+Every key below is written by `PUT /discovery/settings` unless marked. "Lens
+refresh" means the key changes the active pipeline.
+
+| Control | Consumer in source | Effect on a lens refresh |
+|---|---|---|
+| Lens context, name, active flag | `application/discovery/lens_crud.py` | Yes |
+| Lens channel weights | `frontend/src/components/discovery/LensWeightsPanel.tsx` | Yes |
+| Branch temperature, resolution, pinned, boosted, muted (lens JSON) | `frontend/src/components/discovery/BranchExplorerPanel.tsx` | Yes |
+| `branches.temperature` | `application/discovery/seed_profile.py:821` | Yes |
+| `branches.max_clusters` | `application/discovery/__init__.py:357` | Yes, capped at 6 in code |
+| `branches.max_active_for_retrieval`, `query_core_variants`, `query_explore_variants` | `application/discovery/retrieval/external.py:85` | Yes, external lane only |
+| `recommendation_mode` | `application/discovery/ranker.py:645`, `application/discovery/seed_profile.py:814` | Yes |
+| `weights.*` | `application/discovery/ranker.py:626` | Yes, global (D92-01) |
+| `limits.min_score` | `application/discovery/__init__.py:1466` | Yes |
+| `limits.lane_deadline_seconds` | `application/discovery/__init__.py:570` | Yes; absent from the settings route |
+| `lens.max_seeds` | `application/discovery/seed_profile.py:156` | Yes; absent from the settings route |
+| `limits.recency_window_years` | `discovery/scoring.py:605` | Yes |
+| `schedule.refresh_enabled`, `refresh_interval_hours`, `graph_maintenance_interval_hours` | `api/scheduler.py:1680`, `api/scheduler.py:1687`, `api/scheduler.py:1740` | Scheduling only |
+| `cache.similarity_ttl_hours` | `api/routes/discovery.py:502` | Similar search only |
+| `strategies.related_works`, `topic_search`, `followed_authors`, `coauthor_network`, `citation_chain`, `semantic_scholar`; `limits.max_results`, `limits.max_candidates_per_strategy` | `discovery/engine.py:654` to `discovery/engine.py:659`, `discovery/engine.py:649`, `discovery/engine.py:652` | **None.** Read only by the legacy generator |
+| `strategies.branch_explorer`, `taste_topics`, `taste_authors`, `taste_venues`, `recent_wins` | Settings route only | **None** |
+| `strategies.adaptive_channels` | `application/discovery/channel_yield.py:42` | **None**; `channel_multipliers` has no caller in the refresh |
+| `limits.feedback_decay_days_full`, `limits.feedback_decay_days_half` | Settings route only | **None** |
+| `strategies.s2_recommend`, `citation_fabric.*`, `limits.taste_*_queries`, `limits.recent_win_queries` | `discovery/defaults.py` only | **None**; defaults with no reader |
+
+### Entry points outside the lens pipeline
+
+| Entry | Writers it reaches | Consequence for measurement |
+|---|---|---|
+| Similar | `similarity_cache`; papers on a later action | No snapshot or impression; an action from it is `online_search` or `papers`. |
+| Manual search | `application/openalex_manual.py` | Same; Dislike there also hides the paper globally (`application/openalex_manual.py:1212`). |
+| Legacy generator | `discovery/engine.py:535`, `discovery/engine.py:1475` | Separate writer; reference search found no production caller. |
+
 ## Design and execution ownership
 
 The target model and implementation sequence are maintained in

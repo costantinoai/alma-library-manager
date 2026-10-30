@@ -163,6 +163,7 @@ nav:
       - Discovery design and method decisions: reference/discovery-component-architecture.md
       - Discovery scope and learning audit: reference/discovery-scope-and-learning-audit.md
       - Discovery compute and Raspberry Pi audit: reference/discovery-compute-and-pi-audit.md
+      - Discovery baseline and relevance protocol: reference/discovery-baseline-and-relevance-protocol.md
       - Scoring formulas: reference/scoring.md
   - Operations:
       - operations/index.md
