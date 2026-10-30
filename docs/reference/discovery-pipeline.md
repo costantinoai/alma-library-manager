@@ -278,6 +278,13 @@ Two mechanisms, both required:
   tail, then randomly permuted across those positions. The pool size, RNG and
   policy version, marginal inclusion probability, conditional position
   probability, exploration flag and final position are all logged.
+- **Branch floor.** Each active branch keeps its two best cards in the ranked
+  part of the deck (`exploration.BRANCH_FLOOR_SLOTS`). The floor runs after
+  ranking, moves no score, and puts these cards in the last ranked places. A
+  floor card is deterministic, so its probabilities are 1.0, it is never
+  `exploration`, and it never enters the randomised cohort. It is logged as
+  `selection.branch_floor` and named on the card. Probing and muted branches
+  have no floor.
 - **Actual impressions.** The frontend logs which recommendation ids were
   really visible, with position and timestamp. A lens-level "seen" stamp is not
   an item impression, and an unviewed item is **never** a negative.
@@ -320,6 +327,14 @@ is already implied by the database.
 A frontier row is a **lead, not a corpus citizen**. It carries no membership
 state, so it never enters Insights counts, dedup, or any preference
 query. It is promoted into `papers` only when actually staged as a suggestion.
+
+**Searching it.** `search_frontier` orders by match, then newest year: a literal
+title phrase scores exactly 1.0, so without the second key the frontier's own
+coupling order, which favours old papers, picks among hundreds of ties. The
+external channel then cuts to `limit` round-robin across branches, with the
+lens-wide searches as one more queue. Inside a queue core and explore take turns,
+and the lens-wide lanes take turns. A probing branch stops at a quarter share. A
+cut by score alone gave the channel to the branch with the most literal matches.
 
 **Building it.** `frontier.run_frontier_maintenance` is the single owner of the
 three-phase sequence (bibliographic coupling → query/taste leads → S2 vector

@@ -547,6 +547,45 @@ Peter Dayan at 30. Rotated seeds still reach the rail on their merit: 12 of the 
 outside the corpus carries, because `centroid_sim` needs local papers, and inside
 neuroscience it is coarse.
 
+### First-refresh deck, measured 2026-10-30
+
+A prod copy (schema 45 migrated to 49, 547 Library papers, 10,117 live frontier
+leads, no keys) refreshed through `POST /lenses/{id}/refresh`, 50 cards, two fresh
+copies per side. The numbers before the slash and after it are the two runs.
+v0.24.2 comes from the earlier measurement on the same data.
+
+| Measure | v0.24.2 | Discovery before | This change |
+|---|---|---|---|
+| Median year | 2020 / 2020 | 2019.5 / 2019 | 2021.5 / 2021.5 |
+| Before 2015 | 10 / 12 | 19 / 18 | 10 / 9 |
+| Before 2010 | 3 / 5 | 12 / 13 | 3 / 4 |
+| 2023 or later | 14 / 13 | 13 / 14 | 22 / 22 |
+| Branches reaching the deck | 2 | 4 / 5 of 6 | 6 / 6 of 6 |
+| Cards with chess in the title | 0 | 0 / 0 | 3 / 3 |
+| `expertise / chess` cards | 0 / 1 | 0 / 2 | 2 / 2 |
+| Median citations | 22.5 / 28 | 41.5 / 35 | 15.5 / 12 |
+| Low-quality flags | 12 / 12 | 14 / 12 | 8 / 8 |
+| Largest branch | 23 / 23 | 18 / 18 | 6 / 6 |
+
+Ranked cards are stable: 46 of 46 shared between the two runs. 19 of 46 are shared
+with the earlier deck. The frontier's chess rows have a median year of 2003, so most
+remain out of reach of a 50-card deck; the first run carried 4 of the 134 into the pool.
+
+The cost is precision. About six cards of 50 are off topic for this Library, such as
+a retina-inspired synaptic device, quantum methods for medical images and two
+gustatory papers from `taste / brain`, whose label word matched literally.
+
+**The floor did not fire at 50 cards** on the Library or on the two collection
+lenses: the fairer cut alone brought every branch in. It fired at a 20-card deck, 6
+cards across 4 branches, with scores equal to their snapshot, inclusion and position
+probability 1.0 and `exploration` 0. A Like on a floor card wrote one
+event carrying its branch and kept the card; a Dismiss on one wrote none, kept the
+rating and hid only that card.
+
+**The page shows less than the deck.** It sorts by score and renders 20 cards until
+Show all, so the three chess cards sit at places 29, 47 and 49, and the top 20 hold
+three branches. The sort is deliberate, so it is open as D92-35.
+
 ### Open items from this audit
 
 | ID | Status | Source | Note |
@@ -555,6 +594,11 @@ neuroscience it is coarse.
 | D92-29 | fixed | `application/discovery/seed_profile.py:1094`, `application/discovery/branch_identity.py:81` | Membership is stored and a refresh keeps it. A rebuild is explicit, maps identities and reports every control. Table above. `test_discovery_branch_stability.py`, red then green. |
 | D92-30 | fixed | `application/author_network.py:244` | A refresh adds to the row: a candidate stays one lap of the ring plus one refresh and is ranked with every other window's. Table below. `test_author_suggestion_accumulation.py`, red then green. |
 | D92-31 | open | `application/library.py:347` | Import title dedup reads 5,000 rows with no order. Harmless until the Library passes that size. |
+| D92-32 | fixed | `application/discovery/retrieval/external.py`, `application/discovery/frontier.py`, `application/discovery/exploration.py`, `application/discovery/branch_attribution.py` | The channel cut is shared round-robin, title ties go to the newest year, each active branch keeps two cards, and `branch_coverage` names the stage that lost a branch. A floor card is never `exploration` and counts for no channel's yield. Table above. `test_discovery_deck_coverage.py`, red then green. |
+| D92-33 | fixed | `application/discovery/__init__.py`, `frontend/src/pages/DiscoveryPage.tsx` | The Temp chip read 0.00 because nothing wrote `retrieval_summary.temperature`. A refresh now records the effective value; an older summary shows a dash. `test_discovery_deck_coverage.py`, red then green. |
+| D92-34 | fixed | `application/author_network.py` | `_s2_recommendations` and `_openalex_works_by_dois` no longer swallow failures. A failed seed counts, and a run where every seed failed keeps its window. S2's 400 and 404 stay answers. `test_author_suggestion_accumulation.py`, red then green. |
+| D92-35 | open, needs a decision | `frontend/src/pages/DiscoveryPage.tsx:678` | Relevance order sorts by score and ignores `rank`, so MMR order, the exploration positions and floor places do not reach the page, and a logged `final_position` differs from the shown position. |
+| D92-36 | open | `application/discovery/__init__.py` | `recommendation_mode`, `taste_profile`, `negative_profile` and `budgets` in the summary have no writer, so Mode always reads balanced and the Taste Retrieval Profile is empty. |
 
 To refresh the aggregate evidence counts on a consistent SQLite copy, run
 `python scripts/discovery_evidence_audit.py --db /path/to/copy.db`. The command

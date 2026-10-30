@@ -287,6 +287,12 @@ branch outcome data for auto-weighting. A branch has:
 * Manual control state (`pin`, `boost`, `mute`) plus an `auto_weight`
   when enough branch-attributed outcomes exist.
 
+Every active branch keeps its two best cards in a deck. Most reach it on their
+own; the rest get the last ranked places, with **Reserved branch slot** on the
+card, because the ranked selection left them out. Their scores do not change.
+A branch with no card is listed under **Lens performance** with the stage that
+lost it, and the **Branches** chip there shows how many reached the deck.
+
 The Branch Studio UI lets you pin / mute / boost a branch. Those
 controls affect branch-specific external retrieval budget on the next
 lens refresh. Branch membership is stored and survives a refresh (see
