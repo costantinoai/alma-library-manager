@@ -186,8 +186,6 @@ def _branch_centroids(
             centroid = _unit(np.mean(np.vstack(vectors), axis=0))
             if centroid is not None:
                 centroids.append((str(branch["id"]), centroid))
-        if not centroids:
-            return []
     else:
         # Compatibility for direct lane callers; the lens refresh always
         # supplies its resolved branch plan so positional vector IDs cannot
@@ -207,12 +205,15 @@ def _branch_centroids(
                 for idx, centroid in enumerate(branch_vectors)
             ]
 
-        if not centroids:
-            stacked = np.vstack(list(seed_vectors.values()))
-            unit = _unit(np.mean(stacked, axis=0))
-            if unit is None:
-                return []
-            centroids = [("vector_global", unit)]
+    # Also the path when every branch is muted or has no embedded seed: dense
+    # retrieval stays on, and this id belongs to no branch, so its hits stay
+    # lens-wide and train nothing.
+    if not centroids:
+        stacked = np.vstack(list(seed_vectors.values()))
+        unit = _unit(np.mean(stacked, axis=0))
+        if unit is None:
+            return []
+        centroids = [("vector_global", unit)]
 
     # Adopted custom directions (task 47 §8) pull EVERY centroid toward the
     # region the user adopted from the map. Members are stored, never raw
