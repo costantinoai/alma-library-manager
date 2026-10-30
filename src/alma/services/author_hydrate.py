@@ -44,6 +44,7 @@ from alma.openalex.client import (
 from alma.services.retry_policy import (
     TRANSIENT_RETRY_AFTER,
     UNCHANGED_RECHECK_AFTER,
+    WORKS_RECHECK_AFTER,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ RETRYABLE_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 # (30 d) is the profile-hydration cadence, and works coverage is re-checked
 # more often than a display name changes.
 WORKS_FIELDS_KEY = "openalex_author_works_v1"
-WORKS_STALE_AFTER = timedelta(days=14)
+WORKS_STALE_AFTER = WORKS_RECHECK_AFTER
 WORKS_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 WORKS_FETCHED_STATUS = "fetched"
 WORKS_SKIPPED_STATUS = "already_complete"
