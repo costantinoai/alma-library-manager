@@ -11,7 +11,10 @@ Nothing was lost:
 - The complete map implementation is preserved on the git branch
   `feature/maps-plugin`.
 - The database artifacts it built (`publication_clusters` and the stored graph
-  views) are left in place; nothing reads them here, and nothing deletes them.
+  views) are left in place. Nothing rebuilds them here, and nothing deletes them.
+  Insights still reads `publication_clusters`: the cluster topics on its Overview
+  and its cluster drilldown use the rows the map left, so a library that never
+  had a map shows none.
 
 What learning needed from the same embeddings stayed behind at the time,
 coordinate-free: the **semantic partition** and the **semantic regions** built
