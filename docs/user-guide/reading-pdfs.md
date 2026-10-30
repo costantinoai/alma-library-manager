@@ -95,8 +95,10 @@ that computer:
 tailscale serve --bg 8000
 ```
 
-and open the `https://<machine>.<tailnet>.ts.net` address it prints on your
-phone. Tap a paper's PDF icon: the file opens in the phone's own PDF viewer,
+then add the `https://alma.your-tailnet.ts.net` address it prints to
+`ALMA_ALLOWED_ORIGINS` and restart ALMa, as
+[Open ALMa from your phone](../operations/deployment.md#open-alma-from-your-phone-or-another-device)
+describes. Open that address on your phone. Tap a paper's PDF icon: the file opens in the phone's own PDF viewer,
 where you can read it, save it to Files or share it.
 
 ## Related

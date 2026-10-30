@@ -64,7 +64,7 @@
    *   surface-1  #F8F4E8  card on the desk · dialog/sheet body
    *   surface-2  #FBF8EE  panel inside a card · table header band
    *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
-   *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
+   *   surface-4  #FFFFFF  top of the stack (deepest nest)
    *
    * Consumed ONLY through the static SURFACE_BG / SURFACE_BORDER literal
    * maps in components/ui/surface.tsx — never interpolate `bg-surface-${n}`
@@ -527,3 +527,15 @@ body {
   pointer-events: none;
 }
 
+
+/* Ink tooltip: slate is the TEXT ramp for paper, and its dark steps vanish on
+ * ink (slate-700 measured 1.7:1). Inside the chip the ramp points at on-ink
+ * tones, so nested text stays at AA without any call site knowing. */
+.tooltip-ink {
+  --color-slate-900: var(--color-alma-cream);
+  --color-slate-800: var(--color-alma-cream);
+  --color-slate-700: var(--color-alma-cream);
+  --color-slate-600: var(--color-alma-100);
+  --color-slate-500: var(--color-alma-200);
+  --color-slate-400: var(--color-alma-200);
+}

@@ -8,17 +8,22 @@ Provides data export capabilities:
 
 import json
 import logging
-import shutil
+import os
 import sqlite3
+import tempfile
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response, StreamingResponse
 
 from alma.api.deps import get_current_user, get_db
+from alma.api.helpers import raise_internal
 from alma.config import get_db_path
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sqlite_backup import online_sqlite_backup
 
 logger = logging.getLogger(__name__)
 
@@ -30,35 +35,79 @@ router = APIRouter(
 )
 
 
+_SNAPSHOT_PREFIX = ".alma-export-"
+_SNAPSHOT_SUFFIX = ".tmp"
+
+
+def clear_stale_export_snapshots(db_path: Path) -> None:
+    """Delete export snapshots that a crash left beside the database.
+
+    Startup calls this: no export is running yet, so any such file is a leftover
+    copy of the library. Only this folder is searched, by the exact name
+    ``mkstemp`` was given. A file that cannot be deleted must not stop the app.
+    """
+    for stale in db_path.parent.glob(f"{_SNAPSHOT_PREFIX}*{_SNAPSHOT_SUFFIX}"):
+        try:
+            stale.unlink()
+            logger.warning("Removed an export snapshot left by a crash: %s", stale)
+        except OSError as exc:
+            logger.warning("Could not remove the stale export snapshot %s: %s", stale, exc)
+
+
+def _snapshot_database(db_path: Path) -> BinaryIO:
+    """Return an open handle on a consistent copy of the live database.
+
+    The copy sits beside the database because Compose mounts ``/tmp`` as a
+    128 MB tmpfs. SQLite's backup API needs a path, so the copy has a name while
+    it is written. It is unlinked before this returns, and the handle keeps the
+    bytes readable until the download ends, so a dropped connection leaves
+    nothing. A crash during the copy does leave the file; the next startup
+    removes it (:func:`clear_stale_export_snapshots`).
+    """
+    fd, name = tempfile.mkstemp(prefix=_SNAPSHOT_PREFIX, suffix=_SNAPSHOT_SUFFIX, dir=db_path.parent)
+    os.close(fd)
+    snapshot = Path(name)
+    try:
+        online_sqlite_backup(db_path, snapshot)
+        return snapshot.open("rb")
+    finally:
+        snapshot.unlink(missing_ok=True)
+
+
+def _read_chunks(stream: BinaryIO, size: int = 1 << 20) -> Iterator[bytes]:
+    with stream:
+        while chunk := stream.read(size):
+            yield chunk
+
+
 @router.get("/export")
 def export_database():
     """Export the entire SQLite database as a downloadable file.
 
-    Creates a snapshot copy of the database file and returns it.
-    Filename: alma-backup-{date}.db
+    The snapshot comes from SQLite's backup API, so it holds every committed
+    transaction, including those still in the WAL, and writes can continue
+    while it is taken. Filename: alma-backup-{date}.db
     """
+    db_path = get_db_path()
+    if not db_path.exists():
+        raise HTTPException(status_code=404, detail="Database file not found")
+
     try:
-        db_path = get_db_path()
-        if not db_path.exists():
-            raise HTTPException(status_code=404, detail="Database file not found")
-
-        # Create a temporary snapshot
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup_filename = f"alma-backup-{timestamp}.db"
-        temp_backup = Path("/tmp") / backup_filename
-
-        # Copy the database file
-        shutil.copy2(db_path, temp_backup)
-
-        return FileResponse(
-            path=str(temp_backup),
-            media_type="application/x-sqlite3",
-            filename=backup_filename,
-            headers={"Content-Disposition": f'attachment; filename="{backup_filename}"'},
-        )
+        stream = _snapshot_database(db_path)
     except Exception as e:
-        logger.error(f"Failed to export database: {e}")
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+        raise_internal("Export failed", e)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_filename = f"alma-backup-{timestamp}.db"
+    return StreamingResponse(
+        _read_chunks(stream),
+        # octet-stream keeps the response out of the gzip middleware.
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{backup_filename}"',
+            "Content-Length": str(os.fstat(stream.fileno()).st_size),
+        },
+    )
 
 
 @router.get("/export/bibtex")

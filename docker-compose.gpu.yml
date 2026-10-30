@@ -8,11 +8,10 @@
 #   - An NVIDIA GPU on the host
 #   - The NVIDIA Container Toolkit installed and configured for Docker
 #     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
-#   - `alma:normal` built with TORCH_VARIANT=cuda (the default — see
-#     docker-compose.yml's build args).
+#   - A `-gpu` image: ALMA_IMAGE_TAG=stable-gpu in .env
 #
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Usage: the installer sets this up when it finds a GPU. By hand, in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
 #
 # Verify the container saw the GPU:
 #   docker exec alma python -c "import torch; print(torch.cuda.is_available())"

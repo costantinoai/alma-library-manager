@@ -133,7 +133,7 @@ The most useful keys to set:
 | `SEMANTIC_SCHOLAR_API_KEY` | **Strongly recommended** — avoids shared-pool 429s. Free at [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api). |
 | `OPENAI_API_KEY` | Optional OpenAI embedding provider. |
 | `SLACK_TOKEN` / `SLACK_CHANNEL` | Slack digest alerts. |
-| `API_KEY` | Optional shared key — if set, requires `X-API-Key` on every request. |
+| `API_KEY` | Optional shared key for API and connector use. Setting it breaks the web app, which sends no key. See [Deployment](../operations/deployment.md#api-key). |
 
 See the [configuration reference](../reference/configuration.md) for
 the complete list.

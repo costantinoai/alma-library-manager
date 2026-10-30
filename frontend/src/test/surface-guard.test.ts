@@ -137,6 +137,8 @@ const CONTROL_BANNED: Array<{ name: string; re: RegExp; scope: 'all' | 'app' }> 
   // `bg-slate-200` on-states). Categorical data fills live in lib/palette.ts.
   { name: 'alma ramp fill', re: /\bbg-alma-(50|100|200|300|400)\b/g, scope: 'app' },
   { name: 'slate ramp fill', re: /\bbg-slate-(200|300)\b/g, scope: 'app' },
+  // A tooltip's fill belongs to its `tone`, or nested text loses its contrast.
+  { name: 'hand-painted tooltip', re: /<TooltipContent\b[^>]*\bclassName="[^"]*\b(bg-[a-z]+[-\w/]*)/g, scope: 'app' },
 ]
 
 /** Markers that make an element interactive — i.e. a control, not a surface.

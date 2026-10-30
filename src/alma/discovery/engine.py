@@ -74,14 +74,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
-    """Read discovery settings, falling back to defaults when needed."""
+    """Read discovery settings over the built-in defaults."""
     kv: dict[str, str] = dict(DEFAULTS)
-    try:
-        rows = conn.execute("SELECT key, value FROM discovery_settings").fetchall()
-        for r in rows:
-            kv[r["key"]] = r["value"]
-    except sqlite3.OperationalError:
-        pass
+    for r in conn.execute("SELECT key, value FROM discovery_settings").fetchall():
+        kv[r["key"]] = r["value"]
     return kv
 
 

@@ -62,7 +62,7 @@ It runs in this order:
     Discovery just produced (none of them already in your library),
     again applying the rating contract so the next refresh leans toward
     what you kept.
-13. **All set** — a summary and a few signposts (Health, Map, Library →
+13. **All set** — a summary and a few signposts (Health, Library →
     Analytics, Settings), then you land on **Home**, the daily brief you
     will open every day afterwards.
 

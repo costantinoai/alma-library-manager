@@ -20,8 +20,6 @@ description: React 19 + Vite + TypeScript + Tailwind 4 + shadcn primitives. The 
 * **`@tanstack/react-table`** — DataTable primitive.
 * **`@dnd-kit/sortable`** — drag-reorder for table headers.
 * **`recharts`** — Insights charts.
-* **`react-force-graph-2d` / `react-force-graph-3d`** — clustered
-  embedding graph (paper map).
 * **`lucide-react`** — icons.
 
 ## Routing

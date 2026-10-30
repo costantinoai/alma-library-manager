@@ -6,16 +6,33 @@ const TooltipProvider = TooltipPrimitive.Provider
 const Tooltip = TooltipPrimitive.Root
 const TooltipTrigger = TooltipPrimitive.Trigger
 
+/**
+ * The primitive owns both looks, so a call site never paints a tooltip itself.
+ * - `ink`: the default dark chip. `tooltip-ink` (index.css) re-points the slate
+ *   TEXT ramp, which is tuned for paper, so nested `text-slate-*` stays legible.
+ * - `paper`: a small card for tooltips with a list or a breakdown inside.
+ */
+const TOOLTIP_TONES = {
+  ink: 'tooltip-ink bg-alma-800 text-alma-cream shadow-md',
+  paper: 'border border-edge-3 bg-surface-3 text-slate-700 shadow-paper-md',
+} as const
+
+interface TooltipContentProps
+  extends React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content> {
+  tone?: keyof typeof TOOLTIP_TONES
+}
+
 const TooltipContent = React.forwardRef<
   React.ComponentRef<typeof TooltipPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
->(({ className, sideOffset = 4, ...props }, ref) => (
+  TooltipContentProps
+>(({ className, sideOffset = 4, tone = 'ink', ...props }, ref) => (
   <TooltipPrimitive.Portal>
     <TooltipPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        'z-[1000] overflow-hidden rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-md data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
+        'z-[1000] overflow-hidden rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
+        TOOLTIP_TONES[tone],
         className,
       )}
       {...props}

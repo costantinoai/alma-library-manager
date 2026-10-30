@@ -1726,7 +1726,11 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
         conn.commit()
     except Exception as e:
         conn.rollback()
-        logger.error("Database error: %s", e)
+        # Everything a route raises passes through here, including an
+        # HTTPException for a plain 404. Only SQLite's own errors are database
+        # errors; the app's exception handlers report the rest.
+        if isinstance(e, sqlite3.Error):
+            logger.error("Database error: %s", e)
         raise
     finally:
         conn.close()

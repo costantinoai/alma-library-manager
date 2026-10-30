@@ -1,0 +1,27 @@
+# =============================================================================
+# ALMa — local build overlay (developers)
+# =============================================================================
+# docker-compose.yml pulls a release and never builds. Layer this file to run
+# your own checkout instead:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Variants — choose with the ALMA_VARIANT env var:
+#   ALMA_VARIANT=normal (default)  full AI stack (~2 GB image after build)
+#   ALMA_VARIANT=lite              core only, no torch / sklearn (~300 MB),
+#                                  for Raspberry Pi and other low-memory hosts.
+# =============================================================================
+services:
+  alma:
+    image: alma:${ALMA_VARIANT:-normal}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VARIANT: ${ALMA_VARIANT:-normal}
+        # `cpu` (default) installs PyTorch's CPU-only wheel — small, works
+        # everywhere, matches the published CPU tag. Set
+        # ALMA_TORCH_VARIANT=cuda to install the CUDA-capable wheel (~1.8 GB
+        # larger) so SPECTER2 can use a host GPU passed through with
+        # docker-compose.gpu.yml.
+        TORCH_VARIANT: ${ALMA_TORCH_VARIANT:-cpu}

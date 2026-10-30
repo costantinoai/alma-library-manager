@@ -28,6 +28,7 @@ from alma.application.signal_projection import (
     load_projected_paper_signals,
 )
 from alma.core.keywords import parse_keywords
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
 )
@@ -3864,6 +3865,7 @@ def seed_thin_suggestion_authors(
             + (f" · {summary['deferred']} deferred to a later run" if summary["deferred"] else ""),
         )
 
+        attempted = 0
         for index, (openalex_id, name) in enumerate(thin, start=1):
             # Each author costs an OpenAlex works page plus an S2 vector fetch,
             # so Cancel must land between authors rather than after the batch.
@@ -3872,11 +3874,13 @@ def seed_thin_suggestion_authors(
                 summary["deferred"] += len(thin) - index + 1
                 _log("seed_cancelled", f"Cancelled after {index - 1} of {len(thin)} authors")
                 break
+            attempted += 1
             try:
                 result = seed_papers_for_author(conn, openalex_id)
             except Exception as exc:  # noqa: BLE001 — one author must not sink the batch
                 logger.warning("suggestion seed failed for %s (%s): %s", name, openalex_id, exc)
                 summary["failures"] += 1
+                _log("seed_failed", f"{name}: {type(exc).__name__}: {exc}")
                 continue
             landed = int(result.get("papers_landed") or 0)
             if landed:
@@ -3905,6 +3909,9 @@ def seed_thin_suggestion_authors(
         # emptied the network buckets with nothing scheduled to refill them, so
         # the rail silently lost its new-discovery authors until the next manual
         # refresh (2026-07-26).
+        summary["batch"] = batch_outcome(
+            attempted=attempted, failed=summary["failures"], noun="authors"
+        )
         return summary
     finally:
         conn.close()

@@ -734,6 +734,10 @@ export function DiscoveryPage() {
     (undoMutation.isPending && undoMutation.variables?.paperId) || null
 
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
+  // A refresh that never reached external retrieval records no temperature.
+  // That is unknown, not a measured 0.00, so it reads like an unknown Mode.
+  const selectedLensTemperature =
+    selectedLensSummary?.temperature == null ? '—' : Number(selectedLensSummary.temperature).toFixed(2)
 
   /** Pull `[{label, value}]` out of one taste/negative-profile bucket. */
   const profileItems = (
@@ -1137,7 +1141,7 @@ export function DiscoveryPage() {
                   [
                     ['Mode', String(selectedLensSummary.recommendation_mode ?? '—')],
                     ['Seeds', String(Number(selectedLensSummary.seed_count ?? 0))],
-                    ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
+                    ['Temp', selectedLensTemperature],
                     [
                       'Lanes',
                       // Old summaries lack `frontier_size`; only an explicit 0 says empty.
@@ -1206,7 +1210,7 @@ export function DiscoveryPage() {
                     />
                     <MetricTile
                       label="Temperature"
-                      value={Number(selectedLensSummary.temperature ?? 0).toFixed(2)}
+                      value={selectedLensTemperature}
                       labelSuffix={
                         <JargonHint
                           title="Exploration Temperature"
