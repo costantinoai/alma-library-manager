@@ -394,7 +394,7 @@ system intervenes automatically before the next refresh:
 |---|---|
 | ≥ 0.65 | Normal. Branch keeps its core_topics, gets its proportional budget. |
 | 0.55 < x ≤ 0.65 | **Rotated.** Branch keeps the same seed set (and its accumulated calibration history), but its `core_topics` and `explore_topics` are *swapped* for the next refresh. The system probes the explore-angle while the core angle has been accumulating dismisses. The label updates to reflect what the branch is actually probing. If the rotation pulls saves, auto_weight rises and the rotation reverses on the refresh after — fully self-correcting. |
-| ≤ 0.55 | **Auto-muted.** Branch's external lane budget drops to zero. The cluster's seeds still influence ranking through their centroid + the author / topic / venue affinities, but the system stops fanning external API queries off it. The user can manually unmute or pin in Branch Studio to override. |
+| ≤ 0.55 | **Auto-muted.** The branch stops its normal retrieval but keeps probing: one explore query and a quarter of its vector share, so it can still earn the verdicts that let it recover. Probing guarantees retrieval, not a visible card. A branch you mute by hand never probes. |
 
 User-set pin and boost take precedence over both rotate and
 auto-mute — once you've explicitly endorsed a branch, the system

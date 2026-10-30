@@ -1658,11 +1658,13 @@ def _apply_branch_auto_lifecycle(branches: list[dict]) -> list[dict]:
         if weight <= _AUTO_WEIGHT_MUTE_THRESHOLD:
             item["is_active"] = False
             item["is_muted"] = True
+            item["is_probing"] = True
             item["control_state"] = "auto_muted"
             item["auto_managed_state"] = "auto_muted"
             reason = item.get("auto_weight_reason") or ""
             item["auto_weight_reason"] = (
-                f"{reason} — auto-muted (auto_weight {weight:.2f} ≤ {_AUTO_WEIGHT_MUTE_THRESHOLD})"
+                f"{reason} — auto-muted (auto_weight {weight:.2f} ≤ {_AUTO_WEIGHT_MUTE_THRESHOLD}), "
+                "still probing with a small budget so it can recover"
                 .strip()
             )
         elif weight <= _AUTO_WEIGHT_ROTATE_THRESHOLD:

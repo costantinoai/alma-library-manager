@@ -87,15 +87,19 @@ def _retrieve_external_channel(
     explore_variants = setting_int(settings, "branches.query_explore_variants", 2, 1, 4)
 
     active_branches = [item for item in branches if item.get("is_active")]
-    for branch in active_branches[:max_active]:
+    # Probing branches sit outside the cap: behind four active ones they would
+    # never run, and a branch with no cards can never recover.
+    probing_branches = [item for item in branches if item.get("is_probing")]
+    for branch in [*active_branches[:max_active], *probing_branches]:
+        probing = bool(branch.get("is_probing"))
         plan = _plan_branch_queries_deterministic(
             branch,
             temperature=temperature,
             max_core=core_variants,
-            max_explore=explore_variants,
+            max_explore=1 if probing else explore_variants,
         )
         for mode, queries in (
-            ("branch_core", plan.get("core_queries") or []),
+            ("branch_core", [] if probing else plan.get("core_queries") or []),
             ("branch_explore", plan.get("explore_queries") or []),
         ):
             for query in queries:

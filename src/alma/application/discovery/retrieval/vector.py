@@ -29,6 +29,7 @@ from typing import Any
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 
+from ..branch_attribution import branch_can_retrieve
 from ..frontier import load_frontier_vectors
 from ._common import FAMILY_SEMANTIC, attach_hits
 
@@ -49,6 +50,9 @@ _DIRECTION_BLEND_WEIGHT = {"pin": 0.5, "boost": 0.3}
 # vector matrix; at ~10k rows that is milliseconds, but the cap keeps a
 # pathological cluster count from multiplying the work.
 _MAX_BRANCH_CENTROIDS = 6
+
+#: A probing branch searches at this fraction of a normal branch's share.
+_PROBE_SHARE_DIVISOR = 4
 
 # Minimum seeds before branching is worth it. Below this the seed set is one
 # topic by definition and a single centroid is the honest summary.
@@ -93,9 +97,14 @@ def _retrieve_vector_channel(
     # candidate near two branches accumulates two hits — genuine multi-region
     # evidence rather than a single averaged score.
     per_centroid = max(1, int(round(limit / max(1, len(centroids)))) + 5)
+    probing = {
+        str(branch["id"]) for branch in resolved_branches or [] if branch.get("is_probing")
+    }
     merged: dict[str, dict] = {}
     for branch_id, centroid in centroids:
-        ranked = _search(centroid, pool, limit=per_centroid)
+        # A probing branch searches at a quarter share: enough to earn verdicts.
+        share = max(2, per_centroid // _PROBE_SHARE_DIVISOR) if branch_id in probing else per_centroid
+        ranked = _search(centroid, pool, limit=share)
         attach_hits(
             ranked,
             family=FAMILY_SEMANTIC,
@@ -174,7 +183,7 @@ def _branch_centroids(
     centroids: list[tuple[str, Any]] = []
     if resolved_branches is not None:
         for branch in resolved_branches:
-            if not branch.get("is_active", True):
+            if not branch_can_retrieve(branch):
                 continue
             vectors = [
                 seed_vectors[paper_id]

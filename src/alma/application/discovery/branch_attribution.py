@@ -9,6 +9,16 @@ from __future__ import annotations
 from collections import defaultdict
 
 
+def branch_can_retrieve(branch: dict) -> bool:
+    """True for a branch that still searches: active, or auto-muted and probing.
+
+    A probing branch keeps a small budget, because a branch that gets no cards
+    gets no verdicts and could never recover. A branch the user muted never
+    probes.
+    """
+    return bool(branch.get("is_active", True) or branch.get("is_probing"))
+
+
 def _strongest_lane_mode(candidate: dict, branch_id: str) -> str:
     """Return the core/explore mode of the branch's best-ranked hit that has one."""
     hits = [
@@ -31,7 +41,7 @@ def attribute_candidate(candidate: dict, branches: list[dict]) -> None:
     active = {
         str(branch["id"]): branch
         for branch in branches
-        if branch.get("is_active", True)
+        if branch_can_retrieve(branch)
     }
     evidence: dict[str, list[float]] = defaultdict(list)
     for hit in candidate.get("retrieval_hits") or []:
