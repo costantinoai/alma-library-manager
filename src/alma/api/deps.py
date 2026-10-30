@@ -1587,7 +1587,8 @@ def init_db_schema() -> None:
             )
 
             # D12 AUTH-SUG-3/4: TTL cache for network-backed author
-            # suggestion buckets. One row per (source, seed-set hash).
+            # suggestion buckets. One row per source, holding every
+            # rotated seed's candidates until they expire.
             # `payload_json` is an already-scored + sorted candidate list
             # written by the refresh runners; `list_author_suggestions`
             # only reads it. Stale rows are served synchronously while a

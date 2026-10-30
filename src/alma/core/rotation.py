@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import math
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -45,6 +46,13 @@ class RotationWindow(Generic[T]):
     pool: int
     cursor_before: str
     cursor_after: str
+
+    @property
+    def runs_per_lap(self) -> int:
+        """Runs until the ring returns to this window; 1 when the pool fits."""
+        if not self.rotated:
+            return 1
+        return math.ceil((self.pool - self.kept) / self.rotated)
 
     def record(self) -> dict[str, int | str]:
         """What a job result stores so this exact pick can be reproduced."""

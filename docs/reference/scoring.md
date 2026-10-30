@@ -779,6 +779,13 @@ $$
 \text{score} = \min\left(_{\max},\ 100 \cdot \text{composite}\right)
 $$
 
+The seeds rotate, so a refresh adds to the row instead of replacing it. A
+candidate stays for one lap of the seed ring plus one refresh, keeps its best
+score if a later window finds it again, and leaves early if it joins the corpus.
+Every window spends the same budget, so the scores compare, and the row is ranked
+as one pool of at most 2,000 per source. `author_suggestion_cache_ttl_hours` is
+the spacing of refreshes, not a candidate's lifetime.
+
 Each network bucket gets `network_slot_cap = max(2, ⌈limit/3⌉)`
 *new* slots so that even a Library that saturates `library_core`
 still sees external suggestions. Overlap with prior buckets

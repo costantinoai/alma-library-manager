@@ -518,13 +518,42 @@ Branch step, warm, stored against a build, on the copies of the cost table above
 The stored step is mostly per-branch term extraction, which still runs on every
 refresh so topics follow the members.
 
+### Author suggestions accumulate, measured 2026-10-30
+
+Four rotated refreshes in a row on a prod copy, real OpenAlex and Semantic
+Scholar, no keys. "Old" is each run's own window alone, which is what the row used
+to hold. The rail is `list_author_suggestions` at limit 12; network slots are its
+top 4 per source.
+
+| Between runs 1-2, 2-3, 3-4 | Old | Accumulated |
+|---|---:|---:|
+| Rail names kept, of 12 | 7, 6, 6 | 10, 10, 12 |
+| OpenAlex top 15 kept | 5, 8, 8 | 12, 13, 12 |
+| S2 top 15 kept | 5, 7, 10 | 8, 12, 15 |
+
+`author_suggestion_cache_ttl_hours` (24) is also the refresh spacing, so a lifetime
+of one TTL would have kept nothing. A candidate therefore lives
+`ttl * (runs per lap + 1)`: a lap is 108 runs of the 1,084 authors on prod, so about
+109 days. The row keeps its 2,000 best per source, because the GET parses it whole
+and a lap would hold about 60,000. The read took 3.5 ms at 2,000, and OpenAlex
+reached the bound on the third run.
+
+Of the 2,000 in the OpenAlex pool after four runs, 3 have at most a quarter of their
+topics in the Library, the best at rank 1,437, and none is in the top 100. Of the 22
+network names the old rail showed across the runs, 16 are off the final rail: David
+Rosenbaum (motor control) was its top OpenAlex name in run 4 and sits at rank 33,
+Peter Dayan at 30. Rotated seeds still reach the rail on their merit: 12 of the top
+20 came only from rotated seeds. Topic overlap is the only taste signal a candidate
+outside the corpus carries, because `centroid_sim` needs local papers, and inside
+neuroscience it is coarse.
+
 ### Open items from this audit
 
 | ID | Status | Source | Note |
 |---|---|---|---|
 | D92-28 | fixed | Table above | Every Library paper is a seed; every external budget rotates. `test_discovery_every_library_paper_counts.py`, red then green. |
 | D92-29 | fixed | `application/discovery/seed_profile.py:1094`, `application/discovery/branch_identity.py:81` | Membership is stored and a refresh keeps it. A rebuild is explicit, maps identities and reports every control. Table above. `test_discovery_branch_stability.py`, red then green. |
-| D92-30 | open | `core/rotation.py`, `application/author_network.py:162` | The author cache holds only the latest window, so a suggestion from a rotated seed lives for one TTL. |
+| D92-30 | fixed | `application/author_network.py:244` | A refresh adds to the row: a candidate stays one lap of the ring plus one refresh and is ranked with every other window's. Table below. `test_author_suggestion_accumulation.py`, red then green. |
 | D92-31 | open | `application/library.py:347` | Import title dedup reads 5,000 rows with no order. Harmless until the Library passes that size. |
 
 To refresh the aggregate evidence counts on a consistent SQLite copy, run

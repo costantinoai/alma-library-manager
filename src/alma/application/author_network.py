@@ -11,10 +11,14 @@ Architecture:
     not just "rating >= 4". This breaks the recency-locked feedback
     loop where unrated-but-strong Library papers couldn't drive
     author suggestions.
-  - Results are cached in `author_suggestion_cache` keyed by
-    `(source, hash(sorted(seed_ids)))`. Stale rows are served
-    synchronously while the refresh runner recomputes in the
-    background (Activity-envelope pattern).
+  - Results are cached in one `author_suggestion_cache` row per source.
+    Stale rows are served synchronously while the refresh runner
+    recomputes in the background (Activity-envelope pattern).
+  - The seeds rotate, so each run adds its candidates to the row instead
+    of replacing it. A candidate stays until its seed comes round again
+    (`_accumulate_candidates`), so the row ranks every seed's candidates
+    together and the rail does not change with the window. The row's
+    `expires_at` only says when the next run is due.
   - Per-candidate scoring blends seed_cooccurrence + topic_overlap +
     centroid_sim + venue_overlap + recency_activity + h_index_soft
     (weights live in `DISCOVERY_SETTINGS_DEFAULTS.candidate_author_weights.*`).
@@ -51,11 +55,10 @@ logger = logging.getLogger(__name__)
 SOURCE_OPENALEX_RELATED = "openalex_related"
 SOURCE_S2_RELATED = "s2_related"
 _SOURCES = (SOURCE_OPENALEX_RELATED, SOURCE_S2_RELATED)
-# One cache row per source — the refresh runner always overwrites
-# this slot. Earlier revisions hashed the seed set into the key so
-# stale/fresh could coexist, but that pushed expensive seed-selection
-# into the GET read path. Keep the schema column but treat it as a
-# constant.
+# One cache row per source. Earlier revisions hashed the seed set into
+# the key so stale/fresh could coexist, but that pushed expensive
+# seed-selection into the GET read path. Keep the schema column but
+# treat it as a constant.
 _CACHE_SLOT = "default"
 
 _ROTATION_AUTHORS = "author_seed_authors"
@@ -65,6 +68,10 @@ _MAX_SEED_AUTHORS = 20               # network budget per run, a rotating window
 _MAX_SEED_DOIS = 20                  # network budget per run, a rotating window
 _MAX_WORKS_PER_SEED = 25
 _MAX_RECS_PER_DOI = 25
+# Size of one row, not a budget on seeds: the GET parses the whole row, and at
+# about 55 new candidates per rotated seed a lap of prod's 1,077 authors would
+# hold some 60,000 of them (22 MB). The weakest leave first; the rail reads the top.
+_MAX_STORED_CANDIDATES = 2000
 
 _CANDIDATE_COMPONENTS = (
     "seed_cooccurrence",
@@ -171,7 +178,7 @@ def _write_cache(
     *,
     cache_key: str = _CACHE_SLOT,
 ) -> None:
-    """Overwrite the single cache slot for `source` with the latest payload.
+    """Write the single cache slot for `source`; the runner owns the merge.
 
     Called incrementally by the refresh runner — every partial batch
     writes, commits, and releases the writer lock so concurrent GETs
@@ -201,6 +208,65 @@ def _write_cache(
             expires.isoformat(),
         ),
     )
+
+
+def _candidates_to_carry(
+    db: sqlite3.Connection,
+    source: str,
+    *,
+    corpus_oids: set[str],
+    now: datetime,
+) -> list[dict]:
+    """Candidates of earlier windows still in their lifetime, for this run to keep."""
+
+    entry = load_cached_candidates(db, source)
+    if not entry:
+        return []
+    now_iso = now.isoformat()
+    return [
+        row
+        for row in entry["candidates"]
+        if str(row.get("expires_at") or "") > now_iso
+        and row.get("candidate_openalex_id") not in corpus_oids
+    ]
+
+
+def _candidate_expiry(window: RotationWindow, ttl_hours: float, now: datetime) -> str:
+    """When this run's candidates leave: one run after their seed can return.
+
+    `ttl_hours` is the spacing of runs, so holding a candidate only that long
+    would keep nothing across a window.
+    """
+
+    return (now + timedelta(hours=ttl_hours * (window.runs_per_lap + 1))).isoformat()
+
+
+def _accumulate_candidates(
+    carried: list[dict],
+    fresh: list[dict],
+    *,
+    expires_at: str,
+) -> list[dict]:
+    """Rank earlier windows and this run together, best score first.
+
+    A candidate found again keeps its best score, so a later window that sees
+    less of an author does not lower them, and takes this run's expiry. Scores
+    from different windows are comparable because every window spends the same
+    budget.
+    """
+
+    pool = {str(row["candidate_openalex_id"]): row for row in carried}
+    for row in fresh:
+        oid = str(row["candidate_openalex_id"])
+        best = pool.get(oid, row)
+        if row["composite_score"] >= best["composite_score"]:
+            best = row
+        pool[oid] = {**best, "expires_at": expires_at}
+    ranked = sorted(
+        pool.values(),
+        key=lambda row: (-row["composite_score"], row["candidate_openalex_id"]),
+    )
+    return ranked[:_MAX_STORED_CANDIDATES]
 
 
 # -- seed selection --------------------------------------------------
@@ -524,6 +590,10 @@ def refresh_openalex_related_network(
         lib_venues = _library_venue_set(conn)
         corpus_oids = _corpus_author_oids(conn)
         weights = _resolve_candidate_weights(conn)
+        carried = _candidates_to_carry(
+            conn, SOURCE_OPENALEX_RELATED, corpus_oids=corpus_oids, now=now_dt
+        )
+        expires_at = _candidate_expiry(window, ttl, now_dt)
 
         per_candidate: dict[str, dict] = {}
         errors = 0
@@ -563,7 +633,13 @@ def refresh_openalex_related_network(
             # ran outside the gate). One BEGIN IMMEDIATE section per seed keeps
             # the streaming-UX cadence while serializing the write correctly.
             with write_section(conn, label="author network: openalex partial cache"):
-                _write_cache(conn, SOURCE_OPENALEX_RELATED, partial, len(seeds), ttl)
+                _write_cache(
+                    conn,
+                    SOURCE_OPENALEX_RELATED,
+                    _accumulate_candidates(carried, partial, expires_at=expires_at),
+                    len(seeds),
+                    ttl,
+                )
             _log_step(
                 ctx, "openalex_fetch",
                 f"Seed {idx}/{len(seeds)} · {len(partial)} candidates",
@@ -667,6 +743,10 @@ def refresh_s2_related_network(
         lib_venues = _library_venue_set(conn)
         corpus_oids = _corpus_author_oids(conn)
         weights = _resolve_candidate_weights(conn)
+        carried = _candidates_to_carry(
+            conn, SOURCE_S2_RELATED, corpus_oids=corpus_oids, now=now_dt
+        )
+        expires_at = _candidate_expiry(window, ttl, now_dt)
 
         per_candidate: dict[str, dict] = {}
         errors = 0
@@ -721,7 +801,13 @@ def refresh_s2_related_network(
             # Gated partial-cache write (network + in-memory scoring above ran
             # outside the gate). One BEGIN IMMEDIATE section per seed DOI.
             with write_section(conn, label="author network: s2 partial cache"):
-                _write_cache(conn, SOURCE_S2_RELATED, partial, len(seeds), ttl)
+                _write_cache(
+                    conn,
+                    SOURCE_S2_RELATED,
+                    _accumulate_candidates(carried, partial, expires_at=expires_at),
+                    len(seeds),
+                    ttl,
+                )
             _log_step(
                 ctx, "s2_fetch",
                 f"DOI {idx}/{len(seeds)} · {len(partial)} candidates",
