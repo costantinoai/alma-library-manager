@@ -46,6 +46,7 @@ from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import commit_unless_gated, write_section
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     canonical_lookup_doi,
@@ -1327,6 +1328,14 @@ def backfill_all_resolved_authors(
                 )
             except Exception:
                 pass
+    # `processed` counts the authors that ran through, so the failures are added
+    # back to get what was tried; a cancelled run stops short of `total`.
+    summary["batch"] = batch_outcome(
+        attempted=summary["processed"] + summary["failures"],
+        failed=summary["failures"],
+        incomplete=summary["centroid_failures"],
+        noun="authors",
+    )
     return summary
 
 

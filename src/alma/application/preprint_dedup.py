@@ -39,6 +39,7 @@ import sqlite3
 from typing import Any
 
 from alma.core.db_write import write_section
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.paper_groups import (
     absorb_paper_group,
     build_preprint_title_index,
@@ -280,6 +281,12 @@ def run_preprint_dedup(
                 )
     finally:
         conn.close()
+    # Skipped pairs were never tried: they are not a merge that failed.
+    summary["batch"] = batch_outcome(
+        attempted=summary["merged"] + summary["errors"],
+        failed=summary["errors"],
+        noun="merges",
+    )
     return summary
 
 
@@ -402,6 +409,12 @@ def run_duplicate_identity_collapse(
                 )
     finally:
         conn.close()
+    # Skipped pairs were never tried: they are not a merge that failed.
+    summary["batch"] = batch_outcome(
+        attempted=summary["merged"] + summary["errors"],
+        failed=summary["errors"],
+        noun="merges",
+    )
     return summary
 
 

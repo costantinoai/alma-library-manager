@@ -28,6 +28,7 @@ export function severityMetricTone(severity?: string | null): MetricTileTone {
 /** StatusBadge tone for a maintenance job's last-run status. */
 export function runStatusTone(status?: string | null): StatusBadgeTone {
   if (status === 'completed') return 'positive'
+  if (status === 'partial') return 'warning'
   if (status === 'failed') return 'negative'
   if (status === 'running' || status === 'queued' || status === 'scheduled') return 'info'
   return 'neutral'

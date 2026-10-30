@@ -64,7 +64,7 @@
    *   surface-1  #F8F4E8  card on the desk · dialog/sheet body
    *   surface-2  #FBF8EE  panel inside a card · table header band
    *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
-   *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
+   *   surface-4  #FFFFFF  top of the stack (deepest nest)
    *
    * Consumed ONLY through the static SURFACE_BG / SURFACE_BORDER literal
    * maps in components/ui/surface.tsx — never interpolate `bg-surface-${n}`

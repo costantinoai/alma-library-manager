@@ -22,9 +22,8 @@ what you keep, **Control** how it runs.
 
 **Explore**
 
-- **Home** — the daily brief. What arrived since midnight, what is waiting
-  in your Inbox and reading list, and a few Signal Lab rounds to tune the
-  ranker while you drink your coffee.
+- **Home** — the daily brief. What arrived since midnight, and what is waiting
+  in your Inbox and reading list.
 - **Feed** — a chronological inbox of new publications from the authors,
   topics, venues and queries you monitor.
 - **Discovery** — papers related to your library that the Feed never saw,

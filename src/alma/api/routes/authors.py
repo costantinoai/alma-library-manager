@@ -49,6 +49,7 @@ from alma.core.identifier_resolution import (
     scholar_url_for_id,
 )
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.resolution import (
     get_author_sample_titles as _shared_get_author_sample_titles,
 )
@@ -1703,6 +1704,7 @@ def _deep_refresh_all_impl(
             f"{skipped} skipped · {failed} failed "
             f"({total} total)"
         ),
+        "batch": batch_outcome(attempted=refreshed + failed, failed=failed, noun="authors"),
     }
     if job_id:
         add_job_log(

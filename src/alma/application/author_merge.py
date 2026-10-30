@@ -47,6 +47,7 @@ from alma.core.author_names import (
     parse_person_name,
 )
 from alma.core.db_write import run_after_gate_release, write_section
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 
@@ -1551,6 +1552,9 @@ def scan_duplicate_candidates(
         f"across {summary['scanned']} authors scanned "
         f"({summary['skipped_no_orcid']} had no ORCID, {summary['errors']} errored)"
     )
+    summary["batch"] = batch_outcome(
+        attempted=summary["scanned"], failed=summary["errors"], noun="authors"
+    )
     return summary
 
 
@@ -1871,6 +1875,9 @@ def apply_merge_candidates(
     if errored_n:
         msg += f", {errored_n} errored"
     summary["message"] = msg
+    summary["batch"] = batch_outcome(
+        attempted=merged_n + errored_n, failed=errored_n, noun="merges"
+    )
     return summary
 
 
