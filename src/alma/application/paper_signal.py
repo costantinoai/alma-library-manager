@@ -25,7 +25,8 @@ Signals blended:
   embedding_sim   — cos(paper_vec, library_centroid), [-1,1]→[0,1]
   author_alignment— max cos(author_centroid, library_centroid) over
                     this paper's authors that have cached centroids
-  feedback_events — net decayed positive feedback events on the paper
+  feedback_events — the one decayed verdict on the paper (newest wins),
+                    [-1,1]→[0,1]; absent when the paper has none
   recency         — half-life decay over publication_date (2yr)
 """
 
@@ -36,7 +37,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from alma.application.signal_projection import normalize_feedback_event_value
+from alma.application.signal_projection import load_paper_verdicts
 from alma.core.scoring_math import age_decay
 from alma.core.sql_helpers import standalone_paper_sql
 
@@ -57,8 +58,7 @@ _COMPONENT_NAMES: tuple[str, ...] = (
 )
 
 _RECENCY_HALF_LIFE_DAYS = 730.0  # ~2 years
-_FEEDBACK_DECAY_HALF_LIFE_DAYS = 180.0
-_FEEDBACK_SATURATION = 5.0  # net events at which feedback_events = 1.0
+_FEEDBACK_SATURATION = 1.0  # a fresh Love (one verdict at full strength) reads 1.0
 _POSITIVE_EVENTS = {"love", "like", "add", "reaction_positive", "swipe_right", "triage_pick"}
 _NEGATIVE_EVENTS = {"dislike", "remove", "reaction_negative", "swipe_left"}
 
@@ -443,27 +443,8 @@ def score_papers_batch(
                 author_align[pid] = sim
 
     # --- feedback_events ---------------------------------------------
-    sig_lab: dict[str, float] = {}
-    try:
-        fe_rows = db.execute(
-            f"""
-            SELECT entity_id, event_type, value, created_at
-            FROM feedback_events
-            WHERE entity_type IN ('paper', 'publication') AND entity_id IN ({placeholders})
-            """,
-            paper_ids,
-        ).fetchall()
-    except sqlite3.OperationalError:
-        fe_rows = []
-    for row in fe_rows:
-        signal = normalize_feedback_event_value(row["event_type"], row["value"])
-        if signal == 0.0:
-            continue
-        age_days = _days_since(row["created_at"], now)
-        decay = age_decay(age_days, half_life_days=_FEEDBACK_DECAY_HALF_LIFE_DAYS)
-        sig_lab[str(row["entity_id"])] = (
-            sig_lab.get(str(row["entity_id"]), 0.0) + signal * decay
-        )
+    # One verdict per paper, the rule `compute_paper_signal_map` uses.
+    verdicts = load_paper_verdicts(db, paper_ids=paper_ids)
 
     # --- assemble per-paper -----------------------------------------
     results: dict[str, float] = {}
@@ -488,8 +469,8 @@ def score_papers_batch(
             components["author_alignment"] = author_align[pid]
             present["author_alignment"] = True
 
-        if pid in sig_lab:
-            raw = sig_lab[pid] / _FEEDBACK_SATURATION
+        if pid in verdicts:
+            raw = verdicts[pid] / _FEEDBACK_SATURATION
             components["feedback_events"] = max(0.0, min(1.0, (raw + 1.0) / 2.0))
             present["feedback_events"] = True
 

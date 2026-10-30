@@ -110,6 +110,63 @@ def normalize_feedback_event_value(event_type: str, raw_value: Any = None) -> fl
     return 0.0
 
 
+def load_paper_verdicts(
+    db: sqlite3.Connection,
+    *,
+    paper_ids: list[str] | None = None,
+    half_life_days: float = _EVENT_HALF_LIFE_DAYS,
+    max_age_days: float = _EVENT_MAX_AGE_DAYS,
+) -> dict[str, float]:
+    """One time-decayed verdict per paper: the newest event that states one.
+
+    The single owner of the rule. Rows are read newest first, so a repeated
+    Like is one label and a changed mind replaces the old opinion; summing them
+    counted one paper's repeats as independent evidence (D92-17, D92-21). An
+    event with no valence (Dismiss, a link click) is skipped, so it neither
+    counts nor hides an earlier verdict. A verdict past ``max_age_days`` still
+    stands as the newest, it has simply expired, so an older event cannot
+    replace it.
+
+    ``paper_ids`` scopes the read to a batch; without it the read covers the
+    newest 5000 events.
+    """
+    query = """
+        SELECT entity_id, event_type, value, created_at
+        FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper'){scope}
+        ORDER BY created_at DESC, rowid DESC
+        {limit}
+    """
+    rows: list[Any] = []
+    try:
+        if paper_ids is None:
+            rows = db.execute(query.format(scope="", limit="LIMIT 5000")).fetchall()
+        else:
+            for chunk in _chunks(paper_ids, 500):
+                placeholders = ",".join("?" for _ in chunk)
+                scope = f" AND entity_id IN ({placeholders})"
+                rows.extend(db.execute(query.format(scope=scope, limit=""), chunk).fetchall())
+    except sqlite3.OperationalError:
+        rows = []
+
+    now = datetime.now(timezone.utc)
+    verdicts: dict[str, float] = {}
+    judged: set[str] = set()
+    for row in rows:
+        paper_id = str(row[0] or "").strip()
+        if not paper_id or paper_id in judged:
+            continue
+        signal = normalize_feedback_event_value(row[1], row[2])
+        if signal == 0.0:
+            continue
+        judged.add(paper_id)
+        age_days = _days_since(row[3], now)
+        if age_days is not None and age_days > max_age_days:
+            continue
+        verdicts[paper_id] = signal * age_decay(age_days, half_life_days=half_life_days)
+    return verdicts
+
+
 def compute_paper_signal_map(
     db: sqlite3.Connection,
     *,
@@ -133,41 +190,9 @@ def compute_paper_signal_map(
     """
     now = datetime.now(timezone.utc)
     paper_events: dict[str, float] = defaultdict(float)
-
-    try:
-        rows = db.execute(
-            """
-            SELECT entity_id, event_type, value, created_at
-            FROM feedback_events
-            WHERE entity_type IN ('publication', 'paper')
-            ORDER BY created_at DESC, rowid DESC
-            LIMIT 5000
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-
-    # One verdict per paper: the newest event that states one. Rows are newest
-    # first, so a repeated Like is one label and a changed mind replaces the old
-    # opinion. Summing them counted one paper's repeats as independent evidence.
-    judged: set[str] = set()
-    for row in rows:
-        paper_id = str(row["entity_id"] if isinstance(row, sqlite3.Row) else row[0] or "").strip()
-        if not paper_id or paper_id in judged:
-            continue
-        signal = normalize_feedback_event_value(
-            row["event_type"] if isinstance(row, sqlite3.Row) else row[1],
-            row["value"] if isinstance(row, sqlite3.Row) else row[2],
-        )
-        if signal == 0.0:
-            continue
-        judged.add(paper_id)
-        created_at = row["created_at"] if isinstance(row, sqlite3.Row) else row[3]
-        age_days = _days_since(created_at, now)
-        if age_days is not None and age_days > max_age_days:
-            continue
-        decay = age_decay(age_days, half_life_days=half_life_days)
-        paper_events[paper_id] += signal * decay
+    paper_events.update(
+        load_paper_verdicts(db, half_life_days=half_life_days, max_age_days=max_age_days)
+    )
 
     _add_rating_signals(db, paper_events)
     _add_recommendation_signals(
