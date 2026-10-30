@@ -154,8 +154,16 @@ networks:
     external: true
 ```
 
-The installer keeps this file in the stack. Watchtower keeps both
-networks when it recreates the container.
+Create an external network first (`docker network create proxy`).
+Compose cannot start ALMa without it, and if the installer is replacing
+an older container, that container is already gone by then.
+
+The installer adds this file to `COMPOSE_FILE` in `.env` when it finds
+it, so run the installer once after adding the file. Until then
+`docker compose` by hand ignores it. To remove the file, take its name
+out of `COMPOSE_FILE` as well, or both Compose and the installer stop
+with an error. Watchtower keeps both networks when it recreates the
+container.
 
 The image is multi-stage: a builder layer compiles the frontend,
 the runtime layer carries only the Python app + the built
