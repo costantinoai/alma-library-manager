@@ -5,21 +5,22 @@ export const ONBOARDING_STORAGE_KEY = 'alma.onboarding.state'
 
 export function clearPersistedOnboardingState() {
   try {
-    localStorage.removeItem(ONBOARDING_STORAGE_KEY)
+    sessionStorage.removeItem(ONBOARDING_STORAGE_KEY)
   } catch {
     /* ignore blocked storage */
   }
 }
 
 /**
- * Onboarding state + localStorage persistence so a half-finished first run
- * resumes after a reload (mirrors the guarded localStorage pattern in
- * `AppShell.tsx`). Returns the state, a shallow `patch`, and a `reset`.
+ * Wizard form state, cached in sessionStorage so a reload resumes the step you
+ * were on. It is progress, not a verdict: whether the wizard shows at all comes
+ * only from the database (`useWalkthroughs`). Returns the state, a shallow
+ * `patch`, and a `reset`.
  */
 export function useOnboardingState() {
   const [state, setState] = useState<OnboardingState>(() => {
     try {
-      const raw = localStorage.getItem(ONBOARDING_STORAGE_KEY)
+      const raw = sessionStorage.getItem(ONBOARDING_STORAGE_KEY)
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<OnboardingState>
         return { ...INITIAL_STATE, ...parsed }
@@ -42,7 +43,7 @@ export function useOnboardingState() {
       return
     }
     try {
-      localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(state))
+      sessionStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(state))
     } catch {
       /* storage blocked — non-fatal */
     }

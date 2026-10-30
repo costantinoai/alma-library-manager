@@ -668,6 +668,9 @@ def _dimension(
         "breakdown": breakdown,
         "repair_task": repair_task,
         "actions": actions,
+        # API owns this capability. The UI must not maintain a second list that
+        # can drift from dimension_items_page().
+        "has_drilldown": key in DIMENSION_ITEM_KEYS,
         "scope": scope,
         "exhausted": int(exhausted) if exhausted is not None else None,
         # Subset of the gap that is enqueued-but-never-attempted background work
@@ -1298,9 +1301,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # literal needs the bump to force one rebuild onto the new assessment.
 # v11→v12: relationship integrity now uses the full paper-group defect summary
 # and exposes the paper_group_reconcile repair operation.
+# v13→v14: dimensions expose backend-owned drilldown capability.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v13',
+      'health-logic-v14',
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
@@ -1624,6 +1628,15 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
       (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
       (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),
       (SELECT COUNT(*) FROM followed_authors),
+      -- Suggested-author coverage is part of this view too. Paper/authorship
+      -- growth and terminal seed outcomes must invalidate it even when no
+      -- authors row changed.
+      (SELECT COUNT(*) FROM papers),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers),
+      (SELECT COUNT(*) FROM publication_authors),
+      (SELECT COUNT(*) FROM publication_embeddings),
+      (SELECT COUNT(*) FROM author_seed_status),
+      (SELECT COALESCE(MAX(updated_at), '') FROM author_seed_status),
       -- Affiliation-conflict counts feed this view, so any evidence change
       -- (a manual pick OR an auto-refresh replacing source rows) must
       -- invalidate it — otherwise the ribbon shows a stale conflict count.
@@ -1653,7 +1666,7 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 #             operation and its dimension describe exactly the same population.
 # 2026.09-2: "placed" means a row in the core semantic partition, not a map
 #             layout row (task 67 C2); copy says semantic placement.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-3"
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.09-5"  # drilldown ownership + coverage inputs
 
 mv.register(
     mv.View(

@@ -86,6 +86,7 @@ from alma.core.utils import title_tokens as _title_tokens
 from alma.core.utils import utcnow_iso as _utcnow_iso
 from alma.discovery import semantic_scholar
 from alma.openalex.client import _normalize_openalex_work_id
+from alma.services.retry_policy import TRANSIENT_RETRY_AFTER
 
 logger = logging.getLogger(__name__)
 
@@ -882,7 +883,7 @@ def _write_title_results(
                 if row is not None:
                     _stamp(str(row["id"]), str(row["title"] or ""),
                            _RETRYABLE_STATUS, f"fetch_error:{r.error}", [],
-                           timedelta(hours=6))
+                           TRANSIENT_RETRY_AFTER)
                 counters["errors"] += 1
                 continue
 

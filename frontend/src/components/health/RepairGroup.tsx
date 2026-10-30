@@ -1,13 +1,13 @@
 /**
  * RepairGroup — one labelled band of `RepairCard`s (e.g. "Corpus & embeddings",
  * "Authors"). Ops that need attention sort worst-first to the top as full
- * cards; ops that are healthy and idle collapse into a single quiet "All clear"
- * strip of chips. Clicking a chip expands that op's full card inline, so every
+ * cards; healthy operations and routine queues collapse into one quiet tools
+ * strip. Clicking a chip expands that op's full card inline, so every
  * tool stays one click away without cluttering the calm state.
  */
 import { useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
-import { CheckCircle2 } from 'lucide-react'
+import { CheckCircle2, Clock3 } from 'lucide-react'
 
 import type { HealthDimension, MaintenanceOperation, MaintenanceRunRequest } from '@/api/client'
 import { isOpAttention, sortOpsByAttention } from './healthFormat'
@@ -97,10 +97,11 @@ export function RepairGroup({
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
             <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
-              All clear
+              Healthy & routine tools
             </span>
             {allClear.map((op) => {
               const open = expanded.has(op.key)
+              const pending = op.candidates_pending ?? 0
               return (
                 <button
                   key={op.key}
@@ -114,8 +115,13 @@ export function RepairGroup({
                       : 'border-control-edge bg-control-well text-alma-700 hover:border-control-edge-strong')
                   }
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                  {pending > 0 ? (
+                    <Clock3 className="h-3.5 w-3.5 text-info-600" />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                  )}
                   {op.label}
+                  {pending > 0 ? <span className="text-slate-400">{pending.toLocaleString()} queued</span> : null}
                   <span className="text-slate-400">{open ? '−' : '+'}</span>
                 </button>
               )

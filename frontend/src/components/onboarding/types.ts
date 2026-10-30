@@ -4,8 +4,8 @@ import type * as React from 'react'
  * Onboarding shared types.
  *
  * The flow is a 12-step client-side machine. State that must survive a reload
- * (so a half-finished onboarding resumes) lives in `OnboardingState`, persisted
- * to localStorage by `useOnboardingState`. Everything else (server counts,
+ * (so a half-finished onboarding resumes) lives in `OnboardingState`, cached in
+ * sessionStorage by `useOnboardingState`. Everything else (server counts,
  * suggestions, recommendations) is read live via React Query in each step.
  */
 

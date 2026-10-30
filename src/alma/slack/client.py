@@ -43,6 +43,13 @@ def _describe_lookup_failure(method: str, exc: Exception) -> str:
     return f"{method}: slack_unreachable ({exc})"
 
 
+def _is_slack_refusal(exc: Exception) -> bool:
+    """True when Slack answered with an error, rather than never being reached."""
+    from slack_sdk.errors import SlackApiError
+
+    return isinstance(exc, SlackApiError)
+
+
 class SlackNotifier:
     """Send rich Block Kit messages to Slack channels.
 
@@ -249,8 +256,9 @@ class SlackNotifier:
         Raises:
             SlackResolveError: When the target cannot be resolved. The message
                 starts with ``channel_not_found`` only when both lookups
-                completed and matched nothing; a lookup that could not complete
-                is reported as what it was (see :func:`_describe_lookup_failure`)
+                completed and matched nothing, or the channel lookup completed
+                and Slack only refused the DM fallback; a lookup that could not
+                complete is reported as what it was (see :func:`_describe_lookup_failure`)
                 so a network outage never reads as a misspelled channel.
         """
         if not target:
@@ -332,7 +340,12 @@ class SlackNotifier:
                             return resolved
         except Exception as exc:
             logger.warning("users.list lookup for %r failed: %s", target, exc)
-            lookup_failures.append(_describe_lookup_failure("users.list", exc))
+            # Slack refusing the DM fallback says nothing about the channel: a
+            # capture bot legitimately has no `users:read`. Once the channel
+            # lookup has completed, only a failure to reach Slack can change
+            # the verdict, so a misspelled channel stays channel_not_found.
+            if lookup_failures or not _is_slack_refusal(exc):
+                lookup_failures.append(_describe_lookup_failure("users.list", exc))
 
         if lookup_failures:
             raise SlackResolveError(

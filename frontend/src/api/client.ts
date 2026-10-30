@@ -273,6 +273,8 @@ export interface HealthDimension {
   breakdown?: HealthDimensionDefect[] | null
   repair_task: string | null
   actions: HealthAction[]
+  /** True when the API exposes affected-item rows for this dimension. */
+  has_drilldown: boolean
   scope: 'corpus' | 'library' | string
   /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
   exhausted: number | null
@@ -417,6 +419,18 @@ export interface MaintenanceOperation {
   unlocks: string[]
   optional: boolean
   manual_gate: boolean
+  /** Routine pipeline work stays available but does not become a Health alarm. */
+  routine: boolean
+  /** Backend-owned verdict used to decide whether this repair needs a full card. */
+  attention_required: boolean
+  attention_reason: string
+  availability_blocker: {
+    code: string
+    message: string
+    owner: string
+    href: string
+    action: string
+  } | null
   readiness: 'healthy' | 'blocked' | 'blocked_external' | 'manual_review' | 'optional' | 'ready' | 'assessment_failed'
   recommended: boolean
   repairs: string[]
@@ -4867,7 +4881,7 @@ export interface BootstrapData {
   discovery: { active_lenses: number; pending_recommendations: number; new_recommendations: number }
   alerts: { active: number }
   app: { version: string }
-  onboarding: { completed: boolean; has_owner: boolean }
+  onboarding: { has_owner: boolean }
 }
 
 export function getBootstrap(opts?: { background?: boolean }): Promise<BootstrapData> {
@@ -5127,12 +5141,45 @@ export function undoPaperFeedback(
   )
 }
 
-export function completeOnboarding(): Promise<void> {
-  return api.post<void>('/onboarding/complete')
+export function completeOnboarding(outcome: WalkthroughCloseOutcome): Promise<void> {
+  return api.post<void>('/onboarding/complete', { outcome })
 }
 
 export function resetOnboarding(): Promise<void> {
   return api.post<void>('/onboarding/reset')
+}
+
+/** How a walkthrough was closed: 'done' finished it, 'skipped' dismissed it. */
+export type WalkthroughCloseOutcome = 'done' | 'skipped'
+
+/** One walkthrough's stored state. `pending` alone decides whether it shows. */
+export interface WalkthroughState {
+  id: string
+  current_version: number
+  pending: boolean
+  outcome: string | null
+  recorded_version: number | null
+  at: string | null
+  source: string | null
+}
+
+export function getWalkthroughs(): Promise<{ walkthroughs: WalkthroughState[] }> {
+  return api.get<{ walkthroughs: WalkthroughState[] }>('/onboarding/walkthroughs')
+}
+
+export function recordWalkthroughOutcome(
+  id: string,
+  outcome: WalkthroughCloseOutcome,
+): Promise<WalkthroughState> {
+  return api.post<WalkthroughState>(`/onboarding/walkthroughs/${encodeURIComponent(id)}/outcome`, { outcome })
+}
+
+export function replayWalkthrough(id: string): Promise<WalkthroughState> {
+  return api.post<WalkthroughState>(`/onboarding/walkthroughs/${encodeURIComponent(id)}/replay`)
+}
+
+export function importWalkthroughFlags(ids: string[]): Promise<{ imported: string[]; ignored: string[] }> {
+  return api.post<{ imported: string[]; ignored: string[] }>('/onboarding/walkthroughs/import', { ids })
 }
 
 /**

@@ -1,13 +1,12 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
 import { HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { SurfaceProvider } from '@/components/ui/surface'
-import { getBootstrap } from '@/api/client'
-import { useFirstVisitTour } from '@/components/onboarding/useFirstVisitTour'
+import type { WalkthroughCloseOutcome } from '@/api/client'
+import { useWalkthrough } from '@/components/onboarding/useWalkthrough'
 import { cn } from '@/lib/utils'
 
 const EASE = [0.22, 0.61, 0.36, 1] as const
@@ -69,7 +68,8 @@ function isOversized(el: Element): boolean {
  * and a small card with Skip / Next / Got it. Steps without a resolvable target
  * render as a centred card. Calm fades; collapses under reduced-motion.
  *
- * Controlled: parent owns `open` and `onClose` (which should mark the tour done).
+ * Controlled: parent owns `open` and `onClose`. `onClose` receives 'done' when
+ * the last step is confirmed and 'skipped' for every other way out.
  */
 export function OnboardingTour({
   steps,
@@ -78,7 +78,7 @@ export function OnboardingTour({
 }: {
   steps: TourStep[]
   open: boolean
-  onClose: () => void
+  onClose: (outcome: WalkthroughCloseOutcome) => void
 }) {
   const reduced = useReducedMotion()
   const [index, setIndex] = React.useState(0)
@@ -147,7 +147,7 @@ export function OnboardingTour({
   React.useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') onClose('skipped')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -156,7 +156,7 @@ export function OnboardingTour({
   if (typeof document === 'undefined') return null
 
   const isLast = index >= steps.length - 1
-  const next = () => (isLast ? onClose() : setIndex((i) => i + 1))
+  const next = () => (isLast ? onClose('done') : setIndex((i) => i + 1))
 
   return createPortal(
     <AnimatePresence>
@@ -186,7 +186,7 @@ export function OnboardingTour({
             <div className="absolute inset-0" style={{ backgroundColor: 'rgba(20, 35, 58, 0.55)' }} aria-hidden />
           )}
           {/* Click-catcher to block the app behind (card stops propagation). */}
-          <div className="absolute inset-0" onClick={onClose} aria-hidden />
+          <div className="absolute inset-0" onClick={() => onClose('skipped')} aria-hidden />
 
           <SurfaceProvider level={1}>
             <motion.div
@@ -209,7 +209,7 @@ export function OnboardingTour({
               <p className="font-brand text-base font-semibold text-alma-800">{step.title}</p>
               <div className="mt-1 text-sm leading-relaxed text-slate-600">{step.body}</div>
               <div className="mt-4 flex items-center justify-between">
-                <Button variant="ghost" size="sm" onClick={onClose}>
+                <Button variant="ghost" size="sm" onClick={() => onClose('skipped')}>
                   Skip tour
                 </Button>
                 <Button variant="accent" size="sm" onClick={next}>
@@ -227,18 +227,11 @@ export function OnboardingTour({
 
 /**
  * PageTour — drop-in for a page header: renders a small "?" relaunch button and
- * the tour itself. First visit auto-runs; the button replays it anytime.
+ * the tour itself. It auto-runs while the server reports it pending; the button
+ * asks for it again.
  */
 export function PageTour({ pageKey, steps }: { pageKey: string; steps: TourStep[] }) {
-  // Don't auto-run page tours while the first-run wizard is still active —
-  // the wizard (z-60) sits above the tour (z-55), and they'd fight on boot.
-  const { data: bootstrap } = useQuery({
-    queryKey: ['bootstrap'],
-    queryFn: () => getBootstrap(),
-    staleTime: 60_000,
-  })
-  const onboardingActive = bootstrap?.onboarding?.completed === false
-  const { open, complete, relaunch } = useFirstVisitTour(pageKey, !onboardingActive)
+  const { open, close, relaunch } = useWalkthrough(pageKey)
   return (
     <>
       <Button
@@ -250,7 +243,7 @@ export function PageTour({ pageKey, steps }: { pageKey: string; steps: TourStep[
       >
         <HelpCircle className="h-4 w-4" />
       </Button>
-      <OnboardingTour steps={steps} open={open} onClose={complete} />
+      <OnboardingTour steps={steps} open={open} onClose={close} />
     </>
   )
 }

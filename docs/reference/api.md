@@ -358,6 +358,18 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings/semantic-scholar/status` | Semantic Scholar connection status |
 | `GET` | `/settings/export` | Export the settings document |
 
+### Onboarding and walkthroughs
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/onboarding/walkthroughs` | State of the wizard (`welcome`), every page tour and any feature walkthrough: `pending`, `outcome`, `recorded_version`, `current_version`, `at`, `source`. The UI shows an overlay only from this. Pure read. |
+| `POST` | `/onboarding/walkthroughs/{id}/outcome` | Record `{"outcome": "done"\|"skipped"}`. `404` for an unknown id, `409` for `welcome`, which closes through `/onboarding/complete`. |
+| `POST` | `/onboarding/walkthroughs/{id}/replay` | Ask for one walkthrough again. It stays pending until closed. |
+| `POST` | `/onboarding/walkthroughs/import` | One-way import of a browser's old page-tour flags, `{"ids": [...]}`. Returns `imported` and `ignored`. Never overrides a server record the user wrote. |
+| `POST` | `/onboarding/complete` | Close the wizard, optional `{"outcome": "done"\|"skipped"}` (default `done`), and start the convergence chain. |
+| `POST` | `/onboarding/reset` | Settings → Restart onboarding: mark the wizard and every walkthrough as requested. |
+| `GET` | `/onboarding/status` | First-run state and counts. `completed` is true when `welcome` is not pending. |
+
 ### Other
 
 | Method | Path | Purpose |

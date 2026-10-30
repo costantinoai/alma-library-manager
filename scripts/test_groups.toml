@@ -43,7 +43,7 @@ tests = ["test_embedding_*.py", "test_vector_*.py", "test_s2_*.py", "test_semant
 sources = ["src/alma/services/embedding*.py", "src/alma/services/s2_vectors.py", "src/alma/application/semantic_partition.py", "src/alma/ai/embedding_sources.py", "src/alma/ai/providers.py", "src/alma/ai/auto_tagger.py"]
 
 [groups.health]
-tests = ["test_health_*.py", "test_integration_health.py", "test_diagnostics_*.py", "test_startup_health_async.py", "test_p0_network_health.py", "test_insights_*.py", "test_reports_phase4.py"]
+tests = ["test_corpus_rehydrate_failure_semantics.py", "test_health_*.py", "test_integration_health.py", "test_diagnostics_*.py", "test_startup_health_async.py", "test_p0_network_health.py", "test_insights_*.py", "test_reports_phase4.py"]
 sources = ["src/alma/services/health*.py", "src/alma/services/maintenance.py", "src/alma/api/routes/health*.py", "src/alma/api/routes/insights*.py", "src/alma/api/routes/reports.py", "src/alma/application/insights*.py", "src/alma/application/diagnostics_stats.py", "src/alma/application/reports.py"]
 
 [groups.operations]
@@ -59,5 +59,5 @@ tests = ["test_plugin_*.py", "test_integration_plugins_*.py", "test_channel_regi
 sources = ["src/alma/plugins/**", "src/alma/application/alerts.py", "src/alma/application/pdf_schema.py", "src/alma/application/pdfs/**", "src/alma/services/pdf*.py", "src/alma/services/inbox_channels/**", "src/alma/mailer/**", "src/alma/slack/**", "src/alma/api/routes/plugins.py", "src/alma/api/routes/alerts.py"]
 
 [groups.core]
-tests = ["test_api_helpers.py", "test_core_*.py", "test_keywords.py", "test_topics.py", "test_compression_passthrough.py", "test_raise_internal_passthrough.py", "test_view_read_failure_propagates.py", "test_onboarding.py", "test_signal_projection.py", "test_api_e2e_signal_work.py", "test_db_write_guardrails.py", "test_no_raw_commit_guard.py", "test_rating_contract_one_owner.py"]
-sources = ["src/alma/api/app.py", "src/alma/api/deps.py", "src/alma/api/helpers.py", "src/alma/api/models.py", "src/alma/api/http_cache.py", "src/alma/api/compression.py", "src/alma/api/routes/onboarding.py", "src/alma/api/routes/bootstrap.py", "src/alma/api/routes/ai.py", "src/alma/api/routes/topics.py", "src/alma/api/routes/tags.py", "src/alma/api/routes/library_mgmt.py", "src/alma/core/**", "src/alma/config.py", "src/alma/application/paper_actions.py", "src/alma/ai/environment.py"]
+tests = ["test_api_helpers.py", "test_core_*.py", "test_keywords.py", "test_topics.py", "test_compression_passthrough.py", "test_raise_internal_passthrough.py", "test_view_read_failure_propagates.py", "test_onboarding.py", "test_walkthrough_state.py", "test_signal_projection.py", "test_api_e2e_signal_work.py", "test_db_write_guardrails.py", "test_no_raw_commit_guard.py", "test_rating_contract_one_owner.py"]
+sources = ["src/alma/api/app.py", "src/alma/api/deps.py", "src/alma/api/helpers.py", "src/alma/api/models.py", "src/alma/api/http_cache.py", "src/alma/api/compression.py", "src/alma/api/routes/onboarding.py", "src/alma/application/walkthroughs.py", "src/alma/api/routes/bootstrap.py", "src/alma/api/routes/ai.py", "src/alma/api/routes/topics.py", "src/alma/api/routes/tags.py", "src/alma/api/routes/library_mgmt.py", "src/alma/core/**", "src/alma/config.py", "src/alma/application/paper_actions.py", "src/alma/ai/environment.py"]

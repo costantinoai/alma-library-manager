@@ -41,6 +41,10 @@ from alma.openalex.client import (
     _normalize_openalex_author_id,
     get_author_details_singleton,
 )
+from alma.services.retry_policy import (
+    TRANSIENT_RETRY_AFTER,
+    UNCHANGED_RECHECK_AFTER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +68,11 @@ PENDING_STATUS = "pending"
 RETRYABLE_STATUS = "retryable_error"
 TERMINAL_NO_MATCH_STATUS = "terminal_no_match"
 TERMINAL_STATUSES = {"enriched", "unchanged", TERMINAL_NO_MATCH_STATUS}
-UNCHANGED_RETRY_AFTER = timedelta(days=30)
-RETRYABLE_RETRY_AFTER = timedelta(hours=6)
+UNCHANGED_RETRY_AFTER = UNCHANGED_RECHECK_AFTER
+# A source outage is not evidence that an author is unchanged. Retry transient
+# failures on the same short cadence as the works fetcher instead of hiding the
+# author for a month.
+RETRYABLE_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 
 # -- author works fetch outcomes -------------------------------------
 #
@@ -74,7 +81,7 @@ RETRYABLE_RETRY_AFTER = timedelta(hours=6)
 # more often than a display name changes.
 WORKS_FIELDS_KEY = "openalex_author_works_v1"
 WORKS_STALE_AFTER = timedelta(days=14)
-WORKS_RETRY_AFTER = timedelta(hours=6)
+WORKS_RETRY_AFTER = TRANSIENT_RETRY_AFTER
 WORKS_FETCHED_STATUS = "fetched"
 WORKS_SKIPPED_STATUS = "already_complete"
 WORKS_EXHAUSTED_STATUS = "source_exhausted"
