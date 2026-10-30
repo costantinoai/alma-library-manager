@@ -91,7 +91,7 @@ port 465.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. |
+| `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. `/api/v1/health` then reports `scheduler: disabled` and stays `200`. |
 | `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
 | `ALMA_UNATTENDED_NETWORK` | on for the `prod` profile, off otherwise | May the scheduler start work that calls external services on its own (feed / discovery / suggestion / citation-graph refreshes, the hydration drain's sweeps, Health auto-repair tasks that fetch). Every profile shares one provider key, so a dev or worktree copy seeded from prod would otherwise spend the same daily quota again. `1` turns it on for a copy, `0` holds it in prod. Runs you start by hand are never affected. |
 | `ALERT_CHECK_INTERVAL_HOURS` | `1` | How often the alert dispatcher runs. |

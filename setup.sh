@@ -160,7 +160,7 @@ done
 if [ "${HEALTHY:-}" = "1" ]; then
   ok "ALMa is up."
 else
-  warn "Container started but the health endpoint didn't respond within 30s — check 'docker logs alma'."
+  warn "Container started but the health endpoint didn't report healthy within 30s — check 'docker logs alma'."
 fi
 echo
 

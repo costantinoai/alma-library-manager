@@ -52,14 +52,6 @@ export function LibraryManagementCard() {
     },
   })
 
-  const restoreMutation = useMutation({
-    mutationFn: (name: string) => api.post(`/library-mgmt/restore/${encodeURIComponent(name)}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries()
-      toast({ title: 'Restored', description: 'Database restored from backup.' })
-    },
-  })
-
   const deleteBackupMutation = useMutation({
     mutationFn: (name: string) => api.delete(`/library-mgmt/backup/${encodeURIComponent(name)}`),
     onSuccess: () => {
@@ -211,7 +203,7 @@ export function LibraryManagementCard() {
       <SettingsCard
         icon={HardDrive}
         title="Library Management"
-        description="Backup, restore, or fully reset your library data."
+        description="Back up or fully reset your library data."
         roomy
       >
         {libraryInfoQuery.isLoading && (
@@ -298,6 +290,10 @@ export function LibraryManagementCard() {
             {/* Existing backups */}
             <div className="space-y-2">
               <h4 className="text-sm font-semibold text-slate-800">Existing Backups</h4>
+              <p className="text-sm text-slate-500">
+                To restore one, stop ALMa first: a running ALMa cannot replace its own
+                database. The Backups guide in the docs has the steps.
+              </p>
               {libraryInfoQuery.data.backups.length === 0 ? (
                 <p className="text-sm text-slate-500">No backups yet.</p>
               ) : (
@@ -315,26 +311,6 @@ export function LibraryManagementCard() {
                         </p>
                       </div>
                       <div className="ml-auto flex items-center gap-1">
-                        <ConfirmAction
-                          trigger={
-                            <Button
-                              variant="outline"
-                              size="icon-sm"
-                              title="Restore backup"
-                              disabled={restoreMutation.isPending}
-                            >
-                              {restoreMutation.isPending ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <UploadCloud className="h-3 w-3" />
-                              )}
-                            </Button>
-                          }
-                          title={`Restore backup "${backup.name}"?`}
-                          description="This will replace the current database file. The running database will be overwritten with the backup's contents."
-                          confirmLabel="Restore"
-                          onConfirm={() => restoreMutation.mutate(backup.name)}
-                        />
                         <ConfirmAction
                           trigger={
                             <Button

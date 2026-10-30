@@ -1,6 +1,6 @@
 ---
 title: Backups
-description: Online and offline backup strategies for scholar.db and the surrounding data directory.
+description: Online backups, offline file copies, and the offline restore for scholar.db and the surrounding data directory.
 ---
 
 # Backups
@@ -23,9 +23,10 @@ data/
 └── caches/                   # Embedding / network caches (regenerable)
 ```
 
-WAL files (`-wal`, `-shm`) are part of the live database. Don't
-copy `scholar.db` while ALMa is running without using the online
-backup paths below — you'll get an inconsistent snapshot otherwise.
+WAL files (`-wal`, `-shm`) are part of the live database. Never copy
+`scholar.db` while ALMa is running: committed rows can sit only in the
+WAL, so the copy would miss them. While ALMa runs, use the online
+paths below.
 
 ## Online backup (UI)
 
@@ -36,12 +37,13 @@ backup paths below — you'll get an inconsistent snapshot otherwise.
   `data/backups/scholar_<timestamp>.db.gz`.
 * **List backups** — shows existing snapshots with size and
   timestamp.
-* **Restore from backup** — decompresses the chosen snapshot and
-  overwrites the live `scholar.db` in place. Restart ALMa afterwards
-  so it reopens the restored file cleanly.
 
-Online backups are atomic at the SQLite page level — no risk of a
-torn read.
+Online backups read through SQLite, so a snapshot holds every
+committed transaction, including those still in the WAL, and writes
+can continue while it is taken.
+
+There is no restore button. A running ALMa cannot replace its own
+database, so a restore is an [offline step](#restore).
 
 ## Online backup (API)
 
@@ -57,9 +59,12 @@ curl -X POST http://localhost:8000/api/v1/library-mgmt/backup
 # list — the `backups` array in the info payload
 curl http://localhost:8000/api/v1/library-mgmt/info
 
-# restore — pass a returned backup name
-curl -X POST http://localhost:8000/api/v1/library-mgmt/restore/20260425_143000
+# download a full copy of the database, from any machine that can reach ALMa
+curl -o alma-backup.db http://localhost:8000/api/v1/backup/export
 ```
+
+`POST /library-mgmt/restore/{name}` always answers `409` and changes
+nothing. See [Restore](#restore).
 
 ## Offline backup (file copy)
 
@@ -80,22 +85,56 @@ The archive holds your API keys in plain text (`secrets.json`, `.env`),
 so store it like a credential.
 
 If ALMa is **running**, never copy `scholar.db`: not with `cp`, not with
-`docker run … cat`, and not after a `wal_checkpoint`, because writes
-can land during the copy. Use the [online backup](#online-backup-ui)
-instead. It goes through SQLite's backup API, which is safe while ALMa
+`docker run … cat`, and not after a `wal_checkpoint`, because a write
+can land during the copy. Use the [online paths](#online-backup-ui)
+instead. They go through SQLite's backup API, which is safe while ALMa
 writes.
 
 ## Restore
 
-For a UI-driven restore, see above.
+Restoring always happens with ALMa stopped. Open connections,
+background jobs and the WAL all outlive a file swap, so overwriting the
+database of a running ALMa can corrupt it. ALMa refuses to try.
 
-For a file-copy restore:
+Restore the database and the ALMa release as a pair. ALMa refuses to
+start on a database written by a newer release, and it migrates an
+older one forward on start-up, so take a backup first if you may want
+to go back.
 
-1. Stop ALMa.
-2. Replace `data/scholar.db` (and remove any `-wal` / `-shm`).
-3. Start ALMa.
-4. Watch the Activity panel — the schema migration check runs on
-   start-up. Fresh backups don't need migration; older ones might.
+**Docker** (the volume is `alma-data`; pick a snapshot from `backups/`):
+
+```bash
+docker stop alma
+docker run --rm --user 10001:10001 -v alma-data:/d alpine sh -c '
+  cd /d &&
+  gunzip -c backups/scholar_<timestamp>.db.gz > scholar.db.restoring &&
+  mv scholar.db scholar.db.before-restore &&
+  rm -f scholar.db-wal scholar.db-shm &&
+  mv scholar.db.restoring scholar.db'
+docker start alma
+```
+
+**Bare metal** (in the data directory, with the ALMa process stopped):
+
+```bash
+gunzip -c backups/scholar_<timestamp>.db.gz > scholar.db.restoring
+mv scholar.db scholar.db.before-restore
+rm -f scholar.db-wal scholar.db-shm
+mv scholar.db.restoring scholar.db
+```
+
+Remove the old `-wal` and `-shm` files in the same step. They belong to
+the database you just replaced, and SQLite would try to apply them to
+the restored file.
+
+For a `.db` file from `GET /backup/export`, skip `gunzip` and copy the
+file in place of `scholar.db.restoring`.
+
+Then start ALMa and watch the Activity panel. Fresh backups need no
+migration; older ones might. If the backup was written by a newer
+release, ALMa exits with a message naming both schema versions and
+changes nothing. When you are satisfied, delete
+`scholar.db.before-restore`.
 
 ## Verifying a backup
 
@@ -130,8 +169,9 @@ A reasonable default for a personal install:
 * **Online backup**: weekly (cron the API call).
 * **File-copy backup**: monthly to off-machine storage (cloud
   bucket, second drive).
-* **Before any risky operation**: manual backup right before
-  Settings → Library maintenance → Reset / dedup / large bulk import.
+* **Before any risky operation**: manual backup right before an
+  upgrade, or Settings → Library maintenance → Reset / dedup / large
+  bulk import.
 
 ## What's not backed up by default
 

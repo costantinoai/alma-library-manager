@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
+from pathlib import Path
 
 from alma.core.time import utcnow
 
@@ -1653,6 +1654,49 @@ def _get_user_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
+class DatabaseNewerThanBuildError(RuntimeError):
+    """The database was written by a newer ALMa. Startup stops here."""
+
+
+def _refuse_if_newer(version: int, db_path: Path | str) -> None:
+    """Stop before this build touches a schema it does not know."""
+    if version <= SCHEMA_VERSION:
+        return
+    message = (
+        f"ALMa did not start. The database at {db_path} uses schema {version}, but this "
+        f"build only knows schema {SCHEMA_VERSION}, so a newer ALMa wrote it. Nothing was "
+        "changed. Run the ALMa release that wrote it (or a newer one), or restore a backup "
+        "taken with this release: docs/operations/backups.md."
+    )
+    logger.critical(message)
+    raise DatabaseNewerThanBuildError(message)
+
+
+def refuse_newer_database(db_path: Path) -> None:
+    """Refuse a newer database through a read-only connection.
+
+    Startup calls this before the settings migration, the first thing that
+    would write. The read goes through SQLite and not the file header because
+    a crash can leave the newest ``user_version`` only in the WAL.
+
+    A file SQLite cannot read here is not this check's verdict: sidecar repair
+    runs in ``init_db_schema``, which then opens it for real and repeats the
+    check in ``apply_pending_migrations``.
+    """
+    if not db_path.exists():
+        return
+    try:
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            version = _get_user_version(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        logger.info("Read-only schema check skipped for %s: %s", db_path, exc)
+        return
+    _refuse_if_newer(version, db_path)
+
+
 def stamp_schema_version(conn: sqlite3.Connection) -> None:
     """Pin ``user_version`` to ``SCHEMA_VERSION`` without running anything.
 
@@ -1674,17 +1718,12 @@ def apply_pending_migrations(conn: sqlite3.Connection) -> None:
 
     Each migration commits individually and advances ``user_version``;
     a failure raises (startup aborts loudly) and leaves the version at
-    the last completed migration.
+    the last completed migration. A database newer than this build raises
+    :class:`DatabaseNewerThanBuildError` before anything runs.
     """
     version = _get_user_version(conn)
-    if version >= SCHEMA_VERSION:
-        if version > SCHEMA_VERSION:
-            logger.warning(
-                "DB user_version %d is ahead of this build's SCHEMA_VERSION %d "
-                "(database written by a newer ALMa?)",
-                version,
-                SCHEMA_VERSION,
-            )
+    _refuse_if_newer(version, conn.execute("PRAGMA database_list").fetchone()[2])
+    if version == SCHEMA_VERSION:
         return
     if not _table_exists(conn, "papers"):
         # Fresh database: nothing to migrate FROM. Bootstrap DDL owns it.
