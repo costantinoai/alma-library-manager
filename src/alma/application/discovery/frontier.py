@@ -910,7 +910,7 @@ def _s2_seed_identifiers(
         FROM papers
         WHERE (
             (status = 'library' AND COALESCE(rating, 0) >= 4)
-            OR status IN ('dismissed', 'removed')
+            OR status = 'removed'
             OR COALESCE(rating, 0) BETWEEN 1 AND 2
         )
           AND (
