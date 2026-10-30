@@ -10,6 +10,9 @@ import { cn } from '@/lib/utils'
 export interface ProvenanceSignals {
   branchLabel?: string | null
   branchMode?: string | null
+  /** The ranked selection left this card out; the branch's reserved slot kept
+   *  it. Stated on the card so its place is not read as merit. */
+  branchFloor?: boolean
   sourceType?: string | null
   sourceApi?: string | null
   matchedQuery?: string | null
@@ -71,6 +74,17 @@ function similarityBand(v: number): string {
 
 function buildChips(signals: ProvenanceSignals): Chip[] {
   const chips: Chip[] = []
+
+  // First: it changes how every other chip on this card should be read.
+  if (signals.branchFloor) {
+    chips.push({
+      key: 'branch-floor',
+      label: 'Reserved branch slot',
+      kind: 'branch',
+      title:
+        'The ranked selection left this one out. Every active branch keeps its best cards, so it stayed. Its score is unchanged.',
+    })
+  }
 
   // Lead with the consensus chip — multi-source agreement is the
   // strongest "why this surfaced" signal we have. When N≥2 distinct

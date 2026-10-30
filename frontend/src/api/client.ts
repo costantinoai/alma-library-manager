@@ -2108,6 +2108,21 @@ export interface RetiredBranch {
   control_state: string | null
 }
 
+/** How far one branch got in a refresh (`retrieval_summary.branch_coverage`). */
+export interface BranchCoverage {
+  branch_id: string
+  label?: string | null
+  state: 'active' | 'probing' | 'muted'
+  seed_count: number
+  retrieved: number
+  attributed: number
+  eligible: number
+  cards: number
+  floor_cards: number
+  /** The stage that lost the branch; null when it has a card. */
+  reason: string | null
+}
+
 export interface LensBranchPreview {
   lens_id: string
   lens_name?: string | null

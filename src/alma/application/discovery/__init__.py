@@ -1330,7 +1330,7 @@ def _refresh_lens_recommendations(
     retrieval_summary = {
         "seed_count": len(seeds),
         "recommendation_mode": external_summary.get("recommendation_mode", "balanced"),
-        "temperature": external_summary.get("temperature"),
+        "temperature": round(branch_plan.temperature, 3),
         "channels": {
             "lexical": len(lexical),
             "vector": len(vector),

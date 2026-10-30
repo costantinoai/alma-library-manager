@@ -42,6 +42,7 @@ import {
   markLensSeen,
   refreshLens,
   updateLens,
+  type BranchCoverage,
   type Lens,
   type LensRecommendation,
   type Publication,
@@ -55,6 +56,7 @@ import {
   LensWeightsPanel,
   PaperDetailPanel,
 } from '@/components/discovery'
+import { BranchCoverageRows } from '@/components/discovery/BranchCoverageRows'
 import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
@@ -70,6 +72,7 @@ import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
 import { PageSection } from '@/components/ui/page-section'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { branchReach } from '@/lib/branchReach'
 import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -734,6 +737,14 @@ export function DiscoveryPage() {
     (undoMutation.isPending && undoMutation.variables?.paperId) || null
 
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
+  // A summary written before the temperature was recorded holds null: say
+  // unknown rather than a confident 0.00.
+  const temperatureLabel =
+    typeof selectedLensSummary?.temperature === 'number'
+      ? selectedLensSummary.temperature.toFixed(2)
+      : '—'
+  const branchCoverage = (selectedLensSummary?.branch_coverage as BranchCoverage[] | undefined) ?? []
+  const reach = branchReach(branchCoverage)
 
   /** Pull `[{label, value}]` out of one taste/negative-profile bucket. */
   const profileItems = (
@@ -868,6 +879,7 @@ export function DiscoveryPage() {
           sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
           sharedAuthorsSample: readString(provenance?.shared_authors_sample),
           negativeHit: readNumber(provenance?.negative_hit),
+          branchFloor: provenance?.branch_floor === true,
           consensusCount: readNumber(breakdown?.consensus_count),
           projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
           couplingCount: readNumber(breakdown?.coupling_count),
@@ -1137,7 +1149,7 @@ export function DiscoveryPage() {
                   [
                     ['Mode', String(selectedLensSummary.recommendation_mode ?? '—')],
                     ['Seeds', String(Number(selectedLensSummary.seed_count ?? 0))],
-                    ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
+                    ['Temp', temperatureLabel],
                     [
                       'Lanes',
                       // Old summaries lack `frontier_size`; only an explicit 0 says empty.
@@ -1156,6 +1168,18 @@ export function DiscoveryPage() {
                     <strong className="font-mono tabular-nums text-alma-800">{value}</strong>
                   </StatusBadge>
                 ))}
+                {reach.total > 0 ? (
+                  <StatusBadge
+                    tone={reach.reached < reach.total ? 'warning' : 'neutral'}
+                    className="items-baseline"
+                    title="Branches with at least one card in this deck"
+                  >
+                    Branches
+                    <strong className="font-mono tabular-nums text-alma-800">
+                      {reach.reached}/{reach.total}
+                    </strong>
+                  </StatusBadge>
+                ) : null}
               </div>
             ) : (
               <span className="text-xs text-slate-500">
@@ -1164,6 +1188,7 @@ export function DiscoveryPage() {
             )
           }
         >
+          <BranchCoverageRows coverage={branchCoverage} />
           <Card>
             <CardContent className="space-y-4 p-4">
               <div className="flex items-start justify-between gap-3">
@@ -1206,7 +1231,7 @@ export function DiscoveryPage() {
                     />
                     <MetricTile
                       label="Temperature"
-                      value={Number(selectedLensSummary.temperature ?? 0).toFixed(2)}
+                      value={temperatureLabel}
                       labelSuffix={
                         <JargonHint
                           title="Exploration Temperature"
