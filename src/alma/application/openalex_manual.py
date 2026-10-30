@@ -816,18 +816,7 @@ def stream_online_sources(
 
     max_items = max(1, min(int(limit or 20), 100))
 
-    source_settings: dict[str, str] = {}
-    try:
-        settings_rows = db.execute(
-            "SELECT key, value FROM settings "
-            "WHERE key LIKE 'sources.%' OR key LIKE 'strategies.%'"
-        ).fetchall()
-        source_settings = {
-            str(row["key"]): str(row["value"] if row["value"] is not None else "")
-            for row in settings_rows
-        }
-    except sqlite3.OperationalError:
-        source_settings = {}
+    source_settings = load_settings(db)
 
     raw_by_source: dict[str, list[dict]] = {}
 
