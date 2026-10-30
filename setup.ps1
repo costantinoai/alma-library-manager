@@ -1,17 +1,22 @@
 # =============================================================================
 # ALMa — self-hosted installer (Windows)
 # =============================================================================
-# Pulls the prebuilt image from GitHub Container Registry, picks the right
-# image variant for your hardware (GPU / CPU), and starts ALMa with named
-# Docker volumes so your library survives upgrades. The required OpenAlex
-# API key is added after boot via Settings -> Connections (kept in the
-# volume's secret store, never in 'docker inspect').
+# A thin front end to docker-compose.yml. It writes the Compose files and a
+# private .env into ~\alma-docker ($env:ALMA_HOME to choose another folder),
+# picks the image for your hardware once, then runs `docker compose pull` and
+# `up`. The running container is only touched after the pull has succeeded.
+# The required OpenAlex API key is added after boot via Settings -> Connections
+# (kept in the volume's secret store, never in 'docker inspect').
 #
 # Usage (PowerShell — Run as a regular user, not Administrator):
 #   irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.ps1 | iex
 #
-# Re-run the same command to update — the script detects an existing install
-# and pulls the latest image before restarting.
+# Re-run the same command to update. Settings are read from the environment and
+# saved in .env, so a later run keeps them:
+#   ALMA_ALLOWED_ORIGINS  addresses you open ALMa at, beyond localhost and IPs
+#   BIND_ADDR             host address for the port (default 127.0.0.1)
+#   ALMA_IMAGE_TAG        exact image tag; or ALMA_VERSION + ALMA_FLAVOR (cpu|gpu|lite)
+#   OPENALEX_EMAIL        optional contact email
 # =============================================================================
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
@@ -27,6 +32,23 @@ Write-Host "  |              ALMa  Installer              |" -ForegroundColor Bl
 Write-Host "  |   Another Library Manager - self-hosted   |" -ForegroundColor Blue
 Write-Host "  +-------------------------------------------+" -ForegroundColor Blue
 Write-Host ""
+
+$imageRepo = "ghcr.io/costantinoai/alma-library-manager"
+$rawUrl    = "https://raw.githubusercontent.com/costantinoai/alma-library-manager/main"
+$almaHome  = if ($env:ALMA_HOME) { $env:ALMA_HOME } else { Join-Path $HOME "alma-docker" }
+$envFile   = Join-Path $almaHome ".env"
+
+function Get-Saved($name) {
+    if (-not (Test-Path $envFile)) { return "" }
+    $line = Get-Content $envFile | Where-Object { $_ -like "$name=*" } | Select-Object -Last 1
+    if (-not $line) { return "" }
+    return ($line.Substring($name.Length + 1)).Trim("'")
+}
+function Set-Saved($name, $value) {
+    $lines = @(Get-Content $envFile | Where-Object { $_ -notlike "$name=*" }) + "$name='$value'"
+    # Compose reads .env as UTF-8; ASCII keeps PowerShell 5.1 from adding a BOM.
+    Set-Content -Path $envFile -Value $lines -Encoding Ascii
+}
 
 # ---- 1. Docker check -------------------------------------------------------
 Write-Step 1 5 "Checking Docker installation..."
@@ -48,115 +70,164 @@ try {
     Write-Host "  Start Docker Desktop and wait for the whale icon to settle, then re-run."
     exit 1
 }
+try {
+    docker compose version *> $null
+    if ($LASTEXITCODE -ne 0) { throw }
+} catch {
+    Write-Err2 "Docker Compose v2 not found ('docker compose'). Update Docker Desktop."
+    exit 1
+}
 $dockerVersion = (docker --version) -join ""
 Write-Ok "Docker is running ($dockerVersion)"
 Write-Host ""
 
-# ---- 2. Pick image variant -------------------------------------------------
-Write-Step 2 5 "Choosing the right image for your hardware..."
-$imageBase = "ghcr.io/costantinoai/alma-library-manager"
-$gpuArgs   = @()
-$tag       = "latest"
-$variantLabel = "CPU (~1.4 GB image)"
+# ---- 2. Write the deployment folder ----------------------------------------
+Write-Step 2 5 "Preparing $almaHome..."
+New-Item -ItemType Directory -Force -Path $almaHome | Out-Null
+if (-not (Test-Path $envFile)) { New-Item -ItemType File -Path $envFile | Out-Null }
+# .env can hold API keys: only you may read it.
+& icacls $envFile /inheritance:r /grant:r "${env:USERNAME}:F" | Out-Null
 
-# GPU detection — NVIDIA host with the Container Toolkit
-$nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-$hasNvidia = $false
-if ($nvidia) {
-    try { & nvidia-smi *> $null; if ($LASTEXITCODE -eq 0) { $hasNvidia = $true } } catch {}
-}
-if ($hasNvidia) {
-    $dockerInfo = (docker info 2>$null) -join "`n"
-    if ($dockerInfo -match "(?i)runtimes:.*nvidia") {
-        $tag = "latest-gpu"
-        $gpuArgs = @("--gpus", "all")
-        $variantLabel = "GPU (CUDA, ~3.2 GB image)"
+foreach ($file in @("docker-compose.yml", "docker-compose.gpu.yml")) {
+    $target = Join-Path $almaHome $file
+    # Run from a checkout, use its files. Piped through iex there is no script path.
+    if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot $file))) {
+        Copy-Item (Join-Path $PSScriptRoot $file) "$target.new" -Force
     } else {
+        Invoke-WebRequest -Uri "$rawUrl/$file" -OutFile "$target.new" -UseBasicParsing
+    }
+    Move-Item "$target.new" $target -Force
+}
+
+# An install that Compose does not own here: an older `docker run`, or a
+# checkout under another project name. Its settings move into .env; the
+# container itself goes only after the pull.
+Push-Location $almaHome
+$config = (docker compose config) -split "`r?`n"
+Pop-Location
+if ($LASTEXITCODE -ne 0) { Write-Err2 "Could not read the Compose files."; exit 1 }
+$container = (($config | Where-Object { $_ -match '^\s*container_name: ' } | Select-Object -First 1) -replace '^\s*container_name: ', '').Trim()
+$project   = (($config | Where-Object { $_ -match '^name: ' } | Select-Object -First 1) -replace '^name: ', '').Trim()
+
+$older = ""
+$carried = @{}
+$existing = (docker ps -a --format "{{.Names}}") -split "`n" | Where-Object { $_ -eq $container }
+if ($existing) {
+    $owner = (docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' $container | Out-String).Trim()
+    if ($owner -ne $project) { $older = $container }
+}
+if ($older) {
+    Write-Warn2 "Found an older '$older' container. Its settings will carry over."
+    $oldImage = (docker inspect -f '{{.Config.Image}}' $older | Out-String).Trim()
+    # Only what was set on the container, not what the image itself defines.
+    $format = '{{range .Config.Env}}{{println .}}{{end}}'
+    $imageEnv = @(docker image inspect -f $format $oldImage)
+    foreach ($line in @(docker inspect -f $format $older)) {
+        if ($line -and ($imageEnv -notcontains $line)) {
+            $name, $value = $line -split "=", 2
+            $carried[$name] = $value
+        }
+    }
+    $oldBind = (docker inspect -f '{{range (index .HostConfig.PortBindings "8000/tcp")}}{{.HostIp}}{{end}}' $older | Out-String).Trim()
+    if ($oldBind -and $oldBind -ne "127.0.0.1") { $carried["BIND_ADDR"] = $oldBind }
+    # Stay on the channel: a `latest` database can be too new for `stable`.
+    if ($oldImage -like "${imageRepo}:*") { $carried["ALMA_IMAGE_TAG"] = $oldImage.Split(":")[-1] }
+}
+Write-Ok "Deployment folder ready"
+Write-Host ""
+
+# ---- 3. Pick the image ------------------------------------------------------
+# A saved choice stands: a re-run must not move an install to another flavor.
+Write-Step 3 5 "Choosing the right image for your hardware..."
+function Find-Flavor {
+    $nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    $hasNvidia = $false
+    if ($nvidia) {
+        try { & nvidia-smi *> $null; if ($LASTEXITCODE -eq 0) { $hasNvidia = $true } } catch {}
+    }
+    if ($hasNvidia) {
+        $dockerInfo = (docker info 2>$null) -join "`n"
+        if ($dockerInfo -match "(?i)runtimes:.*nvidia") { return "gpu" }
         Write-Warn2 "NVIDIA GPU detected but the NVIDIA Container Toolkit isn't registered with Docker."
         Write-Warn2 "On Windows, enable WSL2 GPU passthrough: https://docs.nvidia.com/cuda/wsl-user-guide/"
     }
+    return "cpu"
 }
 
-# Honour ALMA_IMAGE_TAG override
-if ($env:ALMA_IMAGE_TAG) {
-    $tag = $env:ALMA_IMAGE_TAG
-    $variantLabel = "custom (ALMA_IMAGE_TAG=$tag)"
-    $gpuArgs = @()
-    if ($tag -like "*gpu*") { $gpuArgs = @("--gpus", "all") }
+$tag = $env:ALMA_IMAGE_TAG
+if (-not $tag -and -not $env:ALMA_VERSION) {
+    $tag = Get-Saved "ALMA_IMAGE_TAG"
+    if (-not $tag) { $tag = $carried["ALMA_IMAGE_TAG"] }
+}
+if (-not $tag) {
+    $flavor = if ($env:ALMA_FLAVOR) { $env:ALMA_FLAVOR } else { Find-Flavor }
+    $tag = if ($env:ALMA_VERSION) { $env:ALMA_VERSION } else { "stable" }
+    if ($flavor -eq "gpu")  { $tag = "$tag-gpu" }
+    if ($flavor -eq "lite") { $tag = "$tag-lite" }
 }
 
-$image = "$imageBase`:$tag"
-Write-Ok "Selected: $image  -  $variantLabel"
+$stack = "docker-compose.yml"
+if ($tag -like "*gpu*") { $stack = "$stack;docker-compose.gpu.yml" }
+if (Test-Path (Join-Path $almaHome "docker-compose.override.yml")) { $stack = "$stack;docker-compose.override.yml" }
+
+# The chosen values go to Compose through the environment, and into .env only
+# once the pull has worked, so a bad tag does not stick.
+$env:ALMA_IMAGE_TAG = $tag
+$env:COMPOSE_FILE = $stack
+Write-Ok "Selected: ${imageRepo}:$tag"
 Write-Host ""
 
-# ---- 3. OpenAlex credentials -----------------------------------------------
-# OpenAlex requires an API key on every request (since 2026-02-13). We do
-# NOT prompt for it here: the key is added after boot via Settings ->
-# Connections, which persists it to the 0600 secret store inside the
-# alma-data volume - so it never lands in 'docker inspect' or shell history.
-# An optional contact email (no longer affects rate limits) is passed
-# through only if it's already in the environment.
-Write-Step 3 5 "Configuring OpenAlex access..."
-$openalexEmail = $env:OPENALEX_EMAIL
-$emailArgs = @()
-if ($openalexEmail) {
-    $emailArgs = @("-e", "OPENALEX_EMAIL=$openalexEmail")
-    Write-Ok "Optional contact email: $openalexEmail"
-}
-Write-Host "OpenAlex now requires a free API key - you'll add it in the UI after"
-Write-Host "boot (Settings -> Connections). Get one in ~30s at openalex.org/settings/api."
-Write-Host ""
-
-# ---- 4. Stop existing container (if any) -----------------------------------
-Write-Step 4 5 "Pulling image and (re)starting container..."
-$existing = (docker ps -a --format "{{.Names}}" 2>$null) -split "`n" | Where-Object { $_ -eq "alma" }
-if ($existing) {
-    Write-Warn2 "Existing 'alma' container found - stopping and removing it (your data in the named volumes is preserved)."
-    docker rm -f alma | Out-Null
+# ---- 4. Pull while the old container keeps serving --------------------------
+Write-Step 4 5 "Pulling the image..."
+Push-Location $almaHome
+docker compose pull
+$pulled = $LASTEXITCODE
+Pop-Location
+if ($pulled -ne 0) {
+    Write-Err2 "Pull failed. Nothing was stopped; the running ALMa is unchanged."
+    exit 1
 }
 
-docker pull $image
-if ($LASTEXITCODE -ne 0) { Write-Err2 "Pull failed."; exit 1 }
-
-# ---- 5. Run ---------------------------------------------------------------
-# Bind to localhost only by default - ALMa has no auth in single-user mode.
-# Set $env:BIND_ADDR="0.0.0.0" to reach it from other devices (trusted
-# networks only). See the README "Exposing on your network".
-$bindAddr = if ($env:BIND_ADDR) { $env:BIND_ADDR } else { "127.0.0.1" }
-if ($bindAddr -ne "127.0.0.1") {
-    Write-Warn2 "Binding to $bindAddr - ALMa will be reachable from other devices."
-    Write-Warn2 "ALMa has no auth by default; only do this on a trusted network."
+# OpenAlex requires an API key on every request (since 2026-02-13). We do NOT
+# prompt for it here: the key is added after boot via Settings -> Connections,
+# which persists it to the 0600 secret store inside the alma-data volume - so
+# it never lands in 'docker inspect' or shell history.
+foreach ($name in @($carried.Keys)) {
+    if ($name -ne "ALMA_IMAGE_TAG" -and -not (Get-Saved $name)) { Set-Saved $name $carried[$name] }
+}
+Set-Saved "ALMA_IMAGE_TAG" $tag
+Set-Saved "COMPOSE_FILE" $stack
+foreach ($name in @("ALMA_ALLOWED_ORIGINS", "BIND_ADDR", "OPENALEX_EMAIL")) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($value) { Set-Saved $name $value }
 }
 
-$runArgs = @(
-    "run", "-d",
-    "--name", "alma",
-    "--restart", "unless-stopped",
-    "-p", "${bindAddr}:8000:8000",
-    "-e", "ALMA_SETTINGS_PATH=/app/data/settings.json",
-    "-v", "alma-data:/app/data",
-    "-v", "alma-config:/app/config"
-) + $emailArgs + $gpuArgs + @($image)
-
-& docker @runArgs | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Err2 "Container failed to start."; exit 1 }
-
-Write-Host ""
-Write-Step 5 5 "Verifying..."
-$healthy = $false
-for ($i = 0; $i -lt 30; $i++) {
-    try {
-        $resp = Invoke-WebRequest -Uri "http://localhost:8000/api/v1/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) { $healthy = $true; break }
-    } catch {}
-    Start-Sleep -Seconds 1
+$bindNow = Get-Saved "BIND_ADDR"
+if ($bindNow -and $bindNow -ne "127.0.0.1") {
+    Write-Warn2 "Binding to $bindNow - ALMa will be reachable from other devices."
+    Write-Warn2 "ALMa has no login; only do this on a trusted private network."
 }
 
-if ($healthy) {
-    Write-Ok "ALMa is up."
-} else {
-    Write-Warn2 "Container started but the health endpoint didn't report healthy within 30s - check 'docker logs alma'."
+# ---- 5. Start and wait for health ------------------------------------------
+Write-Step 5 5 "Starting ALMa..."
+if ($older) {
+    docker stop $older | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Err2 "Could not stop '$older'."; exit 1 }
+    docker rm $older | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Err2 "Could not remove '$older'."; exit 1 }
 }
+
+# A first boot may migrate the database, which is why the wait is long. A
+# health check that keeps failing ends it sooner.
+Push-Location $almaHome
+docker compose up -d --wait --wait-timeout 300
+$started = $LASTEXITCODE
+Pop-Location
+if ($started -ne 0) {
+    Write-Err2 "ALMa did not become healthy. Check: docker logs $container"
+    exit 1
+}
+Write-Ok "ALMa is up."
 
 Write-Host ""
 Write-Host "----------------------------------------------------------------"
@@ -171,11 +242,12 @@ Write-Host "    Free key (~30s): https://openalex.org/settings/api"
 Write-Host "    A Semantic Scholar key (Settings -> Connections) is recommended too."
 Write-Host "    Keys are stored in the alma-data volume's 0600 secret store."
 Write-Host ""
+Write-Host "  Settings:     $envFile"
 Write-Host "  Logs:         docker logs -f alma"
 Write-Host "  Stop:         docker stop alma"
 Write-Host "  Start:        docker start alma"
 Write-Host "  Update:       re-run this installer"
-Write-Host "  Uninstall:    docker rm -f alma; docker volume rm alma-data alma-config"
+Write-Host "  Uninstall:    cd $almaHome; docker compose down; docker volume rm alma-data alma-config"
 Write-Host ""
 Write-Host "  Your library lives in the 'alma-data' Docker volume - it survives"
 Write-Host "  container removal and image upgrades. Only 'docker volume rm' wipes it."

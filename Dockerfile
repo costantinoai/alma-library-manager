@@ -23,7 +23,7 @@
 # Build:
 #   docker build --build-arg VARIANT=normal -t alma:normal .
 #   docker build --build-arg VARIANT=lite   -t alma:lite   .
-# Or via compose: see docker-compose.yml + the ALMA_VARIANT env var.
+# Or via compose: see docker-compose.build.yml + the ALMA_VARIANT env var.
 #
 # Image contents (read-only):
 #   /app/src/                 Python source (editable-installed into venv)
@@ -168,9 +168,7 @@ COPY --from=builder /app/src ./src
 # Built frontend SPA, served by FastAPI (see app.py:_frontend_dist).
 COPY --from=frontend /frontend/dist ./frontend/dist
 
-# Non-root default user for `docker run` (no --user flag). Compose
-# overrides this with the host UID via `user: ${UID}:${GID}` so files
-# in bind-mounted dirs stay owned by the user.
+# Non-root default user. docker-compose.yml pins the same 10001:10001.
 #
 # Code at /app/src and /app/frontend is read-only at runtime: chmod
 # world-readable so any UID can `import alma` and serve assets.

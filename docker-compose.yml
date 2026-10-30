@@ -1,6 +1,10 @@
 # =============================================================================
-# ALMa — Docker Compose
+# ALMa — Docker Compose (the production path)
 # =============================================================================
+# This file is the one definition of a running ALMa. setup.sh / setup.ps1 and
+# scripts/deploy-prod.sh all go through it. It pulls a prebuilt image and never
+# builds: docker-compose.build.yml adds the local build for developers.
+#
 # User-sensitive state lives in NAMED Docker volumes (not host bind-mounts):
 #   - alma-data    /app/data   scholar.db + caches + secrets.json + settings.json
 #   - alma-config  /app/config plugin configs (slack.config, etc.)
@@ -8,58 +12,33 @@
 # Named volumes are owned by the container's app user, so there is never a
 # host-vs-container UID/permission mismatch (the cause of "permission denied"
 # on the DB / lock / secrets in bind-mount setups). They survive container
-# removal and image upgrades; only `docker volume rm` wipes them. This matches
-# what setup.sh / setup.ps1 create. Initial secrets come from .env via the
-# `env_file:` below; the Settings UI persists rotations to the secret store
-# inside alma-data, so no host .env write-back (or bind) is needed.
+# removal and image upgrades; only `docker volume rm` wipes them. Nothing here
+# is baked into the image: the volumes are where personal data stays. See
+# docs/operations/backups.md before you copy anything out of them.
 #
-# Back up / inspect the data volume with, e.g.:
-#   docker run --rm -v alma-data:/data -v "$PWD":/out alpine \
-#     tar czf /out/alma-backup.tgz -C /data .
+# Settings go in `.env`, next to this file:
+#   ALMA_IMAGE_TAG        image tag. Default `stable`, which moves on a release.
+#                         Also stable-gpu, stable-lite, or a version: 0.25.0.
+#   ALMA_ALLOWED_ORIGINS  the addresses you open ALMa at, beyond localhost/IPs.
+#   BIND_ADDR             host address for the port. Default 127.0.0.1.
+#   ALMA_CPUS, ALMA_MEMORY  resource ceilings. Default no CPU cap, 4 GB RAM.
 #
-# Nothing here is baked into the image — the image is reproducible and
-# shareable; the volumes are where personal data stays.
+# First-time setup, by hand (the installer does this for you):
+#   touch .env && chmod 600 .env
+#   docker compose pull
+#   docker compose up -d --wait
 #
-# Variants — choose with the ALMA_VARIANT env var:
-#   ALMA_VARIANT=normal (default)  full AI stack (~2 GB image after build)
-#   ALMA_VARIANT=lite              core only, no torch / sklearn (~300 MB)
-#                                  intended for Raspberry Pi and other
-#                                  low-memory hosts. AI features (local
-#                                  embeddings, clustering, projections)
-#                                  degrade gracefully — every AI import
-#                                  in src/alma is lazy.
-#
-# Resource ceilings are also overridable: ALMA_CPUS, ALMA_MEMORY.
-# Defaults: 8 vCPUs / 4 GB RAM — sized for a typical desktop host. On a
-# laptop with 4 cores, you'll want ALMA_CPUS=2.0 or 4.0; on a workstation
-# with more cores, bump it higher for faster local embedding compute.
-# For Raspberry Pi 4 (4 GB), a reasonable combo is:
-#   ALMA_VARIANT=lite ALMA_CPUS=2.0 ALMA_MEMORY=1G docker compose up -d
-#
-# First-time setup:
-#   cp .env.example .env          # then edit and add your API keys
-#   cp settings.example.json settings.json
-#   mkdir -p data config
-#   docker compose up -d          # normal variant
-#   # OR
-#   ALMA_VARIANT=lite docker compose up -d
+# The update is the same two commands: `pull` runs while the old container keeps
+# serving, so a failed pull changes nothing. Watchtower also works on this
+# container: it pulls the same tag and recreates it with the same settings.
 # =============================================================================
+
+# A fixed project name, so the folder holding this file does not decide it.
+name: alma
 
 services:
   alma:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VARIANT: ${ALMA_VARIANT:-normal}
-        # `cpu` (default) installs PyTorch's CPU-only wheel — small,
-        # works everywhere, matches the published `:latest` tag.
-        # Set ALMA_TORCH_VARIANT=cuda to install the CUDA-capable wheel
-        # (~1.8 GB larger) so SPECTER2 can use a host GPU passed
-        # through with docker-compose.gpu.yml. `setup.sh` flips this
-        # to `cuda` automatically when it detects an NVIDIA GPU.
-        TORCH_VARIANT: ${ALMA_TORCH_VARIANT:-cpu}
-    image: alma:${ALMA_VARIANT:-normal}
+    image: ghcr.io/costantinoai/alma-library-manager:${ALMA_IMAGE_TAG:-stable}
     container_name: alma
     restart: unless-stopped
 
@@ -99,8 +78,10 @@ services:
           # Defaults sized for the `normal` variant — the AI stack
           # (transformers + sklearn) can balloon to ~2 GB once an
           # embedding model is loaded; leave headroom. Override on
-          # constrained hosts (Pi: ALMA_MEMORY=1G).
-          cpus: ${ALMA_CPUS:-8.0}
+          # constrained hosts (Pi: ALMA_MEMORY=1G). CPU stays uncapped by
+          # default: Docker refuses to start a container whose limit is above
+          # the host's core count, and 0 means no limit.
+          cpus: ${ALMA_CPUS:-0}
           memory: ${ALMA_MEMORY:-4G}
         reservations:
           cpus: '0.5'
@@ -129,6 +110,9 @@ services:
       - PYTHONUNBUFFERED=1
       # Optional API auth — leave empty for single-user local mode.
       - API_KEY=${API_KEY:-}
+      # The addresses you open ALMa at, beyond localhost and IPs. See
+      # docs/operations/deployment.md.
+      - ALMA_ALLOWED_ORIGINS=${ALMA_ALLOWED_ORIGINS:-}
       # Disable numba JIT cache to avoid Docker filesystem issues with UMAP
       - NUMBA_DISABLE_JITCACHE=1
 
@@ -157,9 +141,9 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# Named volumes — stable names (no compose project prefix) so they match
-# setup.sh / setup.ps1 and survive `docker compose down` (use `down -v` to
-# wipe). Owned by the container app user: no host UID/permission mismatch.
+# Named volumes — stable names (no compose project prefix), the same ones every
+# earlier install used, so a library carries over. They survive
+# `docker compose down` (use `down -v` to wipe). Owned by the container app user: no host UID/permission mismatch.
 volumes:
   alma-data:
     name: alma-data
