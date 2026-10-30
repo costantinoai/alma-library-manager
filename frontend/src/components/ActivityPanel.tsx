@@ -602,7 +602,7 @@ function OperationsView({
               )}
               {duration && <span>in {duration}</span>}
               {op.finished_at && (
-                <span className="text-slate-400">\u00b7 Finished {formatTimestamp(op.finished_at)}</span>
+                <span className="text-slate-400">· Finished {formatTimestamp(op.finished_at)}</span>
               )}
             </p>
           )}
