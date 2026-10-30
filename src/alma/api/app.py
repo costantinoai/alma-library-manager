@@ -168,13 +168,16 @@ app = FastAPI(
     The API supports optional authentication via API key:
     - Set the `API_KEY` environment variable to enable authentication
     - Provide the key via `X-API-Key` header or `Bearer` token
-    - If no `API_KEY` is set, all requests are allowed (development mode)
+    - If no `API_KEY` is set, all requests are allowed (the normal mode)
+    - The web app sends no key, so setting `API_KEY` breaks the browser UI
 
     ## Cross-site requests
 
     Whatever the `API_KEY` setting, a browser page on another origin cannot change
-    data: unsafe methods from it get `403`. Add your own address to
-    `ALMA_ALLOWED_ORIGINS`. Requests without an `Origin` header (curl, scripts) pass.
+    data: unsafe methods from it get `403`. A request whose `Host` is not `localhost`,
+    an IP address or a listed address also gets `403`, on every method, which stops
+    DNS rebinding. List your own address in `ALMA_ALLOWED_ORIGINS`. Requests without
+    an `Origin` header (curl, scripts) pass once their `Host` is known.
 
     ## Rate Limiting
 
@@ -226,8 +229,9 @@ app = FastAPI(
 # Middleware
 # ============================================================================
 
-# One list decides both which pages may read responses (CORS) and which may send
-# writes (the origin guard added below, after the request logger).
+# One list decides which pages may read responses (CORS), which may send writes,
+# and which names this server answers to (the origin guard added below, after the
+# request logger). A malformed entry stops startup here, before any migration.
 ALLOWED_ORIGINS = allowed_origins()
 
 app.add_middleware(
