@@ -26,6 +26,23 @@ class SlackResolveError(RuntimeError):
     """Raised when a Slack channel/user name cannot be resolved to an ID."""
 
 
+def _describe_lookup_failure(method: str, exc: Exception) -> str:
+    """Name why one Slack lookup call failed, keeping Slack's own error code.
+
+    Two different failures look identical to the caller if both are flattened
+    into "not found": Slack answering with an error (``missing_scope``,
+    ``invalid_auth`` … — kept verbatim so the inbox route's per-code guidance
+    still matches) and Slack never being reached at all (DNS, no connection,
+    timeout), which is reported as ``slack_unreachable``.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    if isinstance(exc, SlackApiError):
+        code = exc.response.get("error") if exc.response is not None else None
+        return f"{method}: {code or exc}"
+    return f"{method}: slack_unreachable ({exc})"
+
+
 class SlackNotifier:
     """Send rich Block Kit messages to Slack channels.
 
@@ -230,7 +247,11 @@ class SlackNotifier:
         process doesn't re-list workspace members on every send.
 
         Raises:
-            SlackResolveError: When the target cannot be resolved.
+            SlackResolveError: When the target cannot be resolved. The message
+                starts with ``channel_not_found`` only when both lookups
+                completed and matched nothing; a lookup that could not complete
+                is reported as what it was (see :func:`_describe_lookup_failure`)
+                so a network outage never reads as a misspelled channel.
         """
         if not target:
             raise SlackResolveError("empty Slack target")
@@ -255,6 +276,9 @@ class SlackNotifier:
             raise SlackResolveError(f"empty Slack target after strip: {target!r}")
 
         client = self._get_client()
+        # Lookups that raised instead of answering. A miss is only a real
+        # "not found" when every lookup actually completed.
+        lookup_failures: list[str] = []
 
         # Try as channel name first.
         try:
@@ -271,10 +295,11 @@ class SlackNotifier:
                         "Resolved %r via conversations.list -> %s", target, resolved
                     )
                     return resolved
-        except Exception as exc:  # pragma: no cover - network failures
+        except Exception as exc:
             logger.warning(
                 "conversations.list lookup for %r failed: %s", target, exc
             )
+            lookup_failures.append(_describe_lookup_failure("conversations.list", exc))
 
         # Fall back to user display name -> open DM.
         try:
@@ -305,9 +330,14 @@ class SlackNotifier:
                                 resolved,
                             )
                             return resolved
-        except Exception as exc:  # pragma: no cover - network failures
+        except Exception as exc:
             logger.warning("users.list lookup for %r failed: %s", target, exc)
+            lookup_failures.append(_describe_lookup_failure("users.list", exc))
 
+        if lookup_failures:
+            raise SlackResolveError(
+                f"could not look up {target!r}: " + "; ".join(lookup_failures)
+            )
         raise SlackResolveError(f"channel_not_found: {target!r}")
 
     # ---- Paper alert -------------------------------------------------

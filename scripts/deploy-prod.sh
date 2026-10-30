@@ -60,9 +60,18 @@ fi
 docker pull "$IMAGE"
 docker rm -f alma >/dev/null 2>&1 || true
 
+# Own network, not Docker's default bridge. The default bridge copies the
+# host's upstream DNS servers once, at container start; when Docker starts
+# at boot before the network is up, it copies none and the container never
+# resolves a hostname until it is restarted. A user-defined network resolves
+# through the host's resolver on every lookup, so DNS works as soon as the
+# host has a connection.
+docker network inspect alma-net >/dev/null 2>&1 || docker network create alma-net >/dev/null
+
 # shellcheck disable=SC2086  # GPU_FLAG must word-split when set
 docker run -d \
   --name alma \
+  --network alma-net \
   --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -e "ALMA_SETTINGS_PATH=/app/data/settings.json" \
