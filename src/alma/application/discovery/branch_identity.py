@@ -36,7 +36,7 @@ MISFIT_RECOMMEND = 0.03
 FIT_FLOOR_QUANTILE = 0.10
 
 #: A new branch holding this share of an old branch's papers is its successor.
-_SUCCESSOR_SHARE = 0.25
+_SUCCESSOR_SHARE = 0.10
 #: A control follows the old branch's papers only into a branch with their majority.
 _CONTROL_MAJORITY = 0.5
 
@@ -210,7 +210,7 @@ def plan_branch_lineage(
         successors = item["successor_ids"]
         if not successors:
             item["reason"] = "emptied"
-        elif len(successors) > 1:
+        elif len(successors) > 1 or top_shares[item["id"]] < _CONTROL_MAJORITY:
             item["reason"] = "split"
         elif len(leading[successors[0]]) > 1:
             item["reason"] = "merged"

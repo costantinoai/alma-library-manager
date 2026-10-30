@@ -512,7 +512,7 @@ export function DiscoveryWeightsCard() {
                 />
                 <SettingsNumberField
                   label="Max Branches"
-                  description="How many clusters to build from seed papers."
+                  description="How many clusters a rebuild keeps. Existing branches stay until the next rebuild."
                   value={values.branches.max_clusters}
                   min={2}
                   max={12}

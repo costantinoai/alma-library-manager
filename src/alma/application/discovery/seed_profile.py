@@ -1341,8 +1341,6 @@ def _describe_seed_branches(
     Everything here is derived from the members on each call, whether the
     partition came from a build or from the stored rows.
     """
-    effective_max = max_branches
-    effective_temp = temperature
     if not clusters:
         return []
 
@@ -1354,12 +1352,12 @@ def _describe_seed_branches(
     # ("learning / cortex / model") and every branch label looked the
     # same — defeating the entire point of clustering.
     branches: list[dict] = []
-    for i, cluster in enumerate(clusters[:effective_max], start=1):
+    for i, cluster in enumerate(clusters[:max_branches], start=1):
         cluster_seeds = cluster.get("seeds") or []
         if not cluster_seeds:
             continue
         background_seeds: list[dict] = []
-        for j, other in enumerate(clusters[:effective_max]):
+        for j, other in enumerate(clusters[:max_branches]):
             if j == i - 1:
                 continue
             background_seeds.extend(other.get("seeds") or [])
@@ -1371,7 +1369,7 @@ def _describe_seed_branches(
         if not cluster_terms:
             cluster_terms = global_terms
 
-        core_count = max(2, min(4, int(round(4.0 - (effective_temp * 2.4)))))
+        core_count = max(2, min(4, int(round(4.0 - (temperature * 2.4)))))
         core_topics = cluster_terms[:core_count] if cluster_terms else []
         if not core_topics and global_terms:
             core_topics = global_terms[:2]
@@ -1390,7 +1388,7 @@ def _describe_seed_branches(
         #     genuinely orthogonal threads.
         # Either way the user has full control via the temperature
         # setting (and per-lens override).
-        prefer_far_neighbour = effective_temp >= 0.5
+        prefer_far_neighbour = temperature >= 0.5
         own_centroid = cluster.get("centroid")
         if _NUMPY_AVAILABLE and own_centroid is not None and len(clusters) > 1:
             best_idx: int | None = None
@@ -1425,7 +1423,7 @@ def _describe_seed_branches(
             if neighbor_terms:
                 direction_hint = " / ".join(neighbor_terms[:2])
 
-        explore_count = max(1, min(5, int(round(1.0 + (effective_temp * 4.0)))))
+        explore_count = max(1, min(5, int(round(1.0 + (temperature * 4.0)))))
         explore_pool: list[str] = []
         for term in [*neighbor_terms, *global_terms]:
             if term in core_topics or term in explore_pool:
@@ -1492,7 +1490,7 @@ def _describe_seed_branches(
         key=lambda b: (float(b.get("branch_score") or 0.0), int(b.get("seed_count") or 0)),
         reverse=True,
     )
-    return branches[:effective_max]
+    return branches[:max_branches]
 
 
 class BranchPlan(NamedTuple):
