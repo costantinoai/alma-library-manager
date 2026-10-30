@@ -24,9 +24,23 @@ interface ToastHandle {
   update: (updateProps: Partial<ToastInput>) => void
 }
 
+/**
+ * How long a toast stays up. Sonner's default is 4 s, too short to read a title
+ * plus a description. An error or an offered action (Undo) needs a decision, so
+ * it stays longer. Hovering a toast pauses its timer.
+ */
+const TOAST_DURATION_MS = { plain: 6_000, needsDecision: 10_000 } as const
+
+function toastDuration(input: ToastInput): number {
+  return input.variant === 'destructive' || input.action
+    ? TOAST_DURATION_MS.needsDecision
+    : TOAST_DURATION_MS.plain
+}
+
 function emit(input: ToastInput, id?: string | number): string | number {
   const options: Parameters<typeof sonnerToast.success>[1] = {
     description: input.description,
+    duration: toastDuration(input),
     ...(id !== undefined ? { id } : {}),
     ...(input.action ? { action: input.action } : {}),
   }
