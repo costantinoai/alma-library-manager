@@ -130,11 +130,11 @@ irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/set
 ```
 
 Then open <http://localhost:8000>. To update later, re-run the same
-command — the installer detects an existing install and pulls the latest
-image; your data lives in named volumes, so nothing is lost.
+command — the installer pulls the new image first, keeps your settings in
+`~/alma-docker/.env`, and your data lives in named volumes, so nothing is lost.
 
-> **Other ways to install:** manual `docker run`, the three image
-> flavors (`:latest` / `:latest-gpu` / `:latest-lite`), Docker Compose,
+> **More options:** running the same `docker-compose.yml` by hand, the three
+> image flavors (`:stable` / `:stable-gpu` / `:stable-lite`), Watchtower,
 > and exposing ALMa on your LAN are all covered in the
 > [Docker guide](docs/getting-started/docker.md). ALMa has no login: keep
 > it on loopback or a private network, and

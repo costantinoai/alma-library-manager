@@ -31,17 +31,24 @@ address as described in
 [Exposing on your network](../getting-started/docker.md#exposing-on-your-network).
 An IP address works as it is, so you can stop here.
 
-**2. Tell ALMa that address, then restart it.** With Compose, in `.env`:
+**2. Tell ALMa that address.** Add it to `.env` in `~/alma-docker`, then
+apply it:
 
 ```bash
 ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net
 ```
 
-With `docker run`, add `-e ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net`.
-The one-line installer does not carry this setting, so re-create the
-container with the
-[`docker run` command](../getting-started/docker.md#or-run-docker-run-directly)
-and that flag.
+```bash
+cd ~/alma-docker
+docker compose up -d --wait
+```
+
+Or pass it to the one-line installer, which saves it in `.env`:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.sh \
+  | ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net bash
+```
 
 **If you skip step 2**, the address does not work: the page shows one
 line of JSON containing `UnknownHostRefused` and your address.
@@ -81,18 +88,15 @@ proxy at ALMa by IP address without keeping `Host`: either way ALMa can
 no longer tell a hostile page from its own. ALMa ignores
 `X-Forwarded-Host` and the like, because any client can write them.
 
-**Containers.** `docker-compose.yml` reads the value from `.env`.
-`scripts/deploy-prod.sh` keeps it from the running container, and takes
-it from the calling shell on a first deploy:
-
-```bash
-ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net scripts/deploy-prod.sh 0.25.0
-```
+**Containers.** `docker-compose.yml` reads the value from `.env`. The
+installer saves it there, and keeps it from an older container the
+first time it runs.
 
 Older images ignore the variable, so you can set it before upgrading.
-Do that first if Watchtower updates ALMa for you: the new image will
-otherwise arrive without it, and your hostname will be refused until
-you add it.
+Do that first if Watchtower updates ALMa for you: Watchtower keeps the
+settings the container already has, so a new image arrives with the
+value only if you applied it beforehand. Without it, your hostname is
+refused until you add it.
 
 The browser connector, curl and scripts need nothing here when they use
 `localhost` or an IP address. Clients with no `Origin` header pass once
@@ -122,29 +126,36 @@ exposure safe.
 
 ## Docker production
 
-The shipped `docker-compose.yml` already encodes the production
-defaults you want: `restart: unless-stopped`, localhost-only port
-binding (`127.0.0.1:8000:8000`), read-only rootfs, `cap_drop ALL`,
+The shipped `docker-compose.yml` is the one production definition. It
+encodes `restart: unless-stopped`, localhost-only port binding
+(`127.0.0.1:8000:8000`), read-only rootfs, `cap_drop ALL`,
 `no-new-privileges`, healthcheck on `/api/v1/health`, log rotation,
-and per-host resource limits (`ALMA_CPUS` / `ALMA_MEMORY`). For most
-deployments, the right move is to pull the prebuilt GHCR image
-through the shipped overlay rather than rebuilding locally:
-
-```bash
-git clone https://github.com/costantinoai/alma-library-manager.git
-cd alma-library-manager
-cp .env.example .env             # OPENALEX_API_KEY, OPENALEX_EMAIL, etc.
-
-# Pin a specific version in production (avoid surprise upgrades)
-ALMA_IMAGE_TAG=0.20.1 \
-  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
-```
+and per-host resource limits (`ALMA_CPUS` / `ALMA_MEMORY`). It pulls the
+`:stable` image. The one-line installer and `scripts/deploy-prod.sh`
+both go through it, so install and update can't drift apart.
 
 State lives in the `alma-data` / `alma-config` named volumes (owned by
-the container app user — no host permission setup). See
-[Getting started → Docker](../getting-started/docker.md#path-2-docker-compose-named-volumes)
-for the full list of compose flags (GPU overlay, lite image, build
-locally, etc.).
+the container app user — no host permission setup). The deployment lives
+in `~/alma-docker`: the Compose files, and `.env` with your settings. See
+[Getting started → Docker](../getting-started/docker.md) for the flavors
+and for running the same file by hand.
+
+To add a proxy or a second network, keep them in
+`docker-compose.override.yml` in that folder, so every update declares
+them. A proxy and ALMa that share a declared network reach each other at
+`http://alma:8000`:
+
+```yaml
+services:
+  alma:
+    networks: [default, proxy]
+networks:
+  proxy:
+    external: true
+```
+
+The installer keeps this file in the stack. Watchtower keeps both
+networks when it recreates the container.
 
 The image is multi-stage: a builder layer compiles the frontend,
 the runtime layer carries only the Python app + the built
@@ -191,16 +202,26 @@ Don't use `nohup uvicorn …` long-term; it has no restart-on-crash.
 
 ## Updating
 
-**Docker (the normal path)** — deploy a released version with the
-versioned script; it pulls `ghcr.io/costantinoai/alma-library-manager:
-X.Y.Z[-gpu|-lite]` (flavor autodetected), recreates the `alma`
-container preserving your env and the `alma-data` / `alma-config`
-volumes, health-polls, and exits non-zero unless the container is
-healthy and reports the requested release version:
+**Docker (the normal path)** — re-run the one-line installer, or run
+this in `~/alma-docker`:
+
+```bash
+docker compose pull          # the old container keeps serving
+docker compose up -d --wait  # replaces it and waits for health
+```
+
+If the pull fails, nothing has stopped. With a checkout,
+`scripts/deploy-prod.sh` does the same for a named release: it pulls
+`ghcr.io/costantinoai/alma-library-manager:X.Y.Z[-gpu|-lite]` (flavor
+autodetected) through the installer, and exits non-zero unless the
+container is healthy and reports that version:
 
 ```bash
 scripts/deploy-prod.sh 0.21.0
 ```
+
+[Watchtower](../getting-started/docker.md#automatic-updates-with-watchtower)
+also works on this container.
 
 **Bare metal**:
 
@@ -209,7 +230,7 @@ git pull
 pip install -e ".[ai]"           # if AI extras already installed
 cd frontend && npm install && npm run build && cd ..
 # restart the service
-systemctl restart alma           # or docker compose up -d
+systemctl restart alma
 ```
 
 Schema migrations run on backend start-up. If a migration fails,

@@ -25,8 +25,8 @@ on the bare-metal path is a dependency build mismatch.
 
     One-line installer for Linux, macOS, and Windows — auto-detects
     your hardware (GPU / CPU / Pi), pulls the prebuilt image from
-    GHCR, and starts ALMa with named volumes that survive upgrades.
-    Manual `docker run` and Docker Compose paths are documented too.
+    GHCR, and starts ALMa through Compose with named volumes that
+    survive upgrades. You can also run the same Compose file by hand.
 
     [:octicons-arrow-right-24: Docker](docker.md)
 

@@ -72,13 +72,21 @@ If ALMa is **stopped**:
 
 ```bash
 # stop ALMa first
-docker compose down               # or kill the uvicorn process
+docker compose down               # in ~/alma-docker, or kill the uvicorn process
 
 # tar everything
 tar -czf alma-backup-$(date +%F).tar.gz data/ settings.json .env
 
 # done; restart
-docker compose up -d
+docker compose up -d --wait
+```
+
+Under Docker, the data sits in the volumes, not in a `data/` folder.
+With ALMa stopped, archive both of them:
+
+```bash
+docker run --rm -v alma-data:/data:ro -v alma-config:/config:ro \
+  -v "$PWD":/out alpine tar -czf /out/alma-backup-$(date +%F).tar.gz /data /config
 ```
 
 The archive holds your API keys in plain text (`secrets.json`, `.env`),
