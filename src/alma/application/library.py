@@ -1228,6 +1228,32 @@ def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
     return int(events[saves[0]]["previous_rating"])
 
 
+def _restore_lens_verdicts(db: sqlite3.Connection, paper_id: str, rating: int) -> None:
+    """Give each lens back the verdict a Save overwrote with a zero signal.
+
+    A lens keeps one signal per paper, so a Save at 3 stars replaces that lens's
+    Dislike. When the Save is undone and the rating returns, so does the signal,
+    but only in a lens whose own rating event still stands: the event names it,
+    and a Save elsewhere says nothing about this lens.
+    """
+    signal_value = rating_signal_value(rating)
+    if signal_value == 0:
+        return
+    placeholders = ", ".join("?" for _ in _RATING_ACTIONS)
+    db.execute(
+        f"""
+        UPDATE lens_signals SET signal_value = ?
+        WHERE paper_id = ? AND signal_value = 0 AND lens_id IN (
+            SELECT json_extract(context_json, '$.lens_id')
+            FROM feedback_events
+            WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+              AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        )
+        """,
+        (signal_value, paper_id, paper_id, *_RATING_ACTIONS),
+    )
+
+
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1287,6 +1313,8 @@ def undo_paper_feedback(
                 (paper_id,),
             )
         if _table_exists(db, "lens_signals"):
+            if rating_before_save is not None:
+                _restore_lens_verdicts(db, paper_id, rating_before_save)
             db.execute(
                 "DELETE FROM lens_signals WHERE paper_id = ? AND signal_value = 0",
                 (paper_id,),
