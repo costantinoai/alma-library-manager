@@ -110,7 +110,8 @@ export function AuthorSignalBar({
                 <Info className="h-3.5 w-3.5" aria-hidden />
               </TooltipTrigger>
               <TooltipContent
-                className="w-56 border border-edge-3 bg-surface-3 p-3 text-slate-700 shadow-md"
+                tone="paper"
+                className="w-56 p-3"
                 sideOffset={6}
               >
                 <Breakdown components={components} />
