@@ -10,6 +10,7 @@ import {
   CheckCircle,
   XCircle,
   Clock,
+  TriangleAlert,
   UserRound,
   X,
   Square,
@@ -24,7 +25,7 @@ import { SubPanel } from '@/components/ui/sub-panel'
 import { SIDEBAR_DOCK_INSET, sidebarInset } from '@/components/layout/sidebarMetrics'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { isBackgroundTriggerSource } from '@/lib/activity'
+import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
 import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { api } from '@/api/client'
@@ -102,6 +103,8 @@ function StatusIcon({ status }: { status: string }) {
       return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-slate-500" />
     case 'completed':
       return <CheckCircle className="h-4 w-4 shrink-0 text-success-500" />
+    case 'partial':
+      return <TriangleAlert className="h-4 w-4 shrink-0 text-warning-500" />
     case 'failed':
       return <XCircle className="h-4 w-4 shrink-0 text-critical-500" />
     case 'cancelling':
@@ -211,6 +214,7 @@ function statusAccent(status: string): string {
     case 'scheduled':
       return 'border-l-slate-300'
     case 'cancelling':
+    case 'partial':
       return 'border-l-warning-500'
     case 'failed':
       return 'border-l-critical-500'
@@ -227,6 +231,7 @@ function statusTone(status: string): StatusBadgeTone {
       return 'negative'
     case 'cancelled':
     case 'cancelling':
+    case 'partial':
       return 'warning'
     case 'running':
       return 'accent'
@@ -430,7 +435,7 @@ function OperationsView({
         onClick={() => onSelect(op.job_id)}
         className={cn(
           'flex w-full min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
-          statusAccent(op.status),
+          statusAccent(runDisplayStatus(op.status, op.result?.batch)),
           isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
         )}
@@ -453,7 +458,7 @@ function OperationsView({
         ) : (
           <span className={cn('mt-1 w-4 shrink-0', isChild && 'w-2')} />
         )}
-        <StatusIcon status={op.status} />
+        <StatusIcon status={runDisplayStatus(op.status, op.result?.batch)} />
         <div className="min-w-0 flex-1 space-y-1">
           {/* Primary line: title + action buttons */}
           <div className="flex min-w-0 items-start justify-between gap-2">
@@ -942,6 +947,7 @@ function OperationDetailView({
   const active = isActiveOperation(job.status)
   const duration = formatDuration(job.started_at, job.finished_at)
   const title = job.stage_label || job.message || job.job_id
+  const displayStatus = runDisplayStatus(job.status, job.result?.batch)
   const resultSummary = summarizeResult(job.result)
   const resultKeys = job.result ? Object.keys(job.result) : []
   const hasResult = resultKeys.length > 0
@@ -959,7 +965,7 @@ function OperationDetailView({
         )}
       >
         <div className="flex min-w-0 items-start gap-2">
-          <StatusIcon status={job.status} />
+          <StatusIcon status={displayStatus} />
           <div className="min-w-0 flex-1">
             <h3
               className={cn(
@@ -971,8 +977,8 @@ function OperationDetailView({
               {title}
             </h3>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <StatusBadge tone={statusTone(job.status)} size="sm" className="capitalize">
-                {job.status}
+              <StatusBadge tone={statusTone(displayStatus)} size="sm" className="capitalize">
+                {displayStatus}
               </StatusBadge>
               {job.operation_key && (
                 <StatusBadge

@@ -16,6 +16,28 @@
  * Classification keys off `trigger_source`, the single field every job stamps
  * (see `set_job_status` in src/alma/api/scheduler.py).
  */
+/** How a batch job went, from `alma/core/operations/batch_outcome.py`. */
+export interface BatchOutcome {
+  attempted: number
+  succeeded: number
+  failed: number
+  incomplete: number
+  noun: string
+  state: 'clean' | 'partial' | 'failed'
+}
+
+/**
+ * The word to show for a run. A partial sweep is `completed` in the ledger on
+ * purpose, so Health stays quiet about a routine retry; only its badge says
+ * "partial". Nothing else may branch on this: the status stays the truth for
+ * every reader that needs a verdict.
+ */
+export function runDisplayStatus(status: string, batch?: unknown): string {
+  const partial =
+    status === 'completed' && (batch as BatchOutcome | null | undefined)?.state === 'partial'
+  return partial ? 'partial' : status
+}
+
 export function isBackgroundTriggerSource(src?: string | null): boolean {
   if (!src) return false // null/unknown → treat as foreground (user-meaningful)
   return (
