@@ -14,9 +14,8 @@ through setup. Everything below assumes you have
 
 ## The guided onboarding flow
 
-On a fresh install the backend reports onboarding as incomplete (the
-gate reads `onboarding.completed` from the `discovery_settings` table),
-and the frontend shows a full-screen, step-by-step welcome instead of
+On a fresh install the backend reports the `welcome` walkthrough as
+pending (see [Walkthrough state](#walkthrough-state)), and the frontend shows a full-screen, step-by-step welcome instead of
 the normal app shell. The flow is a friendly UI over machinery ALMa
 already has — follow + backfill, author suggestions, keyword monitors,
 the library lens, a Discovery run, and paper triage — so finishing it
@@ -67,23 +66,50 @@ It runs in this order:
     Analytics, Settings), then you land on **Home**, the daily brief you
     will open every day afterwards.
 
-When you finish, ALMa marks `onboarding.completed` and the gate stops
-showing on every future boot.
+When you finish, or close it with the **×** in its header, ALMa records
+that in the database and the flow stops showing, in every browser.
 
 ### Page tours
 
 The wizard is only half the guided experience. Home, Feed, Discovery,
-Map, Authors and Library each carry a short **first-visit tour** — a
-handful of coachmarks over the real page, spotlighting the controls that
-matter. It runs once per page, automatically, and the **?** button in the
-page header replays it any time.
+Authors and Library each carry a short **page tour** — a handful of
+coachmarks over the real page, spotlighting the controls that matter. It
+runs once, automatically, and the **?** button in the page header asks
+for it again any time.
+
+### Walkthrough state
+
+Whether a walkthrough has been seen is stored in the database, never in
+the browser, so a new browser, another device or cleared site data does
+not bring one back. Each of the wizard, the page tours and any
+new-feature walkthrough has one record: the outcome, the revision it
+applies to, and when it was written.
+
+| Outcome | Meaning |
+| --- | --- |
+| `done` | Finished. |
+| `skipped` | Dismissed: Skip tour, Esc, a click outside, or the wizard's **×**. |
+| `assumed` | Never recorded. The install finished onboarding before this store existed, so its page tours are not shown again. |
+| `requested` | You asked for it again. It stays pending until closed. |
+
+A walkthrough shows while it has no record, is `requested`, or was closed
+at an older revision than the current one. While that state is loading,
+or if the request fails, no overlay shows.
+
+Upgrading from a release that kept this in the browser needs no action.
+At startup the old `onboarding.completed` flag becomes the wizard's
+record and page tours become `assumed`. A browser that still holds the
+old per-page flags hands them to the server once and deletes them.
+
+To ship a new or revised walkthrough, add or bump its entry in
+`WALKTHROUGH_VERSIONS` (`src/alma/application/walkthroughs.py`). Only that
+walkthrough shows again, once.
 
 ### Re-running it later
 
 You can replay the whole flow at any time from **Settings → First-run
-setup → Restart onboarding**. This clears the completed flag (via
-`/onboarding/reset`) and forgets every page tour's "seen it" flag, so both
-the guided welcome and the per-page tours show again on the next load.
+setup → Restart onboarding**. This marks the wizard and every page tour
+as requested (via `/onboarding/reset`), so they all show again.
 **Nothing is deleted** — your identity, follows, monitors, lens, and
 saved papers are all kept; it simply lets you revisit or adjust anything
 you skipped.

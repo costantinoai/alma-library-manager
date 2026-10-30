@@ -1,7 +1,7 @@
 export { OnboardingGate } from './OnboardingGate'
 export { OnboardingFlow } from './OnboardingFlow'
 export { OnboardingTour, PageTour, type TourStep } from './OnboardingTour'
-export { useFirstVisitTour, clearPageTourState } from './useFirstVisitTour'
+export { useWalkthrough, useWalkthroughs, WALKTHROUGHS_QUERY_KEY } from './useWalkthrough'
 export {
   HOME_TOUR,
   FEED_TOUR,

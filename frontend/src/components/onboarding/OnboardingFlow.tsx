@@ -6,11 +6,12 @@ import { errorToast } from '@/hooks/useToast'
 import {
   completeOnboarding,
   getApiErrorMessage,
-  type BootstrapData,
   type OnboardingStatus,
+  type WalkthroughCloseOutcome,
 } from '@/api/client'
 import { OnboardingShell } from './OnboardingShell'
 import { useOnboardingState } from './useOnboardingState'
+import { markWalkthroughClosed, WALKTHROUGHS_QUERY_KEY, WELCOME_WALKTHROUGH } from './useWalkthrough'
 import type { StepComponent, StepContext } from './types'
 import { StepWelcome } from './steps/StepWelcome'
 import { StepVision } from './steps/StepVision'
@@ -44,9 +45,9 @@ const STEPS: StepComponent[] = [
 
 /**
  * OnboardingFlow — the step machine. Owns persisted state + navigation, renders
- * the active step inside the OnboardingShell. `finish` marks onboarding done on
- * the server (so the gate stops showing), clears local state, and drops the user
- * on Home.
+ * the active step inside the OnboardingShell. Closing records the outcome on the
+ * server (finishing the last step is `done`, the header close is `skipped`), so
+ * the gate stops showing, then clears local state and drops the user on Home.
  */
 export function OnboardingFlow() {
   const qc = useQueryClient()
@@ -62,25 +63,18 @@ export function OnboardingFlow() {
   )
   const back = useCallback(() => patch({ step: Math.max(step - 1, 0) }), [patch, step])
 
-  const finish = useCallback(async () => {
+  const close = useCallback(async (outcome: WalkthroughCloseOutcome) => {
     if (finishingRef.current) return
     finishingRef.current = true
     setFinishing(true)
     try {
-      await completeOnboarding()
-      qc.setQueryData<BootstrapData>(['bootstrap'], (prev) =>
-        prev
-          ? {
-              ...prev,
-              onboarding: { ...prev.onboarding, completed: true },
-            }
-          : prev,
-      )
+      await completeOnboarding(outcome)
+      markWalkthroughClosed(qc, WELCOME_WALKTHROUGH, outcome)
       qc.setQueryData<OnboardingStatus>(['onboarding-status'], (prev) =>
         prev ? { ...prev, completed: true } : prev,
       )
       reset()
-      void invalidateQueries(qc, ['bootstrap'], ['onboarding-status'])
+      void invalidateQueries(qc, WALKTHROUGHS_QUERY_KEY, ['onboarding-status'])
       // Land on Home, the daily brief and the app's default route (task 47).
       // The flow used to drop straight into Discovery, which skipped the page
       // the user will open every day afterwards — and its first-visit tour.
@@ -92,11 +86,14 @@ export function OnboardingFlow() {
     }
   }, [qc, reset])
 
+  const finish = useCallback(() => void close('done'), [close])
+  const skip = useCallback(() => void close('skipped'), [close])
+
   const ctx: StepContext = { state, patch, next, back, finish, finishing, total: STEPS.length }
   const Active = STEPS[step]
 
   return (
-    <OnboardingShell step={step} total={STEPS.length} onClose={finish} closeDisabled={finishing}>
+    <OnboardingShell step={step} total={STEPS.length} onClose={skip} closeDisabled={finishing}>
       <Active {...ctx} />
     </OnboardingShell>
   )

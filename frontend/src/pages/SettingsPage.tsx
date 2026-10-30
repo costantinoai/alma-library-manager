@@ -23,7 +23,7 @@ import { LibraryManagementCard } from '@/components/settings/LibraryManagementCa
 import { CorpusExplorerCard } from '@/components/settings/CorpusExplorerCard'
 import { AboutCard } from '@/components/settings/AboutCard'
 import { clearPersistedOnboardingState } from '@/components/onboarding/useOnboardingState'
-import { clearPageTourState } from '@/components/onboarding'
+import { WALKTHROUGHS_QUERY_KEY } from '@/components/onboarding'
 import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
@@ -380,14 +380,12 @@ export function SettingsPage() {
                   size="sm"
                   onClick={async () => {
                     clearPersistedOnboardingState()
-                    // Replay the PAGE tours too. Restarting the welcome but
-                    // keeping every "seen it" flag replayed only the wizard —
-                    // and the per-page tours are the half that explains the
-                    // surfaces you actually work in.
-                    clearPageTourState()
+                    // The server re-arms the wizard AND every page tour: the
+                    // page tours are the half that explains the surfaces you
+                    // actually work in.
                     try {
                       await resetOnboarding()
-                      invalidateQueries(queryClient, ['bootstrap'])
+                      invalidateQueries(queryClient, WALKTHROUGHS_QUERY_KEY, ['onboarding-status'])
                     } catch (err) {
                       errorToast('Could not restart onboarding', getApiErrorMessage(err))
                     }

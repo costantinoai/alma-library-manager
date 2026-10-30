@@ -9,7 +9,7 @@ describe('getNavBadgeCount', () => {
     discovery: { active_lenses: 2, pending_recommendations: 99, new_recommendations: 3 },
     alerts: { active: 1 },
     app: { version: 'test' },
-    onboarding: { completed: true, has_owner: true },
+    onboarding: { has_owner: true },
   }
 
   it('uses only latest-refresh New counts for Feed and Discovery', () => {

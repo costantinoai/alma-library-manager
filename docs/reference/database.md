@@ -79,7 +79,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 
 | Table | Purpose |
 |---|---|
-| `discovery_settings` | Key/value store mirroring the Discovery section of `settings.json` (used by some hot paths). Also holds onboarding state under the keys `onboarding.completed` (flag), `onboarding.completed_at` (timestamp), and `user.name` (the user's display name captured during onboarding). |
+| `discovery_settings` | Key/value store mirroring the Discovery section of `settings.json` (used by some hot paths). Also holds `user.name` (the user's display name captured during onboarding) and walkthrough state: one `walkthrough.<id>` row per walkthrough, a JSON record `{version, outcome, at, source}` owned by `application/walkthroughs.py`. The startup migrator `migrate_walkthrough_state` replaces the earlier `onboarding.completed` and `onboarding.completed_at` keys and deletes them. |
 | `discovery_lenses` | Saved lens definitions. |
 | `lens_signals` | Per-lens positive / negative feedback counters. |
 | `recommendations` | Materialised recommendations from the last lens refresh. `user_action` is used for suggestion-resolution actions such as `save`, `read`, and `dismiss`; Discovery like / love / dislike are rating signals and do not resolve the row. |

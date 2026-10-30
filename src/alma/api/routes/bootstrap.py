@@ -109,21 +109,6 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Onboarding gate. The frontend shows the first-run flow whenever
-    # `onboarding.completed` is not set, so it fires on every fresh DB and
-    # can be re-triggered from Settings → Restart onboarding. Reuses this
-    # single bootstrap fetch — no extra request on boot.
-    onboarding_completed = False
-    try:
-        row = db.execute(
-            "SELECT value FROM discovery_settings WHERE key = 'onboarding.completed'"
-        ).fetchone()
-        onboarding_completed = bool(
-            row and str(row["value"]).strip().lower() in ("1", "true", "yes")
-        )
-    except Exception:
-        pass
-
     has_owner = False
     try:
         has_owner = (
@@ -159,7 +144,6 @@ def get_bootstrap(
             "version": get_app_version(),
         },
         "onboarding": {
-            "completed": onboarding_completed,
             "has_owner": has_owner,
         },
     }
