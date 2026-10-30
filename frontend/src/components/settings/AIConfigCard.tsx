@@ -127,7 +127,7 @@ function TierHint({ items }: { items: string[] }) {
           <Info className="h-3 w-3" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs bg-surface-1 p-2.5 text-slate-700 shadow-lg">
+      <TooltipContent side="top" tone="paper" className="max-w-xs p-2.5">
         <p className="mb-1 text-xs font-semibold text-slate-700">Enables:</p>
         <ul className="list-inside list-disc space-y-0.5 text-xs text-slate-600">
           {items.map((item) => (
