@@ -19,6 +19,8 @@ more than their sample sizes explain, every multiplier is exactly 1.0 and the
 hand-set weights act alone. A paper found by several channels counts for each —
 it is evidence for each. Surfaced-and-ignored is the denominator, not explicit
 rejection: rejections are too rare (and too old) to estimate anything from.
+A branch-floor card was placed by the slate, not surfaced by its channel, so it
+counts for no channel.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ def build_channel_yield(conn: sqlite3.Connection) -> dict[str, Any]:
             SELECT rc.paper_id, rc.retrieval_hits FROM discovery_ranking_candidates rc
             JOIN papers p ON p.id = rc.paper_id
             WHERE selected = 1 AND {standalone_paper_sql('p')}
+              AND COALESCE(json_extract(rc.exposure_features, '$.selection.branch_floor'), 0) = 0
             """
         ).fetchall()
     except sqlite3.OperationalError:  # fresh DB: no ranking snapshots yet

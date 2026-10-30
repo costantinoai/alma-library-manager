@@ -19,6 +19,62 @@ def branch_can_retrieve(branch: dict) -> bool:
     return bool(branch.get("is_active", True) or branch.get("is_probing"))
 
 
+def _coverage_state(branch: dict) -> str:
+    if branch.get("is_probing"):
+        return "probing"
+    return "active" if branch.get("is_active", True) else "muted"
+
+
+def _coverage_reason(state: str, row: dict) -> str | None:
+    """Why a branch has no card: the first stage that lost it."""
+    if row["cards"]:
+        return None
+    if state == "muted":
+        return "muted"
+    if not row["retrieved"]:
+        return "no_retrieval_hit"
+    if not row["attributed"]:
+        return "only_shared_hits"
+    if not row["eligible"]:
+        return "all_ineligible"
+    return "no_slot"
+
+
+def branch_coverage(
+    branches: list[dict],
+    *,
+    pool: list[dict],
+    eligible: list[dict],
+    slate: list[dict],
+) -> list[dict]:
+    """How far each branch got: retrieved, attributed, eligible, on the deck.
+
+    A branch with no card is a fact about this refresh, so it is stated with the
+    stage that lost it rather than left for the user to notice.
+    """
+    rows: list[dict] = []
+    for branch in branches:
+        branch_id = str(branch.get("id") or "")
+        state = _coverage_state(branch)
+        cards = [card for card in slate if card.get("branch_id") == branch_id]
+        row = {
+            "branch_id": branch_id,
+            "label": branch.get("label"),
+            "state": state,
+            "seed_count": int(branch.get("seed_count") or 0),
+            "retrieved": sum(1 for item in pool if branch_id in (item.get("branch_evidence") or {})),
+            "attributed": sum(1 for item in pool if item.get("branch_id") == branch_id),
+            "eligible": sum(1 for item in eligible if item.get("branch_id") == branch_id),
+            "cards": len(cards),
+            "floor_cards": sum(
+                1 for card in cards if (card.get("_selection") or {}).get("branch_floor")
+            ),
+        }
+        row["reason"] = _coverage_reason(state, row)
+        rows.append(row)
+    return rows
+
+
 def _strongest_lane_mode(candidate: dict, branch_id: str) -> str:
     """Return the core/explore mode of the branch's best-ranked hit that has one."""
     hits = [

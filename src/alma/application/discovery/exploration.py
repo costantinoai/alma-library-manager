@@ -7,6 +7,7 @@ import random
 import re
 import secrets
 from collections import Counter
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from .retrieval._common import (
@@ -17,6 +18,11 @@ from .retrieval._common import (
 
 POLICY_VERSION = "mmr-semantic-explore-v2"
 EXPLORATION_SLOTS = 4
+#: Cards every active branch keeps in a deck. Two, not one: a single card is one
+#: coin toss for a whole branch, and its verdict cannot start that branch's own
+#: learning (D26). More would hand the ranked deck to branches the ranker doubts:
+#: at ten branches two slots already reserve at most 20 of 46 ranked places.
+BRANCH_FLOOR_SLOTS = 2
 
 
 def _tokens(candidate: dict) -> set[str]:
@@ -64,6 +70,19 @@ def _similarity(left: dict, right: dict) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def _remembered_similarity() -> Callable[[dict, dict], float]:
+    """`_similarity` that computes each pair once: MMR asks for it on every pick."""
+    known: dict[tuple[int, int], float] = {}
+
+    def similarity(left: dict, right: dict) -> float:
+        key = (id(left), id(right))
+        if key not in known:
+            known[key] = _similarity(left, right)
+        return known[key]
+
+    return similarity
 
 
 def _safety_caps(target: int) -> dict[str, int]:
@@ -115,13 +134,19 @@ def _mmr(
     count: int,
     *,
     caps: dict[str, int],
+    fixed: Sequence[dict] = (),
+    similarity: Callable[[dict, dict], float] = _similarity,
     diversity: float = 0.24,
 ) -> tuple[list[dict], Counter[str], Counter[str], Counter[str]]:
-    remaining = list(candidates)
+    """Greedy diversified pick. `fixed` cards are already in: they count against
+    the caps and repel similar picks, and they are not returned."""
+    remaining = [item for item in candidates if not any(item is card for card in fixed)]
     selected: list[dict] = []
     authors: Counter[str] = Counter()
     venues: Counter[str] = Counter()
     topics: Counter[str] = Counter()
+    for card in fixed:
+        _add_to_counts(card, authors=authors, venues=venues, topics=topics)
     max_score = max((float(item.get("score") or 0.0) for item in remaining), default=1.0) or 1.0
     while remaining and len(selected) < count:
         eligible = [
@@ -141,7 +166,8 @@ def _mmr(
             eligible,
             key=lambda item: (
                 (1.0 - diversity) * float(item.get("score") or 0.0) / max_score
-                - diversity * max((_similarity(item, prior) for prior in selected), default=0.0),
+                - diversity
+                * max((similarity(item, prior) for prior in [*fixed, *selected]), default=0.0),
                 float(item.get("score") or 0.0),
                 str(item.get("candidate_key") or ""),
             ),
@@ -157,13 +183,81 @@ def _mmr(
     return selected, authors, venues, topics
 
 
+def _floor_deficit(
+    pool: list[dict],
+    deck: list[dict],
+    branch_ids: Sequence[str],
+    *,
+    room: int,
+) -> list[dict]:
+    """The best cards each branch still needs to hold its floor, first branch first."""
+    shown = Counter(str(card.get("branch_id") or "") for card in deck)
+    in_deck = {id(card) for card in deck}
+    needed: list[dict] = []
+    for branch_id in branch_ids:
+        waiting = sorted(
+            (
+                item
+                for item in pool
+                if str(item.get("branch_id") or "") == branch_id
+                and id(item) not in in_deck
+            ),
+            key=lambda item: -float(item.get("score") or 0.0),
+        )
+        needed.extend(waiting[: max(0, BRANCH_FLOOR_SLOTS - shown[branch_id])])
+    return needed[: max(0, room)]
+
+
+def _exploit_with_floor(
+    pool: list[dict],
+    count: int,
+    *,
+    caps: dict[str, int],
+    floor_branch_ids: Sequence[str],
+) -> tuple[list[dict], list[dict], Counter[str], Counter[str], Counter[str]]:
+    """MMR picks, then each branch's floor cards in the last ranked places.
+
+    Runs after ranking and moves no score. Giving a floor card its slot can push
+    another branch's last card out, so the pick repeats until no branch is short;
+    each pass adds a floor card, so it ends. A floor card ignores the safety caps
+    on purpose: they stop one author or venue dominating a deck, and a branch's
+    only way in is not that.
+    """
+    floor: list[dict] = []
+    similarity = _remembered_similarity()
+    while True:
+        picked, authors, venues, topics = _mmr(
+            pool, count - len(floor), caps=caps, fixed=floor, similarity=similarity
+        )
+        missing = _floor_deficit(
+            pool, [*picked, *floor], floor_branch_ids, room=count - len(floor)
+        )
+        if not missing:
+            return (
+                picked,
+                sorted(floor, key=lambda item: -float(item.get("score") or 0.0)),
+                authors,
+                venues,
+                topics,
+            )
+        floor.extend(missing)
+
+
 def build_slate(
     candidates: list[dict],
     *,
     limit: int,
     random_seed: int | None = None,
+    floor_branch_ids: Sequence[str] = (),
 ) -> tuple[list[dict], dict[str, Any]]:
-    """Return MMR exploit + uniform-without-replacement exploration slate."""
+    """Return MMR exploit + uniform-without-replacement exploration slate.
+
+    ``floor_branch_ids``, best branch first, each keep `BRANCH_FLOOR_SLOTS` cards.
+    Such a card is chosen deterministically from the pool, so its probabilities
+    are 1.0 and it is never `exploration`: the randomized evidence stays the
+    uniform tail, and the tail's E/N stays exact because it is declared after
+    the floor is settled.
+    """
 
     pool = list(candidates)
     for item in pool:
@@ -175,12 +269,15 @@ def build_slate(
     )
     requested_exploit_count = target - requested_explore_count
     caps = _safety_caps(target)
-    exploit, authors, venues, topics = _mmr(
+    ranked, floor, authors, venues, topics = _exploit_with_floor(
         pool,
         requested_exploit_count,
         caps=caps,
+        floor_branch_ids=floor_branch_ids,
     )
+    exploit = [*ranked, *floor]
     exploit_ids = {id(item) for item in exploit}
+    floor_ids = {id(item) for item in floor}
 
     # Declare a tail whose complete membership fits the remaining hard caps.
     # Uniform sampling any subset from this tail therefore cannot violate the
@@ -250,6 +347,7 @@ def build_slate(
                 "exploration": False,
                 "inclusion_probability": 1.0,
                 "position_probability": 1.0,
+                "branch_floor": id(item) in floor_ids,
             }
         else:
             item["_selection"] = {
@@ -287,6 +385,7 @@ def build_slate(
         "candidate_pool": len(pool),
         "requested_slate_size": target,
         "exploit_count": len(exploit),
+        "branch_floor_count": len(floor),
         "exploration_count": explore_count,
         "exploration_pool_size": len(eligible_tail),
         "reserved_positions": reserved,

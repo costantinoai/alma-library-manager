@@ -49,6 +49,7 @@ def ranking_candidate_rows(
         exposure["selection"] = {
             "selected": selection.get("final_position") is not None,
             "exploration": bool(selection.get("exploration")),
+            "branch_floor": bool(selection.get("branch_floor")),
             "inclusion_probability": selection.get("inclusion_probability"),
             "position_probability": selection.get("position_probability"),
             "final_position": selection.get("final_position"),

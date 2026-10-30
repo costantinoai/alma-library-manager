@@ -34,7 +34,7 @@ from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
 from . import channel_yield as _channel_yield  # registers diagnostic view
-from .branch_attribution import attribute_candidate
+from .branch_attribution import attribute_candidate, branch_coverage
 from .branch_identity import branch_structure_report, persist_branch_identities
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
 from .citation_fabric import build_citation_fabric_maps
@@ -1284,8 +1284,10 @@ def _refresh_lens_recommendations(
     full_ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
     # Freeze the complete counterfactual pool before lifecycle filtering.
     # Two hundred candidates is large enough for exploration/evaluation while
-    # keeping the single batch write and paper staging bounded.
-    staging_limit = min(len(full_ranked), 200)
+    # keeping the single batch write and paper staging bounded. A larger deck
+    # stages all four channels: a cut by score here would empty a low-scoring
+    # branch before the slate could keep its floor.
+    staging_limit = min(len(full_ranked), max(200, 4 * limit))
     ranked = full_ranked[:staging_limit]
     diversity_summary: dict[str, Any] = {
         "candidate_pool": len(full_ranked),
@@ -1517,11 +1519,18 @@ def _refresh_lens_recommendations(
             candidate["paper_id"] = paper_id
         eligible_candidates.append(candidate)
 
+    # Probing branches keep their own small budget; a muted one gets no card.
     slate, slate_summary = build_slate(
         eligible_candidates,
         limit=max(1, limit),
+        floor_branch_ids=[
+            str(branch["id"]) for branch in resolved_branches if branch.get("is_active")
+        ],
     )
     diversity_summary.update(slate_summary)
+    for candidate in slate:
+        if candidate["_selection"].get("branch_floor"):
+            candidate["score_breakdown"].setdefault("provenance", {})["branch_floor"] = True
     phase_started = perf_counter()
     # Candidate promotion + transported-vector persistence is DML too. It used
     # to rely on a bare helper-level commit after the loop, leaving this
@@ -1589,6 +1598,23 @@ def _refresh_lens_recommendations(
         "insertable": len(rec_rows),
     }
     retrieval_summary["diversity"] = diversity_summary
+    retrieval_summary["branch_coverage"] = branch_coverage(
+        resolved_branches,
+        pool=ranked,
+        eligible=eligible_candidates,
+        slate=slate,
+    )
+    empty_branches = [
+        row
+        for row in retrieval_summary["branch_coverage"]
+        if row["reason"] and row["reason"] != "muted"
+    ]
+    if empty_branches:
+        _log(
+            "branch_coverage",
+            f"Lens '{lens_name}': {len(empty_branches)} branch(es) have no card in this deck",
+            data={"branches": empty_branches},
+        )
     retrieval_summary["final_mix"] = _recommendation_mix_summary(rec_rows, ranked_by_paper=ranked)
     _log(
         "filter_result",
