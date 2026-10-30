@@ -14,8 +14,10 @@
 # Flavor autodetects GPU exactly like setup.sh; volumes carry all state so
 # a swap is safe to re-run.
 #
-# Verifies health AND that the container actually reports the requested
-# release version (images >= 0.21.1 report it at /api/v1/health).
+# Exits non-zero unless /api/v1/health answers 200 within 60s and, for a
+# concrete version, reports that exact release. `stable` accepts whichever
+# release the channel resolved to. Images before 0.21.1 report the API contract
+# version instead, so they fail this check.
 set -euo pipefail
 
 REPO_IMAGE="ghcr.io/costantinoai/alma-library-manager"
@@ -28,7 +30,7 @@ while [ $# -gt 0 ]; do
     --gpu) FLAVOR="-gpu" ;;
     --lite) FLAVOR="-lite" ;;
     --cpu) FLAVOR="" ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
   shift
@@ -87,19 +89,25 @@ docker run -d \
 
 echo "[deploy] waiting for health…"
 for _ in $(seq 1 60); do
+  # -f: only a 200 counts. A starting container and a 503 both keep waiting.
   body="$(curl -fsS -m 2 http://localhost:8000/api/v1/health 2>/dev/null || true)"
   if [ -n "$body" ]; then
     echo "[deploy] health: $body"
     if [ "$VERSION" = "stable" ]; then
       echo "[deploy] OK — stable channel; health reports the concrete release above"
-    elif echo "$body" | grep -q "\"version\":\"$VERSION\""; then
-      echo "[deploy] OK — running $VERSION"
-    else
-      echo "[deploy] note: health version differs from $VERSION (images built before 0.21.1 report the API contract version instead)."
+      exit 0
     fi
-    exit 0
+    if echo "$body" | grep -qF "\"version\":\"$VERSION\""; then
+      echo "[deploy] OK — running $VERSION"
+      exit 0
+    fi
+    echo "[deploy] FAILED — asked for $VERSION but the running release is: $body" >&2
+    exit 1
   fi
   sleep 1
 done
 echo "[deploy] UNHEALTHY after 60s — check: docker logs alma" >&2
+# No -f: a 503 carries the reason in its body.
+curl -sS -m 2 http://localhost:8000/api/v1/health >&2 || true
+echo >&2
 exit 1

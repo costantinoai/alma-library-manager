@@ -155,7 +155,7 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($healthy) {
     Write-Ok "ALMa is up."
 } else {
-    Write-Warn2 "Container started but the health endpoint didn't respond within 30s - check 'docker logs alma'."
+    Write-Warn2 "Container started but the health endpoint didn't report healthy within 30s - check 'docker logs alma'."
 }
 
 Write-Host ""

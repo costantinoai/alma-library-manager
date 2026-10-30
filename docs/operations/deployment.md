@@ -192,8 +192,8 @@ Don't use `nohup uvicorn …` long-term; it has no restart-on-crash.
 versioned script; it pulls `ghcr.io/costantinoai/alma-library-manager:
 X.Y.Z[-gpu|-lite]` (flavor autodetected), recreates the `alma`
 container preserving your env and the `alma-data` / `alma-config`
-volumes, health-polls, and verifies the container reports the
-requested release version:
+volumes, health-polls, and exits non-zero unless the container is
+healthy and reports the requested release version:
 
 ```bash
 scripts/deploy-prod.sh 0.21.0
@@ -217,6 +217,31 @@ then run `scripts/release.sh X.Y.Z` — preflight, tests, bump, tag,
 locally-signed connector built from the tag, push, GitHub release.
 Fully local; no CI secrets. Details in `extension/README.md` →
 "How releases work".
+
+## Health
+
+`GET /api/v1/health` answers one question: can this process do its job?
+The Docker healthcheck and `scripts/deploy-prod.sh` act on its status code.
+
+| Status | Means | `status` | `database_ok` | `scheduler` |
+|---|---|---|---|---|
+| `200` | Ready | `healthy` | `true` | `running` or `disabled` |
+| `503` | The database failed | `unhealthy` | `false` | any |
+| `503` | The scheduler never started | `unhealthy` | `true` | `failed` |
+
+The database check fails when the file is missing or unreadable, or holds
+no `papers` table. The scheduler is required because Feed refreshes,
+alerts and repairs all run on it, so a process without it would serve a
+library that quietly stops updating. `SCHEDULER_ENABLED=false` is a
+deliberate choice and stays healthy.
+
+A scheduler failure does not stop ALMa: the Library and the logs stay
+reachable, Docker marks the container `unhealthy`, and
+`docker logs alma` holds the cause. Restart it after fixing that.
+
+Providers, the internet and DNS are never checked here. An outage out
+there must not mark a working ALMa unhealthy. Those failures appear on
+Home's Connections rail and in Activity.
 
 ## Backups
 
