@@ -1022,8 +1022,8 @@ def record_paper_feedback(
     rating: int | None = None,
     source_surface: str,
     recommendation_id: str | None = None,
-    discovery_provenance: dict[str, str] | None = None,
-) -> None:
+    discovery_provenance: dict[str, str | int] | None = None,
+) -> str | None:
     """Record a paper feedback event through the one feedback engine.
 
     Thin adapter over ``services.feedback_substrate.record_feedback`` — the single
@@ -1036,16 +1036,17 @@ def record_paper_feedback(
     own those (Discovery's ``mark_recommendation_action``) keep recording them
     explicitly, so there is no double rec-update / double lens-signal. The
     engine does NOT commit — the caller owns the transaction (every caller runs
-    inside a ``run_write_unit``).
+    inside a ``run_write_unit``). Returns the event id, or None when nothing
+    was recorded.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id or not _table_exists(db, "feedback_events"):
-        return
+        return None
     # Lazy import: a module-level ``application → services`` import would be a
     # cycle. Feed records through the same engine the same way.
     from alma.services.feedback_substrate import record_feedback
 
-    record_feedback(
+    return record_feedback(
         db,
         event_type="paper_action",
         entity_type="publication",
@@ -1214,6 +1215,8 @@ def undo_paper_feedback(
     now = utcnow().isoformat()
 
     if aspect in ("membership", "all"):
+        status_row = db.execute("SELECT status FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        globally_hidden = bool(status_row) and status_row["status"] in (DISMISSED_STATUS, REMOVED_STATUS)
         db.execute(
             f"UPDATE papers SET status = '{TRACKED_STATUS}', updated_at = ? "
             f"WHERE id = ? AND status IN (?, ?, ?)",
@@ -1225,8 +1228,18 @@ def undo_paper_feedback(
         if _table_exists(db, "feed_items"):
             db.execute("UPDATE feed_items SET status = 'new' WHERE paper_id = ?", (paper_id,))
         if _table_exists(db, "recommendations"):
+            # Only what this membership set. A lens-local Dismiss belongs to
+            # that lens (D6) and survives leaving the Library; a global hide
+            # stamped its rows, so undoing the hide does clear them.
+            scope = "" if aspect == "all" or globally_hidden else "AND user_action = 'save'"
             db.execute(
-                "UPDATE recommendations SET user_action = NULL, action_at = NULL WHERE paper_id = ?",
+                "UPDATE recommendations SET user_action = NULL, action_at = NULL "
+                f"WHERE paper_id = ? {scope}",
+                (paper_id,),
+            )
+        if _table_exists(db, "lens_signals"):
+            db.execute(
+                "DELETE FROM lens_signals WHERE paper_id = ? AND signal_value = 0",
                 (paper_id,),
             )
 
@@ -1236,6 +1249,9 @@ def undo_paper_feedback(
             (now, paper_id),
         )
         _delete_feedback_actions(db, paper_id, _RATING_ACTIONS)
+        # The lens signal mirrors the verdict just withdrawn.
+        if _table_exists(db, "lens_signals"):
+            db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
 
     if aspect in ("reading", "all"):
         paper_actions.set_reading_status(db, paper_id, None)

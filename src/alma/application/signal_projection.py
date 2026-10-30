@@ -140,16 +140,20 @@ def compute_paper_signal_map(
             SELECT entity_id, event_type, value, created_at
             FROM feedback_events
             WHERE entity_type IN ('publication', 'paper')
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT 5000
             """
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
 
+    # One verdict per paper: the newest event that states one. Rows are newest
+    # first, so a repeated Like is one label and a changed mind replaces the old
+    # opinion. Summing them counted one paper's repeats as independent evidence.
+    judged: set[str] = set()
     for row in rows:
         paper_id = str(row["entity_id"] if isinstance(row, sqlite3.Row) else row[0] or "").strip()
-        if not paper_id:
+        if not paper_id or paper_id in judged:
             continue
         signal = normalize_feedback_event_value(
             row["event_type"] if isinstance(row, sqlite3.Row) else row[1],
@@ -157,6 +161,7 @@ def compute_paper_signal_map(
         )
         if signal == 0.0:
             continue
+        judged.add(paper_id)
         created_at = row["created_at"] if isinstance(row, sqlite3.Row) else row[3]
         age_days = _days_since(created_at, now)
         if age_days is not None and age_days > max_age_days:

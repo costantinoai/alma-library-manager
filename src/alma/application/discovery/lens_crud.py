@@ -439,6 +439,7 @@ def mark_recommendation_action(
 
     effective_rating = current_rating
     feedback_action: str | None = None
+    event_id: str | None = None
     stamp_recommendation = action in {"save", "read", "dismiss", "seen"}
     now = utcnow().isoformat()
 
@@ -450,7 +451,7 @@ def mark_recommendation_action(
         # record_paper_feedback (now the shared engine adapter) and
         # record_lens_signal do not commit. The engine keys on paper_id so it
         # won't double the explicit recommendation/lens writes below.
-        nonlocal effective_rating, feedback_action
+        nonlocal effective_rating, feedback_action, event_id
         if action == "save":
             effective_rating = max(current_rating, int(rating or 3), 3)
             if paper_id:
@@ -533,7 +534,16 @@ def mark_recommendation_action(
                 source_surface="discovery",
             )
         if paper_id and feedback_action:
-            library_app.record_paper_feedback(
+            # What the user actually saw: this row is the shown card, and a
+            # refresh deletes it, so the event keeps the context for good.
+            snapshot = db.execute(
+                """
+                SELECT id FROM discovery_ranking_candidates
+                WHERE suggestion_set_id = ? AND final_position = ? AND selected = 1
+                """,
+                (row["suggestion_set_id"], row["rank"]),
+            ).fetchone()
+            event_id = library_app.record_paper_feedback(
                 db,
                 paper_id,
                 action=feedback_action,
@@ -545,6 +555,9 @@ def mark_recommendation_action(
                     "suggestion_set_id": str(row["suggestion_set_id"] or ""),
                     "branch_id": str(row["branch_id"] or ""),
                     "branch_label": str(row["branch_label"] or ""),
+                    "branch_mode": str(row["branch_mode"] or ""),
+                    "rank": int(row["rank"] or 0),
+                    "ranking_candidate_id": str(snapshot["id"]) if snapshot else "",
                 },
             )
         lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
@@ -572,6 +585,7 @@ def mark_recommendation_action(
         "user_action": action if stamp_recommendation else None,
         "action_at": now if stamp_recommendation else None,
         "rating": effective_rating,
+        "event_id": event_id,
     }
 
 
@@ -1112,13 +1126,18 @@ def _aggregate_branch_outcomes(
         return {}
     since = (utcnow() - timedelta(days=max(7, int(days or 60)))).date().isoformat()
     feedback_by_rec: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    # Like keeps a card, so a refresh can show the paper again and it can be
+    # judged in a second deck. That is one paper, so one verdict per branch and
+    # paper: a later deck's verdict supersedes the earlier deck's row.
+    latest_rec_by_branch_paper: dict[tuple[str, str], str] = {}
+    superseded_recs: set[str] = set()
     if _table_exists(db, "feedback_events"):
         # The event's recommendation_id is the durable branch attribution.
         # Query once, then attach by ID instead of an unindexed JSON join for
         # each recommendation row.
         feedback_rows = db.execute(
             """
-            SELECT value, context_json, created_at
+            SELECT entity_id, value, context_json, created_at
             FROM feedback_events
             WHERE event_type = 'paper_action'
               AND created_at >= ?
@@ -1141,6 +1160,15 @@ def _aggregate_branch_outcomes(
             action = str(value.get("action") or "").strip().lower()
             if rec_id and action in {"save", "like", "love", "dislike"}:
                 feedback_by_rec[rec_id] = (action, str(event["created_at"] or ""), context)
+                verdict_key = (
+                    str(context.get("branch_id") or context.get("branch_label") or ""),
+                    str(event["entity_id"] or ""),
+                )
+                earlier_rec = latest_rec_by_branch_paper.get(verdict_key)
+                if earlier_rec and earlier_rec != rec_id:
+                    superseded_recs.add(earlier_rec)
+                superseded_recs.discard(rec_id)
+                latest_rec_by_branch_paper[verdict_key] = rec_id
     # Keep the read bounded to recent recommendations, while including an
     # older recommendation if its linked feedback happened in this window.
     params: list[Any] = [since, json.dumps(list(feedback_by_rec))]
@@ -1179,6 +1207,8 @@ def _aggregate_branch_outcomes(
     found_feedback_ids: set[str] = set()
     for row in rows:
         rec_id = str(row["recommendation_id"] or "")
+        if rec_id in superseded_recs:
+            continue
         explicit_feedback = feedback_by_rec.get(rec_id)
         if explicit_feedback:
             found_feedback_ids.add(rec_id)
@@ -1211,7 +1241,7 @@ def _aggregate_branch_outcomes(
     # Like/Love/Dislike kept them visible. The event retains the immutable
     # attribution, so their verdict must survive that deck swap.
     for rec_id, (action, acted_at, context) in feedback_by_rec.items():
-        if rec_id in found_feedback_ids:
+        if rec_id in found_feedback_ids or rec_id in superseded_recs:
             continue
         branch_id = str(context.get("branch_id") or "").strip()
         if not branch_id or (lens_id and str(context.get("lens_id") or "") != lens_id):

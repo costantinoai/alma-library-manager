@@ -168,15 +168,18 @@ def record_feedback(
 
     # Compute the affinity delta from this event
     delta = _affinity_delta(event_type, value, context)
-    if entity_type == "publication":
-        if paper_target_id:
+    # A profile row counts evidence that moved it. `paper_action` has no affinity
+    # delta on purpose (it must not train a global profile, D26), so it counts
+    # nothing either: bumping `interaction_count` would raise `confidence` on
+    # zero information, and on every topic and author of the paper.
+    if delta:
+        if entity_type != "publication":
+            _update_preference_profile(conn, entity_type, entity_id, delta)
+        elif paper_target_id:
             _update_preference_profile(conn, entity_type, paper_target_id, delta)
-    else:
-        _update_preference_profile(conn, entity_type, entity_id, delta)
+            _propagate_to_topics_and_authors(conn, paper_target_id, delta)
 
-    # For publication feedback, also propagate to related topics/authors
     if entity_type == "publication" and paper_target_id:
-        _propagate_to_topics_and_authors(conn, paper_target_id, delta)
         _record_publication_lens_signal(conn, rec_target, event_type, value or {}, delta)
 
     # Caller owns the transaction: this is the single feedback-recording
