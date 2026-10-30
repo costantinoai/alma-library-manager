@@ -20,7 +20,11 @@ from .value_keys import candidate_value_keys
 # gone — the feature left main with D25. A v5 row carries two reward keys a v6
 # row does not, so the two must not be mixed in replay, evaluation or the
 # shadow ranker's training pool.
-FEATURE_SCHEMA_VERSION = "discovery-features-v7"
+# Bump only when a reward key or its meaning changes: observations.py reads the
+# current version alone, so a bump retires every earlier row from learning and
+# evaluation. The exposure-only `branch_attribution`, `branch_evidence` and
+# `value_keys` did not bump; a v6 row may simply lack them.
+FEATURE_SCHEMA_VERSION = "discovery-features-v6"
 
 _SCALAR_DIAGNOSTICS = (
     "semantic_similarity_centroid_raw",
