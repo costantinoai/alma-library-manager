@@ -107,9 +107,17 @@ database of a running ALMa can corrupt it. ALMa refuses to try.
 Restore the database and the ALMa release as a pair. ALMa refuses to
 start on a database written by a newer release, and it migrates an
 older one forward on start-up, so take a backup first if you may want
-to go back.
+to go back. Releases up to 0.24.2 do not have this check: they log a
+warning, report healthy and run on a schema they do not know, so never
+roll back to one of them past a migration without restoring a backup
+taken on it.
 
-**Docker** (the volume is `alma-data`; pick a snapshot from `backups/`):
+**Docker** (the volume is `alma-data`). List the snapshots, then restore
+one:
+
+```bash
+docker run --rm -v alma-data:/d:ro alpine ls /d/backups
+```
 
 ```bash
 docker stop alma
@@ -136,7 +144,22 @@ the database you just replaced, and SQLite would try to apply them to
 the restored file.
 
 For a `.db` file from `GET /backup/export`, skip `gunzip` and copy the
-file in place of `scholar.db.restoring`.
+file in place of `scholar.db.restoring`. Under Docker the file has to
+reach the volume as the container's user, so put it in a folder of its
+own that user can read:
+
+```bash
+mkdir restore && mv alma-backup.db restore/
+chmod a+rx restore && chmod a+r restore/alma-backup.db
+docker stop alma
+docker run --rm --user 10001:10001 -v alma-data:/d -v "$PWD/restore":/in:ro alpine sh -c '
+  cd /d &&
+  cp /in/alma-backup.db scholar.db.restoring &&
+  mv scholar.db scholar.db.before-restore &&
+  rm -f scholar.db-wal scholar.db-shm &&
+  mv scholar.db.restoring scholar.db'
+docker start alma
+```
 
 Then start ALMa and watch the Activity panel. Fresh backups need no
 migration; older ones might. If the backup was written by a newer
@@ -152,6 +175,12 @@ A quick sanity check after restore:
 sqlite3 data/scholar.db "SELECT COUNT(*) AS papers FROM papers;"
 sqlite3 data/scholar.db "SELECT COUNT(*) AS saved FROM papers WHERE status='library';"
 sqlite3 data/scholar.db "SELECT COUNT(*) AS authors FROM authors;"
+```
+
+Under Docker the image has no `sqlite3`, so ask Python in the container:
+
+```bash
+docker exec alma python -c "import sqlite3; c = sqlite3.connect('/app/data/scholar.db'); print(c.execute('SELECT COUNT(*) FROM papers').fetchone()[0])"
 ```
 
 Compare against the numbers you had before. The Insights overview

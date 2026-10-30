@@ -223,6 +223,24 @@ scripts/deploy-prod.sh 0.21.0
 [Watchtower](../getting-started/docker.md#automatic-updates-with-watchtower)
 also works on this container.
 
+**If the new version does not start**, the installer stops with an
+error. By then the old container has been replaced, so ALMa is down, but
+your data is untouched in the volumes and `.env` names the new image.
+The installer prints the commands to go back to the exact image that was
+running, even when a tag such as `stable` has moved. They are:
+
+```bash
+cd ~/alma-docker
+sed -i.bak 's|^ALMA_IMAGE_TAG=.*|ALMA_IMAGE_TAG="stable@sha256:<digest>"|' .env
+docker compose up -d --wait
+```
+
+That pins one image, so nothing updates it. To follow the tag again,
+re-run the installer with `ALMA_IMAGE_TAG=stable`, or your own tag,
+in front of `bash`. If the new version had already migrated the
+database, the old image cannot use it: restore a backup taken before the
+update, as described in [Backups](backups.md#restore).
+
 **Bare metal**:
 
 ```bash
@@ -235,6 +253,10 @@ systemctl restart alma
 
 Schema migrations run on backend start-up. If a migration fails,
 the backend exits non-zero — check the systemd / docker logs.
+
+A migration cannot be undone by going back to an older image, so take a
+backup first if the release notes mention one:
+`curl -fsS -X POST http://127.0.0.1:8000/api/v1/library-mgmt/backup`.
 
 **Cutting a release** (maintainer): write `docs/releases/vX.Y.Z.md`,
 then run `scripts/release.sh X.Y.Z` — preflight, tests, bump, tag,
