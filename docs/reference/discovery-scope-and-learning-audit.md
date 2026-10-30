@@ -307,7 +307,7 @@ that holds the contract, then the Task 92 gate that closes any remainder.
 Test file: `tests/test_discovery_g0_semantics.py` in the local test repository.
 
 **Status counts.** Original twelve: 7 fixed, 2 superseded, 3 open. Found during
-reconciliation: 6 fixed, 9 open.
+reconciliation: 8 fixed, 7 open.
 
 ### Original entries
 
@@ -330,7 +330,7 @@ reconciliation: 6 fixed, 9 open.
 
 | ID | Status | Source | Reproduction and guard |
 |---|---|---|---|
-| D92-13 | open, needs a decision | `application/discovery/frontier.py:914`, `application/signal_projection.py` (`_add_rating_signals`) | Dismiss wrote `rating=1` until July. Papers with a Dismiss event, rating 1 and no dislike event: dev 21, prod 18. All 25 dev and all 17 prod dismissed papers hold rating 1, so each still reaches the S2 negative list and outcome labels. Repair rewrites user ratings, so it was not run. Proposed migrator: reset rating where the only rating-bearing event is a legacy Dismiss. |
+| D92-13 | fixed, migrator not released | `core/migrations.py` (`_m_0047_clear_legacy_dismiss_ratings`) | Dismiss wrote `rating=1` until July. Schema 47 sets it back to 0 only on a dismissed paper, never in the Library, whose events are legacy Dismiss alone, with no other recommendation, Feed or positive lens action. Any doubt keeps the rating. Preview: dev 21 cleared, 12 kept; prod 17 cleared, 18 kept. One prod paper in the Library holds a stale 1 and stays for a user decision. Live on a dev copy: 21 ratings moved, no other paper field, event or lens signal did. `test_dismiss_then_a_real_dislike_keeps_its_rating`, `test_a_second_run_changes_nothing`. |
 | D92-14 | fixed | `application/discovery/observations.py:247` | Text comparison of a space against `T` dropped every reaction on the day of its impression. `test_an_action_on_the_day_it_was_seen_is_an_observation`, red then green. Live: 2 observations from Like and Dislike. |
 | D92-15 | fixed | `application/discovery/observations.py:275` | A legacy Dismiss payload (`signal_value=-1`) became a negative label, masked by D92-14 until that was fixed. `test_legacy_dismiss_event_is_not_a_negative_label`. Dev holds 52 such events and prod 80. |
 | D92-16 | fixed | `application/discovery/observations.py:154`, `application/recommendation_outcomes.py:225` | A snapshot scored under a paper later merged lost its link and failed the impression batch. Linked by set and position; 102 of 102 recent dev rows agree. `test_merged_paper_keeps_its_snapshot_impression_and_label`. |
@@ -338,7 +338,7 @@ reconciliation: 6 fixed, 9 open.
 | D92-18 | fixed | `application/discovery/lens_crud.py:1133` | One paper judged in two decks counted twice in a branch. `test_one_paper_liked_in_two_decks_is_one_branch_outcome`. |
 | D92-19 | fixed | `application/library.py:1234` | Leaving the Library cleared another lens's Dismiss, and undone Likes kept their lens signal. `test_undoing_a_save_keeps_another_lens_dismiss`, `test_undone_like_leaves_no_lens_signal`. |
 | D92-20 | open, cause known | `application/discovery/frontier.py:839`, `core/network_policy.py:59`, `api/scheduler.py:2433` | Dev's external lane returned 0 because its 427 leads expired on 2026-08-26 and the clock-started rebuild is off outside prod. Reviving them on a copy gave 50 candidates and 24 lane runs. Prod is healthy: 11,792 live leads, 50 candidates. Fixed part: `frontier_size` is stored and the chip says so. A dev rebuild needs the user's click or `ALMA_UNATTENDED_NETWORK=1`. |
-| D92-21 | open | `application/paper_signal.py:464` | The Library signal score still sums repeated events. Dividing by one verdict changes its scale, so it needs its own decision. |
+| D92-21 | fixed | `application/signal_projection.py` (`load_paper_verdicts`), `application/paper_signal.py` | The Library signal score and `compute_paper_signal_map` read one helper: one verdict per paper, newest wins. `_FEEDBACK_SATURATION` moved from 5 to 1, so a fresh Love reads 1.0, Like 0.75, Dislike 0.25, where 5 would have held every paper to 0.4 to 0.6. Dev: top 50 of 141 Library papers 49 of 50, largest score change 0.031, no paper crossed a seed threshold, no lens prior moved. `test_repeated_like_is_one_verdict_in_the_library_score`. |
 | D92-22 | open | `application/discovery/lens_crud.py:478` | Like on a Loved paper lowers its rating from 5 to 4 in Discovery, while `apply_valence` keeps 5 elsewhere. |
 | D92-23 | open | `application/alerts.py:513`, `application/discovery/lens_crud.py:675`, `services/feedback_substrate.py:957` | These counters read `user_action='like'`, which no path stamps, so `liked` is always 0. |
 | D92-24 | open | `application/discovery/__init__.py:1713` | A refresh deletes Like and Dislike rows, so `build_recommendation_outcomes` and every report on it lose those cards. Events survive, and branch outcomes already read them. |
