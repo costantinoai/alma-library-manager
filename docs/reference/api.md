@@ -27,6 +27,17 @@ example through a reverse proxy or Tailscale). It does **not**
 create user accounts — it gates the entire API behind a shared
 secret.
 
+## Cross-site requests
+
+With or without an API key, a page on another website cannot change
+ALMa's data. `POST`, `PUT`, `PATCH` and `DELETE` get `403` unless the
+`Origin` header is ALMa's own address, a browser extension, or listed
+in [`ALMA_ALLOWED_ORIGINS`](../operations/deployment.md#browser-origins).
+`Origin: null` is refused.
+
+Clients without an `Origin` header, such as curl and scripts, are not
+affected, because this guard stops browsers and only browsers set it.
+
 ## Base URL
 
 | Environment | Base |
@@ -67,6 +78,7 @@ Errors use standard HTTP status codes with a JSON body:
 | `200` / `201` / `204` | Success |
 | `400` | Validation error (bad query, missing required body) |
 | `401` | Missing / wrong `X-API-Key` (when `API_KEY` is set) |
+| `403` | Cross-site request refused: the page's origin may not change data |
 | `404` | Resource not found |
 | `409` | Conflict (already exists, concurrent edit) |
 | `500` | Internal error — check `/api/v1/logs` for stack trace |

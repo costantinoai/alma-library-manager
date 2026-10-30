@@ -22,6 +22,11 @@ from alma.api.compression import MediaAwareGZipMiddleware
 from alma.api.deps import get_plugin_registry, open_db_connection
 from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
+from alma.api.origin_guard import (
+    EXTENSION_ORIGIN_REGEX,
+    OriginGuardMiddleware,
+    allowed_origins,
+)
 from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.activity import router as activity_router
 from alma.api.routes.ai import router as ai_router
@@ -165,6 +170,12 @@ app = FastAPI(
     - Provide the key via `X-API-Key` header or `Bearer` token
     - If no `API_KEY` is set, all requests are allowed (development mode)
 
+    ## Cross-site requests
+
+    Whatever the `API_KEY` setting, a browser page on another origin cannot change
+    data: unsafe methods from it get `403`. Add your own address to
+    `ALMA_ALLOWED_ORIGINS`. Requests without an `Origin` header (curl, scripts) pass.
+
     ## Rate Limiting
 
     Rate limiting will be implemented in a future version.
@@ -215,21 +226,17 @@ app = FastAPI(
 # Middleware
 # ============================================================================
 
-# CORS - Allow all origins for now (restrict in production)
+# One list decides both which pages may read responses (CORS) and which may send
+# writes (the origin guard added below, after the request logger).
+ALLOWED_ORIGINS = allowed_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8000",
-    ],
-    # Browser-connector origins (see extension/). Firefox sends
-    # `moz-extension://<uuid>` and Chromium `chrome-extension://<id>`;
-    # the per-install UUID can't be hard-listed, so match the scheme.
-    # (The connector fetches from a context with host_permissions for
-    # the API, which already bypasses CORS — this is a belt-and-braces
-    # allowance so a direct popup fetch works too.)
-    allow_origin_regex=r"^(moz-extension|chrome-extension)://.*$",
+    allow_origins=ALLOWED_ORIGINS,
+    # Browser-connector origins (see extension/). The connector fetches from a
+    # context with host_permissions for the API, which already bypasses CORS, so
+    # this is a belt-and-braces allowance for a direct popup fetch.
+    allow_origin_regex=EXTENSION_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -299,6 +306,11 @@ async def log_requests(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
 
     return response
+
+
+# Added last so it runs first: a refused request reaches no route, no activity
+# clock and no health refresh. CORS does not stop a request being sent; this does.
+app.add_middleware(OriginGuardMiddleware, origins=ALLOWED_ORIGINS)
 
 
 # ============================================================================
