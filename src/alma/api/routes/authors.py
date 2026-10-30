@@ -477,7 +477,10 @@ def _resolve_and_persist_author_identity(
             (_summarize_hierarchical_identity(hierarchical), author_id),
         )
 
-    after_openalex = _norm_oaid(str(hierarchical.openalex_id or before_openalex or "").strip()) or None
+    # What the row now holds, not what the resolver named: persistence keeps a stored
+    # id, so a different one here would send the refresh to an identity no author
+    # row owns, and the works outcome, which keys on the row, would match nothing.
+    after_openalex = before_openalex or _norm_oaid(str(hierarchical.openalex_id or "").strip()) or None
     after_scholar = str(hierarchical.scholar_id or before_scholar or "").strip() or None
     after_orcid = normalize_orcid(str(hierarchical.orcid or before_orcid or "")) or None
     identity_changed = (
@@ -1043,6 +1046,7 @@ def _refresh_author_cache_impl(
     # per author on bulk deep refresh. None when modern backfill didn't
     # run or its profile fetch errored.
     backfill_profile: dict | None = None
+    openalex_failure: Exception | None = None
     if openalex_id:
         try:
             from alma.api.deps import _db_path
@@ -1100,6 +1104,7 @@ def _refresh_author_cache_impl(
                     data=backfill_summary,
                 )
         except Exception as exc:
+            openalex_failure = exc
             logger.warning(
                 "OpenAlex backfill failed for %s (%s): %s — falling back to Scholar",
                 author_name,
@@ -1148,6 +1153,11 @@ def _refresh_author_cache_impl(
                     step="refresh_scholar_fallback",
                 )
             pubs = []
+
+    # No source delivered, so this is a failed refresh: the caller's job must end
+    # failed, and `last_fetched_at` must not claim a fetch that never happened.
+    if openalex_failure is not None and not pubs:
+        raise openalex_failure
 
     now = utcnow().isoformat()
     with write_section(db, label="author refresh: last_fetched_at"):
