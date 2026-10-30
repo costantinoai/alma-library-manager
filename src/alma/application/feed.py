@@ -656,12 +656,14 @@ def _insert_feed_item(
     # protects retroactively (a paper re-classified as a component by the
     # backfill stops producing new feed items).
     row = db.execute(
-        f"SELECT 1 FROM papers p WHERE p.id = ? AND {standalone_paper_sql('p')}",
+        f"SELECT {standalone_paper_sql('p')} AS standalone FROM papers p WHERE p.id = ?",
         (paper_id,),
     ).fetchone()
-    if row is None:
+    if row is None or not row["standalone"]:
         if candidate_outcomes is not None:
-            candidate_outcomes["non_standalone"] = candidate_outcomes.get("non_standalone", 0) + 1
+            # A missing row is a lost candidate; a subordinate one is stored.
+            reason = "paper_not_stored" if row is None else "non_standalone"
+            candidate_outcomes[reason] = candidate_outcomes.get(reason, 0) + 1
         return False
 
     feed_id = uuid.uuid4().hex
@@ -1941,6 +1943,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         try:
                             work = _normalize_work(raw_work)
                         except Exception:
+                            candidate_outcomes["unparseable_work"] = candidate_outcomes.get("unparseable_work", 0) + 1
                             continue
                         found += 1
                         papers_found += 1
@@ -2301,8 +2304,8 @@ def feed_refresh_outcome(result: dict) -> tuple[str, str]:
         message += f"; {failures} monitors failed (see diagnostics)"
     if result.get("health_warning"):
         message += f"; Warning: {result['health_warning']}"
-    elif int(result.get("zero_yield_runs") or 0) >= monitor_app.ZERO_YIELD_WARNING_RUNS:
-        message += "; Warning: candidates repeatedly produced no new items; see monitor diagnostics"
+    elif int(result.get("drop_runs") or 0) >= monitor_app.ZERO_YIELD_WARNING_RUNS:
+        message += "; Warning: candidates were repeatedly dropped with no new items; see monitor diagnostics"
     return status, message
 
 
@@ -2437,6 +2440,7 @@ def refresh_feed_monitor(
                 try:
                     work = _normalize_work(raw_work)
                 except Exception:
+                    candidate_outcomes["unparseable_work"] = candidate_outcomes.get("unparseable_work", 0) + 1
                     continue
                 found += 1
                 candidate = _normalize_author_work_to_candidate(work)
