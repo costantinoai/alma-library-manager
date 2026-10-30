@@ -159,6 +159,10 @@ nav:
       - Database schema: reference/database.md
       - External APIs: reference/external-apis.md
       - Discovery pipeline: reference/discovery-pipeline.md
+      - Discovery current-state map: reference/discovery-current-state-map.md
+      - Discovery design and method decisions: reference/discovery-component-architecture.md
+      - Discovery scope and learning audit: reference/discovery-scope-and-learning-audit.md
+      - Discovery compute and Raspberry Pi audit: reference/discovery-compute-and-pi-audit.md
       - Scoring formulas: reference/scoring.md
   - Operations:
       - operations/index.md

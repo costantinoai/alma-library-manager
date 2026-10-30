@@ -123,6 +123,7 @@ scripts/*
 !scripts/deploy-prod.sh
 !scripts/test_local.py
 !scripts/test_groups.toml
+!scripts/discovery_evidence_audit.py
 
 # Local docker-compose override (e.g. to use a published image instead of local build)
 docker-compose.override.yml

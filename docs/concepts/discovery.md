@@ -477,6 +477,7 @@ the `/library/import/search/authors` and
 ## Read more
 
 * [Lenses](lenses.md) — per-context pipelines
+* [Discovery scope and learning audit](../reference/discovery-scope-and-learning-audit.md) — current ownership, evidence and defects
 * [Scoring formulas](../reference/scoring.md) — the weight reference
 * [Tuning Discovery](../user-guide/tuning-discovery.md) — practical
   guide
