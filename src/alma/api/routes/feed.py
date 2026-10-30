@@ -99,16 +99,10 @@ def _run_feed_refresh_sync(*, db: sqlite3.Connection, user: dict) -> dict[str, o
 
     def _handler(ctx):
         result = feed_app.refresh_feed_inbox(db, ctx=ctx)
-        items_created = int(result.get("items_created") or 0)
-        if items_created == 0:
-            return OperationOutcome(
-                status="noop",
-                message="No new papers found from active monitors",
-                result=result,
-            )
+        status, message = feed_app.feed_refresh_outcome(result)
         return OperationOutcome(
-            status="completed",
-            message=f"Added {items_created} new papers to feed inbox",
+            status=status,
+            message=message,
             result=result,
         )
 
@@ -134,10 +128,10 @@ def _run_feed_monitor_refresh_sync(*, db: sqlite3.Connection, user: dict, monito
                 message="Feed monitor not found",
                 result={"found": False},
             )
-        items_created = int(result.get("items_created") or 0)
+        status, message = feed_app.feed_refresh_outcome(result)
         return OperationOutcome(
-            status="completed" if items_created > 0 or str(result.get("status") or "") == "completed" else "noop",
-            message=f"Refreshed feed monitor {monitor_id}",
+            status=status,
+            message=message,
             result=result,
         )
 
@@ -497,13 +491,7 @@ def refresh_feed_inbox(
             conn = open_db_connection()
             try:
                 result = feed_app.refresh_feed_inbox(conn, ctx=ActivityJobContext(job_id))
-                items_created = int(result.get("items_created") or 0)
-                final_status = "noop" if items_created == 0 else "completed"
-                final_message = (
-                    "No new papers found from active monitors"
-                    if items_created == 0
-                    else f"Added {items_created} new papers to feed inbox"
-                )
+                final_status, final_message = feed_app.feed_refresh_outcome(result)
                 set_job_status(
                     job_id,
                     status=final_status,
@@ -619,15 +607,14 @@ def refresh_feed_monitor(
                     )
                     return
 
-                items_created = int(result.get("items_created") or 0)
-                final_status = "completed" if items_created > 0 or str(result.get("status") or "") == "completed" else "noop"
+                final_status, final_message = feed_app.feed_refresh_outcome(result)
                 set_job_status(
                     job_id,
                     status=final_status,
                     finished_at=utcnow().isoformat(),
                     processed=1,
                     total=1,
-                    message=f"Refreshed feed monitor {monitor_label}",
+                    message=final_message,
                     result=result,
                     operation_key=operation_key,
                     trigger_source="user",

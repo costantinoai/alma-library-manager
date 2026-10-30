@@ -289,6 +289,13 @@ _CHANNEL_ERROR_HELP: dict[str, str] = {
         "`/invite @ALMa` (use your bot's name). Installing the app does not "
         "join any channel by itself."
     ),
+    "slack_unreachable": (
+        "ALMa could not reach Slack at all: no connection, or DNS is not "
+        "resolving from where ALMa runs. Nothing is wrong with the channel "
+        "or token. The scheduled sweep retries every few minutes; if this "
+        "persists while the machine itself is online, the server or "
+        "container has no working DNS — restart it."
+    ),
     "channel_not_found": (
         "No channel by that name is visible to the bot. Check the spelling in "
         "Settings (use the bare name, no `#`), and make sure the bot has been "

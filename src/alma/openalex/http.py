@@ -49,6 +49,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from alma.config import get_openalex_api_key, get_openalex_email
+from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -659,7 +660,7 @@ class OpenAlexClient:
                     url,
                     attempt + 1,
                     _MAX_RETRIES + 1,
-                    exc,
+                    redact_sensitive_text(str(exc)),
                     wait,
                 )
                 time.sleep(wait)

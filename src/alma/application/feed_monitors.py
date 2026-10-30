@@ -14,6 +14,7 @@ from alma.core.time import utcnow
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
 AUTHOR_MONITOR_PREFIX = "author:"
+ZERO_YIELD_WARNING_RUNS = 3
 
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -217,6 +218,9 @@ def _monitor_health(row: sqlite3.Row) -> tuple[str, str | None]:
     last_status = str(row["last_status"] or "").strip().lower()
     if last_status == "failed":
         return "degraded", str(row["last_error"] or "operation_failed").strip() or "operation_failed"
+    runs = int(_json_loads(row["last_result_json"]).get("zero_yield_runs") or 0)
+    if runs >= ZERO_YIELD_WARNING_RUNS:
+        return "degraded", f"Candidates returned but no new items in {runs} consecutive checks; see monitor diagnostics"
     return "ready", None
 
 
@@ -558,6 +562,17 @@ def update_feed_monitor_result(
     error: str | None = None,
 ) -> None:
     now = utcnow().isoformat()
+    if result is not None:
+        previous = db.execute(
+            "SELECT last_result_json FROM feed_monitors WHERE id = ?", (monitor_id,)
+        ).fetchone()
+        previous_result = _json_loads(previous["last_result_json"]) if previous else {}
+        zero_yield = (
+            status in {"completed", "noop"}
+            and int(result.get("papers_found") or 0) > 0
+            and int(result.get("items_created") or 0) == 0
+        )
+        result["zero_yield_runs"] = int(previous_result.get("zero_yield_runs") or 0) + 1 if zero_yield else 0
     # Errors carry request URLs, and OpenAlex URLs carry `api_key=`; this row is
     # served back by GET /feed/monitors.
     if error:
