@@ -571,7 +571,6 @@ export function AIConfigCard() {
                       items={[
                         'Semantic search',
                         'Discovery vector channel',
-                        'Graph visualizations',
                       ]}
                     />
                   </div>
