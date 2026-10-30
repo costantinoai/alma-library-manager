@@ -117,6 +117,24 @@ done
 CONFIG="$(compose config)"
 CONTAINER="$(printf '%s\n' "$CONFIG" | sed -n 's/^ *container_name: //p' | head -n 1)"
 PROJECT="$(printf '%s\n' "$CONFIG" | sed -n 's/^name: //p' | head -n 1)"
+
+# An external network is not Compose's to create. If one is missing the start
+# would fail after the running container has gone, so stop here instead.
+EXTERNAL_NETWORKS="$(printf '%s\n' "$CONFIG" | awk '
+  /^[^ ]/ { section = $1; next }
+  section != "networks:" { next }
+  /^  [^ ]/ { if (external) print name; external = 0; next }
+  /^    name: / { name = $2 }
+  /^    external: true/ { external = 1 }
+  END { if (external) print name }')"
+for network in $EXTERNAL_NETWORKS; do
+  if ! docker network inspect "$network" >/dev/null 2>&1; then
+    err "The Compose files need the external network '$network', and it does not exist."
+    echo "  Create it (docker network create $network) and re-run. Nothing was stopped." >&2
+    exit 1
+  fi
+done
+
 OLDER=""
 ROLLBACK_TAG=""
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -134,12 +152,14 @@ declare -a CARRIED=()  # NAME=value lines from the older install, not yet saved
 if [ -n "$OLDER" ]; then
   warn "Found an older '$OLDER' container. Its settings will carry over."
   old_image="$(docker inspect -f '{{.Config.Image}}' "$OLDER")"
-  # Only what was set on the container, not what the image itself defines.
+  old_image_id="$(docker inspect -f '{{.Image}}' "$OLDER")"
+  # Only what was set on the container, not what its image defines. By ID: the
+  # tag may have moved to an image with other values.
   while IFS= read -r line; do
     [ -n "$line" ] && CARRIED+=("$line")
   done < <(comm -23 \
     <(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$OLDER" | sort) \
-    <(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$old_image" | sort))
+    <(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$old_image_id" | sort))
   old_bind="$(docker inspect -f '{{range (index .HostConfig.PortBindings "8000/tcp")}}{{.HostIp}}{{end}}' "$OLDER")"
   if [ -n "$old_bind" ] && [ "$old_bind" != "127.0.0.1" ]; then
     CARRIED+=("BIND_ADDR=$old_bind")

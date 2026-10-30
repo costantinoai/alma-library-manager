@@ -113,6 +113,24 @@ if ($LASTEXITCODE -ne 0) { Write-Err2 "Could not read the Compose files."; exit 
 $container = (($config | Where-Object { $_ -match '^\s*container_name: ' } | Select-Object -First 1) -replace '^\s*container_name: ', '').Trim()
 $project   = (($config | Where-Object { $_ -match '^name: ' } | Select-Object -First 1) -replace '^name: ', '').Trim()
 
+# An external network is not Compose's to create. If one is missing the start
+# would fail after the running container has gone, so stop here instead.
+$section = ""; $network = ""; $externalNetworks = @()
+foreach ($line in $config) {
+    if ($line -match '^\S') { $section = $line.Trim(); continue }
+    if ($section -ne "networks:") { continue }
+    if ($line -match '^    name: (.+)') { $network = $Matches[1].Trim() }
+    if ($line -match '^    external: true') { $externalNetworks += $network }
+}
+foreach ($network in $externalNetworks) {
+    docker network inspect $network *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err2 "The Compose files need the external network '$network', and it does not exist."
+        Write-Host "  Create it (docker network create $network) and re-run. Nothing was stopped."
+        exit 1
+    }
+}
+
 $older = ""
 $rollback = ""
 $carried = @{}
@@ -131,9 +149,10 @@ if ($existing) {
 if ($older) {
     Write-Warn2 "Found an older '$older' container. Its settings will carry over."
     $oldImage = (docker inspect -f '{{.Config.Image}}' $older | Out-String).Trim()
-    # Only what was set on the container, not what the image itself defines.
+    # Only what was set on the container, not what its image defines. By ID: the
+    # tag may have moved to an image with other values.
     $format = '{{range .Config.Env}}{{println .}}{{end}}'
-    $imageEnv = @(docker image inspect -f $format $oldImage)
+    $imageEnv = @(docker image inspect -f $format $imageId)
     foreach ($line in @(docker inspect -f $format $older)) {
         if ($line -and ($imageEnv -notcontains $line)) {
             $name, $value = $line -split "=", 2
