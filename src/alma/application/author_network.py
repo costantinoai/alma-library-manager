@@ -756,7 +756,7 @@ def refresh_s2_related_network(
             try:
                 recs = _s2_recommendations(doi, limit=_MAX_RECS_PER_DOI)
             except Exception as exc:
-                logger.debug("S2 recommend failed for %s: %s", doi, exc)
+                logger.warning("S2 recommend failed for %s: %s", doi, exc)
                 recs = []
                 errors += 1
             if recs:
@@ -775,7 +775,10 @@ def refresh_s2_related_network(
                     try:
                         oa_works = _openalex_works_by_dois(rec_dois)
                     except Exception as exc:
-                        logger.debug("OpenAlex hydrate failed: %s", exc)
+                        logger.warning("OpenAlex hydrate failed: %s", exc)
+                    # These DOIs came from S2, so an empty answer is a failure:
+                    # OpenAlex's batch reader logs a non-200 and returns nothing.
+                    if not oa_works:
                         errors += 1
                 if oa_works:
                     _accumulate_openalex_coauthors(
@@ -841,45 +844,33 @@ def _s2_recommendations(seed_doi: str, *, limit: int = 20) -> list[dict]:
     `/graph/v1/...`. The ALMa `semantic_scholar` source client is
     base-URL'd at `https://api.semanticscholar.org/graph/v1`, so we
     pass the full URL here to bypass the base-URL join.
+
+    A 400 or 404 is S2's answer that it cannot use this paper, so it returns no
+    rows. Anything else that is not a 200 raises: the caller counts it, and a run
+    that failed on every seed keeps its rotation window.
     """
 
     doi = (seed_doi or "").strip()
     if not doi:
         return []
     client = get_source_http_client("semantic_scholar")
-    try:
-        resp = client.get(
-            f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{doi}",
-            params={
-                "fields": (
-                    "paperId,externalIds,title,year,venue,publicationDate,"
-                    "authors.authorId,authors.name"
-                ),
-                "limit": min(limit, 100),
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            logger.debug(
-                "S2 recommendations HTTP %d for DOI %s", resp.status_code, doi
-            )
-            return []
-        return (resp.json() or {}).get("recommendedPapers") or []
-    except Exception as exc:
-        logger.debug("S2 recommendations failed for DOI %s: %s", doi, exc)
+    resp = client.get(
+        f"https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{doi}",
+        params={
+            "fields": (
+                "paperId,externalIds,title,year,venue,publicationDate,"
+                "authors.authorId,authors.name"
+            ),
+            "limit": min(limit, 100),
+        },
+        timeout=15,
+    )
+    if resp.status_code in (400, 404):
+        logger.debug("S2 has no recommendations for DOI %s (HTTP %d)", doi, resp.status_code)
         return []
-
-
-def _s2_recommended_dois(seed_doi: str, *, limit: int = 20) -> list[str]:
-    """Back-compat helper — extracts just the DOIs from recommendations."""
-
-    out: list[str] = []
-    for row in _s2_recommendations(seed_doi, limit=limit):
-        ext = row.get("externalIds") or {}
-        rec_doi = normalize_doi(str(ext.get("DOI") or "").strip())
-        if rec_doi:
-            out.append(rec_doi)
-    return out
+    if resp.status_code != 200:
+        raise RuntimeError(f"S2 recommendations HTTP {resp.status_code} for DOI {doi}")
+    return (resp.json() or {}).get("recommendedPapers") or []
 
 
 def _accumulate_s2_native_authors(
@@ -940,13 +931,9 @@ def _openalex_works_by_dois(dois: list[str]) -> list[dict]:
 
     if not dois:
         return []
-    try:
-        from alma.openalex.client import _normalize_work, batch_fetch_works_by_dois
+    from alma.openalex.client import _normalize_work, batch_fetch_works_by_dois
 
-        raw = batch_fetch_works_by_dois(dois)
-    except Exception as exc:
-        logger.debug("OpenAlex DOI hydration failed: %s", exc)
-        return []
+    raw = batch_fetch_works_by_dois(dois)
     # `batch_fetch_works_by_dois` returns RAW work dicts keyed by DOI —
     # run them through `_normalize_work` so every caller sees the same
     # shape (`authorships` structured with openalex_ids, `topics` list,
