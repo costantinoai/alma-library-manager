@@ -64,8 +64,9 @@ def mutation_may_change_health(method: str, path: str) -> bool:
 def _build_operations(conn: sqlite3.Connection) -> dict[str, Any]:
     from alma.services import maintenance
 
-    corpus = stored_payload(conn, health_service.HEALTH_CORPUS_VIEW_KEY)
-    return maintenance.list_operations(conn, health_payload=corpus)
+    return maintenance.list_operations(
+        conn, health_payload=maintenance.planning_health_payload(conn)
+    )
 
 
 mv.register(
@@ -73,17 +74,25 @@ mv.register(
         key=HEALTH_OPERATIONS_VIEW_KEY,
         fingerprint_sql="""
             SELECT
-              'health-operations-v2',
+              'health-operations-v4',
               COALESCE((SELECT fingerprint FROM materialized_views
                         WHERE view_key = 'health:corpus'), ''),
               COALESCE((SELECT fingerprint FROM materialized_views
                         WHERE view_key = 'health:authors'), ''),
               (SELECT COUNT(*) FROM operation_status),
               (SELECT COALESCE(MAX(updated_at), '') FROM operation_status),
-              (SELECT COUNT(*) FROM discovery_settings
-                 WHERE key LIKE 'maintenance.%'
-                    OR key IN ('background.idle_wait_minutes',
-                               'background.reserved_api_calls'))
+              COALESCE((
+                SELECT GROUP_CONCAT(key || '=' || value, '|')
+                FROM (
+                  SELECT key, value FROM discovery_settings
+                  WHERE key LIKE 'maintenance.%'
+                     OR key IN ('background.idle_wait_minutes',
+                                'background.reserved_api_calls',
+                                'ai.provider', 'ai.local_model',
+                                'ai.python_env_type', 'ai.python_env_path')
+                  ORDER BY key
+                )
+              ), '')
         """,
         build_fn=_build_operations,
         operation_key="materialize.health.operations",

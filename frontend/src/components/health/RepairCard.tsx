@@ -141,8 +141,9 @@ export function RepairCard({
   const eta = estimate ? estimate.eta : op.eta
   const quota = estimate ? estimate.quota : op.quota
   const quotaBlocked = quota?.sufficient === false
+  const availabilityBlocked = op.availability_blocker != null
   const noEligibleWork = pending === 0 && op.unit !== 'operation'
-  const runBlocked = quotaBlocked || pending == null || prerequisiteUnknown || noEligibleWork || (dirty && estimateQuery.isFetching)
+  const runBlocked = availabilityBlocked || quotaBlocked || pending == null || prerequisiteUnknown || noEligibleWork || (dirty && estimateQuery.isFetching)
 
   const runRequest = (extra?: Partial<MaintenanceRunRequest>): MaintenanceRunRequest => ({
     max_items: manualLimit,
@@ -179,6 +180,7 @@ export function RepairCard({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-medium text-alma-800">{op.label}</h3>
             {op.recommended ? <StatusBadge tone="info" size="sm">Recommended next</StatusBadge> : null}
+            {op.routine ? <StatusBadge tone="neutral" size="sm">Routine</StatusBadge> : null}
             {op.optional ? <StatusBadge tone="neutral" size="sm">Optional</StatusBadge> : null}
             {op.manual_gate ? <StatusBadge tone="warning" size="sm">Manual gate</StatusBadge> : null}
             <StatusBadge tone="neutral" size="sm" className="uppercase tracking-wide">
@@ -244,6 +246,19 @@ export function RepairCard({
         </p>
       ) : null}
 
+      {op.availability_blocker ? (
+        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>
+            {op.availability_blocker.message}{' '}
+            <a className="font-medium underline underline-offset-2" href={op.availability_blocker.href}>
+              {op.availability_blocker.action}
+            </a>
+            {' '}Owner: {op.availability_blocker.owner}.
+          </span>
+        </p>
+      ) : null}
+
       {/* Status rows — the gaps this op repairs (click → affected papers). */}
       {attentionDims.length > 0 ? (
         <div className="space-y-1.5">
@@ -285,6 +300,7 @@ export function RepairCard({
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <Switch
                 checked={op.auto_enabled}
+                disabled={availabilityBlocked}
                 onCheckedChange={(value) => onConfig(op.key, { auto_enabled: value })}
               />
               <span className="inline-flex items-center gap-1">
@@ -405,10 +421,6 @@ export function RepairCard({
             pending={running}
             disabled={runBlocked}
             className="border-control-edge text-alma-700 hover:bg-control-quiet"
-            // 42.2: a pending prerequisite is a WARNING (banner above), not a hard
-            // block — one stuck upstream op (e.g. a throttled title_resolution)
-            // must not freeze every downstream repair. The backend DAG still
-            // orders auto-sequences; only this manual hard-disable is lifted.
             onClick={() =>
               op.destructive
                 ? setConfirmOpen(true)

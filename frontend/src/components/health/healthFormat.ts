@@ -40,34 +40,6 @@ export const COST_LABEL: Record<string, string> = {
   compute: 'compute',
 }
 
-/**
- * Dimension keys whose affected-papers drilldown is backed by the API.
- * Mirrors `DIMENSION_ITEM_KEYS` in `src/alma/services/health.py` — keep in
- * sync. Author dimensions are deliberately absent: they're repaired by running
- * the op, not by drilling into individual paper rows, so their status rows
- * render read-only (no "view →").
- */
-export const DRILLDOWN_DIM_KEYS: ReadonlySet<string> = new Set([
-  'identity.unresolved',
-  'identity.paper_group_integrity',
-  'papers.missing_abstract',
-  'papers.missing_doi',
-  'papers.missing_url',
-  'papers.missing_publication_date',
-  'papers.missing_authorships',
-  'papers.missing_topics',
-  'papers.missing_references',
-  'embeddings.local_computable',
-  'embeddings.s2_vector_missing',
-  'embeddings.coverage',
-  'ledger.retry_waiting',
-])
-
-/** Whether a dimension exposes the affected-papers drilldown. */
-export function canDrilldown(key: string): boolean {
-  return DRILLDOWN_DIM_KEYS.has(key)
-}
-
 /** Worst-first ordering (critical → warning → info → ok), then larger count first. */
 export function sortBySeverity(dims: HealthDimension[]): HealthDimension[] {
   return [...dims].sort(
@@ -112,20 +84,12 @@ export function opSeverity(dims: HealthDimension[]): Severity | null {
 }
 
 /**
- * An op "needs attention" when any dimension it repairs is non-healthy OR it has
- * items pending. Only healthy AND idle ops collapse into the "All clear" strip.
- *
- * The pending check is NOT gated on being dimension-less: an op can have pending
- * work while every dimension it repairs reads healthy (the dimension measures a
- * different/narrower population than the op processes — e.g. an op with 90
- * pending whose mapped dimension is at 0). Hiding such an op as "All clear" was
- * the bug where a backlog silently disappeared from the page.
+ * Backend owns whether pending work is a health defect or normal pipeline work.
+ * This keeps the UI from turning routine freshness queues into maintenance alarms.
  */
 export function isOpAttention(op: MaintenanceOperation, dims: HealthDimension[]): boolean {
-  if (op.candidates_pending == null || op.assessment_error || op.blocked_by.some((d) => d.pending == null)) return true
-  const sev = opSeverity(dims)
-  if (sev != null && sev !== 'ok') return true
-  return op.candidates_pending > 0
+  void dims
+  return op.attention_required
 }
 
 /** Worst-first ordering for op cards: severity, then larger pending first. */

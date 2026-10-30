@@ -898,6 +898,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             default_auto_daily_cap=500,
             auto_chunk_size=100,
             local_compute=True,
+            requirements=("embedding_provider",),
         ),
         MaintenanceTask(
             key="title_resolution",
@@ -959,6 +960,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             target_kind=TargetKind.AUTHOR,
             supports_targets=False,
             unlocks=("dedup_orcid",),
+            routine=True,
             count_fn=_count_author_metadata,
             default_manual_limit=200,
             max_manual_limit=2_000,
@@ -1005,6 +1007,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             prerequisites=("dedup_orcid",),
             unlocks=("title_resolution", "corpus_metadata"),
             optional=True,
+            routine=True,
             count_fn=_count_author_works,
             default_manual_limit=25,
             max_manual_limit=500,
@@ -1074,6 +1077,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             supports_targets=False,
             prerequisites=("dedup_orcid",),
             optional=True,
+            routine=True,
             count_fn=_count_corpus_backfill_stale,
             # A deep refresh paginates an author's full works — heavy. Small
             # defaults; the daily cap bounds the unattended background spend.
@@ -1105,6 +1109,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             supports_targets=False,
             prerequisites=("embedding",),
             manual_gate=True,
+            routine=True,
             count_fn=_count_gc_orphans,
             default_manual_limit=500,
             max_manual_limit=5_000,
@@ -1140,6 +1145,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             supports_targets=False,
             prerequisites=("author_metadata",),
             unlocks=("author_works",),
+            routine=True,
             count_fn=_count_dedup_orcid,
             default_manual_limit=100,
             max_manual_limit=500,
@@ -1324,6 +1330,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             target_kind=TargetKind.NONE,
             supports_targets=False,
             prerequisites=("embedding",),
+            routine=True,
             count_fn=_count_author_centroids,
             default_manual_limit=500,
             max_manual_limit=5_000,
@@ -1378,6 +1385,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             target_kind=TargetKind.NONE,
             supports_targets=False,
             prerequisites=("corpus_metadata",),
+            routine=True,
             count_fn=_count_topic_normalize,
             default_manual_limit=1,
             max_manual_limit=1,
@@ -1404,6 +1412,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             unit=MaintenanceUnit.OPERATION,
             target_kind=TargetKind.NONE,
             supports_targets=False,
+            routine=True,
             count_fn=_count_housekeeping,
             default_manual_limit=1,
             max_manual_limit=1,
@@ -1765,6 +1774,19 @@ def task_pending_count(
         ) from exc
 
 
+def planning_health_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    """One health input for planning, ordering, recommendation, and resume."""
+
+    corpus = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+    authors = (mv.get(conn, health_service.HEALTH_AUTHORS_VIEW_KEY).get("payload")) or {}
+    dimensions: dict[str, dict[str, Any]] = {}
+    for row in [*(corpus.get("dimensions") or []), *(authors.get("dimensions") or [])]:
+        key = str(row.get("key") or "")
+        if key:
+            dimensions[key] = row
+    return {**corpus, "dimensions": list(dimensions.values())}
+
+
 def _validated_spec(task: MaintenanceTask, spec: MaintenanceRunSpec) -> MaintenanceRunSpec:
     if spec.trigger == MaintenanceTrigger.USER:
         task.validate_max_items(spec.max_items)
@@ -1802,7 +1824,7 @@ def plan_task(
     validated = _validated_spec(task, spec)
     payload = health_payload
     if payload is None:
-        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        payload = planning_health_payload(conn)
     params = {
         key: value
         for key, value in {
@@ -1926,7 +1948,7 @@ def _task_budget(
     else:
         payload = health_payload
         if payload is None:
-            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+            payload = planning_health_payload(conn)
         try:
             pending = task_pending_count(conn, task, payload, params=effective)
         except MaintenanceAssessmentError as exc:
@@ -2056,6 +2078,28 @@ def _last_success_at(conn: sqlite3.Connection, operation_key: str) -> str | None
     return str(row["at"] or "") or None
 
 
+def _task_availability_blocker(
+    conn: sqlite3.Connection, task: MaintenanceTask
+) -> dict[str, str] | None:
+    """Return a truthful, actionable blocker for an unavailable dependency."""
+
+    if "embedding_provider" in task.requirements:
+        from alma.ai.providers import get_active_provider
+
+        if get_active_provider(conn) is None:
+            return {
+                "code": "embedding_provider_unavailable",
+                "message": (
+                    "No active embedding provider is available. Configure one or "
+                    "repair its dependency environment before running this task."
+                ),
+                "owner": "AI settings",
+                "href": "#/settings?anchor=ai-config",
+                "action": "Open AI settings",
+            }
+    return None
+
+
 def describe_task(
     conn: sqlite3.Connection, task: MaintenanceTask, health_payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2094,6 +2138,44 @@ def describe_task(
         }
     if task.supports_dry_run:
         params_spec["dry_run"] = {"default": True}
+    pending = budget["candidates_pending"]
+    assessment_error = budget["assessment_error"]
+    dimensions = {
+        str(row.get("key")): row
+        for row in (health_payload.get("dimensions") or [])
+        if row.get("key")
+    }
+    unhealthy_dimensions = [
+        dimensions[key]
+        for key in task.health_dimensions
+        if (
+            dimensions.get(key, {}).get("state") == "error"
+            or dimensions.get(key, {}).get("severity") in {"warning", "critical"}
+        )
+    ]
+    if assessment_error:
+        attention_required = True
+        attention_reason = "Pending work could not be measured"
+    elif unhealthy_dimensions:
+        attention_required = True
+        attention_reason = "Health warning: " + ", ".join(
+            str(row.get("label") or row.get("key")) for row in unhealthy_dimensions
+        )
+    elif pending is not None and pending > 0 and not task.routine and not task.health_dimensions:
+        # Structural/manual operations have no percentage-style dimension. Their
+        # measured candidate pool is itself the health defect.
+        attention_required = True
+        attention_reason = f"{pending} structural issue(s) detected"
+    else:
+        attention_required = False
+        if pending and task.routine:
+            attention_reason = "Routine pipeline work"
+        elif pending and task.health_dimensions:
+            attention_reason = "Informational health gap"
+        else:
+            attention_reason = "No work pending"
+
+    availability_blocker = _task_availability_blocker(conn, task)
     return {
         "key": task.key,
         "label": task.label,
@@ -2112,10 +2194,14 @@ def describe_task(
         "unlocks": list(task.unlocks),
         "optional": task.optional,
         "manual_gate": task.manual_gate,
+        "routine": task.routine,
+        "attention_required": attention_required,
+        "attention_reason": attention_reason,
+        "availability_blocker": availability_blocker,
         "repairs": list(task.health_dimensions),
         "operation_key": task.operation_key,
-        "candidates_pending": budget["candidates_pending"],
-        "assessment_error": budget["assessment_error"],
+        "candidates_pending": pending,
+        "assessment_error": assessment_error,
         "params_spec": params_spec or None,
         "request_batch_size": budget["batch_size"],
         "request_batch_default": task.request_batch.default if task.request_batch else None,
@@ -2276,7 +2362,13 @@ def finalize_operation_plan(
             operation["readiness"] = "ready"
         quota = operation.get("quota") or {}
         quota_blocked = not quota.get("sufficient", True)
-        if pending is not None and pending > 0 and quota_blocked:
+        availability_blocked = bool(operation.get("availability_blocker"))
+        if (
+            pending is not None
+            and pending > 0
+            and not blocked_by
+            and (quota_blocked or availability_blocked)
+        ):
             operation["readiness"] = "blocked_external"
         operation["recommended"] = False
         # Recommended-next must be SAFE: it drives the one-click "Run recommended
@@ -2284,6 +2376,7 @@ def finalize_operation_plan(
         # are never auto-recommended — the user reaches those deliberately.
         if (
             recommended is None
+            and operation.get("attention_required") is True
             and pending is not None
             and pending > 0
             and not blocked_by
@@ -2291,13 +2384,15 @@ def finalize_operation_plan(
             and not operation["manual_gate"]
             and not operation["destructive"]
             and not quota_blocked
+            and not availability_blocked
         ):
             operation["recommended"] = True
             recommended = {
                 "key": operation["key"],
                 "label": operation["label"],
                 "readiness": operation["readiness"],
-                "reason": "First actionable operation in dependency order",
+                "reason": operation.get("attention_reason")
+                or "First health repair in dependency order",
             }
     return recommended
 
@@ -2310,7 +2405,7 @@ def list_operations(
     """Backend-owned order, stage grouping, readiness, and operation state."""
     payload = health_payload
     if payload is None:
-        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        payload = planning_health_payload(conn)
     operations = [describe_task(conn, task, payload) for task in REGISTRY.values()]
     recommended = finalize_operation_plan(operations)
 
@@ -2409,6 +2504,11 @@ def _schedule_task(
     """
     from alma.core.job_envelope import schedule_with_envelope
 
+    blocker = _task_availability_blocker(conn, task)
+    if blocker:
+        logger.warning("maintenance task %s not scheduled: %s", task.key, blocker["message"])
+        return None
+
     runner = task.runner
 
     # Inject the configured batch size so the runner uses the SAME value the ETA
@@ -2503,6 +2603,15 @@ def run_task_now(
             )
     if plan.selected <= 0:
         return MaintenanceLaunch(status="noop", job_id=None, plan=plan)
+
+    availability_blocker = _task_availability_blocker(conn, task)
+    if availability_blocker:
+        return MaintenanceLaunch(
+            status="blocked_external",
+            job_id=None,
+            plan=plan,
+            message=str(availability_blocker["message"]),
+        )
 
     from alma.api.scheduler import find_active_job
 
@@ -2663,7 +2772,7 @@ def maintenance_repair_periodic() -> None:
 
     conn = open_db_connection()
     try:
-        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        payload = planning_health_payload(conn)
 
         # A task that calls an external source is network work the clock is
         # starting, so it needs the scheduler's admission (profile + network
@@ -2683,6 +2792,10 @@ def maintenance_repair_periodic() -> None:
             if find_active_job(task.operation_key):
                 continue
             if not get_task_auto_enabled(conn, task):
+                continue
+            blocker = _task_availability_blocker(conn, task)
+            if blocker:
+                logger.info("idle maintenance: %s blocked — %s", task.key, blocker["message"])
                 continue
             if task.sources and network_refusal is not None:
                 network_held = True
@@ -2878,7 +2991,7 @@ def run_onboarding_convergence(
     def _pending_now(task: MaintenanceTask, payload: dict[str, Any] | None = None) -> int:
         """This task's live pending count (reads the health payload when not given)."""
         if payload is None:
-            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+            payload = planning_health_payload(conn)
         return task_pending_count(conn, task, payload)
 
     try:
@@ -2963,7 +3076,7 @@ def run_onboarding_convergence(
             if task is None:
                 stalled.add(key)
                 continue
-            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+            payload = planning_health_payload(conn)
             pending = _pending_now(task, payload)
             if pending <= 0:
                 continue  # count moved since the ops read — re-evaluate
@@ -3106,6 +3219,7 @@ _RESUMABLE_OPERATION_KEYS = frozenset({
 # marker means a USER cancel (which writes a different message) is never
 # auto-resumed.
 _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
+_ORPHAN_RESUME_CONSUMED_MESSAGE = "Orphaned run resumed once"
 
 
 def _mark_orphan_handed_off(conn: sqlite3.Connection, marker_ids: list[str], continuation: str) -> None:
@@ -3204,7 +3318,7 @@ def resume_orphaned_sweeps() -> int:
         if not orphaned:
             return resumed
 
-        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        payload = planning_health_payload(conn)
         by_opkey = {t.operation_key: t for t in REGISTRY.values()}
         for opkey, orphan_trigger in orphaned.items():
             task = by_opkey.get(opkey)

@@ -38,6 +38,10 @@ from alma.openalex.client import (
     _normalize_work,
 )
 from alma.openalex.http import get_client
+from alma.services.retry_policy import (
+    TRANSIENT_RETRY_AFTER,
+    UNCHANGED_RECHECK_AFTER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +69,7 @@ RETRYABLE_STATUS = "retryable_error"
 # indexing (especially for ARVO / Journal of Vision proceedings and other
 # venues that publish abstracts late), so an `unchanged` outcome must
 # expire — otherwise local SPECTER2 stays starved of input text forever.
-UNCHANGED_RETRY_AFTER = timedelta(days=30)
+UNCHANGED_RETRY_AFTER = UNCHANGED_RECHECK_AFTER
 _AUTO_PAPER_INSERT_HYDRATION_LIMIT = 25
 
 # Phase-3 abstract recovery fan-out. The `publisher` / `unpaywall` source
@@ -622,7 +626,7 @@ def _run_s2_batched_phase(
                             reason=retry_reason,
                             fields_filled=[],
                             fields_key="s2_paper_v1",
-                            retry_after=timedelta(hours=6),
+                            retry_after=TRANSIENT_RETRY_AFTER,
                         )
                         summary["retryable_error"] += 1
                         processed += 1
@@ -686,7 +690,7 @@ def _run_s2_batched_phase(
                         reason=str(exc),
                         fields_filled=[],
                         fields_key="s2_paper_v1",
-                        retry_after=timedelta(hours=6),
+                        retry_after=TRANSIENT_RETRY_AFTER,
                     )
                     summary["retryable_error"] += 1
                     processed += 1
@@ -840,10 +844,36 @@ def _run_crossref_abstract_phase(
         },
     )
     try:
-        candidates_by_doi = fetch_works_by_dois(unique_dois, batch_size=50)
+        candidates_by_doi = fetch_works_by_dois(
+            unique_dois, batch_size=50, raise_on_error=True
+        )
     except Exception as exc:
         logger.warning("Phase 2 batched Crossref fetch failed: %s", exc)
-        candidates_by_doi = {}
+        # Provider failure is not evidence that every DOI is absent. Stamp a
+        # shared transient backoff so the operation converges for now and tries
+        # again later instead of either lying terminal or hot-looping.
+        with write_section(conn, label="corpus_rehydrate crossref failure"):
+            for pid, doi in paper_to_doi.items():
+                _write_ledger(
+                    conn,
+                    paper_id=pid,
+                    source=CROSSREF_SOURCE,
+                    lookup_key=f"crossref:{doi.lower()}",
+                    status=RETRYABLE_STATUS,
+                    reason=f"crossref_batch_failed:{type(exc).__name__}: {exc}",
+                    fields_filled=[],
+                    fields_key="crossref_v1",
+                    retry_after=TRANSIENT_RETRY_AFTER,
+                )
+                fallback_summary["retryable_error"] += 1
+        add_job_log(
+            job_id,
+            f"Crossref unavailable; {len(paper_to_doi)} papers deferred for retry",
+            level="ERROR",
+            step="fallback_error",
+            data={"cause": f"{type(exc).__name__}: {exc}"},
+        )
+        return fallback_summary
 
     applied = 0
     seen = 0
@@ -899,7 +929,7 @@ def _run_crossref_abstract_phase(
                         reason=str(exc),
                         fields_filled=[],
                         fields_key="crossref_v1",
-                        retry_after=timedelta(hours=6),
+                        retry_after=TRANSIENT_RETRY_AFTER,
                     )
                     fallback_summary["retryable_error"] += 1
                     continue
@@ -1191,6 +1221,11 @@ def _select_abstract_recovery_candidates(
     if limit is not None:
         params.append(max(1, int(limit)))
         limit_clause = "LIMIT ?"
+    lookup_expr = (
+        "lower(trim(COALESCE(p.oa_url, ''))) || '|' || "
+        "lower(trim(COALESCE(p.url, ''))) || '|' || "
+        "lower(trim(COALESCE(p.doi, '')))"
+    )
     rows = conn.execute(
         f"""
         SELECT p.id
@@ -1209,6 +1244,8 @@ def _select_abstract_recovery_candidates(
           )
           AND (
               es.paper_id IS NULL
+              OR COALESCE(es.lookup_key, '') != {lookup_expr}
+              OR COALESCE(es.fields_key, '') != 'abstract_recovery_v2'
               OR COALESCE(es.status, '') IN ('pending', 'queued')
               OR (
                   es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
@@ -1276,8 +1313,19 @@ def _run_abstract_recovery_phase(
             for r in batch:
                 summary["attempted"] += 1
                 if isinstance(r, FetchError):
-                    # Transient fetch failure → no ledger row, retried next run.
-                    summary["error"] += 1
+                    row = r.item
+                    _write_ledger(
+                        conn,
+                        paper_id=str(row["id"]),
+                        source=ABSTRACT_RECOVERY_SOURCE,
+                        lookup_key=_abstract_recovery_lookup_key(row),
+                        status=RETRYABLE_STATUS,
+                        reason=f"{type(r.error).__name__}: {r.error}",
+                        fields_filled=[],
+                        fields_key="abstract_recovery_v2",
+                        retry_after=TRANSIENT_RETRY_AFTER,
+                    )
+                    summary["retryable_error"] += 1
                     continue
                 status, filled = _apply_abstract_recovery(conn, r)
                 summary[status] += 1
@@ -1758,7 +1806,7 @@ def run_corpus_metadata_rehydration(
     # credits) of the old 50. `_fetch_openalex_chunk` splits on 400/414 if a URL
     # ever runs long, so 100 is safe. See `tasks/11` B2.
     batch_size = 100
-    retry_after = timedelta(hours=6)
+    retry_after = TRANSIENT_RETRY_AFTER
     summary: Counter[str] = Counter()
     field_counts: Counter[str] = Counter()
 
@@ -2906,7 +2954,7 @@ def _hydrate_via_openalex(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
         _upsert_enrichment_status(
             conn, paper_id=paper_id, lookup_key=lookup_key,
             status=RETRYABLE_STATUS, reason=reason,
-            retry_after=timedelta(hours=6),
+            retry_after=TRANSIENT_RETRY_AFTER,
         )
         return (RETRYABLE_STATUS, [])
     raw_work = works_by_id.get(key)
@@ -2964,14 +3012,14 @@ def _hydrate_via_s2(conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row) -
         _write_ledger(
             conn, paper_id=paper_id, source=S2_SOURCE, lookup_key=lookup_key,
             status=RETRYABLE_STATUS, reason=str(exc), fields_filled=[],
-            fields_key="s2_paper_v1", retry_after=timedelta(hours=6),
+            fields_key="s2_paper_v1", retry_after=TRANSIENT_RETRY_AFTER,
         )
         return (RETRYABLE_STATUS, [])
     except Exception as exc:
         _write_ledger(
             conn, paper_id=paper_id, source=S2_SOURCE, lookup_key=lookup_key,
             status=RETRYABLE_STATUS, reason=str(exc), fields_filled=[],
-            fields_key="s2_paper_v1", retry_after=timedelta(hours=6),
+            fields_key="s2_paper_v1", retry_after=TRANSIENT_RETRY_AFTER,
         )
         return (RETRYABLE_STATUS, [])
     paper = None
@@ -3029,7 +3077,7 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
         _write_ledger(
             conn, paper_id=paper_id, source=CROSSREF_SOURCE, lookup_key=lookup_key,
             status=RETRYABLE_STATUS, reason=str(exc), fields_filled=[],
-            fields_key="crossref_v1", retry_after=timedelta(hours=6),
+            fields_key="crossref_v1", retry_after=TRANSIENT_RETRY_AFTER,
         )
         return (RETRYABLE_STATUS, [])
     if candidate is None:
@@ -3054,6 +3102,14 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
         fields_key="crossref_v1", retry_after=retry,
     )
     return (status_value, fields_filled)
+
+
+def _abstract_recovery_lookup_key(row: sqlite3.Row) -> str:
+    """Fingerprint only local inputs; changing a URL/DOI immediately rearms."""
+
+    return "|".join(
+        str(row[field] or "").strip().lower() for field in ("oa_url", "url", "doi")
+    )
 
 
 def _fetch_abstract_recovery(row: sqlite3.Row) -> dict:
@@ -3085,7 +3141,7 @@ def _fetch_abstract_recovery(row: sqlite3.Row) -> dict:
             if value and value not in urls:
                 urls.append(value)
 
-    lookup_key = "|".join(urls[:3]) or (f"doi:{doi}" if doi else "")
+    lookup_key = _abstract_recovery_lookup_key(row)
 
     # Channel 1 — structured preprint-twin recovery (arXiv / bioRxiv).
     # Preprint servers expose clean abstracts with no paywall, so this

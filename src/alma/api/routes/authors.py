@@ -365,6 +365,18 @@ def _apply_author_resolution_result(
 
     params.append(author_id)
     db.execute(f"UPDATE authors SET {', '.join(updates)} WHERE id = ?", tuple(params))
+    if result.openalex_id or result.scholar_id or result.orcid:
+        # Identifier acquisition is the author equivalent of a paper insert:
+        # durably join the normal hydration lane now, rather than requiring a
+        # later maintenance sweep to discover the new work.
+        from alma.services.author_hydrate import enqueue_pending_author_hydration
+
+        enqueue_pending_author_hydration(
+            db,
+            author_id,
+            priority="low",
+            reason="identity_resolved",
+        )
 
 
 def _summarize_hierarchical_identity(result) -> str:
@@ -3967,6 +3979,13 @@ def _resolve_identifiers_bulk_optimized(
 
     # No final flush: each author committed inside its own write_section.
     summary["elapsed_seconds"] = round(time.monotonic() - t0, 1)
+    if summary["resolved_auto"] or summary["enriched"]:
+        try:
+            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+
+            schedule_pending_author_hydration_sweep(reason="identity_resolution")
+        except Exception as exc:
+            logger.debug("Resolved-author hydration sweep skipped: %s", exc)
     add_job_log(
         job_id,
         (
