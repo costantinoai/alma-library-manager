@@ -1207,6 +1207,7 @@ def save_online_search_result(
             action=action,
             rating=eff,
             source_surface=added_from,
+            previous_rating=current_rating if action == "add" else None,
         )
 
         # NB: `publication_references` rows were already written by

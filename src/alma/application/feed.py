@@ -1262,7 +1262,7 @@ def apply_feed_action(
             # contract, so a Feed like and a Discovery like cannot drift apart.
             # Feed keeps its own event recording below — the monitor provenance
             # it carries is genuinely Feed-specific.
-            paper_actions.apply_valence(
+            applied = paper_actions.apply_valence(
                 db,
                 paper_id,
                 action,
@@ -1299,6 +1299,7 @@ def apply_feed_action(
                         "action": action,
                         "rating": paper_actions.ACTION_RATINGS.get(action),
                         "signal_value": paper_actions.ACTION_SIGNAL_VALUES.get(action, 0),
+                        **({"previous_rating": applied["previous_rating"]} if action == "add" else {}),
                     },
                     context={
                         "mode": "feed",
