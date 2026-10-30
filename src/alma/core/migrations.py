@@ -1728,7 +1728,8 @@ def _m_0047_clear_legacy_dismiss_ratings(conn: sqlite3.Connection) -> None:
     """
     review = _review_legacy_dismiss_ratings(conn)
     cleared = [(paper_id,) for paper_id, reason in review.items() if reason is None]
-    conn.executemany("UPDATE papers SET rating = 0 WHERE id = ? AND rating = 1", cleared)
+    if cleared:  # a very old papers table may have no rating column to name
+        conn.executemany("UPDATE papers SET rating = 0 WHERE id = ? AND rating = 1", cleared)
     logger.info("Cleared %d legacy Dismiss ratings, kept %d", len(cleared), len(review) - len(cleared))
 
 
