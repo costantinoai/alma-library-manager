@@ -135,9 +135,11 @@ only command that wipes your library.
 If you ever want a copy on the host filesystem (for backup or
 inspection), the simplest way is the **Settings → Library
 Management → Backup** button, which writes a gzipped SQLite file into
-the volume's `backups/` subdirectory. You can also `docker run --rm
--v alma-data:/d alpine cat /d/scholar.db > /tmp/scholar.db` to copy
-the live DB out.
+the volume's `backups/` subdirectory. To download a full copy
+instead, use `curl -o alma-backup.db
+http://localhost:8000/api/v1/backup/export`. Never copy `scholar.db`
+out of the volume while ALMa runs: that copy misses whatever is still
+in the WAL.
 
 ### Upgrade
 
@@ -525,7 +527,7 @@ docker run --rm -v alma-data:/d -v "$PWD":/out alpine \
 ```
 
 See [Backups](../operations/backups.md) for the full strategy
-(retention, cron, restore round-trip).
+(retention, cron, and the offline restore).
 
 ## Troubleshooting
 

@@ -108,10 +108,14 @@ async def lifespan(app: FastAPI):
         logger.error("Storage validation failed: %s", e)
         raise
 
+    # A database from a newer ALMa stops startup here, before the first write.
+    from alma.config import get_db_path, migrate_settings_schema, validate_settings_schema
+    from alma.core.migrations import refuse_newer_database
+
+    refuse_newer_database(get_db_path())
+
     # Upgrade and validate the forward-only settings schema before any optional
     # subsystem can read activation/configuration.
-    from alma.config import migrate_settings_schema, validate_settings_schema
-
     migrate_settings_schema()
     validate_settings_schema()
 

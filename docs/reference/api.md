@@ -162,7 +162,7 @@ the PDF's state is the `pdf` block of `GET /papers/{id}/details`
 |---|---|---|
 | `GET` | `/library-mgmt/info` | DB size, paper count, backup list |
 | `POST` `DELETE` | `/library-mgmt/backup[/…]` | Create / delete a backup (list is in `/library-mgmt/info`) |
-| `POST` | `/library-mgmt/restore/{name}` | Restore from a backup |
+| `POST` | `/library-mgmt/restore/{name}` | Always `409`: restoring needs ALMa stopped. See [Backups](../operations/backups.md#restore) |
 | `POST` | `/library-mgmt/deduplicate` | Run preprint↔journal dedup |
 | `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
 | `POST` | `/library-mgmt/reset` | Wipe DB (dangerous; confirms) |
