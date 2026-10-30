@@ -34,7 +34,6 @@ import {
   applyPaperAction,
   explainRecommendation,
   getApiErrorMessage,
-  getDiscoveryStatus,
   getDiscoverySettings,
   updateDiscoverySettings,
   getPaperById,
@@ -179,6 +178,7 @@ export function DiscoveryPage() {
   const routeLensId = route.params.get('lens')?.trim() ?? ''
   const routePaperId = route.params.get('paper')?.trim() ?? ''
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
+  const appliedLensRoute = useRef<string | null>(null)
   const [performanceOpen, setPerformanceOpen] = useState(false)
   const [weightsOpen, setWeightsOpen] = useState(false)
   const [branchStudioOpen, setBranchStudioOpen] = useState(false)
@@ -201,8 +201,8 @@ export function DiscoveryPage() {
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   // Lazily fetched explanations keyed by rec ID
   const [explanations, setExplanations] = useState<Record<string, string | null>>({})
-  // List view state — mirrors Feed: sort (relevance vs publication date),
-  // density (compact / normal / extended), and bulk-selection set.
+  // List view state — mirrors Feed: sort (relevance vs publication date)
+  // and density (compact / normal / extended).
   const [sort, setSort] = useState<DiscoverySort>('relevance')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
   const observeCardImpression = useDiscoveryImpressions('discovery_card', sort)
@@ -210,7 +210,6 @@ export function DiscoveryPage() {
     'discovery_compact',
     'custom',
   )
-  const [selectedRecIds, setSelectedRecIds] = useState<Set<string>>(new Set())
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
   const [showAllRecs, setShowAllRecs] = useState(false)
@@ -248,19 +247,17 @@ export function DiscoveryPage() {
 
   useEffect(() => {
     if (!lensesQuery.data || lensesQuery.data.length === 0) return
-    // T8 — honour `?lens=<id>` deep-links first, falling back to the
-    // first lens when no valid route param is present. We do this even
-    // when `selectedLensId` is already set so deep-links land cleanly
-    // after a cold navigation (user types the URL or clicks "Turn into
-    // Discovery feed" from Library).
-    if (routeLensId && lensesQuery.data.some((l) => l.id === routeLensId)) {
-      if (selectedLensId !== routeLensId) setSelectedLensId(routeLensId)
+    // Apply a deep link once per route. Keeping ?lens= in the address bar
+    // must not undo a later click on another lens.
+    if (routeLensId && route.raw !== appliedLensRoute.current && lensesQuery.data.some((l) => l.id === routeLensId)) {
+      appliedLensRoute.current = route.raw
+      setSelectedLensId(routeLensId)
       return
     }
-    if (!selectedLensId) {
+    if (!selectedLensId || !lensesQuery.data.some((l) => l.id === selectedLensId)) {
       setSelectedLensId(lensesQuery.data[0].id)
     }
-  }, [lensesQuery.data, selectedLensId, routeLensId])
+  }, [lensesQuery.data, selectedLensId, routeLensId, route.raw])
 
   // Reset dismissed IDs and the show-all toggle when the lens changes —
   // a fresh lens always opens to the curated first DEFAULT_VISIBLE_RECS
@@ -407,19 +404,6 @@ export function DiscoveryPage() {
       }
     },
     onError: () => errorToast('Refresh failed', 'Could not queue lens refresh.'),
-  })
-
-  // Adopt a selected map region as a custom direction on the current lens
-  // (task 47 §8): merge it into branch_controls.custom_directions and refresh so
-  // retrieval deepens toward it. Member IDS are stored (the backend recomputes
-  // the centroid live), so the direction never goes stale.
-  const discoveryStatusQuery = useQuery({
-    queryKey: ['discovery-status'],
-    // Timer-driven poll → background so an open Discovery tab doesn't pin the
-    // app "active" (41.1).
-    queryFn: () => getDiscoveryStatus({ background: true }),
-    retry: 1,
-    refetchInterval: 60_000,
   })
 
   // Auto-refresh opt-in. The page toggle and Settings drive the same KV-backed
@@ -701,11 +685,9 @@ export function DiscoveryPage() {
     const dateKey = (rec: LensRecommendation): string => {
       const direct = rec.paper?.publication_date ?? ''
       if (direct) return direct
-      // Fallback so older rows without a full ISO date still sort
-      // sensibly relative to one another. Year-only papers land on
-      // YYYY-01-01 — better than sinking the whole batch to the end.
+      // Keep year-only precision: a missing month/day is not January 1.
       const year = rec.paper?.year
-      return year != null ? `${String(year).padStart(4, '0')}-01-01` : ''
+      return year != null ? String(year).padStart(4, '0') : ''
     }
     return [...visible].sort((a, b) => {
       const dateA = dateKey(a)
@@ -717,31 +699,6 @@ export function DiscoveryPage() {
     })
   }, [allRecommendations, dismissedIds, sort])
 
-  // Bulk-selection helpers — mirror the Feed page so the affordance
-  // feels identical between the two surfaces.
-  const allVisibleSelected =
-    recommendations.length > 0 &&
-    recommendations.every((rec) => selectedRecIds.has(rec.id))
-  const toggleRecSelection = (recId: string) => {
-    setSelectedRecIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(recId)) next.delete(recId)
-      else next.add(recId)
-      return next
-    })
-  }
-  const toggleSelectAllVisible = () => {
-    setSelectedRecIds((prev) => {
-      const next = new Set(prev)
-      if (allVisibleSelected) {
-        for (const rec of recommendations) next.delete(rec.id)
-      } else {
-        for (const rec of recommendations) next.add(rec.id)
-      }
-      return next
-    })
-  }
-
   const fetchExplanation = (recId: string) => {
     if (recId in explanations) return // already fetched or in-flight
     setExplanations((prev) => ({ ...prev, [recId]: null })) // mark in-flight
@@ -750,10 +707,12 @@ export function DiscoveryPage() {
         setExplanations((prev) => ({ ...prev, [recId]: res.explanation ?? null }))
       })
       .catch((err: unknown) => {
-        // The score bars stay visible without an explanation, so this
-        // is best-effort UX. But devs need to see when the explanation
-        // endpoint is silently 5xx-ing — the in-flight `null` would
-        // otherwise persist forever (no retry).
+        // Allow the next expansion to retry instead of caching a failed load.
+        setExplanations((prev) => {
+          const next = { ...prev }
+          delete next[recId]
+          return next
+        })
         console.warn('[DiscoveryPage] explainRecommendation failed', recId, err)
       })
   }
@@ -1119,14 +1078,14 @@ export function DiscoveryPage() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="cursor-default text-xs text-slate-500">
-                  {discoveryStatusQuery.data?.last_refresh_at
-                    ? `Last refresh ${formatRelativeShort(discoveryStatusQuery.data.last_refresh_at)}`
+                  {selectedLens?.last_refreshed_at
+                    ? `Last refresh ${formatRelativeShort(selectedLens.last_refreshed_at)}`
                     : 'No refresh on record yet'}
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom" align="end">
-                {discoveryStatusQuery.data?.last_refresh_at
-                  ? formatTimestamp(discoveryStatusQuery.data.last_refresh_at)
+                {selectedLens?.last_refreshed_at
+                  ? formatTimestamp(selectedLens.last_refreshed_at)
                   : 'Refresh the selected lens to generate recommendations.'}
               </TooltipContent>
             </Tooltip>
@@ -1362,8 +1321,7 @@ export function DiscoveryPage() {
 
         {/* ── Control bar ──────────────────────────────────────────────
             Mirrors the Feed control bar so the two surfaces feel like
-            the same product. Three zones: [sort] · [counter +
-            select-all] · [view mode]. Nothing here mutates data — all
+            the same product. Three zones: [sort] · [counter] · [view mode]. Nothing here mutates data — all
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
         <ListControlBar
@@ -1401,11 +1359,6 @@ export function DiscoveryPage() {
             onToggle: () => setSort(sort === 'relevance' ? 'recent' : 'relevance'),
           }}
           count={recommendations.length}
-          selectAll={{
-            allSelected: allVisibleSelected,
-            onToggle: toggleSelectAllVisible,
-            show: recommendations.length > 0,
-          }}
           view={{
             value: viewMode,
             ariaLabel: 'Discovery view mode',
@@ -1423,6 +1376,13 @@ export function DiscoveryPage() {
         <div className="space-y-3" data-tour="discovery-card">
           {lensRecommendationsQuery.isLoading ? (
             <SkeletonList count={5} />
+          ) : lensRecommendationsQuery.isError ? (
+            <ErrorState
+              message="Could not load recommendations for this lens."
+              actionLabel="Retry"
+              onAction={() => void lensRecommendationsQuery.refetch()}
+              actionPending={lensRecommendationsQuery.isFetching}
+            />
           ) : recommendations.length === 0 ? (
             <EmptyState
               title={allRecommendations.length > 0 ? 'All recommendations reviewed' : 'No recommendations yet'}
@@ -1448,8 +1408,6 @@ export function DiscoveryPage() {
           ) : viewMode === 'compact' ? (
             <DiscoveryCompactTable
               recommendations={recommendations}
-              selectedIds={selectedRecIds}
-              onSelectionChange={setSelectedRecIds}
               rowRef={(element, rec, position) =>
                 observeCompactImpression(element, rec.id, position)
               }
@@ -1506,11 +1464,6 @@ export function DiscoveryPage() {
                   suppressSummaries={viewMode === 'normal'}
                   compactActions={viewMode === 'normal'}
                   showActionLabels={viewMode === 'extended'}
-                  selection={{
-                    checked: selectedRecIds.has(rec.id),
-                    onCheckedChange: () => toggleRecSelection(rec.id),
-                    ariaLabel: 'Select recommendation',
-                  }}
                   paper={cardPaper}
                   score={rec.score}
                   rank={recIdx + 1}
@@ -1611,8 +1564,7 @@ export function DiscoveryPage() {
 // raison d'être here is the lens-ranked relevance.
 //
 // Column visibility / order / sort state persists per-user via
-// `storageKey="discovery.compact"`. Selection + row highlight come
-// from DataTable itself via the selectedIds / onSelectionChange props.
+// `storageKey="discovery.compact"`.
 // ──────────────────────────────────────────────────────────────────────
 
 interface DiscoveryCompactRow {
@@ -1631,8 +1583,6 @@ interface DiscoveryCompactRow {
 
 interface DiscoveryCompactTableProps {
   recommendations: LensRecommendation[]
-  selectedIds: Set<string>
-  onSelectionChange: (next: Set<string>) => void
   onOpenDetails: (paper: Publication | null) => void
   rowRef: (
     element: HTMLTableRowElement | null,
@@ -1643,8 +1593,6 @@ interface DiscoveryCompactTableProps {
 
 function DiscoveryCompactTable({
   recommendations,
-  selectedIds,
-  onSelectionChange,
   onOpenDetails,
   rowRef,
 }: DiscoveryCompactTableProps) {
@@ -1661,7 +1609,7 @@ function DiscoveryCompactTable({
           authors: paper?.authors ?? '',
           publishedSortKey:
             paper?.publication_date ??
-            (paper?.year != null ? `${paper.year}-01-01` : ''),
+            (paper?.year != null ? String(paper.year) : ''),
           publishedLabel: formatPublicationDate(paper),
           journal: paper?.journal ?? '',
           // The ranking score, on the same 0-100 band as the ScoreMeter on
@@ -1767,8 +1715,6 @@ function DiscoveryCompactTable({
       getRowId={(row) => row.id}
       onRowClick={(row) => onOpenDetails(row.paper)}
       rowRef={(element, row, position) => rowRef(element, row.rec, position)}
-      selectedIds={selectedIds}
-      onSelectionChange={onSelectionChange}
     />
   )
 }
