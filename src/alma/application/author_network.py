@@ -32,12 +32,14 @@ import json
 import logging
 import sqlite3
 import statistics
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import paper_signal
 from alma.core.db_write import write_section
 from alma.core.http_sources import get_source_http_client
+from alma.core.rotation import RotationWindow, load_cursor, save_cursors, take_window
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_doi
 from alma.discovery.defaults import merge_discovery_defaults
@@ -56,10 +58,11 @@ _SOURCES = (SOURCE_OPENALEX_RELATED, SOURCE_S2_RELATED)
 # constant.
 _CACHE_SLOT = "default"
 
-_SEED_AUTHOR_SIGNAL_MIN = 0.45       # composite paper_signal threshold for seed authors
-_SEED_PAPER_SIGNAL_MIN = 0.50        # composite paper_signal threshold for seed DOIs
-_MAX_SEED_AUTHORS = 20
-_MAX_SEED_DOIS = 20
+_ROTATION_AUTHORS = "author_seed_authors"
+_ROTATION_DOIS = "author_seed_dois"
+_SEED_AUTHOR_SIGNAL_MIN = 0.45       # paper_signal at which a Library paper makes its authors strong
+_MAX_SEED_AUTHORS = 20               # network budget per run, a rotating window
+_MAX_SEED_DOIS = 20                  # network budget per run, a rotating window
 _MAX_WORKS_PER_SEED = 25
 _MAX_RECS_PER_DOI = 25
 
@@ -202,13 +205,13 @@ def _write_cache(
 
 # -- seed selection --------------------------------------------------
 
-def _select_seed_authors(db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS) -> list[str]:
-    """Top-signal authors to seed OpenAlex co-author extension from.
+def _rank_seed_authors(db: sqlite3.Connection) -> list[str]:
+    """Every followed and Library author, strongest first.
 
-    Union of (followed authors, authors of high-signal Library papers).
-    High-signal = composite `paper_signal_score` above a threshold.
-    Ranked by (a) cached author_centroid similarity to library centroid
-    when available, (b) Library paper count as fallback.
+    Followed authors and authors of high-signal Library papers come first,
+    then every other Library author, so the signal threshold orders the pool
+    and never removes anyone from it. Inside each part: cached author_centroid
+    similarity to the Library when available, else Library paper count.
     """
 
     try:
@@ -224,54 +227,48 @@ def _select_seed_authors(db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS)
     except sqlite3.OperationalError:
         followed = []
 
-    # Authors of high-signal Library papers, ordered by their centroid
-    # alignment with the library when we have it.
     state = paper_signal.load_library_state(db)
     lib_paper_rows = db.execute(
         f"SELECT id FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
     ).fetchall()
     lib_ids = [str(r["id"]) for r in lib_paper_rows]
     scores = paper_signal.score_papers_batch(db, lib_ids, state)
-    strong_ids = [pid for pid, s in scores.items() if s >= _SEED_AUTHOR_SIGNAL_MIN]
-    extra: list[str] = []
-    if strong_ids:
-        placeholders = ",".join("?" * len(strong_ids))
-        try:
-            pa_rows = db.execute(
-                f"""
-                SELECT lower(trim(pa.openalex_id)) AS oid, COUNT(DISTINCT pa.paper_id) AS n
-                FROM publication_authors pa
-                WHERE pa.paper_id IN ({placeholders})
-                  AND COALESCE(TRIM(pa.openalex_id), '') <> ''
-                GROUP BY lower(trim(pa.openalex_id))
-                ORDER BY n DESC
-                """,
-                strong_ids,
-            ).fetchall()
-            extra = [str(r["oid"]) for r in pa_rows if r["oid"]]
-        except sqlite3.OperationalError:
-            extra = []
+    try:
+        authored = db.execute(
+            f"""
+            SELECT DISTINCT lower(trim(pa.openalex_id)) AS oid, pa.paper_id
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
+              AND COALESCE(TRIM(pa.openalex_id), '') <> ''
+            ORDER BY oid, pa.paper_id
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        authored = []
+    paper_count: Counter[str] = Counter()
+    strong_count: Counter[str] = Counter()
+    for row in authored:
+        paper_count[row["oid"]] += 1
+        if scores.get(row["paper_id"], 0.0) >= _SEED_AUTHOR_SIGNAL_MIN:
+            strong_count[row["oid"]] += 1
 
-    # Merge; ranking: centroid-aligned first, then Library count.
-    pool: list[str] = []
-    seen: set[str] = set()
-    for oid in followed + extra:
-        if oid and oid not in seen:
-            seen.add(oid)
-            pool.append(oid)
+    strong = list(dict.fromkeys([*followed, *(oid for oid, _ in strong_count.most_common())]))
+    known = set(strong)
+    rest = [oid for oid, _ in paper_count.most_common() if oid not in known]
 
     if state.has_author_centroids():
         # Fairness (doc 49 F1): under PARTIAL centroid coverage, an author with
-        # no cached centroid must not collapse to 0.0 — that sinks them below
-        # every author with any positive similarity and truncates them out of
-        # the seed pool entirely (a silent exclusion, not a soft penalty). Give
-        # centroid-less authors a NEUTRAL rank = the median of the present
-        # similarities, so they interleave in the middle (keeping their
-        # Library-count order among themselves) instead of the bottom. Membership
-        # (`is not None`) distinguishes "no centroid" from a genuine low 0.0 sim.
+        # no cached centroid must not collapse to 0.0, which would sink them
+        # below every author with any positive similarity. Give centroid-less
+        # authors a NEUTRAL rank = the median of the present similarities, so
+        # they interleave in the middle (keeping their Library-count order among
+        # themselves). Membership (`is not None`) distinguishes "no centroid"
+        # from a genuine low 0.0 sim.
         present = [
             sim
-            for oid in pool
+            for oid in [*strong, *rest]
             if (sim := state.author_centroid_sim.get(oid)) is not None
         ]
         neutral = statistics.median(present) if present else 0.0
@@ -280,12 +277,27 @@ def _select_seed_authors(db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS)
             sim = state.author_centroid_sim.get(oid)
             return sim if sim is not None else neutral
 
-        pool.sort(key=_centroid_rank, reverse=True)
-    return pool[:limit]
+        strong.sort(key=_centroid_rank, reverse=True)
+        rest.sort(key=_centroid_rank, reverse=True)
+    return [*strong, *rest]
 
 
-def _select_seed_dois(db: sqlite3.Connection, limit: int = _MAX_SEED_DOIS) -> list[str]:
-    """Top-signal Library DOIs for S2-backed recommendation seeding."""
+def _select_seed_authors(
+    db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS
+) -> RotationWindow[str]:
+    """This run's authors to seed OpenAlex co-author extension from."""
+    return take_window(
+        _rank_seed_authors(db),
+        name=_ROTATION_AUTHORS,
+        budget=limit,
+        cursor=load_cursor(db, _ROTATION_AUTHORS),
+    )
+
+
+def _select_seed_dois(
+    db: sqlite3.Connection, limit: int = _MAX_SEED_DOIS
+) -> RotationWindow[str]:
+    """This run's Library DOIs for S2-backed recommendation seeding."""
 
     try:
         rows = db.execute(
@@ -299,18 +311,18 @@ def _select_seed_dois(db: sqlite3.Connection, limit: int = _MAX_SEED_DOIS) -> li
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
-    if not rows:
-        return []
-    paper_ids = [str(r["id"]) for r in rows]
     state = paper_signal.load_library_state(db)
-    scores = paper_signal.score_papers_batch(db, paper_ids, state)
-    ranked = [
-        (scores.get(str(r["id"]), 0.0), str(r["doi"] or "").strip())
-        for r in rows
-    ]
-    ranked = [(s, d) for s, d in ranked if d and s >= _SEED_PAPER_SIGNAL_MIN]
-    ranked.sort(reverse=True)
-    return [d for _s, d in ranked[:limit]]
+    scores = paper_signal.score_papers_batch(db, [str(r["id"]) for r in rows], state)
+    ranked = sorted(
+        ((scores.get(str(r["id"]), 0.0), str(r["doi"] or "").strip()) for r in rows),
+        reverse=True,
+    )
+    return take_window(
+        [doi for _score, doi in ranked if doi],
+        name=_ROTATION_DOIS,
+        budget=limit,
+        cursor=load_cursor(db, _ROTATION_DOIS),
+    )
 
 
 # -- candidate scoring -----------------------------------------------
@@ -368,7 +380,7 @@ def _score_from_buckets(
     *,
     total_seeds: int,
     library_state: paper_signal.LibraryState,
-    top_topics: set[str],
+    library_topics: set[str],
     lib_venues: set[str],
     corpus_oids: set[str],
     weights: dict[str, float],
@@ -392,8 +404,8 @@ def _score_from_buckets(
             present["seed_cooccurrence"] = True
 
         topics = set(t.lower() for t in (ctx.get("topics") or []))
-        if topics and top_topics:
-            components["topic_overlap"] = len(topics & top_topics) / max(1, len(topics | top_topics))
+        if topics and library_topics:
+            components["topic_overlap"] = len(topics & library_topics) / len(topics)
             present["topic_overlap"] = True
 
         centroid_sim = library_state.author_centroid_sim.get(oid)
@@ -450,7 +462,7 @@ def _score_candidates(
         per_candidate,
         total_seeds=total_seeds,
         library_state=library_state,
-        top_topics=set(list(library_state.topic_weights.keys())[:25]),
+        library_topics=set(library_state.topic_weights),
         lib_venues=_library_venue_set(db),
         corpus_oids=_corpus_author_oids(db),
         weights=_resolve_candidate_weights(db),
@@ -494,7 +506,8 @@ def refresh_openalex_related_network(
     try:
         # Heavy seed selection runs ONCE in the runner (never in GET).
         _log_step(ctx, "seed_select", "Selecting seed authors")
-        seeds = _select_seed_authors(conn)
+        window = _select_seed_authors(conn)
+        seeds = list(window.picked)
         ttl = _cache_ttl_hours(conn)
         now_dt = datetime.now(timezone.utc)
 
@@ -507,7 +520,7 @@ def refresh_openalex_related_network(
         _log_step(ctx, "openalex_fetch", f"Expanding {len(seeds)} seed authors", 0, len(seeds))
         # Precompute scoring primitives ONCE so every per-seed rescore is cheap.
         library_state = paper_signal.load_library_state(conn)
-        top_topics = set(list(library_state.topic_weights.keys())[:25])
+        library_topics = set(library_state.topic_weights)
         lib_venues = _library_venue_set(conn)
         corpus_oids = _corpus_author_oids(conn)
         weights = _resolve_candidate_weights(conn)
@@ -541,7 +554,7 @@ def refresh_openalex_related_network(
                 per_candidate,
                 total_seeds=len(seeds),
                 library_state=library_state,
-                top_topics=top_topics,
+                library_topics=library_topics,
                 lib_venues=lib_venues,
                 corpus_oids=corpus_oids,
                 weights=weights,
@@ -556,10 +569,15 @@ def refresh_openalex_related_network(
                 f"Seed {idx}/{len(seeds)} · {len(partial)} candidates",
                 idx, len(seeds),
             )
+        # A run where every seed failed retries the same window.
+        if errors < len(seeds):
+            with write_section(conn, label="author network: rotation cursor"):
+                save_cursors(conn, [window])
         return {
             "seeds": len(seeds),
             "candidates": len(per_candidate),
             "errors": errors,
+            "rotation": window.record(),
         }
     finally:
         conn.close()
@@ -633,7 +651,8 @@ def refresh_s2_related_network(
     conn = open_db_connection()
     try:
         _log_step(ctx, "seed_select", "Selecting seed DOIs")
-        seeds = _select_seed_dois(conn)
+        window = _select_seed_dois(conn)
+        seeds = list(window.picked)
         ttl = _cache_ttl_hours(conn)
         now_dt = datetime.now(timezone.utc)
 
@@ -644,7 +663,7 @@ def refresh_s2_related_network(
             return {"seeds": 0, "candidates": 0}
 
         library_state = paper_signal.load_library_state(conn)
-        top_topics = set(list(library_state.topic_weights.keys())[:25])
+        library_topics = set(library_state.topic_weights)
         lib_venues = _library_venue_set(conn)
         corpus_oids = _corpus_author_oids(conn)
         weights = _resolve_candidate_weights(conn)
@@ -694,7 +713,7 @@ def refresh_s2_related_network(
                 per_candidate,
                 total_seeds=len(seeds),
                 library_state=library_state,
-                top_topics=top_topics,
+                library_topics=library_topics,
                 lib_venues=lib_venues,
                 corpus_oids=corpus_oids,
                 weights=weights,
@@ -708,10 +727,15 @@ def refresh_s2_related_network(
                 f"DOI {idx}/{len(seeds)} · {len(partial)} candidates",
                 idx, len(seeds),
             )
+        # A run where every seed failed retries the same window.
+        if errors < len(seeds):
+            with write_section(conn, label="author network: rotation cursor"):
+                save_cursors(conn, [window])
         return {
             "seeds": len(seeds),
             "candidates": len(per_candidate),
             "errors": errors,
+            "rotation": window.record(),
         }
     finally:
         conn.close()
