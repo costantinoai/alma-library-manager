@@ -1122,7 +1122,12 @@ def _select_source_candidates(
 ) -> list[sqlite3.Row]:
     ensure_author_hydration_tables(conn)
     now = _utcnow_iso()
-    params: list[Any] = [source]
+    # Only this sweep's own purposes. A `works` row shares `source='openalex'` but
+    # only the works runner can settle it, so a lapsed works failure here reselects
+    # the author forever and, because metadata is a required predecessor of that
+    # runner, keeps the failure from ever being retried.
+    purposes = SOURCE_PURPOSES[source]
+    params: list[Any] = [source, *purposes]
     target_ids = normalize_id_list(target_author_ids)
     target_clause = ""
     if target_ids:
@@ -1158,6 +1163,7 @@ def _select_source_candidates(
         FROM author_enrichment_status es
         JOIN authors a ON a.id = es.author_id
         WHERE es.source = ?
+          AND es.purpose IN ({','.join('?' for _ in purposes)})
           AND COALESCE(a.status, 'active') != 'removed'
           {target_clause}
           AND {force_clause}
