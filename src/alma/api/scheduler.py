@@ -49,6 +49,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from alma.core.concurrency import enter_job_fanout
 from alma.core.db_retry import commit_with_retry
+from alma.core.operations.batch_outcome import settle_batch_fields
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
@@ -3061,8 +3062,13 @@ def get_job_logs_page(
 
 
 def set_job_status(job_id: str, **kwargs) -> None:
-    """Merge status information for a job."""
-    kwargs = redact_sensitive_data(kwargs)
+    """Merge status information for a job.
+
+    This is the one write every terminal status crosses, whether a runner
+    stamps it or `schedule_immediate` finalizes it, so a batch outcome is
+    settled here and a sweep cannot end green with its failures left in logs.
+    """
+    kwargs = settle_batch_fields(redact_sensitive_data(kwargs))
     prev_status = None
     prev_message = None
     with _job_lock:
@@ -3361,7 +3367,9 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 candidate = result.get("message")
                 if isinstance(candidate, str) and candidate.strip():
                     done_message = candidate.strip()
-            if not done_message:
+            # A batch result writes its own headline in `set_job_status`.
+            has_batch = isinstance(result, dict) and "batch" in result
+            if not done_message and not has_batch:
                 done_message = f"Completed: {job_id}"
             payload = {
                 "status": "completed",

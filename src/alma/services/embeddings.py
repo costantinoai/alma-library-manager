@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from alma.ai.embedding_sources import source_for_provider_name
 from alma.core.db_write import write_section
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import normalize_id_list
@@ -491,6 +492,12 @@ def run_embedding_computation(
                 f"Completed ({scope}): {processed - errors - skipped_empty}/{total} embeddings computed "
                 f"({errors} errors, {skipped_empty} empty texts skipped)"
             ),
+            # An empty text was never encoded, so it is not an attempt.
+            result={
+                "batch": batch_outcome(
+                    attempted=processed - skipped_empty, failed=errors, noun="papers"
+                )
+            },
             finished_at=utcnow().isoformat(),
         )
     except Exception as exc:
