@@ -8,6 +8,7 @@ handling.
 from __future__ import annotations
 
 import logging
+import math
 import random
 import threading
 import time
@@ -157,8 +158,14 @@ def _pinned(session: Any, pin: VettedUrl | None) -> Iterator[None]:
     options = {**(saved or {}), CurlOpt.RESOLVE: [f"{pin.host}:{pin.port}:{addresses}"]}
     remaining = remaining_timeout()
     if remaining is not None:
-        # curl_cffi stream mode otherwise sets only a LOW_SPEED timeout.
-        options[CurlOpt.TIMEOUT_MS] = max(1, int(remaining * 1000))
+        # curl_cffi stream mode otherwise sets only a LOW_SPEED timeout. curl
+        # must outlast the budget, or the fetch fails while the budget still has
+        # time left and reads as a transport failure. It counts in whole
+        # milliseconds and rounds its elapsed time up, so one to the budget's
+        # own round-up: seen firing 0.3 ms early with only the round-up.
+        budget_ms = math.ceil(remaining * 1000) + 1
+        options[CurlOpt.TIMEOUT_MS] = budget_ms
+        options[CurlOpt.CONNECTTIMEOUT_MS] = budget_ms
     session.curl_options = options
     try:
         yield

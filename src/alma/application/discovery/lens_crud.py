@@ -540,6 +540,7 @@ def mark_recommendation_action(
                 rating=effective_rating,
                 source_surface="discovery",
                 recommendation_id=rec_id,
+                previous_rating=current_rating if feedback_action == "save" else None,
             )
         lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
         if lens_id and paper_id and feedback_action:
