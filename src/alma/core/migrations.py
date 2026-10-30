@@ -43,6 +43,7 @@ so fresh installs get the new shape directly.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -1622,6 +1623,115 @@ def _m_0046_discovery_branch_identity(conn: sqlite3.Connection) -> None:
     )
 
 
+def _review_legacy_dismiss_ratings(conn: sqlite3.Connection) -> dict[str, str | None]:
+    """Judge every 1-star paper that carries a legacy Dismiss event.
+
+    Returns paper id -> None when the rating came from that Dismiss and nothing
+    else, or -> the reason it stays. Until the D6 amendment Dismiss stamped
+    `rating=1` and wrote `{"action": "dismiss", "rating": 1}`; today's Dismiss
+    writes neither, so that event is the proof. Everything that could mean the
+    user spoke is doubt, and doubt keeps the rating: any other event on the
+    paper or a row merged into it, a non-Dismiss recommendation or Feed action,
+    a positive lens signal, a past Library membership (stars had no event before
+    July 2026) or any status but `dismissed`.
+    """
+
+    def payload(raw: object) -> dict | None:
+        try:
+            value = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    if not _table_exists(conn, "feedback_events"):
+        return {}
+    events: dict[str, list[tuple[str, object]]] = {}
+    for entity_id, event_type, raw in conn.execute(
+        "SELECT entity_id, event_type, value FROM feedback_events "
+        "WHERE entity_type IN ('paper', 'publication')"
+    ):
+        events.setdefault(str(entity_id), []).append((str(event_type), raw))
+
+    def legacy_dismiss(raw: object) -> bool:
+        value = payload(raw) or {}
+        return value.get("action") in {"dismiss", "dismissed"} and value.get("rating") == 1
+
+    def other_event(paper_id: str) -> str | None:
+        for event_type, raw in events.get(paper_id, []):
+            if event_type == "external_link_click":
+                continue  # interest in a link, never a rating
+            value = payload(raw)
+            if value is None:
+                return f"unreadable {event_type} event"
+            if value.get("action") not in {"dismiss", "dismissed"}:
+                return f"{value.get('action') or event_type} event"
+        return None
+
+    def first_other(table: str, query: str, paper_id: str) -> object | None:
+        if not _table_exists(conn, table):
+            return None
+        row = conn.execute(query, (paper_id,)).fetchone()
+        return row[0] if row else None
+
+    review: dict[str, str | None] = {}
+    for paper_id, status, added_at, canonical_id in conn.execute(
+        "SELECT id, status, added_at, canonical_paper_id FROM papers WHERE rating = 1"
+    ).fetchall():
+        paper_id = str(paper_id)
+        if not any(legacy_dismiss(raw) for _, raw in events.get(paper_id, [])):
+            continue
+        twins = [
+            str(r[0])
+            for r in conn.execute("SELECT id FROM papers WHERE canonical_paper_id = ?", (paper_id,))
+        ]
+        reason = next(filter(None, map(other_event, [paper_id, *twins])), None)
+        if reason is None and status != "dismissed":
+            reason = f"status is {status}"
+        if reason is None and str(added_at or "").strip():
+            reason = "was in the Library"
+        if reason is None and canonical_id:
+            reason = "merged into another paper"
+        if reason is None:
+            action = first_other(
+                "recommendations",
+                "SELECT user_action FROM recommendations WHERE paper_id = ? "
+                "AND TRIM(COALESCE(user_action, '')) NOT IN ('', 'dismiss', 'dismissed')",
+                paper_id,
+            )
+            reason = f"recommendation action {action}" if action else None
+        if reason is None:
+            state = first_other(
+                "feed_items",
+                "SELECT status FROM feed_items WHERE paper_id = ? "
+                "AND COALESCE(status, 'new') NOT IN ('new', 'dismissed')",
+                paper_id,
+            )
+            reason = f"feed action {state}" if state else None
+        if reason is None:
+            positive = first_other(
+                "lens_signals",
+                "SELECT signal_value FROM lens_signals WHERE paper_id = ? AND signal_value > 0",
+                paper_id,
+            )
+            reason = "positive lens signal" if positive else None
+        review[paper_id] = reason
+    return review
+
+
+def _m_0047_clear_legacy_dismiss_ratings(conn: sqlite3.Connection) -> None:
+    """Clear `rating=1` where a legacy Dismiss is the only thing that wrote it (D92-13).
+
+    Those ratings still sent dismissed papers to the S2 negative list and the
+    outcome labels, against D6. Only `papers.rating` moves, back to the unrated
+    0: membership, `updated_at`, events and lens signals stay, and a second run
+    finds nothing left to clear.
+    """
+    review = _review_legacy_dismiss_ratings(conn)
+    cleared = [(paper_id,) for paper_id, reason in review.items() if reason is None]
+    conn.executemany("UPDATE papers SET rating = 0 WHERE id = ? AND rating = 1", cleared)
+    logger.info("Cleared %d legacy Dismiss ratings, kept %d", len(cleared), len(review) - len(cleared))
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1669,6 +1779,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (44, "inbox_message_review", _m_0044_inbox_message_review),
     (45, "discovery_lane_deadline", _m_0045_discovery_lane_deadline),
     (46, "discovery_branch_identity", _m_0046_discovery_branch_identity),
+    (47, "clear_legacy_dismiss_ratings", _m_0047_clear_legacy_dismiss_ratings),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
