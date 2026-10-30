@@ -102,7 +102,6 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "branches.max_active_for_retrieval": "4",
     "branches.query_core_variants": "2",
     "branches.query_explore_variants": "2",
-    "lens.max_seeds": "500",
     "sources.openalex.enabled": "true",
     "sources.semantic_scholar.enabled": "true",
     "sources.crossref.enabled": "true",

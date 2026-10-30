@@ -1733,6 +1733,12 @@ def _m_0047_clear_legacy_dismiss_ratings(conn: sqlite3.Connection) -> None:
     logger.info("Cleared %d legacy Dismiss ratings, kept %d", len(cleared), len(review) - len(cleared))
 
 
+def _m_0048_drop_lens_max_seeds(conn: sqlite3.Connection) -> None:
+    """Remove the seed cap's setting: a lens now seeds every member, so it means nothing."""
+    if _table_exists(conn, "discovery_settings"):
+        conn.execute("DELETE FROM discovery_settings WHERE key = 'lens.max_seeds'")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1781,6 +1787,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (45, "discovery_lane_deadline", _m_0045_discovery_lane_deadline),
     (46, "discovery_branch_identity", _m_0046_discovery_branch_identity),
     (47, "clear_legacy_dismiss_ratings", _m_0047_clear_legacy_dismiss_ratings),
+    (48, "drop_lens_max_seeds", _m_0048_drop_lens_max_seeds),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -149,14 +149,16 @@ def _plan_branch_queries_deterministic(
 
 
 def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]:
+    """Every paper the lens's context names, strongest first.
+
+    There is deliberately no cap. A limit on this order silences the same
+    papers on every refresh, so membership is the context itself and bounded
+    work belongs to the steps that use it. A keyword lens matches the local
+    corpus, which is bounded the same way as the Library, minus what the user
+    took out: every seed is a positive for that lens.
+    """
     context_type = lens["context_type"]
     config = lens.get("context_config") or {}
-    settings = read_settings(db)
-    try:
-        max_seeds = int(settings.get("lens.max_seeds", "500"))
-    except (TypeError, ValueError):
-        max_seeds = 500
-    max_seeds = max(50, min(5000, max_seeds))
     if context_type == "library_global":
         rows = db.execute(
             f"""
@@ -165,9 +167,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             WHERE status = 'library'
               AND {standalone_paper_sql("papers")}
             ORDER BY COALESCE(rating, 0) DESC, COALESCE(cited_by_count, 0) DESC
-            LIMIT ?
-            """,
-            (max_seeds,),
+            """
         ).fetchall()
         return [dict(r) for r in rows]
     if context_type == "collection":
@@ -183,9 +183,8 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
               AND p.status = 'library'
               AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
-            LIMIT ?
             """,
-            (collection_id, max_seeds),
+            (collection_id,),
         ).fetchall()
         return [dict(r) for r in rows]
     if context_type == "topic_keyword":
@@ -198,11 +197,11 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
             WHERE (title LIKE ? OR abstract LIKE ?)
+              AND status NOT IN ('dismissed', 'removed')
               AND {standalone_paper_sql("papers")}
             ORDER BY COALESCE(cited_by_count, 0) DESC
-            LIMIT ?
             """,
-            (pattern, pattern, max_seeds),
+            (pattern, pattern),
         ).fetchall()
         return [dict(r) for r in rows]
     if context_type == "tag":
@@ -217,9 +216,8 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
                 WHERE pt.tag_id = ?
                   AND {standalone_paper_sql("p")}
                 ORDER BY COALESCE(p.cited_by_count, 0) DESC
-                LIMIT ?
                 """,
-                (tag_id, max_seeds),
+                (tag_id,),
             ).fetchall()
             return [dict(r) for r in rows]
         if tag_name:
@@ -974,7 +972,8 @@ def _cluster_seed_papers_vector(
 
     Cluster COUNT is inferred by the engine from ``resolution``; ``max_clusters``
     is only a display ceiling. Overflow clusters + density-noise outliers are
-    absorbed into the nearest retained centroid (cosine) so NO seed is dropped
+    absorbed into the nearest retained centroid (cosine), and a seed with no
+    vector joins the branch sharing the most terms with it, so NO seed is dropped
     from the branch view. Returns ``[{"seeds": [...], "centroid": np.ndarray}]``
     with unit-normalized raw-vector centroids for the downstream
     core-pull / explore-push neighbour geometry.
@@ -988,7 +987,7 @@ def _cluster_seed_papers_vector(
         return []
     if len(emb) == 1:
         sid = next(iter(emb))
-        return [{"seeds": [seed_by_id[sid]], "centroid": vectors[sid]}]
+        return [{"seeds": list(seeds), "centroid": vectors[sid]}]
 
     def _unit(v: np.ndarray) -> np.ndarray:
         n = float(np.linalg.norm(v))
@@ -1010,7 +1009,7 @@ def _cluster_seed_papers_vector(
         # (never collapse the whole library to an empty branch view).
         all_ids = list(emb.keys())
         centroid = _unit(np.mean(np.vstack([vectors[i] for i in all_ids]), axis=0))
-        pooled = sorted((seed_by_id[i] for i in all_ids), key=_seed_strength, reverse=True)
+        pooled = sorted(seeds, key=_seed_strength, reverse=True)
         return [{"seeds": pooled, "centroid": centroid}]
 
     # Rank by size then aggregate seed strength; cap to the display ceiling.
@@ -1038,8 +1037,10 @@ def _cluster_seed_papers_vector(
         group_seeds = [seed_by_id[i] for i in cluster["ids"] if i in seed_by_id]
         if not group_seeds:
             continue
-        group_seeds.sort(key=_seed_strength, reverse=True)
         clusters.append({"seeds": group_seeds, "centroid": cluster["centroid"]})
+    _attach_seeds_without_vector(clusters, [s for s in seeds if str(s.get("id") or "") not in emb])
+    for cluster in clusters:
+        cluster["seeds"].sort(key=_seed_strength, reverse=True)
 
     clusters.sort(
         key=lambda c: (
@@ -1049,6 +1050,26 @@ def _cluster_seed_papers_vector(
         reverse=True,
     )
     return clusters
+
+
+def _attach_seeds_without_vector(clusters: list[dict[str, Any]], seeds: list[dict]) -> None:
+    """Give a vector-less seed the branch whose seeds share the most terms with it.
+
+    Its text then shapes that branch's topics and queries, and its id counts in
+    the branch's identity. The branch centroid stays a mean of real vectors.
+    """
+    if not seeds or not clusters:
+        return
+    vocabularies = [
+        set().union(*(_seed_token_set(seed) for seed in cluster["seeds"])) for cluster in clusters
+    ]
+    for seed in seeds:
+        tokens = _seed_token_set(seed)
+        best = max(
+            range(len(clusters)),
+            key=lambda index: len(tokens & vocabularies[index]) / max(1, len(vocabularies[index])),
+        )
+        clusters[best]["seeds"].append(seed)
 
 
 def _cluster_seed_papers_lexical(
