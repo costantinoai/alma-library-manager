@@ -26,6 +26,7 @@ import { JargonHint, MetricTile } from '@/components/shared'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/useToast'
 import { useBranchControls } from '@/hooks/useBranchControls'
+import { BranchStructureStatus } from './BranchStructureStatus'
 
 interface BranchExplorerPanelProps {
   lens: Lens | null
@@ -195,12 +196,13 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
     return {
       branchCount: branches.length,
       activeCount,
-      pinnedCount: pinned.length,
-      boostedCount: boosted.length,
-      mutedCount: muted.length,
+      // A control can name a branch that ended; only a live branch counts.
+      pinnedCount: branches.filter((branch) => pinned.includes(branch.id)).length,
+      boostedCount: branches.filter((branch) => boosted.includes(branch.id)).length,
+      mutedCount: branches.filter((branch) => muted.includes(branch.id)).length,
       autoTunedCount,
     }
-  }, [branches, boosted.length, muted.length, pinned.length])
+  }, [branches, boosted, muted, pinned])
   const activePreset = useMemo(() => closestPreset(temperature), [temperature])
 
   if (!lens?.id) {
@@ -333,6 +335,12 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
             surface area; <strong className="text-alma-800">Mute</strong> to stop spending
             budget on it. Changes apply on the next Discovery refresh.
           </p>
+          <p>
+            <strong className="text-alma-800">Branches stay put.</strong> A paper you save joins
+            the nearest branch and nothing else moves, so your pins and a branch's history last.
+            Clustering runs again only for a new Cluster detail, for Rebuild branches, or once as
+            many papers have come and gone as the structure was built on.
+          </p>
         </ConceptCallout>
 
         {/* Number tiles — adaptive grid (auto-fit packs as many
@@ -386,6 +394,8 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
             />
           ))}
         </div>
+
+        <BranchStructureStatus lensId={lens.id} preview={branchQuery.data} branches={branches} />
 
         <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
@@ -464,9 +474,9 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         How finely the lens's own papers are split into branches. <strong>Higher</strong>{' '}
                         (&gt;1) splits into more, tighter branches; <strong>lower</strong> (&lt;1) merges into
                         fewer, broader ones. Drives the SAME clustering engine as the Insights graph's
-                        cluster-detail knob. Tune live; Apply Controls to persist — the saved value also
-                        shapes the next Discovery refresh's per-branch budget. (Distinct from Temperature,
-                        which steers topic spread, not branch count.)
+                        cluster-detail knob. Tune live to preview it; Apply Controls and the next refresh
+                        rebuilds the branches at this detail. (Distinct from Temperature, which steers
+                        topic spread, not branch count.)
                       </>
                     }
                   />

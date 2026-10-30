@@ -2076,6 +2076,38 @@ export interface LensBranchItem {
   auto_weight_reason?: string | null
 }
 
+export interface BranchLineage {
+  continued: string[]
+  retired: { id: string; reason: string; successor_ids: string[] }[]
+  controls_carried: Record<string, string>
+  controls_dropped: { id: string; control: string }[]
+}
+
+export interface BranchStructure {
+  revision: number | null
+  built_at: string | null
+  trigger: string | null
+  seed_count_at_build: number | null
+  /** Set when this plan reclusters; 'resolution' is a preview of a rebuild. */
+  rebuild_reason: string | null
+  lineage: BranchLineage | null
+  joined: number
+  left: number
+  misfit: number
+  turnover: number
+  misfit_share: number
+  rebuild_recommended: boolean
+}
+
+export interface RetiredBranch {
+  id: string
+  label: string
+  reason: string
+  successor_ids: string[]
+  retired_at: string
+  control_state: string | null
+}
+
 export interface LensBranchPreview {
   lens_id: string
   lens_name?: string | null
@@ -2084,6 +2116,8 @@ export interface LensBranchPreview {
   temperature: number
   resolution?: number
   generated_at: string
+  structure: BranchStructure | null
+  retired_branches: RetiredBranch[]
   branches: LensBranchItem[]
 }
 
@@ -4119,9 +4153,14 @@ export function reorderLenses(orderedIds: string[]): Promise<{ success: boolean;
   return api.put('/lenses/order', { ordered_ids: orderedIds })
 }
 
-export function refreshLens(lensId: string, limit = 50): Promise<JobEnvelope> {
+export function refreshLens(
+  lensId: string,
+  limit = 50,
+  options?: { rebuildBranches?: boolean },
+): Promise<JobEnvelope> {
+  const rebuild = options?.rebuildBranches ? '&rebuild_branches=true' : ''
   return api.post<JobEnvelope>(
-    `/lenses/${encodeURIComponent(lensId)}/refresh?limit=${encodeURIComponent(String(limit))}`,
+    `/lenses/${encodeURIComponent(lensId)}/refresh?limit=${encodeURIComponent(String(limit))}${rebuild}`,
   )
 }
 
