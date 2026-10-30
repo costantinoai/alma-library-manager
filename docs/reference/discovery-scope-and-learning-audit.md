@@ -317,8 +317,8 @@ reconciliation: 8 fixed, 7 open.
 | D92-02 | fixed | `application/discovery/lens_crud.py:1110` | Verdicts come from linked events; Dismiss adds to no preference bucket. `test_dismiss_on_a_saved_paper_changes_no_branch_outcome`. Live: Dismiss wrote 0 events and engagement stayed 0. Prod copies predate linkage: 33 of 336 action events carry a recommendation id. |
 | D92-03 | fixed | `services/feedback_substrate.py:175` | A zero delta no longer raises `interaction_count` or `confidence`, on the paper or its topics and authors. `paper_action` keeps no delta on purpose, because a global profile would break D26. `test_zero_valued_action_is_not_tuning_evidence`. |
 | D92-04 | superseded | `application/discovery/branch_attribution.py:33`, `application/discovery/__init__.py:699` | Attribution reads all hits, ties stay unattributed, and hits survive in the snapshot. Keeping several candidate-branch contexts is G3 design. Live deck: 16 of 50 cards carried a branch. |
-| D92-05 | open, narrowed | `application/discovery/seed_profile.py:1311`, `application/discovery/branch_preview.py:26` | Preview and refresh share `resolve_lens_branches`. The preview key still omits seed and action revisions, so a Save can leave a preview stale until the next refresh changes the set id. Owner: `branch_preview.py`, G2. |
-| D92-06 | fixed | `application/discovery/branch_identity.py:29`, `application/discovery/lens_crud.py:1777` | `_load_branch_seed_history` is gone. A mutable-slug id is only a birth name; seed overlap in `discovery_branches` carries identity. Split and merge lineage stays G2. Test: `test_discovery_branch_identity.py`. |
+| D92-05 | open, narrowed | `application/discovery/seed_profile.py:1512`, `application/discovery/branch_preview.py:26` | Preview and refresh share `resolve_lens_branches`. The preview key still omits seed and action revisions, so a Save can leave a preview stale until the next refresh changes the set id. Owner: `branch_preview.py`, G2. |
+| D92-06 | fixed | `application/discovery/branch_identity.py:29`, `application/discovery/lens_crud.py:1777` | `_load_branch_seed_history` is gone. A mutable-slug id is only a birth name; seed overlap in `discovery_branches` carries identity. Rebuild lineage is `successor_ids` (D92-29). Test: `test_discovery_branch_identity.py`. |
 | D92-07 | fixed | `application/discovery/lens_crud.py:943`, `api/routes/insights.py:2648` | The route now finds a lens through the identity table, so a new branch can be controlled. No frontend caller remains; deleting the route is a product decision. Live on 2026-10-30, sprint item C0. |
 | D92-08 | fixed | `frontend/src/pages/DiscoveryPage.tsx:253`, `frontend/src/pages/DiscoveryPage.tsx:1382`, `frontend/src/pages/DiscoveryPage.tsx:1081` | Deep link applies once per route, errors show Retry, refresh time belongs to the lens. Browser pass recorded in sprint item A1. |
 | D92-09 | fixed | `frontend/src/pages/DiscoveryPage.tsx:688` | Year-only dates stay year-only. The selection controls are gone: no bulk state remains in the page. |
@@ -452,23 +452,78 @@ Dev promoted to 547 with prod's ratings; refreshes run in sequence on one copy.
 | Old 2 to new 1 | 6, 4 | 2 of 6 | 33 of 46 |
 | New 1 to new 2 | 4, 4 | 4 of 4 | 46 of 46 |
 
-The drop is not the rotation, because a refresh does not rotate, and it is not
+The drop was not the rotation, because a refresh does not rotate, and it was not
 specific to the 47 papers. Starting from 500 random seeds, adding **one** paper
 gave adjusted Rand 0.32 to 0.36 against the base partition, five papers 0.32 to
 0.46, twenty 0.41, and forty-seven 0.13. UMAP plus excess-of-mass HDBSCAN reshuffles on
 any change to its input, and random subsets of the same copy ranged from 2 to 15
-clusters. So the 0.70 overlap rule fails after an ordinary Save, today and before
-this change: see D92-29.
+clusters. So the 0.70 overlap rule failed after an ordinary Save. D92-29 closed
+this: see Stored branch membership below.
 
 Each of the 47 joined a branch and moves its centroid: 2.1 degrees in the
 smallest branch that received them, 0.39 degrees in the largest.
+
+### Stored branch membership, measured 2026-10-30
+
+A refresh keeps `discovery_branches.seed_ids`; a new seed joins the nearest
+stored branch. Each row is one real refresh on its own copy of the same 547-paper
+base, with the same added papers on both sides, against that side's base of 4
+branches. "Moved" is base papers whose branch changed. The base deck matched
+itself 46 of 46 on two refreshes on both sides. "Save" is the top card saved.
+
+| Added | Old: branches, ids kept, adjusted Rand, moved, cards | Stored: branches, ids kept, adjusted Rand, moved, cards |
+|---:|---:|---:|
+| Save | 6, 1 of 4, 0.136, 510 of 547, 35 of 46 | 4, 4 of 4, 1.000, 0, 45 of 46 |
+| 1 | 6, 1 of 4, 0.147, 510 of 547, 36 of 46 | 4, 4 of 4, 1.000, 0, 45 of 46 |
+| 5 | 6, 0 of 4, 0.084, 547 of 547, 28 of 46 | 4, 4 of 4, 1.000, 0, 46 of 46 |
+| 20 | 2, 1 of 4, 0.818, 95 of 547, 32 of 46 | 4, 4 of 4, 1.000, 0, 40 of 46 |
+| 47 | 3, 3 of 4, 0.843, 23 of 547, 37 of 46 | 4, 4 of 4, 1.000, 0, 42 of 46 |
+
+Cards are non-exploration cards in common with the base deck. Save, then 5, then
+20 in sequence on one copy kept all 4 identities and moved nobody, with 45, 45
+and 39 of 46 cards.
+
+A rebuild is expensive to identity, so it is rare and deliberate. It has no
+schedule, because an unchanged Library gains nothing from one. The user starts it
+(Rebuild branches, or a saved Cluster detail), and a refresh does it alone only
+when papers joined plus papers left reach 100% of the papers at the last build.
+That rule also carries a new Library from its first few papers to real branches,
+in a handful of rebuilds that have little state to lose. Measured on real vectors
+without refreshes, misfit share was at most 0.009 for random additions up to 47, and
+0.034 to 0.126 when a whole topic was held out and added back, so Branch Studio
+recommends a rebuild at 0.03, or at 50% turnover. Held-out groups that sat near
+another branch stayed below it, which is the right answer for them.
+
+What a rebuild did, with one pin, boost and mute set on the three largest branches:
+
+| Rebuild | Branches | Continued | Retired | Controls |
+|---|---:|---:|---:|---|
+| No change to the papers | 4 to 4 | 4 | 0 | All three stayed |
+| After 47 added | 4 to 3 (40, 44, 510) | 3 | 1, `split` | All three stayed |
+| After 1 Save, live, from Branch Studio | 4 to 6 (41 to 164) | 1 | 3: 2 `split`, 1 `replaced` | Boost stayed, mute carried, pin dropped and reported |
+
+The third row dropped the pin because the 455-paper branch split with no child
+holding half of it. A rebuild's own result stays as unstable as the clusterer: the
+same copy gave 3 and 6 branches from 594 and 548 papers. Only the rebuild carries
+that risk now, and Branch Studio shows every ended branch with its successors.
+
+Branch step, warm, stored against a build, on the copies of the cost table above:
+
+| Library | Build | Stored |
+|---:|---:|---:|
+| 547 | 1.5 s | 0.6 s |
+| 2,000 | 11.6 s | 3.7 s |
+| 10,000 | 21.3 s | 11.1 s |
+
+The stored step is mostly per-branch term extraction, which still runs on every
+refresh so topics follow the members.
 
 ### Open items from this audit
 
 | ID | Status | Source | Note |
 |---|---|---|---|
 | D92-28 | fixed | Table above | Every Library paper is a seed; every external budget rotates. `test_discovery_every_library_paper_counts.py`, red then green. |
-| D92-29 | open | `ai/clustering.py:357`, `application/discovery/branch_identity.py:15` | Branch structure is not stable under small additions. Owner: G2, stable revisions and lineage. |
+| D92-29 | fixed | `application/discovery/seed_profile.py:1094`, `application/discovery/branch_identity.py:81` | Membership is stored and a refresh keeps it. A rebuild is explicit, maps identities and reports every control. Table above. `test_discovery_branch_stability.py`, red then green. |
 | D92-30 | open | `core/rotation.py`, `application/author_network.py:162` | The author cache holds only the latest window, so a suggestion from a rotated seed lives for one TTL. |
 | D92-31 | open | `application/library.py:347` | Import title dedup reads 5,000 rows with no order. Harmless until the Library passes that size. |
 

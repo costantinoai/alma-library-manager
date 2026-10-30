@@ -289,14 +289,14 @@ branch outcome data for auto-weighting. A branch has:
 
 The Branch Studio UI lets you pin / mute / boost a branch. Those
 controls affect branch-specific external retrieval budget on the next
-lens refresh. Current production branches are not yet the persistent
-hierarchical interest tree described in the experimental branched user
-model work; branch outcome learning still depends on enough
-recommendations being persisted with `branch_id`.
+lens refresh. Branch membership is stored and survives a refresh (see
+below), but branches are not yet the hierarchical interest tree described
+in the experimental branched user model work; branch outcome learning
+still depends on enough recommendations being persisted with `branch_id`.
 
 #### How branches are built
 
-`_build_seed_branches` runs at the start of every lens refresh:
+`_build_seed_branches` runs at a build, which is not every refresh:
 
 1. **Cluster the seeds.** When ≥ 4 of your library papers carry
    embeddings, K-means clusters them in SPECTER2 space; otherwise a
@@ -324,29 +324,57 @@ recommendations being persisted with `branch_id`.
    they come from the *farthest* cluster (leap discovery,
    genuinely orthogonal threads). The branch's `direction_hint`
    surfaces this so you know why it's pointing where it is.
-5. **Branch identity.** `branch_id` is hashed from the cluster's
-   sorted seed paper IDs, scoped by lens — so labels can drift
-   without breaking the join to stored recommendations. When the
-   seed set shifts even by one paper, the id changes, but…
+5. **Branch identity.** A new branch gets an id hashed from its seed
+   paper IDs, scoped by lens. That id is a birth name: after the first
+   build the row in `discovery_branches` carries the identity, so
+   labels and members can change without breaking the join to stored
+   recommendations.
 
-#### Lineage: calibration + controls survive seed drift
+Steps 1 and 2 run only at a build. Steps 3 and 4 run on every refresh,
+from the members the branch has then.
 
-When K-means reshuffles a single seed (say, you saved 3 papers
-since the last refresh), the new cluster's `branch_id` is
-technically different from the previous one. Two mechanisms ensure
-your accumulated calibration and pin/mute/boost don't get lost:
+#### Stored membership: a Save never reshuffles a lens
 
-* **Calibration lineage.** `_enrich_branches_with_outcomes` checks
-  past `branch_id`s in `recommendations` for this lens and inherits
-  the outcome history of any past branch whose seed set overlaps
-  ≥ 70 % with the current cluster's seed set.
-* **Control lineage.** `_apply_branch_controls` does the same for
-  pin / mute / boost — a branch you muted three days ago stays
-  muted after K-means reshuffles, as long as the new cluster is
-  ≥ 70 % the same papers.
+A refresh keeps every stored assignment. The clusterer reshuffles on
+any change to its input, so reclustering after each Save would break
+branch identity, and pins and outcomes would follow it.
 
-This lineage is best-effort and only has useful outcome data when
-previous recommendations carried branch attribution. If a refresh
+* **New seed.** It joins the branch with the nearest centroid, and
+  nothing else moves. Centroids are taken before anyone joins, so the
+  order of seeds does not matter.
+* **Seed with no vector.** It joins the branch sharing the most terms
+  with it, and joins by its vector once it has one.
+* **Removed paper.** It leaves its branch. A branch that loses its last
+  paper retires as `emptied`, and Branch Studio says so, with the control
+  it held.
+* **Semantics only.** Assignment reads ids, vectors and terms. A rating,
+  a signal score or a mute cannot move a paper, so a new seed near a
+  muted branch joins that branch, and Branch Studio's seed count shows it.
+
+A **rebuild** reclusters every seed. It has four causes and no schedule:
+
+| Reason | When |
+|---|---|
+| `initial` | The lens has no stored structure, or no member left. |
+| `user` | **Rebuild branches** in Branch Studio. |
+| `resolution` | A saved Cluster detail differs from the one the structure was built with. Moving the slider previews the rebuild; Apply Controls and the next refresh do it. |
+| `drift` | Papers joined plus papers left reach 100% of the papers at the last build. |
+
+Below 100%, Branch Studio recommends a rebuild at 50% turnover, or when
+3% of the members joined and fit their branch worse than the bottom tenth
+of its built members do. That second figure catches a new topic.
+
+A rebuild keeps an identity under the D26 rule: strong, unambiguous
+one-to-one overlap of at least 70%, which keeps its history and outcomes.
+Every other old branch retires as `split`, `merged` or `replaced`, with
+its successors in `successor_ids`, and its successor starts cold. A pin,
+boost or mute is an instruction and not learned taste, so it follows the
+majority of the branch's papers. If no branch holds that majority, the
+control is dropped and reported. Activity carries the whole report, as
+the refresh job's message and `branch_structure` result.
+
+Outcome history is only useful when previous recommendations carried
+branch attribution. If a refresh
 produces branch-lane candidates but none survive into persisted
 recommendations with `branch_id`, Branch Studio can still show and
 control branches, but auto-weighting and branch diagnostics have no

@@ -197,6 +197,11 @@ an explicit unresolved region. Preserve broad/narrow structural levels without
 letting changing a display zoom create new learned scopes. Creating an actual
 new branch is an explicit structural transition with D26 cold-start semantics.
 
+Shipped so far (D92-29): membership is stored in `discovery_branches`, a refresh
+keeps it, and a new seed joins the nearest branch. A rebuild runs on a user action
+or at 100% turnover, and it records `retired_reason` and `successor_ids`. The
+structural method above is still UMAP/HDBSCAN, and only the rebuild now depends on it.
+
 Within each branch, choose **several representative exemplars and distinctive
 facets**. A greedy coverage objective can select exemplars that add uncovered
 neighbourhoods; validate coverage against the full member set. Increase the
