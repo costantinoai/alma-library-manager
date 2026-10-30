@@ -5530,6 +5530,348 @@
         }
       }
     },
+    "/api/v1/papers/{paper_id}/pdf": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Serve the paper's stored PDF",
+        "description": "Streams the kept PDF inline (the browser's own viewer opens it). Supports Range requests and conditional GETs (ETag = the file's sha256). 404 when no PDF is stored or its file is missing.",
+        "operationId": "get_paper_pdf_api_v1_papers__paper_id__pdf_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Attach a PDF to this paper (queued Activity job)",
+        "description": "The request body IS the PDF (`Content-Type: application/pdf`). It is staged, then a `pdf.attach` job verifies it against the paper and stores it (replacing any previous file). Returns the Activity envelope.",
+        "operationId": "upload_paper_pdf_api_v1_papers__paper_id__pdf_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 300,
+              "description": "Original file name",
+              "default": "",
+              "title": "Filename"
+            },
+            "description": "Original file name"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Remove the paper's stored PDF",
+        "description": "`reject=true` also remembers this exact file as wrong for the paper, so a later fetch never stores it again.",
+        "operationId": "delete_paper_pdf_api_v1_papers__paper_id__pdf_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "reject",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Reject"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/papers/{paper_id}/pdf/fetch": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Find this paper's PDF through the enabled sources (queued Activity job)",
+        "description": "Queues a `pdf.fetch` job that tries every enabled PDF-source plugin in run order (open-access first, shadow libraries last) and stores the first file that verifies as this paper. 409 when no source is on.",
+        "operationId": "fetch_paper_pdf_api_v1_papers__paper_id__pdf_fetch_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/papers/{paper_id}/detach": {
       "post": {
         "tags": [
@@ -10723,6 +11065,271 @@
         },
         "responses": {
           "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/pdf": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Import a PDF: find its paper, save it to the Library, attach the file",
+        "description": "Send the PDF itself as the body (`Content-Type: application/pdf`, `?filename=`). A queued `pdf.import` job reads the file's DOI / arXiv id / title, matches an EXISTING paper first (never creating a duplicate), otherwise resolves it online, saves it to the Library and stores the PDF. When the paper cannot be identified the job result carries an `upload_id` for `/import/pdf/uploads/{upload_id}`.",
+        "operationId": "import_pdf_endpoint_api_v1_library_import_pdf_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 300,
+              "description": "Original file name",
+              "default": "",
+              "title": "Filename"
+            },
+            "description": "Original file name"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/pdf/uploads": {
+      "get": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "PDFs ALMa could not identify, still waiting for a DOI or title",
+        "description": "The staged uploads a `pdf.import` job left unresolved, newest first. They outlive the page that dropped them (an upload is kept a day), so the Import dialog can show them again after a tab switch, a close or a reload. Pure read of the staging directory \u2014 no job, no write.",
+        "operationId": "pending_pdf_uploads_endpoint_api_v1_library_import_pdf_uploads_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PdfPendingUploads"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/pdf/uploads/{upload_id}": {
+      "delete": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Give up on a PDF ALMa could not identify",
+        "description": "Removes the kept upload and its sidecar. 404 once it is gone (given up already, or expired after a day).",
+        "operationId": "discard_pdf_upload_endpoint_api_v1_library_import_pdf_uploads__upload_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Retry a PDF import with a DOI or title you provide",
+        "description": "Re-runs the import job for a kept upload, trying your DOI/arXiv id or title before anything read from the file. 404 once the upload has expired (a day).",
+        "operationId": "retry_pdf_import_endpoint_api_v1_library_import_pdf_uploads__upload_id__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfImportHint"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -19973,6 +20580,153 @@
         }
       }
     },
+    "/api/v1/inbox/messages": {
+      "get": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "List capture messages that need attention (pure read)",
+        "description": "Returns the durable failed-capture ledger for review. By default, archived records are omitted. Never writes.",
+        "operationId": "list_capture_messages_api_v1_inbox_messages_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inbox/messages/{message_id}/action": {
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "Archive or retry a failed capture",
+        "description": "The single mutation route for capture review. Archive keeps the audit record but removes it from attention. Retry uses a replacement paper link, resolves outside the SQLite write window, and updates the same ledger record.",
+        "operationId": "apply_capture_message_action_api_v1_inbox_messages__message_id__action_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureMessageAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inbox/status": {
       "get": {
         "tags": [
@@ -20318,8 +21072,77 @@
           "onboarding"
         ],
         "summary": "Complete Onboarding",
-        "description": "Mark onboarding done so the gate stops showing, then start the\nMANDATORY convergence chain (audit 39 finding #4): the coordinator walks\nthe maintenance registry's dependency order \u2014 identity \u2192 metadata \u2192\nvectors \u2192 local embeddings \u2192 centroids \u2192 reference graph \u2192 cluster\nlabels \u2192 topic normalization \u2014 until nothing actionable remains, so the\nfresh library ends healthy, not \"queued\". Its `auto:onboarding_complete`\ntrigger is user-facing (never yields to the idle gate) and survives\nrestarts via the orphan-resume path.",
+        "description": "Mark onboarding done so the gate stops showing, then start the\nMANDATORY convergence chain (audit 39 finding #4): the coordinator walks\nthe maintenance registry's dependency order \u2014 identity \u2192 metadata \u2192\nvectors \u2192 local embeddings \u2192 centroids \u2192 reference graph \u2192 cluster\nlabels \u2192 topic normalization \u2014 until nothing actionable remains, so the\nfresh library ends healthy, not \"queued\". Its `auto:onboarding_complete`\ntrigger is user-facing (never yields to the idle gate) and survives\nrestarts via the orphan-resume path.\n\n`outcome` tells a finished wizard from a dismissed one; both close it and\nboth start the chain, so the wizard has this one closing route.",
         "operationId": "complete_onboarding_api_v1_onboarding_complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WalkthroughOutcomeRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/reset": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Reset Onboarding",
+        "description": "Settings \u2192 Restart: ask for the wizard and every walkthrough again.",
+        "operationId": "reset_onboarding_api_v1_onboarding_reset_post",
         "security": [
           {
             "HTTPBearer": []
@@ -20363,15 +21186,15 @@
         }
       }
     },
-    "/api/v1/onboarding/reset": {
-      "post": {
+    "/api/v1/onboarding/walkthroughs": {
+      "get": {
         "tags": [
           "onboarding",
           "onboarding"
         ],
-        "summary": "Reset Onboarding",
-        "description": "Clear the completed flag so Settings \u2192 Restart re-shows the flow.",
-        "operationId": "reset_onboarding_api_v1_onboarding_reset_post",
+        "summary": "List Walkthrough State",
+        "description": "Every walkthrough's stored state. The UI shows an overlay only from this.",
+        "operationId": "list_walkthrough_state_api_v1_onboarding_walkthroughs_get",
         "security": [
           {
             "HTTPBearer": []
@@ -20396,8 +21219,230 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkthroughListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/walkthroughs/import": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Import Walkthrough State",
+        "description": "Take a browser's old page-tour flags, one way. Repeating it changes nothing.",
+        "operationId": "import_walkthrough_state_api_v1_onboarding_walkthroughs_import_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkthroughImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkthroughImportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/walkthroughs/{walkthrough_id}/outcome": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Record Walkthrough Outcome",
+        "description": "Record that a walkthrough was finished or dismissed.",
+        "operationId": "record_walkthrough_outcome_api_v1_onboarding_walkthroughs__walkthrough_id__outcome_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "walkthrough_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Walkthrough Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalkthroughOutcomeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkthroughStateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/walkthroughs/{walkthrough_id}/replay": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Replay Walkthrough",
+        "description": "Ask for one walkthrough again. It stays pending until it is closed.",
+        "operationId": "replay_walkthrough_api_v1_onboarding_walkthroughs__walkthrough_id__replay_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "walkthrough_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Walkthrough Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalkthroughStateResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -22587,6 +23632,35 @@
         ],
         "title": "BulkSuggestResponse",
         "description": "Response for bulk tag suggestion generation."
+      },
+      "CaptureMessageAction": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "archive",
+              "retry"
+            ],
+            "title": "Action"
+          },
+          "replacement_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "CaptureMessageAction",
+        "description": "One explicit decision on a failed capture record."
       },
       "CollectionCreate": {
         "properties": {
@@ -25562,6 +26636,88 @@
         "title": "PaperResponse",
         "description": "Response model for a paper."
       },
+      "PdfImportHint": {
+        "properties": {
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi",
+            "description": "DOI, doi.org link or arXiv id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "title": "PdfImportHint",
+        "description": "What the user knows about a PDF ALMa could not identify."
+      },
+      "PdfPendingUpload": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "title": "Upload Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "staged_at": {
+            "type": "string",
+            "title": "Staged At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "filename",
+          "sha256",
+          "bytes",
+          "staged_at"
+        ],
+        "title": "PdfPendingUpload",
+        "description": "One kept upload still waiting for a DOI or title."
+      },
+      "PdfPendingUploads": {
+        "properties": {
+          "uploads": {
+            "items": {
+              "$ref": "#/components/schemas/PdfPendingUpload"
+            },
+            "type": "array",
+            "title": "Uploads"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uploads"
+        ],
+        "title": "PdfPendingUploads"
+      },
       "PickAffiliationRequest": {
         "properties": {
           "institution_name": {
@@ -25665,7 +26821,8 @@
               "type": "string",
               "enum": [
                 "send",
-                "receive"
+                "receive",
+                "pdf_source"
               ]
             },
             "type": "array",
@@ -25687,6 +26844,11 @@
           "can_receive": {
             "type": "boolean",
             "title": "Can Receive",
+            "default": false
+          },
+          "can_fetch": {
+            "type": "boolean",
+            "title": "Can Fetch",
             "default": false
           },
           "status": {
@@ -27243,6 +28405,148 @@
           "python_version"
         ],
         "title": "VersionResponse"
+      },
+      "WalkthroughImportRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "WalkthroughImportRequest"
+      },
+      "WalkthroughImportResponse": {
+        "properties": {
+          "imported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Imported"
+          },
+          "ignored": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ignored"
+          }
+        },
+        "type": "object",
+        "required": [
+          "imported",
+          "ignored"
+        ],
+        "title": "WalkthroughImportResponse"
+      },
+      "WalkthroughListResponse": {
+        "properties": {
+          "walkthroughs": {
+            "items": {
+              "$ref": "#/components/schemas/WalkthroughStateResponse"
+            },
+            "type": "array",
+            "title": "Walkthroughs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "walkthroughs"
+        ],
+        "title": "WalkthroughListResponse"
+      },
+      "WalkthroughOutcomeRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "done",
+              "skipped"
+            ],
+            "title": "Outcome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "WalkthroughOutcomeRequest"
+      },
+      "WalkthroughStateResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "current_version": {
+            "type": "integer",
+            "title": "Current Version"
+          },
+          "pending": {
+            "type": "boolean",
+            "title": "Pending"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "recorded_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Version"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "current_version",
+          "pending"
+        ],
+        "title": "WalkthroughStateResponse",
+        "description": "One walkthrough. `pending` is the only field the UI decides on."
       },
       "ZoteroCollectionResponse": {
         "properties": {
