@@ -1049,7 +1049,9 @@ def fetch_related_papers(doi: str, limit: int = 20) -> list[dict]:
 RECOMMENDATION_POOL_ALL = "all-cs"
 
 # Semantic Scholar's hard limit on each seed list of a recommendations request.
-RECOMMEND_MAX_SEEDS = 500
+# Measured 2026-10-30: 100 passes and 101 answers 400 "Maximum 100 papers in input
+# lists". The swagger states no limit. The two lists are counted separately.
+RECOMMEND_MAX_SEEDS = 100
 
 
 def recommend_for_paper(
@@ -1118,8 +1120,8 @@ def recommend_from_seeds(
 
     Each seed id may be a bare S2 `paperId`, a `DOI:{doi}` string, a
     `CorpusID:{id}` string, or any other identifier form the S2
-    recommendations API accepts (ArXiv:, PMID:, PMCID:, etc.). The API
-    accepts up to 500 positive and 500 negative IDs; we cap at the same.
+    recommendations API accepts (ArXiv:, PMID:, PMCID:, etc.). Each list
+    is capped at ``RECOMMEND_MAX_SEEDS``.
 
     The recommendations endpoint lives at a different host path than
     the rest of the graph API (`/recommendations/v1/papers` rather than

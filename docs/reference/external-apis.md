@@ -108,8 +108,8 @@ recommendations, and the reference/citation graph.
   * `/recommendations/v1/papers/forpaper/{id}` (single seed, all-time) and
     `POST /recommendations/v1/papers` (positive + negative seeds, new work
     only) for the `s2_related` recommendation channel — a different host path
-    than the rest of the graph API. Each seed list takes at most 500 ids
-    (`RECOMMEND_MAX_SEEDS`).
+    than the rest of the graph API. Each seed list takes at most 100 ids
+    (`RECOMMEND_MAX_SEEDS`, measured: 101 answers 400).
   * `/author/batch`, `/author/search`, and `/author/{id}/papers` for
     author identity resolution.
 

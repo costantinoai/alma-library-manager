@@ -394,7 +394,7 @@ Shares are read-only from prod (547 Library papers, 538 embedded) and dev (141,
 | `seed_profile._load_seed_papers_for_lens` | 500, clamp 50 to 5,000, rating then citations | 47, always | 0 | Silent forever | No cap, for all four lens types |
 | Branch clustering, seed with no vector | Left out of every branch | 9, until embedded | 2 | Silent in branches | Joins the branch sharing most terms |
 | `similarity.load_publication_example_embeddings` | First 400 vectors, newest added | 137 of 537, always | 0 | Silent as exemplars; still in the centroid | Every vector |
-| `frontier._s2_seed_identifiers`, positives | Rating 4+ only, 150 shared with negatives, 100 per list | 460 of 540, always | 105 of 140 | Silent forever | Every saved paper, rotating 500 |
+| `frontier._s2_seed_identifiers`, positives | Rating 4+ only, 150 shared with negatives, 100 per list | 460 of 540, always | 105 of 140 | Silent forever | Every saved paper, rotating 100 per list |
 | `frontier`, per-paper S2 neighbours | `positive[:6]` | 534 of 540, always | 134 of 140 | Silent forever | Rotating 6 |
 | `frontier._positive_openalex_seed_ids` | 4 newest of rating 4+ | 221 of 225, always | 80 of 84 | Silent forever | Rotating 4 of all saved |
 | `frontier.build_discovery_frontier`, topic queries | 6 strongest | 152 of 158 topics; 267 papers hold none of the 6 | 86 of 92; 33 papers | Silent forever | Rotating 6 |
