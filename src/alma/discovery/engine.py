@@ -1567,9 +1567,7 @@ class DiscoveryEngine:
         """Read all rows from the ``discovery_settings`` table.
 
         Returns a flat ``{key: value}`` dict, falling back to class-level
-        ``DEFAULTS`` for any missing keys.  If the table does not exist yet
-        (e.g. in test databases that skip deps.py migration), all defaults
-        are returned.
+        ``DEFAULTS`` for any missing keys.
         """
         return load_settings(conn)
 

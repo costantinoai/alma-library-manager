@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ALMa API",
-    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Cross-site requests\n\n    Whatever the `API_KEY` setting, a browser page on another origin cannot change\n    data: unsafe methods from it get `403`. Add your own address to\n    `ALMA_ALLOWED_ORIGINS`. Requests without an `Origin` header (curl, scripts) pass.\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
+    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (the normal mode)\n    - The web app sends no key, so setting `API_KEY` breaks the browser UI\n\n    ## Cross-site requests\n\n    Whatever the `API_KEY` setting, a browser page on another origin cannot change\n    data: unsafe methods from it get `403`. A request whose `Host` is not `localhost`,\n    an IP address or a listed address also gets `403`, on every method, which stops\n    DNS rebinding. List your own address in `ALMA_ALLOWED_ORIGINS`. Requests without\n    an `Origin` header (curl, scripts) pass once their `Host` is known.\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
     "contact": {
       "name": "ALMa",
       "url": "https://github.com/costantinoai/alma-library-manager"
@@ -15779,6 +15779,18 @@
             }
           },
           {
+            "name": "rebuild_branches",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Recluster this lens's branches in this refresh, instead of keeping them.",
+              "default": false,
+              "title": "Rebuild Branches"
+            },
+            "description": "Recluster this lens's branches in this refresh, instead of keeping them."
+          },
+          {
             "name": "x-api-key",
             "in": "header",
             "required": false,
@@ -23560,6 +23572,110 @@
         "title": "BranchSeedSample",
         "description": "Small paper summary for branch visualization previews."
       },
+      "BranchStructureSummary": {
+        "properties": {
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "built_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Built At"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "seed_count_at_build": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Count At Build"
+          },
+          "rebuild_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild Reason"
+          },
+          "lineage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineage"
+          },
+          "joined": {
+            "type": "integer",
+            "title": "Joined",
+            "default": 0
+          },
+          "left": {
+            "type": "integer",
+            "title": "Left",
+            "default": 0
+          },
+          "misfit": {
+            "type": "integer",
+            "title": "Misfit",
+            "default": 0
+          },
+          "turnover": {
+            "type": "number",
+            "title": "Turnover",
+            "default": 0.0
+          },
+          "misfit_share": {
+            "type": "number",
+            "title": "Misfit Share",
+            "default": 0.0
+          },
+          "rebuild_recommended": {
+            "type": "boolean",
+            "title": "Rebuild Recommended",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "BranchStructureSummary",
+        "description": "The stored branch structure, and how far the papers moved since its build."
+      },
       "BranchTuningActionRequest": {
         "properties": {
           "branch_id": {
@@ -25291,6 +25407,23 @@
           "generated_at": {
             "type": "string",
             "title": "Generated At"
+          },
+          "structure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchStructureSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retired_branches": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredBranchItem"
+            },
+            "type": "array",
+            "title": "Retired Branches"
           },
           "branches": {
             "items": {
@@ -27513,6 +27646,53 @@
         },
         "type": "object",
         "title": "ResolveOwnerRequest"
+      },
+      "RetiredBranchItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "successor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Successor Ids"
+          },
+          "retired_at": {
+            "type": "string",
+            "title": "Retired At"
+          },
+          "control_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "reason",
+          "retired_at"
+        ],
+        "title": "RetiredBranchItem",
+        "description": "A branch that ended since the current structure was built."
       },
       "RunMaintenanceRequest": {
         "properties": {

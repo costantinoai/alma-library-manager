@@ -239,7 +239,6 @@ Every user action maps to exactly one canonical use-case. Examples:
 | Save an online search result | `alma.application.openalex_manual.save_online_search_result` |
 | Write a paper feedback event | `alma.application.paper_actions.apply_paper_action` |
 | Promote an existing tracked paper into Library | `alma.application.library.add_to_library` (same) |
-| Create a collection-backed lens from a map lasso | `alma.application.map_selection.create_collection_lens` |
 
 Two routes that mean the same thing always call the same helper.
 This is the [one intent per action](../vision.md#one-intent-per-action)
