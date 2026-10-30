@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict, deque
+from itertools import chain, zip_longest
 from typing import Any
 
 from alma.core.settings_helpers import setting_int
 
-from ..frontier import build_frontier_search_index, load_live_frontier, search_frontier
+from ..frontier import (
+    build_frontier_search_index,
+    frontier_rank_key,
+    load_live_frontier,
+    search_frontier,
+)
 from ..lens_crud import (
     _resolve_lens_branch_controls,
     read_settings,
@@ -26,6 +32,78 @@ from ..seed_profile import (
     resolve_lens_branches,
 )
 from ._common import FAMILY_TASTE, _candidate_key, attach_hits
+from .vector import _PROBE_SHARE_DIVISOR
+
+#: The queue of hits no branch asked for: taste topics, recent wins, authors, venues.
+_LENS_WIDE_QUEUE = ""
+
+
+def _queue_of_searches(hits_by_search: dict[str, list[tuple[float, dict]]]) -> deque[dict]:
+    """One queue's candidates: each kind of search in turn.
+
+    A branch alternates core and explore; the lens-wide queue alternates its
+    lanes. Each is ordered on its own. In one list, an explore query's literal
+    title match outranks the branch's own topic, so a chess branch filled with
+    "neural activity" titles, and a venue match, which says nothing about the
+    topic, scores 1.0 and outranks every taste topic.
+    """
+    ordered = [
+        [
+            candidate
+            for score, candidate in sorted(
+                hits, key=lambda pair: frontier_rank_key(pair[0], pair[1])
+            )
+        ]
+        for _search, hits in sorted(hits_by_search.items())
+    ]
+    return deque(
+        item for item in chain.from_iterable(zip_longest(*ordered)) if item is not None
+    )
+
+
+def _share_the_cut(
+    candidates: list[dict],
+    *,
+    limit: int,
+    probing_ids: set[str],
+) -> list[dict]:
+    """Cut the channel to `limit`, round-robin across branches.
+
+    A cut by score alone hands the channel to whichever branch has the most
+    literal title matches, however good the others are. Here each branch, and
+    the lens-wide searches as one more queue, takes one candidate in turn; a
+    queue that runs dry leaves its turns to the rest. A probing branch stops at
+    the small share the vector lane also gives it.
+    """
+    by_queue: dict[str, dict[str, list[tuple[float, dict]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for candidate in candidates:
+        keep = 1.0 - float(candidate.get("negative_pref_penalty") or 0.0)
+        for hit in candidate.get("retrieval_hits") or []:
+            queue = str(hit.branch_id or _LENS_WIDE_QUEUE)
+            by_queue[queue][str(hit.branch_mode or hit.retriever_id)].append(
+                (float(hit.raw_score or 0.0) * keep, candidate)
+            )
+    queues = {name: _queue_of_searches(hits) for name, hits in by_queue.items()}
+    probe_cap = max(2, (limit // max(1, len(queues))) // _PROBE_SHARE_DIVISOR)
+    taken: Counter[str] = Counter()
+
+    picked: dict[str, dict] = {}
+    while len(picked) < limit and queues:
+        for name in list(queues):
+            queue = queues[name]
+            while queue and _candidate_key(queue[0]) in picked:
+                queue.popleft()
+            if not queue or (name in probing_ids and taken[name] >= probe_cap):
+                del queues[name]
+                continue
+            candidate = queue.popleft()
+            picked[_candidate_key(candidate)] = candidate
+            taken[name] += 1
+            if len(picked) >= limit:
+                break
+    return list(picked.values())
 
 
 def _retrieve_external_channel(
@@ -234,11 +312,11 @@ def _retrieve_external_channel(
             ):
                 existing["score"] = candidate["score"]
 
-    ranked = sorted(
-        merged.values(),
-        key=lambda candidate: float(candidate.get("score") or 0.0),
-        reverse=True,
-    )[: max(1, int(limit))]
+    ranked = _share_the_cut(
+        list(merged.values()),
+        limit=max(1, int(limit)),
+        probing_ids={str(branch.get("id")) for branch in probing_branches},
+    )
     lane_counts = Counter(
         str(candidate.get("source_type") or "frontier") for candidate in ranked
     )

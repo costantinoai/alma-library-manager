@@ -923,6 +923,16 @@ def load_live_frontier(db: sqlite3.Connection) -> list[dict[str, Any]]:
     return list(load_frontier_candidates(db, keys).values())
 
 
+def frontier_rank_key(score: float, candidate: dict[str, Any]) -> tuple[float, int]:
+    """Sort key: best match first, then newest year, unknown years last.
+
+    A literal title phrase scores exactly 1.0, so hundreds of leads tie and the
+    frontier's own order (coupling count, which favours old papers) used to pick
+    the winners. The 0 ranks a missing year last; it is never shown or stored.
+    """
+    return (-float(score), -int(candidate.get("year") or 0))
+
+
 def search_frontier(
     candidates: Iterable[dict[str, Any]] | Iterable[FrontierSearchRow],
     query: str,
@@ -964,7 +974,7 @@ def search_frontier(
                 "source_key": query,
             }
         )
-    ranked.sort(key=lambda candidate: float(candidate["score"]), reverse=True)
+    ranked.sort(key=lambda candidate: frontier_rank_key(candidate["score"], candidate))
     return ranked[: max(1, int(limit))]
 
 
