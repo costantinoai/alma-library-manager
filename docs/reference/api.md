@@ -7,8 +7,8 @@ description: Every endpoint ALMa exposes, grouped by domain, with live Swagger U
 
 ALMa exposes a single REST API rooted at `/api/v1/`. The same FastAPI
 app serves the API and the SPA, so in dev you'll hit
-`http://localhost:8000/api/v1/...` and in production whatever
-hostname your reverse proxy is binding to.
+`http://localhost:8000/api/v1/...`, and on a private network the
+address you opened ALMa at.
 
 ## Authentication
 
@@ -16,27 +16,33 @@ By default there is **no authentication** — ALMa is a single-user
 local tool.
 
 You can require an API key by setting the `API_KEY` environment
-variable. When set, every request must include a header:
+variable. All write routes and most read routes then answer `401`
+unless the request includes one of:
 
 ```
 X-API-Key: <your key>
+Authorization: Bearer <your key>
 ```
 
-Set `API_KEY` if you're exposing ALMa beyond `127.0.0.1` (for
-example through a reverse proxy or Tailscale). It does **not**
-create user accounts — it gates the entire API behind a shared
-secret.
+This is for API and connector use. The web app sends no key, so
+**setting `API_KEY` breaks the browser UI**. It is a shared secret, not
+a login, and it does not make ALMa safe to put on the internet. See
+[Deployment](../operations/deployment.md#api-key).
 
 ## Cross-site requests
 
-With or without an API key, a page on another website cannot change
-ALMa's data. `POST`, `PUT`, `PATCH` and `DELETE` get `403` unless the
-`Origin` header is ALMa's own address, a browser extension, or listed
-in [`ALMA_ALLOWED_ORIGINS`](../operations/deployment.md#browser-origins).
-`Origin: null` is refused.
+With or without an API key, every request must name a known address: a
+`Host` other than `localhost`, an IP address or an address listed in
+[`ALMA_ALLOWED_ORIGINS`](../operations/deployment.md#browser-origins)
+gets `403` with `"error": "UnknownHostRefused"`, on every method.
+
+A page on another website cannot change ALMa's data. `POST`, `PUT`,
+`PATCH` and `DELETE` get `403` unless the `Origin` header is ALMa's own
+address, a browser extension, or listed. `Origin: null` is refused.
 
 Clients without an `Origin` header, such as curl and scripts, are not
-affected, because this guard stops browsers and only browsers set it.
+affected by that second check, because it stops browsers and only
+browsers set it.
 
 ## Base URL
 
@@ -44,7 +50,7 @@ affected, because this guard stops browsers and only browsers set it.
 |---|---|
 | Local dev | `http://localhost:8000/api/v1` |
 | Docker compose | `http://localhost:8000/api/v1` |
-| Behind a reverse proxy | `https://your-host/api/v1` |
+| Private network | `https://alma.your-tailnet.ts.net/api/v1` |
 
 ## Response envelope
 
@@ -162,7 +168,7 @@ the PDF's state is the `pdf` block of `GET /papers/{id}/details`
 |---|---|---|
 | `GET` | `/library-mgmt/info` | DB size, paper count, backup list |
 | `POST` `DELETE` | `/library-mgmt/backup[/…]` | Create / delete a backup (list is in `/library-mgmt/info`) |
-| `POST` | `/library-mgmt/restore/{name}` | Restore from a backup |
+| `POST` | `/library-mgmt/restore/{name}` | Always `409`: restoring needs ALMa stopped. See [Backups](../operations/backups.md#restore) |
 | `POST` | `/library-mgmt/deduplicate` | Run preprint↔journal dedup |
 | `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
 | `POST` | `/library-mgmt/reset` | Wipe DB (dangerous; confirms) |

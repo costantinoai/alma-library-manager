@@ -1171,6 +1171,7 @@ class HealthResponse(BaseModel):
     version: str
     uptime_seconds: float
     database_ok: bool
+    scheduler: str  # running | disabled | failed
 
 
 class VersionResponse(BaseModel):

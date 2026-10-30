@@ -2,104 +2,48 @@
 #
 # Deploy a released ALMa version to the local prod container.
 #
-#   scripts/deploy-prod.sh 0.22.0          # pull + recreate + verify
+#   scripts/deploy-prod.sh 0.22.0          # pull + replace + verify
 #   scripts/deploy-prod.sh 0.22.0 --lite   # force the lite flavor
-#   scripts/deploy-prod.sh stable          # release channel (watchtower
+#   scripts/deploy-prod.sh stable          # release channel (Watchtower
 #                                          # then keeps it current)
 #
-# Recreates the `alma` container from ghcr.io/<repo>:<version>[-gpu|-lite],
-# preserving the running container's operator env (API keys live there on
-# this host), the localhost:8000 binding, and the named volumes
-# (alma-data / alma-config — your data is never touched by a swap).
-# Flavor autodetects GPU exactly like setup.sh; volumes carry all state so
-# a swap is safe to re-run.
+# The deployment itself is setup.sh, the one Compose path: it pulls first, keeps
+# the settings in ~/alma-docker/.env (ALMA_HOME), carries over an older
+# container's settings once, and fails unless ALMa turns healthy. This script
+# adds what a release needs on top: a named version, and the check that it runs.
 #
-# Verifies health AND that the container actually reports the requested
-# release version (images >= 0.21.1 report it at /api/v1/health).
+# Exits non-zero unless the container is healthy and, for a concrete version,
+# reports that exact release. `stable` accepts whichever release the channel
+# resolved to. Images before 0.21.1 report the API contract version instead, so
+# they fail this check.
 set -euo pipefail
-
-REPO_IMAGE="ghcr.io/costantinoai/alma-library-manager"
 
 VERSION="${1:-}"
 shift || true
 FLAVOR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --gpu) FLAVOR="-gpu" ;;
-    --lite) FLAVOR="-lite" ;;
-    --cpu) FLAVOR="" ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --gpu) FLAVOR="gpu" ;;
+    --lite) FLAVOR="lite" ;;
+    --cpu) FLAVOR="cpu" ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
   shift
 done
 [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+|stable)$ ]] || { echo "Usage: scripts/deploy-prod.sh X.Y.Z|stable [--gpu|--lite|--cpu]"; exit 2; }
 
-# Flavor autodetect (same rule as setup.sh) unless forced by a flag.
-GPU_FLAG=""
-if [ -z "$FLAVOR" ]; then
-  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1 \
-     && docker info 2>/dev/null | grep -qi "runtimes:.*nvidia"; then
-    FLAVOR="-gpu"
-  fi
+# ALMA_FLAVOR empty means setup.sh autodetects.
+ALMA_VERSION="$VERSION" ALMA_FLAVOR="$FLAVOR" bash "$(dirname "$0")/../setup.sh"
+
+ALMA_HOME="${ALMA_HOME:-$HOME/alma-docker}"
+body="$(cd "$ALMA_HOME" && docker compose exec -T alma curl -fsS -m 5 http://localhost:8000/api/v1/health)"
+echo "[deploy] health: $body"
+if [ "$VERSION" = "stable" ]; then
+  echo "[deploy] OK — stable channel; health reports the concrete release above"
+elif echo "$body" | grep -qF "\"version\":\"$VERSION\""; then
+  echo "[deploy] OK — running $VERSION"
+else
+  echo "[deploy] FAILED — asked for $VERSION but the running release is: $body" >&2
+  exit 1
 fi
-[ "$FLAVOR" = "-gpu" ] && GPU_FLAG="--gpus all"
-IMAGE="$REPO_IMAGE:$VERSION$FLAVOR"
-
-echo "[deploy] image: $IMAGE"
-
-# Carry over operator-set env from the running container (keys etc.).
-ENV_FLAGS=()
-if docker inspect alma >/dev/null 2>&1; then
-  for var in NUMBA_DISABLE_JITCACHE OPENALEX_API_KEY SEMANTIC_SCHOLAR_API_KEY API_KEY OPENALEX_EMAIL ALMA_ALLOWED_ORIGINS; do
-    val="$(docker inspect alma --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E "^${var}=" || true)"
-    [ -n "$val" ] && ENV_FLAGS+=(-e "$val")
-  done
-fi
-# A value in the calling shell wins, so a first deploy can set it (docker -e: last one applies).
-if [ -n "${ALMA_ALLOWED_ORIGINS:-}" ]; then
-  ENV_FLAGS+=(-e "ALMA_ALLOWED_ORIGINS=$ALMA_ALLOWED_ORIGINS")
-fi
-
-docker pull "$IMAGE"
-docker rm -f alma >/dev/null 2>&1 || true
-
-# Own network, not Docker's default bridge. The default bridge copies the
-# host's upstream DNS servers once, at container start; when Docker starts
-# at boot before the network is up, it copies none and the container never
-# resolves a hostname until it is restarted. A user-defined network resolves
-# through the host's resolver on every lookup, so DNS works as soon as the
-# host has a connection.
-docker network inspect alma-net >/dev/null 2>&1 || docker network create alma-net >/dev/null
-
-# shellcheck disable=SC2086  # GPU_FLAG must word-split when set
-docker run -d \
-  --name alma \
-  --network alma-net \
-  --restart unless-stopped \
-  -p 127.0.0.1:8000:8000 \
-  -e "ALMA_SETTINGS_PATH=/app/data/settings.json" \
-  ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"} \
-  $GPU_FLAG \
-  -v alma-data:/app/data \
-  -v alma-config:/app/config \
-  "$IMAGE" >/dev/null
-
-echo "[deploy] waiting for health…"
-for _ in $(seq 1 60); do
-  body="$(curl -fsS -m 2 http://localhost:8000/api/v1/health 2>/dev/null || true)"
-  if [ -n "$body" ]; then
-    echo "[deploy] health: $body"
-    if [ "$VERSION" = "stable" ]; then
-      echo "[deploy] OK — stable channel; health reports the concrete release above"
-    elif echo "$body" | grep -q "\"version\":\"$VERSION\""; then
-      echo "[deploy] OK — running $VERSION"
-    else
-      echo "[deploy] note: health version differs from $VERSION (images built before 0.21.1 report the API contract version instead)."
-    fi
-    exit 0
-  fi
-  sleep 1
-done
-echo "[deploy] UNHEALTHY after 60s — check: docker logs alma" >&2
-exit 1

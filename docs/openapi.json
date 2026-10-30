@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ALMa API",
-    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
+    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Cross-site requests\n\n    Whatever the `API_KEY` setting, a browser page on another origin cannot change\n    data: unsafe methods from it get `403`. Add your own address to\n    `ALMA_ALLOWED_ORIGINS`. Requests without an `Origin` header (curl, scripts) pass.\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
     "contact": {
       "name": "ALMa",
       "url": "https://github.com/costantinoai/alma-library-manager"
@@ -37,11 +37,21 @@
           "system"
         ],
         "summary": "Health check",
-        "description": "Check the health status of the API and its dependencies.",
+        "description": "Readiness of this process. 503 means the database or the required scheduler failed. Providers and the internet are not checked.",
         "operationId": "health_check_api_v1_health_get",
         "responses": {
           "200": {
             "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database or scheduler failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -17328,9 +17338,10 @@
         "tags": [
           "library-management"
         ],
-        "summary": "Restore from backup",
-        "description": "Restore the unified database from a previously created backup.",
+        "summary": "Restore from backup (refused)",
+        "description": "Always answers 409. Replacing the database while ALMa runs is not safe, so a restore is an offline step: see docs/operations/backups.md.",
         "operationId": "restore_backup_api_v1_library_mgmt_restore__backup_name__post",
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -17377,6 +17388,9 @@
           },
           "500": {
             "description": "Internal Server Error"
+          },
+          "409": {
+            "description": "ALMa is running; restore offline"
           },
           "422": {
             "description": "Validation Error",
@@ -19767,7 +19781,7 @@
           "backup"
         ],
         "summary": "Export Database",
-        "description": "Export the entire SQLite database as a downloadable file.\n\nCreates a snapshot copy of the database file and returns it.\nFilename: alma-backup-{date}.db",
+        "description": "Export the entire SQLite database as a downloadable file.\n\nThe snapshot comes from SQLite's backup API, so it holds every committed\ntransaction, including those still in the WAL, and writes can continue\nwhile it is taken. Filename: alma-backup-{date}.db",
         "operationId": "export_database_api_v1_backup_export_get",
         "security": [
           {
@@ -25097,6 +25111,10 @@
           "database_ok": {
             "type": "boolean",
             "title": "Database Ok"
+          },
+          "scheduler": {
+            "type": "string",
+            "title": "Scheduler"
           }
         },
         "type": "object",
@@ -25104,7 +25122,8 @@
           "status",
           "version",
           "uptime_seconds",
-          "database_ok"
+          "database_ok",
+          "scheduler"
         ],
         "title": "HealthResponse"
       },
@@ -25157,6 +25176,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Eta"
+          },
+          "quota": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Quota"
           }
         },
         "type": "object",
@@ -25169,7 +25193,8 @@
           "metadata",
           "dedup",
           "likely_source_calls",
-          "eta"
+          "eta",
+          "quota"
         ],
         "title": "ImportPreflightResponse"
       },

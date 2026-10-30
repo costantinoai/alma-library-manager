@@ -138,7 +138,8 @@ instances:
 * **Add a server** — for a custom port, a LAN address, or a tunnel: enter
   the URL and an optional **API key** (only needed if your ALMa runs with
   `API_KEY` — sent as the `X-API-Key` header). A non-local address prompts
-  Firefox once for permission to reach that host.
+  Firefox once for permission to reach that host. A hostname must also be
+  listed in [`ALMA_ALLOWED_ORIGINS`](../operations/deployment.md#browser-origins).
 * **Remove** — the × on a saved server.
 
 Everything is stored locally in your browser. The same panel is available

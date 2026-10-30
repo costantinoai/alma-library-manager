@@ -83,6 +83,7 @@ def job_admission(operation_key: str) -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 _scheduler: BackgroundScheduler | None = None
+_scheduler_start_error: str | None = None
 _job_meta: dict[str, dict] = {}
 _job_status: dict[str, dict] = {}
 _job_logs: dict[str, collections.deque[dict]] = {}
@@ -1352,6 +1353,25 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+def record_scheduler_start_failure(exc: Exception) -> None:
+    """Remember that startup could not bring the scheduler up, for readiness."""
+    global _scheduler_start_error
+    _scheduler_start_error = str(exc) or type(exc).__name__
+
+
+def scheduler_readiness() -> str:
+    """Say whether background work can run: ``running``, ``disabled`` or ``failed``.
+
+    ``disabled`` is a deliberate ``SCHEDULER_ENABLED=false``. ``failed`` covers a
+    start that raised and a scheduler that is simply not running.
+    """
+    if not _scheduler_enabled():
+        return "disabled"
+    if _scheduler_start_error is None and get_running_scheduler() is not None:
+        return "running"
+    return "failed"
+
+
 def get_running_scheduler() -> BackgroundScheduler | None:
     """Return the existing live scheduler without creating one."""
 
@@ -1853,7 +1873,8 @@ def setup_scheduler() -> None:
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""
-    global _scheduler
+    global _scheduler, _scheduler_start_error
+    _scheduler_start_error = None
     if _scheduler is not None:
         try:
             _scheduler.shutdown(wait=False)
