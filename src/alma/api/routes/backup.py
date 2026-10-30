@@ -35,15 +35,36 @@ router = APIRouter(
 )
 
 
+_SNAPSHOT_PREFIX = ".alma-export-"
+_SNAPSHOT_SUFFIX = ".tmp"
+
+
+def clear_stale_export_snapshots(db_path: Path) -> None:
+    """Delete export snapshots that a crash left beside the database.
+
+    Startup calls this: no export is running yet, so any such file is a leftover
+    copy of the library. Only this folder is searched, by the exact name
+    ``mkstemp`` was given. A file that cannot be deleted must not stop the app.
+    """
+    for stale in db_path.parent.glob(f"{_SNAPSHOT_PREFIX}*{_SNAPSHOT_SUFFIX}"):
+        try:
+            stale.unlink()
+            logger.warning("Removed an export snapshot left by a crash: %s", stale)
+        except OSError as exc:
+            logger.warning("Could not remove the stale export snapshot %s: %s", stale, exc)
+
+
 def _snapshot_database(db_path: Path) -> BinaryIO:
     """Return an open handle on a consistent copy of the live database.
 
     The copy sits beside the database because Compose mounts ``/tmp`` as a
-    128 MB tmpfs. It is unlinked before this returns: the handle keeps the bytes
-    readable until the download ends, and no copy of the library can stay on
-    disk after a dropped connection or a crash.
+    128 MB tmpfs. SQLite's backup API needs a path, so the copy has a name while
+    it is written. It is unlinked before this returns, and the handle keeps the
+    bytes readable until the download ends, so a dropped connection leaves
+    nothing. A crash during the copy does leave the file; the next startup
+    removes it (:func:`clear_stale_export_snapshots`).
     """
-    fd, name = tempfile.mkstemp(prefix=".alma-export-", suffix=".tmp", dir=db_path.parent)
+    fd, name = tempfile.mkstemp(prefix=_SNAPSHOT_PREFIX, suffix=_SNAPSHOT_SUFFIX, dir=db_path.parent)
     os.close(fd)
     snapshot = Path(name)
     try:

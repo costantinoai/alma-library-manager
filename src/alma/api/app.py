@@ -131,6 +131,10 @@ async def lifespan(app: FastAPI):
 
     init_db_schema()
 
+    from alma.api.routes.backup import clear_stale_export_snapshots
+
+    clear_stale_export_snapshots(get_db_path())
+
     logger.info(
         "Integration plugins: %s",
         ", ".join(get_plugin_registry().ids()),
