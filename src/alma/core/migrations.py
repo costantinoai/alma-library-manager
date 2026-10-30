@@ -1597,6 +1597,31 @@ def _m_0045_discovery_lane_deadline(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0046_discovery_branch_identity(conn: sqlite3.Connection) -> None:
+    """Give branches durable identities without guessing lineage from old recs.
+
+    Existing recommendation IDs remain historical. The first refresh records
+    complete seed sets for every current branch; future refreshes can then
+    preserve a branch across small changes or retire it on ambiguous change.
+    """
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS discovery_branches (
+            id TEXT PRIMARY KEY,
+            lens_id TEXT NOT NULL REFERENCES discovery_lenses(id) ON DELETE CASCADE,
+            seed_ids TEXT NOT NULL,
+            label TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('active', 'retired')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            retired_at TEXT
+        )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_discovery_branches_lens_state "
+        "ON discovery_branches(lens_id, state)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1643,6 +1668,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (43, "paper_pdfs", _m_0043_paper_pdfs),
     (44, "inbox_message_review", _m_0044_inbox_message_review),
     (45, "discovery_lane_deadline", _m_0045_discovery_lane_deadline),
+    (46, "discovery_branch_identity", _m_0046_discovery_branch_identity),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

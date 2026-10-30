@@ -67,6 +67,7 @@ def _retrieve_vector_channel(
     seeds: list[dict],
     *,
     limit: int,
+    resolved_branches: list[dict] | None = None,
 ) -> list[dict]:
     """Return dense-retrieval candidates from the corpus and the frontier."""
     if not _NUMPY_AVAILABLE:
@@ -77,7 +78,10 @@ def _retrieve_vector_channel(
     if not seed_vectors:
         return []
 
-    centroids = _branch_centroids(db, lens, seeds, seed_vectors, active_model)
+    centroids = _branch_centroids(
+        db, lens, seeds, seed_vectors, active_model,
+        resolved_branches=resolved_branches,
+    )
     if not centroids:
         return []
 
@@ -158,6 +162,8 @@ def _branch_centroids(
     seeds: list[dict],
     seed_vectors: dict[str, Any],
     active_model: str,
+    *,
+    resolved_branches: list[dict] | None = None,
 ) -> list[tuple[str, Any]]:
     """Return ``(branch_id, unit centroid)`` for each region of the seed set.
 
@@ -166,27 +172,47 @@ def _branch_centroids(
     noise would only fragment the query.
     """
     centroids: list[tuple[str, Any]] = []
-    embedded_seed_ids = sorted(
-        str(seed.get("id") or "")
-        for seed in seeds
-        if str(seed.get("id") or "") in seed_vectors
-    )
-    if len(embedded_seed_ids) >= _MIN_SEEDS_FOR_BRANCHING:
-        branch_vectors = _spherical_branch_centroids(
-            {paper_id: seed_vectors[paper_id] for paper_id in embedded_seed_ids},
-            max_centroids=_MAX_BRANCH_CENTROIDS,
-        )
-        centroids = [
-            (f"vector_branch_{idx}", centroid)
-            for idx, centroid in enumerate(branch_vectors)
-        ]
-
-    if not centroids:
-        stacked = np.vstack(list(seed_vectors.values()))
-        unit = _unit(np.mean(stacked, axis=0))
-        if unit is None:
+    if resolved_branches is not None:
+        for branch in resolved_branches:
+            if not branch.get("is_active", True):
+                continue
+            vectors = [
+                seed_vectors[paper_id]
+                for paper_id in branch.get("_seed_ids") or []
+                if paper_id in seed_vectors
+            ]
+            if not vectors:
+                continue
+            centroid = _unit(np.mean(np.vstack(vectors), axis=0))
+            if centroid is not None:
+                centroids.append((str(branch["id"]), centroid))
+        if not centroids:
             return []
-        centroids = [("vector_global", unit)]
+    else:
+        # Compatibility for direct lane callers; the lens refresh always
+        # supplies its resolved branch plan so positional vector IDs cannot
+        # become production branch identities.
+        embedded_seed_ids = sorted(
+            str(seed.get("id") or "")
+            for seed in seeds
+            if str(seed.get("id") or "") in seed_vectors
+        )
+        if len(embedded_seed_ids) >= _MIN_SEEDS_FOR_BRANCHING:
+            branch_vectors = _spherical_branch_centroids(
+                {paper_id: seed_vectors[paper_id] for paper_id in embedded_seed_ids},
+                max_centroids=_MAX_BRANCH_CENTROIDS,
+            )
+            centroids = [
+                (f"vector_branch_{idx}", centroid)
+                for idx, centroid in enumerate(branch_vectors)
+            ]
+
+        if not centroids:
+            stacked = np.vstack(list(seed_vectors.values()))
+            unit = _unit(np.mean(stacked, axis=0))
+            if unit is None:
+                return []
+            centroids = [("vector_global", unit)]
 
     # Adopted custom directions (task 47 §8) pull EVERY centroid toward the
     # region the user adopted from the map. Members are stored, never raw

@@ -10,13 +10,11 @@ from alma.core.settings_helpers import setting_int
 
 from ..frontier import build_frontier_search_index, load_live_frontier, search_frontier
 from ..lens_crud import (
-    _apply_branch_controls,
     _resolve_lens_branch_controls,
     read_settings,
 )
 from ..seed_profile import (
     _build_recent_win_queries,
-    _build_seed_branches,
     _candidate_negative_preference_penalty,
     _negative_preference_context,
     _plan_branch_queries_deterministic,
@@ -24,6 +22,7 @@ from ..seed_profile import (
     _resolve_branch_temperature,
     _top_preferred_authors,
     _top_profile_terms,
+    resolve_lens_branches,
 )
 from ._common import FAMILY_TASTE, _candidate_key, attach_hits
 
@@ -36,6 +35,7 @@ def _retrieve_external_channel(
     limit: int,
     preference_profile: dict[str, Any] | None = None,
     positive_pubs: list[dict] | None = None,
+    resolved_branches: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, Any]]:
     """Run lens-specific query/identity retrievers against local frontier."""
 
@@ -67,19 +67,17 @@ def _retrieve_external_channel(
     )
 
     runs: list[tuple[str, str, list[dict], dict[str, Any]]] = []
-    branches = _apply_branch_controls(
-        _build_seed_branches(
+    branches = (
+        resolved_branches
+        if resolved_branches is not None
+        else resolve_lens_branches(
             db,
+            lens,
             seeds,
-            settings=settings,
             max_branches=min(6, int(settings.get("branches.max_clusters", "6"))),
             temperature=temperature,
             resolution=resolution,
-            lens_id=str(lens.get("id") or "") or None,
-        ),
-        controls,
-        db=db,
-        lens_id=str(lens.get("id") or "") or None,
+        )[0]
     )
     # Branch Studio's knobs are user-facing sliders persisted through
     # `PUT /discovery/settings`. Hard-coding their default values here made the
@@ -245,4 +243,3 @@ def _retrieve_external_channel(
         "network_calls": 0,
         "frontier_size": len(frontier),
     }
-

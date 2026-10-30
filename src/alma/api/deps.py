@@ -746,6 +746,22 @@ def init_db_schema() -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_lenses_type ON discovery_lenses(context_type)"
             )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS discovery_branches (
+                    id TEXT PRIMARY KEY,
+                    lens_id TEXT NOT NULL REFERENCES discovery_lenses(id) ON DELETE CASCADE,
+                    seed_ids TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('active', 'retired')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    retired_at TEXT
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discovery_branches_lens_state "
+                "ON discovery_branches(lens_id, state)"
+            )
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS suggestion_sets (

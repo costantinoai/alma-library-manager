@@ -33,11 +33,10 @@ from alma.discovery.scoring import (
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
+from . import channel_yield as _channel_yield  # registers diagnostic view
+from .branch_attribution import attribute_candidate
+from .branch_identity import persist_branch_identities
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
-from .channel_yield import (  # registers discovery:channel_yield
-    apply_channel_multipliers,
-    channel_multipliers,
-)
 from .citation_fabric import build_citation_fabric_maps
 from .exploration import build_slate
 from .features import FEATURE_SCHEMA_VERSION
@@ -70,7 +69,6 @@ from .lens_crud import (
     _json_dump,
     _json_load,
     _load_branch_outcome_map,
-    _load_branch_seed_history,
     _make_branch_id,
     _map_lens_row,
     _normalize_branch_controls,
@@ -78,7 +76,6 @@ from .lens_crud import (
     _normalize_recommendation,
     _paper_dismissal_scores,
     _parse_action_datetime,
-    _resolve_branch_control_via_lineage,
     _resolve_lens_branch_controls,
     _safe_div,
     _table_exists,
@@ -160,6 +157,7 @@ from .seed_profile import (
     _top_profile_terms,
     load_library_preference_inputs,
     preview_lens_branches,
+    resolve_lens_branches,
     split_preference_pubs,
 )
 
@@ -348,25 +346,27 @@ def _refresh_lens_recommendations(
 
     _log("seeds", f"Lens '{lens_name}': loaded {len(seeds)} seed papers", data={"seeds": len(seeds)})
 
+    # One read-only branch plan serves preview semantics, vector centroids and
+    # external queries. The refresh writes its identity snapshot only when the
+    # completed deck is committed below.
+    branch_settings = read_settings(db)
+    resolved_branches, _, _ = resolve_lens_branches(
+        db,
+        lens,
+        seeds,
+        max_branches=min(6, int(branch_settings.get("branches.max_clusters", "6"))),
+    )
+
     weights = lens.get("weights") or default_channel_weights(lens["context_type"])
     base_channel_weights = _normalize_channel_weights(weights)
 
     scoring_settings = load_scoring_settings(db)
-    # The lens's weights are the prior; each channel is then scaled by how often
-    # the papers it surfaced were kept (1.0 everywhere until the data says the
-    # channels differ). Retrieval only — exposure never enters the score.
-    yield_multipliers = channel_multipliers(db, scoring_settings)
-    channel_weights = apply_channel_multipliers(base_channel_weights, yield_multipliers)
-    if yield_multipliers:
-        _log(
-            "channel_yield",
-            f"Lens '{lens_name}': channel weights scaled by what you keep — "
-            + ", ".join(
-                f"{channel} {base_channel_weights.get(channel, 0.0):.2f}→{weight:.2f}"
-                for channel, weight in channel_weights.items()
-            ),
-            data={"base": base_channel_weights, "multipliers": yield_multipliers, "effective": channel_weights},
-        )
+    # Channel-yield diagnostics pool outcomes across all lenses. Applying that
+    # global learner here would let one branch's behavior tilt another (D26).
+    # Until branch-linked exposed verdicts support local channel estimates,
+    # use the declared channel weights unchanged.
+    yield_multipliers: dict[str, float] = {}
+    channel_weights = base_channel_weights
     # Every lens computes its taste (preference profile + the scoring
     # positive/negative documents) from its OWN context papers — exactly the way
     # the library lens is scoped to the Library. The seeds already ARE that
@@ -535,14 +535,16 @@ def _refresh_lens_recommendations(
         ("lexical", "Lexical (local corpus + frontier)",
          lambda c: _retrieve_lexical_channel(c, lens, seeds, limit=limit)),
         ("vector", "Vector (local SPECTER2 cosine)",
-         lambda c: _retrieve_vector_channel(c, lens, seeds, limit=limit)),
+         lambda c: _retrieve_vector_channel(c, lens, seeds, limit=limit,
+                                           resolved_branches=resolved_branches)),
         ("graph", "Graph (local references + PPR)",
          lambda c: _retrieve_graph_channel(c, lens, seeds, limit=limit)),
         ("external", "Taste/branch (offline frontier)",
          lambda c: _retrieve_external_channel(
              c, lens, seeds, limit=limit,
              preference_profile=profile,
-             positive_pubs=positive_pubs)),
+             positive_pubs=positive_pubs,
+             resolved_branches=resolved_branches)),
     )
     # A running Future cannot be cancelled. Once the parent has abandoned a
     # lane, keep that terminal decision explicit so the late worker cannot
@@ -687,6 +689,8 @@ def _refresh_lens_recommendations(
             "external": external,
         },
     )
+    for candidate in merged.values():
+        attribute_candidate(candidate, resolved_branches)
     timings_ms["merge"] = int(round((perf_counter() - phase_started) * 1000))
     _log(
         "merge_result",
@@ -1592,6 +1596,7 @@ def _refresh_lens_recommendations(
             suggestion_set_id=suggestion_set_id,
             now=now,
             lens=lens,
+            resolved_branches=resolved_branches,
             trigger_source=trigger_source,
             rec_rows=rec_rows,
             ranked=ranked,
@@ -1680,6 +1685,7 @@ def _persist_refresh(
     suggestion_set_id: str,
     now: str,
     lens: dict,
+    resolved_branches: list[dict],
     trigger_source: str,
     rec_rows: list,
     ranked: list,
@@ -1694,6 +1700,7 @@ def _persist_refresh(
     inside it.
     """
     phase_started = perf_counter()
+    persist_branch_identities(db, lens_id=lens_id, branches=resolved_branches, now=now)
     db.execute("DELETE FROM recommendations WHERE lens_id = ? AND user_action IS NULL", (lens_id,))
     db.execute(
         """

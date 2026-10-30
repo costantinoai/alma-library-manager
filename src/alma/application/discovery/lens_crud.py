@@ -540,6 +540,12 @@ def mark_recommendation_action(
                 rating=effective_rating,
                 source_surface="discovery",
                 recommendation_id=rec_id,
+                discovery_provenance={
+                    "lens_id": str(row["lens_id"] or ""),
+                    "suggestion_set_id": str(row["suggestion_set_id"] or ""),
+                    "branch_id": str(row["branch_id"] or ""),
+                    "branch_label": str(row["branch_label"] or ""),
+                },
             )
         lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
         if lens_id and paper_id and feedback_action:
@@ -962,11 +968,10 @@ def apply_branch_control_action(
 
 
 # Auto-weight tuning constants. The weight is a continuous multiplier on
-# branch retrieval budget derived from past per-branch outcomes (saves and
-# negative Discovery actions recorded in `recommendations`).
+# branch retrieval budget derived from explicit Discovery preference verdicts.
 #
 # - PRIOR_STRENGTH: pseudo-count of "neutral" actions blended in. Acts as a
-#   Bayesian prior so a branch with 2 dismisses doesn't get crushed to 0.3x.
+#   Bayesian prior so a branch with 2 dislikes doesn't get crushed to 0.3x.
 #   Higher = more conservative; weight stays near 1.0 until samples accumulate.
 # - WEIGHT_FLOOR / WEIGHT_CEIL: clamps so a single bad streak can't kill a
 #   branch, and a single good streak can't dominate the budget pool.
@@ -988,7 +993,7 @@ _AUTO_WEIGHT_HALF_LIFE_DAYS = 30.0
 # meaningfully below neutral, the system intervenes:
 #   - At ROTATE_THRESHOLD, the branch's `core_topics` are swapped with
 #     its `explore_topics` for the next refresh — same seed set, but
-#     probing a different conceptual angle. If saves come in under the
+#     probing a different conceptual angle. If positive verdicts come in under the
 #     new angle, auto_weight rises and the rotation reverses
 #     automatically (everything is recomputed each refresh, so the
 #     mapping is deterministic and self-correcting).
@@ -1007,7 +1012,7 @@ _AUTO_WEIGHT_MUTE_THRESHOLD = 0.55
 def _compute_branch_auto_weight(
     *,
     weighted_positive: float,
-    weighted_dismissed: float,
+    weighted_negative: float,
     raw_total: int,
 ) -> tuple[float, str]:
     """Map per-branch outcome stats to a continuous budget multiplier.
@@ -1019,16 +1024,16 @@ def _compute_branch_auto_weight(
     PRIOR_STRENGTH, then map deviations from 0.5 linearly into the [floor, ceil]
     range (0.5 -> 1.0, 1.0 -> CEIL, 0.0 -> FLOOR).
 
-    Brand-new branches (no signal yet) get a small visibility lift —
+    Branches without preference verdicts get a small visibility lift —
     1.15× — so they're guaranteed enough surface area on their first
-    couple of refreshes to actually accumulate save/dismiss feedback.
+    couple of refreshes to accumulate positive/negative feedback.
     Without it, a new branch competes with established ones at neutral
     1.0 and may never accumulate the ~6–10 actions needed before the
     smoothed share moves meaningfully.
     """
-    weighted_total = weighted_positive + weighted_dismissed
+    weighted_total = weighted_positive + weighted_negative
     if weighted_total <= 0.0 or raw_total <= 0:
-        return 1.15, "new branch — surfacing for early feedback"
+        return 1.15, "no preference verdicts — surfacing for early feedback"
 
     smoothed_share = (weighted_positive + 0.5 * _AUTO_WEIGHT_PRIOR_STRENGTH) / (
         weighted_total + _AUTO_WEIGHT_PRIOR_STRENGTH
@@ -1041,13 +1046,13 @@ def _compute_branch_auto_weight(
 
     raw_share = weighted_positive / weighted_total if weighted_total > 0 else 0.0
     if raw_total < 3:
-        reason = f"thin signal ({raw_total} actions) — staying near neutral"
+        reason = f"thin signal ({raw_total} verdicts) — staying near neutral"
     elif weight >= 1.15:
-        reason = f"{raw_share * 100:.0f}% positive across {raw_total} actions — boosting"
+        reason = f"{raw_share * 100:.0f}% positive across {raw_total} verdicts — boosting"
     elif weight <= 0.85:
-        reason = f"{(1.0 - raw_share) * 100:.0f}% dismiss across {raw_total} actions — pulling back"
+        reason = f"{(1.0 - raw_share) * 100:.0f}% negative across {raw_total} verdicts — pulling back"
     else:
-        reason = f"mixed outcomes across {raw_total} actions — neutral"
+        reason = f"mixed outcomes across {raw_total} verdicts — neutral"
     return weight, reason
 
 
@@ -1071,18 +1076,50 @@ def _aggregate_branch_outcomes(
     lens_id: str | None = None,
     days: int = 60,
 ) -> dict[str, dict[str, Any]]:
-    """Walk the recommendations table once, returning per-branch outcome stats.
+    """Return branch visibility and explicit preference outcomes separately.
 
-    Keyed by branch_id when present, else by `label:<lower-label>` so callers
-    can look up branches that lost their stable id but kept their label. Each
-    value carries raw counts (total/positive/dismissed/unseen/unique_sources)
-    plus exponentially-decayed weighted_positive / weighted_dismissed used by
-    the auto-weight computation.
+    Keyed by branch ID when present. Legacy rows without an ID use a label key
+    for diagnostics, but never train a new durable branch from label similarity.
+    Dismiss is visibility-only (D6). A Discovery feedback event linked to the
+    recommendation supplies its latest verdict, including like/love/dislike
+    actions that do not stamp `recommendations.user_action`. Legacy rows
+    without a linked event retain their explicit action as a fallback.
     """
     if not _table_exists(db, "recommendations"):
         return {}
     since = (utcnow() - timedelta(days=max(7, int(days or 60)))).date().isoformat()
-    params: list[Any] = [since]
+    feedback_by_rec: dict[str, tuple[str, str, dict[str, Any]]] = {}
+    if _table_exists(db, "feedback_events"):
+        # The event's recommendation_id is the durable branch attribution.
+        # Query once, then attach by ID instead of an unindexed JSON join for
+        # each recommendation row.
+        feedback_rows = db.execute(
+            """
+            SELECT value, context_json, created_at
+            FROM feedback_events
+            WHERE event_type = 'paper_action'
+              AND substr(created_at, 1, 10) >= ?
+            ORDER BY created_at, rowid
+            """,
+            (since,),
+        ).fetchall()
+        for event in feedback_rows:
+            try:
+                context = json.loads(event["context_json"] or "{}")
+                value = json.loads(event["value"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(context, dict) or not isinstance(value, dict):
+                continue
+            if context.get("surface") != "discovery":
+                continue
+            rec_id = str(context.get("recommendation_id") or "").strip()
+            action = str(value.get("action") or "").strip().lower()
+            if rec_id and action in {"save", "like", "love", "dislike"}:
+                feedback_by_rec[rec_id] = (action, str(event["created_at"] or ""), context)
+    # Keep the read bounded to recent recommendations, while including an
+    # older recommendation if its linked feedback happened in this window.
+    params: list[Any] = [since, json.dumps(list(feedback_by_rec))]
     lens_clause = ""
     if str(lens_id or "").strip():
         lens_clause = "AND COALESCE(r.lens_id, '') = ?"
@@ -1091,6 +1128,7 @@ def _aggregate_branch_outcomes(
         rows = db.execute(
             f"""
             SELECT
+                r.id AS recommendation_id,
                 COALESCE(NULLIF(r.branch_id, ''), '') AS branch_id,
                 COALESCE(NULLIF(r.branch_label, ''), 'Unnamed branch') AS branch_label,
                 COALESCE(r.user_action, '') AS user_action,
@@ -1100,7 +1138,10 @@ def _aggregate_branch_outcomes(
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE (COALESCE(r.branch_id, '') <> '' OR COALESCE(r.branch_label, '') <> '')
-              AND substr(COALESCE(r.action_at, r.created_at), 1, 10) >= ?
+              AND (
+                  substr(COALESCE(r.action_at, r.created_at), 1, 10) >= ?
+                  OR r.id IN (SELECT value FROM json_each(?))
+              )
               AND {standalone_paper_sql('p')}
               {lens_clause}
             """,
@@ -1111,11 +1152,20 @@ def _aggregate_branch_outcomes(
 
     today_julian = float(utcnow().toordinal())
     grouped: dict[str, dict[str, Any]] = {}
+    found_feedback_ids: set[str] = set()
     for row in rows:
+        rec_id = str(row["recommendation_id"] or "")
+        explicit_feedback = feedback_by_rec.get(rec_id)
+        if explicit_feedback:
+            found_feedback_ids.add(rec_id)
+        acted_at = explicit_feedback[1] if explicit_feedback else str(row["acted_at"] or "")
+        if acted_at[:10] < since:
+            continue
         branch_id = str(row["branch_id"] or "").strip()
         branch_label = str(row["branch_label"] or branch_id or "Unnamed branch").strip() or "Unnamed branch"
-        action = str(row["user_action"] or "").strip().lower()
-        decay = _decay_factor(row["acted_at"], today_julian=today_julian, half_life=_AUTO_WEIGHT_HALF_LIFE_DAYS)
+        action = explicit_feedback[0] if explicit_feedback else str(row["user_action"] or "").strip().lower()
+        visibility_action = str(row["user_action"] or "").strip().lower()
+        decay = _decay_factor(acted_at, today_julian=today_julian, half_life=_AUTO_WEIGHT_HALF_LIFE_DAYS)
         bucket = grouped.setdefault(
             branch_id or f"label:{branch_label.lower()}",
             {
@@ -1124,9 +1174,10 @@ def _aggregate_branch_outcomes(
                 "total": 0,
                 "positive": 0,
                 "dismissed": 0,
+                "negative": 0,
                 "unseen": 0,
                 "weighted_positive": 0.0,
-                "weighted_dismissed": 0.0,
+                "weighted_negative": 0.0,
                 "score_sum": 0.0,
                 "source_types": set(),
             },
@@ -1134,14 +1185,51 @@ def _aggregate_branch_outcomes(
         bucket["total"] += 1
         bucket["score_sum"] += float(row["score"] or 0.0)
         bucket["source_types"].add(str(row["source_type"] or "unknown"))
-        if action in ("like", "save"):
+        if visibility_action in ("dismiss", "dismissed"):
+            bucket["dismissed"] += 1
+        if action in ("like", "love", "save"):
             bucket["positive"] += 1
             bucket["weighted_positive"] += decay
-        elif action in ("dismiss", "dismissed", "dislike", "disliked"):
-            bucket["dismissed"] += 1
-            bucket["weighted_dismissed"] += decay
-        else:
+        elif action in ("dislike", "disliked"):
+            bucket["negative"] += 1
+            bucket["weighted_negative"] += decay
+        elif visibility_action not in ("dismiss", "dismissed"):
             bucket["unseen"] += 1
+    # A refresh deletes unresolved recommendation rows, including cards whose
+    # Like/Love/Dislike kept them visible. The event retains the immutable
+    # attribution, so their verdict must survive that deck swap.
+    for rec_id, (action, acted_at, context) in feedback_by_rec.items():
+        if rec_id in found_feedback_ids:
+            continue
+        branch_id = str(context.get("branch_id") or "").strip()
+        if not branch_id or (lens_id and str(context.get("lens_id") or "") != lens_id):
+            continue
+        branch_label = str(context.get("branch_label") or branch_id)
+        bucket = grouped.setdefault(
+            branch_id,
+            {
+                "branch_id": branch_id,
+                "branch_label": branch_label,
+                "total": 0,
+                "positive": 0,
+                "dismissed": 0,
+                "negative": 0,
+                "unseen": 0,
+                "weighted_positive": 0.0,
+                "weighted_negative": 0.0,
+                "score_sum": 0.0,
+                "source_types": set(),
+            },
+        )
+        bucket["total"] += 1
+        bucket["source_types"].add("discovery_feedback")
+        decay = _decay_factor(acted_at, today_julian=today_julian, half_life=_AUTO_WEIGHT_HALF_LIFE_DAYS)
+        if action in ("like", "love", "save"):
+            bucket["positive"] += 1
+            bucket["weighted_positive"] += decay
+        elif action == "dislike":
+            bucket["negative"] += 1
+            bucket["weighted_negative"] += decay
     return grouped
 
 
@@ -1153,8 +1241,8 @@ def _load_branch_outcome_map(
 ) -> dict[str, dict[str, Any]]:
     """Per-branch outcome dict consumed by the branch tile API + budget allocator.
 
-    Keyed by branch_id when present and also by `label:<lower-label>` so callers
-    can fall back when a branch lost its stable id. Each value carries the raw
+    Keyed by branch ID when present; legacy label-only rows remain diagnostic
+    and do not transfer preference to a new branch. Each value carries the raw
     outcome counts plus the derived `auto_weight` and `auto_weight_reason`.
     """
     aggregated = _aggregate_branch_outcomes(db, lens_id=lens_id, days=days)
@@ -1165,18 +1253,19 @@ def _load_branch_outcome_map(
             continue
         positive = int(bucket["positive"])
         dismissed = int(bucket["dismissed"])
+        negative = int(bucket["negative"])
         unseen = int(bucket["unseen"])
         weight, reason = _compute_branch_auto_weight(
             weighted_positive=float(bucket["weighted_positive"]),
-            weighted_dismissed=float(bucket["weighted_dismissed"]),
-            raw_total=total,
+            weighted_negative=float(bucket["weighted_negative"]),
+            raw_total=positive + negative,
         )
         outcome = {
             "recommendation_count": total,
             "avg_score": round(float(bucket["score_sum"]) / total, 3),
             "positive_rate": round(_safe_div(float(positive), float(total)), 3),
             "dismiss_rate": round(_safe_div(float(dismissed), float(total)), 3),
-            "engagement_rate": round(_safe_div(float(positive + dismissed), float(total)), 3),
+            "engagement_rate": round(_safe_div(float(positive + negative), float(total)), 3),
             "unseen": unseen,
             "unique_sources": len(bucket["source_types"]),
             "auto_weight": weight,
@@ -1529,75 +1618,17 @@ def _resolve_lens_branch_controls(lens: dict | None) -> dict[str, Any]:
 def _enrich_branches_with_outcomes(
     branches: list[dict],
     outcome_map: dict[str, dict[str, Any]],
-    *,
-    db: sqlite3.Connection | None = None,
-    lens_id: str | None = None,
 ) -> list[dict]:
-    """Merge per-branch outcome stats (incl. auto_weight) into each branch dict.
+    """Attach outcomes only from this durable branch identity.
 
-    Three-tier lookup so a long-running user's calibration history is not
-    silently orphaned every time K-means reshuffles a single seed:
-
-    1. **Exact branch_id match** — the common path; same cluster identity
-       across refreshes.
-    2. **Label fallback** — `label:<lower-label>` for cases where the
-       seed set didn't drift but the id derivation differs (legacy rows).
-    3. **Lineage match** — when `db` and `lens_id` are provided, look up
-       past branch_ids in `recommendations` for this lens and find any
-       previous branch whose seed set overlaps ≥ 70 % with the current
-       cluster's seed set. Inherit that branch's outcome history. This
-       is what catches the "user added 5 papers, K-means reshuffled,
-       branch got a new id, calibration reset" failure mode.
+    Labels and recommendation outputs cannot prove lineage. A new branch
+    starts without any inherited preference, even when its label resembles an
+    old one; the identity resolver handles legitimate seed-set continuity.
     """
-    enriched: list[dict] = []
-    lineage_lookup_cache: list[dict] | None = None
-    lineage_overlap_threshold = 0.70
-    for branch in branches:
-        branch_id = str(branch.get("id") or "").strip()
-        branch_label = str(branch.get("label") or "").strip()
-        outcome = (
-            outcome_map.get(branch_id)
-            or outcome_map.get(f"label:{branch_label.lower()}")
-            or {}
-        )
-        if not outcome and db is not None and lens_id and branch.get("seed_context"):
-            current_seed_ids = {
-                str(s.get("paper_id") or "").strip()
-                for s in (branch.get("seed_context") or [])
-                if str(s.get("paper_id") or "").strip()
-            }
-            if current_seed_ids:
-                if lineage_lookup_cache is None:
-                    lineage_lookup_cache = _load_branch_seed_history(db, lens_id=lens_id)
-                best_overlap = 0.0
-                best_outcome: dict[str, Any] = {}
-                for prior in lineage_lookup_cache:
-                    prior_seed_ids = prior.get("seed_ids") or set()
-                    if not prior_seed_ids:
-                        continue
-                    overlap = len(current_seed_ids & prior_seed_ids) / max(
-                        len(current_seed_ids | prior_seed_ids), 1
-                    )
-                    if overlap >= lineage_overlap_threshold and overlap > best_overlap:
-                        prior_id = prior.get("branch_id") or ""
-                        prior_label = prior.get("branch_label") or ""
-                        candidate_outcome = (
-                            outcome_map.get(prior_id)
-                            or outcome_map.get(f"label:{str(prior_label).lower()}")
-                            or {}
-                        )
-                        if candidate_outcome:
-                            best_overlap = overlap
-                            best_outcome = {
-                                **candidate_outcome,
-                                "auto_weight_reason": (
-                                    str(candidate_outcome.get("auto_weight_reason") or "")
-                                    + f" (inherited via {overlap:.0%} seed overlap)"
-                                ).strip(),
-                            }
-                outcome = best_outcome
-        enriched.append({**branch, **outcome})
-    return enriched
+    return [
+        {**branch, **(outcome_map.get(str(branch.get("id") or "")) or {})}
+        for branch in branches
+    ]
 
 
 def _apply_branch_auto_lifecycle(branches: list[dict]) -> list[dict]:
@@ -1661,58 +1692,6 @@ def _apply_branch_auto_lifecycle(branches: list[dict]) -> list[dict]:
     return out
 
 
-def _load_branch_seed_history(
-    db: sqlite3.Connection,
-    *,
-    lens_id: str,
-    limit: int = 200,
-) -> list[dict]:
-    """Snapshot of past `(branch_id, seed_ids)` for one lens.
-
-    The recommendations table records each rec's `branch_id` and the
-    seed paper_ids it sprang from indirectly through co-occurrence —
-    we approximate the past branch's seed set by collecting the
-    `paper_id`s of recommendations that carried that branch_id from
-    library-status seeds. This is good enough for the lineage match
-    in `_enrich_branches_with_outcomes`.
-    """
-    if not _table_exists(db, "recommendations"):
-        return []
-    try:
-        rows = db.execute(
-            f"""
-            SELECT
-                COALESCE(NULLIF(r.branch_id, ''), '') AS branch_id,
-                COALESCE(NULLIF(r.branch_label, ''), '') AS branch_label,
-                r.paper_id
-            FROM recommendations r
-            JOIN papers p ON p.id = r.paper_id
-            WHERE COALESCE(r.lens_id, '') = ?
-              AND COALESCE(NULLIF(r.branch_id, ''), '') <> ''
-              AND {standalone_paper_sql('p')}
-            ORDER BY r.created_at DESC
-            LIMIT ?
-            """,
-            (str(lens_id), int(limit)),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    grouped: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        bid = str(row["branch_id"] or "").strip()
-        if not bid:
-            continue
-        bucket = grouped.setdefault(bid, {
-            "branch_id": bid,
-            "branch_label": str(row["branch_label"] or "").strip(),
-            "seed_ids": set(),
-        })
-        pid = str(row["paper_id"] or "").strip()
-        if pid:
-            bucket["seed_ids"].add(pid)
-    return list(grouped.values())
-
-
 def _branch_control_state(branch_id: str, controls: dict[str, Any]) -> str:
     if branch_id in set(controls.get("muted") or []):
         return "muted"
@@ -1723,64 +1702,13 @@ def _branch_control_state(branch_id: str, controls: dict[str, Any]) -> str:
     return "normal"
 
 
-def _resolve_branch_control_via_lineage(
-    branch: dict,
-    pinned: set[str],
-    muted: set[str],
-    boosted: set[str],
-    history: list[dict],
-) -> tuple[bool, bool, bool]:
-    """Recover pin/mute/boost via seed-set overlap when branch_id drifted.
-
-    Mirrors the calibration-history lineage match in
-    `_enrich_branches_with_outcomes`. Returns (pinned, boosted, muted).
-    """
-    if not history or not (branch.get("seed_context") or []):
-        return False, False, False
-    current_seed_ids = {
-        str(s.get("paper_id") or "").strip()
-        for s in (branch.get("seed_context") or [])
-        if str(s.get("paper_id") or "").strip()
-    }
-    if not current_seed_ids:
-        return False, False, False
-    lineage_overlap_threshold = 0.70
-    out_pinned = out_boosted = out_muted = False
-    for prior in history:
-        prior_seed_ids = prior.get("seed_ids") or set()
-        if not prior_seed_ids:
-            continue
-        overlap = len(current_seed_ids & prior_seed_ids) / max(
-            len(current_seed_ids | prior_seed_ids), 1
-        )
-        if overlap < lineage_overlap_threshold:
-            continue
-        prior_id = prior.get("branch_id") or ""
-        if not prior_id:
-            continue
-        if prior_id in pinned:
-            out_pinned = True
-        if prior_id in boosted:
-            out_boosted = True
-        if prior_id in muted:
-            out_muted = True
-    return out_pinned, out_boosted, out_muted
-
-
 def _apply_branch_controls(
     branches: list[dict],
     controls: dict[str, Any],
-    *,
-    db: sqlite3.Connection | None = None,
-    lens_id: str | None = None,
 ) -> list[dict]:
     pinned = set(controls.get("pinned") or [])
     muted = set(controls.get("muted") or [])
     boosted = set(controls.get("boosted") or [])
-
-    history: list[dict] = []
-    if db is not None and lens_id and (pinned or muted or boosted):
-        history = _load_branch_seed_history(db, lens_id=str(lens_id))
 
     annotated: list[dict] = []
     for branch in branches:
@@ -1789,22 +1717,6 @@ def _apply_branch_controls(
         is_pinned = branch_id in pinned
         is_boosted = branch_id in boosted
         is_muted = branch_id in muted
-        # Lineage fallback: if the branch_id changed because K-means
-        # reshuffled, recover the user's pin/mute/boost via seed-set
-        # overlap with past branches.
-        if not (is_pinned or is_boosted or is_muted) and history:
-            inh_pinned, inh_boosted, inh_muted = _resolve_branch_control_via_lineage(
-                branch, pinned, muted, boosted, history
-            )
-            if inh_pinned and not is_muted:
-                is_pinned = True
-                state = "pinned"
-            elif inh_boosted and not is_muted:
-                is_boosted = True
-                state = "boosted"
-            if inh_muted:
-                is_muted = True
-                state = "muted"
         item = {
             **branch,
             "control_state": state,

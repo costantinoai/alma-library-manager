@@ -1022,6 +1022,7 @@ def record_paper_feedback(
     rating: int | None = None,
     source_surface: str,
     recommendation_id: str | None = None,
+    discovery_provenance: dict[str, str] | None = None,
 ) -> None:
     """Record a paper feedback event through the one feedback engine.
 
@@ -1059,6 +1060,7 @@ def record_paper_feedback(
             "paper_id": paper_id,
             "acted_at": utcnow().isoformat(),
             **({"recommendation_id": recommendation_id} if recommendation_id else {}),
+            **(discovery_provenance or {}),
         },
     )
 

@@ -23,6 +23,7 @@ from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 
+from .branch_identity import resolve_branch_identities
 from .lens_crud import (
     _apply_branch_auto_lifecycle,
     _apply_branch_controls,
@@ -1288,6 +1289,7 @@ def _build_seed_branches(
         branches.append(
             {
                 "id": _make_branch_id(lens_id, cluster_seed_ids, core_topics),
+                "_seed_ids": sorted(set(cluster_seed_ids)),
                 "label": label,
                 "seed_count": len(cluster_seeds),
                 "branch_score": round(branch_score, 4),
@@ -1306,29 +1308,17 @@ def _build_seed_branches(
     return branches[:effective_max]
 
 
-def preview_lens_branches(
+def resolve_lens_branches(
     db: sqlite3.Connection,
-    lens_id: str,
+    lens: dict,
+    seeds: list[dict],
     *,
     max_branches: int = 6,
     temperature: float | None = None,
     resolution: float | None = None,
-) -> dict | None:
-    """Build an explainable branch map for one lens (for UI visualization).
-
-    Each branch carries its `auto_weight` — the continuous multiplier the
-    refresh allocator will apply to its retrieval budget based on past
-    save/dismiss outcomes. Manual pin/boost/mute remain available as hard
-    overrides; with no override, `auto_weight` is what shapes allocation.
-
-    ``resolution`` (live slider override → else the persisted
-    ``branch_controls.resolution``) tunes cluster granularity via the shared
-    engine and is echoed back so the UI can render the current knob value.
-    """
-    lens = get_lens(db, lens_id)
-    if lens is None:
-        return None
-    seeds = _attach_signal_scores_to_seeds(db, _load_seed_papers_for_lens(db, lens))
+) -> tuple[list[dict], float, float]:
+    """Resolve the one branch plan consumed by preview and every refresh lane."""
+    lens_id = str(lens["id"])
     settings = read_settings(db)
     controls = _resolve_lens_branch_controls(lens)
     effective_temp = _resolve_branch_temperature(
@@ -1348,15 +1338,35 @@ def preview_lens_branches(
         resolution=effective_resolution,
         lens_id=lens_id,
     )
-    branches = _apply_branch_controls(branches, controls, db=db, lens_id=lens_id)
+    branches = resolve_branch_identities(db, lens_id=lens_id, branches=branches)
+    branches = _apply_branch_controls(branches, controls)
     branch_outcomes = _load_branch_outcome_map(db, lens_id=lens_id, days=60)
-    enriched_branches = _enrich_branches_with_outcomes(
-        branches,
-        branch_outcomes,
-        db=db,
-        lens_id=lens_id,
-    )
+    enriched_branches = _enrich_branches_with_outcomes(branches, branch_outcomes)
     enriched_branches = _apply_branch_auto_lifecycle(enriched_branches)
+    return enriched_branches, effective_temp, effective_resolution
+
+
+def preview_lens_branches(
+    db: sqlite3.Connection,
+    lens_id: str,
+    *,
+    max_branches: int = 6,
+    temperature: float | None = None,
+    resolution: float | None = None,
+) -> dict | None:
+    """Read-only view of the exact branch plan a refresh would start from."""
+    lens = get_lens(db, lens_id)
+    if lens is None:
+        return None
+    seeds = _attach_signal_scores_to_seeds(db, _load_seed_papers_for_lens(db, lens))
+    enriched_branches, effective_temp, effective_resolution = resolve_lens_branches(
+        db,
+        lens,
+        seeds,
+        max_branches=max_branches,
+        temperature=temperature,
+        resolution=resolution,
+    )
     return {
         "lens_id": lens_id,
         "lens_name": lens.get("name"),
@@ -1365,7 +1375,10 @@ def preview_lens_branches(
         "temperature": round(effective_temp, 3),
         "resolution": round(effective_resolution, 3),
         "generated_at": utcnow().isoformat(),
-        "branches": enriched_branches,
+        "branches": [
+            {key: value for key, value in branch.items() if not key.startswith("_")}
+            for branch in enriched_branches
+        ],
     }
 
 

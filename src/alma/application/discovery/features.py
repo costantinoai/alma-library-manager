@@ -6,6 +6,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
+from .value_keys import candidate_value_keys
+
 # v5: four declared ranking inputs began arriving that never had (2026-09-06).
 # `is_retracted` (so the −45-point penalty fires at all), `fwci`, and both PPR
 # proximities were absent from every locally-sourced candidate; `topic_score`
@@ -18,7 +20,7 @@ from typing import Any
 # gone — the feature left main with D25. A v5 row carries two reward keys a v6
 # row does not, so the two must not be mixed in replay, evaluation or the
 # shadow ranker's training pool.
-FEATURE_SCHEMA_VERSION = "discovery-features-v6"
+FEATURE_SCHEMA_VERSION = "discovery-features-v7"
 
 _SCALAR_DIAGNOSTICS = (
     "semantic_similarity_centroid_raw",
@@ -281,6 +283,9 @@ def build_feature_snapshot(
         "source_apis": list(candidate.get("source_apis") or []),
         "branch_id": candidate.get("branch_id"),
         "branch_mode": candidate.get("branch_mode"),
+        "branch_attribution": candidate.get("branch_attribution"),
+        "branch_evidence": dict(candidate.get("branch_evidence") or {}),
+        "value_keys": candidate_value_keys(candidate),
         "retriever_ids": list(candidate.get("retriever_ids") or []),
         "retrieval_hits": list(candidate.get("retrieval_hits") or []),
         "has_abstract": bool(str(candidate.get("abstract") or "").strip()),
@@ -296,4 +301,3 @@ def build_feature_snapshot(
         "embedding_model_compatible": candidate.get("embedding_model_compatible"),
     }
     return reward, exposure
-
