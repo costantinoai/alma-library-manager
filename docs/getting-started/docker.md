@@ -34,8 +34,9 @@ your library is identical and portable between them.
 Both paths use the same published image; pick by ergonomics. Three
 image tags are published — `:latest` (CPU, default), `:latest-gpu`
 (CUDA torch for NVIDIA hosts), and `:latest-lite` (no torch, for
-Pis). The README quick start has copy-paste `docker run` commands
-for each one.
+Pis). `:latest` moves with every push to `main`; `:stable`,
+`:stable-gpu` and `:stable-lite` move only on a release. The README
+quick start has copy-paste `docker run` commands for each flavor.
 
 ## Path 1 — one-line installer (suggested)
 
@@ -91,7 +92,8 @@ What this does:
   `/var/lib/docker/volumes/<name>/_data` on Linux, or under the
   Docker Desktop VM elsewhere.
 * Binds the API to `127.0.0.1` only. Nothing is exposed to your
-  network until you put a reverse proxy in front and set `API_KEY`.
+  network. ALMa has no login, so keep it that way or use a private
+  network; see [Deployment](../operations/deployment.md).
 * Sets an optional OpenAlex contact email (the polite pool is retired;
   this only sets a courteous User-Agent). The **required** OpenAlex
   *key* is set separately — see below.
@@ -105,12 +107,13 @@ A [Semantic Scholar key](https://www.semanticscholar.org/product/api)
 is strongly recommended too (without it S2 shares the anonymous pool and
 429s often, stalling Discovery).
 
-The **recommended, secure** way under Docker: boot the container, open
+The **recommended** way under Docker: boot the container, open
 **Settings → Connections**, paste your key(s), and **Save connection
-settings**. ALMa persists them to its encrypted-at-rest secret store
-inside the `alma-data` named volume (`secrets.json`, mode `600`) — they
-survive restarts and image upgrades, and never appear in `docker inspect`
-or your shell history.
+settings**. ALMa persists them to its secret store inside the
+`alma-data` named volume (`secrets.json`, plain JSON with mode `600`,
+**not encrypted**) — they survive restarts and image upgrades, and never
+appear in `docker inspect` or your shell history. Treat any backup of
+the volume as a credential.
 
 Prefer to bake them in at launch instead (e.g. headless/non-interactive)?
 Add `-e OPENALEX_API_KEY=...` (and `-e SEMANTIC_SCHOLAR_API_KEY=...`) to
@@ -133,11 +136,11 @@ They do **not** survive `docker volume rm alma-data` — that's the
 only command that wipes your library.
 
 If you ever want a copy on the host filesystem (for backup or
-inspection), the simplest way is the **Settings → Library
-Management → Backup** button, which writes a gzipped SQLite file into
-the volume's `backups/` subdirectory. You can also `docker run --rm
--v alma-data:/d alpine cat /d/scholar.db > /tmp/scholar.db` to copy
-the live DB out.
+inspection), use the **Settings → Library Management → Backup** button,
+which writes a gzipped SQLite file into the volume's `backups/`
+subdirectory, then [pull that snapshot out](#backups). Never copy
+`scholar.db` out of a running container: writes can land during the
+copy and leave it damaged.
 
 ### Upgrade
 
@@ -147,10 +150,9 @@ docker rm -f alma
 # rerun the original `docker run` command — your data lives in the volumes
 ```
 
-`:latest` tracks the newest stable release on `main`. For shared
-servers or production-ish setups, pin a specific version
-(`:0.9.2`, `:0.9`, or `:0`) so an automatic refresh of `main` doesn't
-upgrade the running stack out from under you.
+`:latest` moves with every push to `main`, so it can carry unreleased
+work. `:stable` moves only on a release. For anything you rely on, use
+`:stable` or pin a specific version (`:0.9.2`, `:0.9`, or `:0`).
 
 ## Path 2 — Docker Compose (named volumes)
 
@@ -441,8 +443,8 @@ docker run --rm -v alma-data:/d alpine du -sh /d
 ## Exposing on your network
 
 Every install path above binds ALMa to `127.0.0.1` — reachable only
-from `http://localhost:8000` on the host. ALMa has **no auth** in
-single-user mode, so this is the deliberate secure default.
+from `http://localhost:8000` on the host. ALMa has **no login**, so
+this is the deliberate secure default.
 
 For a **headless always-on box — e.g. a Raspberry Pi you run 24/7 and
 open from a laptop** — set the `BIND_ADDR` variable (honoured by both
@@ -474,20 +476,19 @@ Then reach it from your laptop at `http://<pi-lan-ip>:8000`
 (`hostname -I` on the Pi prints its address). `:latest-lite` is the
 right image for a Pi.
 
-!!! warning "No auth by default — trusted networks only"
-    Because single-user ALMa is unauthenticated, only expose it on a
-    private LAN. Prefer binding to the Pi's LAN IP
-    (`BIND_ADDR=192.168.1.50`) over `0.0.0.0`, set an `API_KEY`
-    (`-e API_KEY=…`) so requests need an `X-API-Key` header, restrict
-    the port with a host firewall, and for any access beyond the LAN
-    keep the container on `127.0.0.1` behind a reverse proxy with
-    HTTPS + auth.
+!!! warning "No login — private networks only"
+    Anyone who can reach the port can read and change your library, so
+    only do this on a private LAN, and never forward the port to the
+    internet. Prefer binding to the Pi's LAN IP
+    (`BIND_ADDR=192.168.1.50`) over `0.0.0.0`, and restrict the port
+    with a host firewall. `API_KEY` is no help here: it
+    [breaks the web app](../operations/deployment.md#api-key).
 
 !!! note "Opening it by name"
     An IP address works as is. If you open ALMa by a hostname
     (`http://raspberrypi.local:8000`), add it to
-    `ALMA_ALLOWED_ORIGINS`, or saving will fail with `403`. See
-    [Browser origins](../operations/deployment.md#browser-origins).
+    `ALMA_ALLOWED_ORIGINS`, or ALMa will refuse it. See
+    [Open ALMa from your phone or another device](../operations/deployment.md#open-alma-from-your-phone-or-another-device).
 
 ## After it starts
 
@@ -536,6 +537,10 @@ Check logs for the actual error: `docker logs alma`. Common causes:
   minute; the container has a healthcheck that retries.
 * Permission errors only happen if you opted into host bind-mounts via
   an override — see [Advanced: host bind-mounts](#advanced-host-bind-mounts).
+
+**The page shows `UnknownHostRefused`, or saves fail with `403`.**
+ALMa does not know the address you opened it at. See
+[Open ALMa from your phone or another device](../operations/deployment.md#open-alma-from-your-phone-or-another-device).
 
 **Browser shows "broken image" icons in the sidebar.**
 Pull `:latest` again — versions before v0.9.2 had a static-asset

@@ -35,8 +35,8 @@ and Node environments.
 |---|---|---|
 | `API_HOST` | `0.0.0.0` | Host the backend binds to. |
 | `API_PORT` | `8000` | Port the backend binds to. |
-| `API_KEY` | *(unset)* | If set, every request must include `X-API-Key: <value>`. Use it when exposing ALMa beyond localhost. |
-| `ALMA_ALLOWED_ORIGINS` | *(unset)* | Comma-separated origins (`https://alma.example.com`) whose pages may change data. Needed for every hostname you open ALMa at other than `localhost`, `127.0.0.1` or an IP address. A malformed entry or a `*` stops startup. See [Deployment](../operations/deployment.md#browser-origins). |
+| `API_KEY` | *(unset)* | If set, write routes and most read routes need `X-API-Key: <value>`. For API and connector use only: the web app sends no key, so setting this breaks the browser UI. See [Deployment](../operations/deployment.md#api-key). |
+| `ALMA_ALLOWED_ORIGINS` | *(unset)* | Comma-separated origins (`https://alma.example.com`): the addresses ALMa answers to and whose pages may change data. Needed for every hostname you open ALMa at other than `localhost`, `127.0.0.1` or an IP address, or ALMa refuses it. A malformed entry, a `*`, a username, a path, a query or a fragment stops startup. See [Deployment](../operations/deployment.md#browser-origins). |
 | `FRONTEND_URL` | *(unset)* | Origin of a separately hosted frontend. Treated as one more `ALMA_ALLOWED_ORIGINS` entry. |
 | `DB_PATH` | *(platform data dir)* | SQLite file path. Docker pins `./data/scholar.db`; bare-metal defaults to the OS data dir (`~/.local/share/alma/scholar.db` on Linux). |
 | `DATA_DIR` | *(platform data dir)* | Where caches, logs, and `secrets.json` go. Docker pins `./data`; bare-metal uses the OS data dir. |

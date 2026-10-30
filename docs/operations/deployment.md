@@ -1,84 +1,93 @@
 ---
 title: Deployment
-description: Reverse proxy, secrets, hardening, and what to think about when exposing ALMa beyond localhost.
+description: Running ALMa safely on a private network, the one setting for other devices, what API_KEY does, Docker hardening and updates.
 ---
 
 # Deployment
 
-ALMa was built to run on `127.0.0.1`. If you want to access it from
-another machine — your laptop reaching a desktop, a tablet via a
-home VPN — you'll need a reverse proxy and an API key.
+**ALMa has no login.** Anyone who can reach its port can read and
+change your library. Keep it on `127.0.0.1`, which is the default, or
+on a private network you control. **Never expose it to the open
+internet.** That rules out port forwarding, Tailscale Funnel and public
+reverse proxies. HTTPS encrypts the connection; it does not say who is
+connecting, and nothing behind it would ask.
 
-## Reverse proxy
+## Open ALMa from your phone or another device
 
-Pick one of:
+Use a private network: your home LAN, or a tailnet through
+[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), which only your
+own devices can reach. Do not use Tailscale Funnel: it is public.
 
-* **Caddy** — the easiest. Auto-TLS via Let's Encrypt.
-* **Nginx** — proven and ubiquitous.
-* **Traefik** — good fit for Docker compose stacks.
-* **Tailscale Funnel** — if your machine is on Tailscale and you
-  want to expose to the internet.
+**1. Give ALMa a private address.** With Tailscale, run this on the
+computer that runs ALMa:
 
-Minimal Caddyfile:
-
-```caddyfile
-alma.example.com {
-    reverse_proxy 127.0.0.1:8000
-}
+```bash
+tailscale serve --bg 8000
 ```
 
-The same with Nginx:
+It prints your address, for example
+`https://alma.your-tailnet.ts.net`. On a LAN, use the computer's IP
+address as described in
+[Exposing on your network](../getting-started/docker.md#exposing-on-your-network).
+An IP address works as it is, so you can stop here.
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name alma.example.com;
+**2. Tell ALMa that address, then restart it.** With Compose, in `.env`:
 
-    ssl_certificate     /etc/letsencrypt/live/alma.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/alma.example.com/privkey.pem;
-
-    location / {
-        proxy_pass         http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header   Host              $host;
-        proxy_set_header   X-Real-IP         $remote_addr;
-        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto $scheme;
-    }
-}
+```bash
+ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net
 ```
+
+With `docker run`, add `-e ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net`.
+The one-line installer does not carry this setting, so re-create the
+container with the
+[`docker run` command](../getting-started/docker.md#or-run-docker-run-directly)
+and that flag.
+
+**If you skip step 2**, the address does not work, in one of two ways:
+
+* The page shows one line of JSON containing `UnknownHostRefused` and
+  your address.
+* Or, when a proxy replaces the address on the way in, pages load but
+  every save, like and setting fails with `403`, and the log shows
+  `Refused cross-site POST`.
+
+Everyone on that private network can use your ALMa, so limit who is on
+it.
 
 ## Browser origins
 
-ALMa refuses any `POST`, `PUT`, `PATCH` or `DELETE` that a browser sends
-from another website, so that a page you happen to have open cannot
-wipe your data. It works without configuration on `localhost`,
-`127.0.0.1` and any IP address.
+`ALMA_ALLOWED_ORIGINS` is the one setting that tells ALMa its own
+addresses. It decides two things.
 
-**If you open ALMa at a hostname, list it.** That covers a reverse proxy
-domain, a Tailscale name and a `.local` name:
+**Which addresses ALMa answers to, on every request.** The `Host`
+header must be `localhost`, an IP address, `alma:8000` (the container's
+name on a Docker network) or a listed address. Anything else gets
+`403`, reads included. This stops DNS rebinding: a hostile domain can
+be re-pointed at your machine and then look to your browser like
+ALMa's own address, so only the name it arrived under gives it away.
 
-```bash
-# .env
-ALMA_ALLOWED_ORIGINS=https://alma.example.com
-```
+**Which pages may change data.** `POST`, `PUT`, `PATCH` and `DELETE`
+from a browser must come from ALMa's own page on `localhost` or an IP
+address, from a listed origin, or from a browser extension. A page on
+any other website gets `403`.
 
-Several origins are comma-separated. Each is a scheme and a host, with a
-port if it is not the default, and no path. A malformed entry or a `*`
-stops ALMa at startup.
+Several origins are comma-separated. Each is a scheme and a host, with
+a port if it is not the default, and nothing else. A malformed entry,
+a `*`, a username, a path, a query or a fragment stops ALMa at startup
+with an error naming the entry. `FRONTEND_URL` counts as one more entry.
 
-Without this, pages load but every save, like and setting fails with
-`403`, and the log shows `Refused cross-site POST` with the origin to
-add. Hostnames must be listed because a hostile domain can be re-pointed at
-your machine (DNS rebinding) and then look like ALMa's own address.
-Only IP addresses and `localhost` are safe from that.
+**Behind your own proxy on a private network**, one entry is enough if
+the proxy keeps the `Host` the browser sent, or sends `alma:8000` or an
+IP address. If it sends another upstream name, list that too, for
+example `http://my-upstream:8000`. ALMa ignores `X-Forwarded-Host`
+and the like, because any client can write them.
 
 **Containers.** `docker-compose.yml` reads the value from `.env`.
 `scripts/deploy-prod.sh` keeps it from the running container, and takes
 it from the calling shell on a first deploy:
 
 ```bash
-ALMA_ALLOWED_ORIGINS=https://alma.example.com scripts/deploy-prod.sh 0.25.0
+ALMA_ALLOWED_ORIGINS=https://alma.your-tailnet.ts.net scripts/deploy-prod.sh 0.25.0
 ```
 
 Older images ignore the variable, so you can set it before upgrading.
@@ -86,38 +95,31 @@ Do that first if Watchtower updates ALMa for you: the new image will
 otherwise arrive without it, and your hostname will be refused until
 you add it.
 
-The browser connector, curl and scripts need nothing here. Extensions
-are recognised by their `moz-extension://` or `chrome-extension://`
-origin, and clients with no `Origin` header pass. That second case is
-why this is not authentication: it stops other websites, not other
-programs that can reach the port. Use an `API_KEY` for those.
+The browser connector, curl and scripts need nothing here when they use
+`localhost` or an IP address. Clients with no `Origin` header pass once
+their `Host` is known, which is why this is not authentication: it
+stops other websites, not other programs that can reach the port.
 
 ## API key
 
-When ALMa is reachable from outside `127.0.0.1`, set an API key:
+`API_KEY` is for API and connector use. **It does not protect the web
+app: the app sends no key, so setting `API_KEY` breaks the browser
+UI.** The page still loads, but its sections say they could not be
+loaded and saves fail.
 
 ```bash
 # .env
 API_KEY=$(openssl rand -hex 32)
 ```
 
-Restart the backend. Every request now requires:
+With a key set, all write routes and most read routes answer `401`
+unless the request carries `X-API-Key: <your key>` or
+`Authorization: Bearer <your key>`. `/api/v1/health` stays open. The
+[browser connector](../user-guide/browser-connector.md) can send the
+key.
 
-```
-X-API-Key: <your key>
-```
-
-Without the header, the API returns `401`.
-
-The frontend SPA reads the key from `window.localStorage.api_key`.
-Set it once via the browser console:
-
-```javascript
-localStorage.setItem('api_key', 'your-key-here')
-```
-
-You only do this once per browser; subsequent requests carry the
-header automatically.
+It is one shared secret, not a login, and it does not make internet
+exposure safe.
 
 ## Docker production
 
@@ -132,7 +134,7 @@ through the shipped overlay rather than rebuilding locally:
 ```bash
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
-cp .env.example .env             # API_KEY, OPENALEX_EMAIL, etc.
+cp .env.example .env             # OPENALEX_API_KEY, OPENALEX_EMAIL, etc.
 
 # Pin a specific version in production (avoid surprise upgrades)
 ALMA_IMAGE_TAG=0.20.1 \
@@ -153,7 +155,9 @@ on-disk); the `lite` flavour, which drops the AI stack, is ~300 MB.
 ## Secrets
 
 * `.env` — `chmod 600`, owned by the user that runs the container.
-* `data/secrets.json` — auto-managed; same permissions.
+* `data/secrets.json` — auto-managed; same permissions. It is **plain
+  JSON, not encrypted**. Mode `600` is its only protection, so treat
+  any backup of it, or of the `alma-data` volume, as a credential.
 * Never commit either to git. Both are in `.gitignore`.
 * For team / shared deployments, use a secrets manager
   (Vault, 1Password CLI, etc.) and template into `.env` at
@@ -228,15 +232,13 @@ deployed install: a weekly cron that calls
 # /etc/cron.weekly/alma-backup
 #!/usr/bin/env bash
 # Backups are auto-named with a server timestamp; there is no name param.
-curl -fsS -X POST \
-  -H "X-API-Key: ${ALMA_API_KEY}" \
-  http://127.0.0.1:8000/api/v1/library-mgmt/backup
+curl -fsS -X POST http://127.0.0.1:8000/api/v1/library-mgmt/backup
 ```
 
 ## What not to do
 
-* **Don't expose `8000` directly to the internet.** Even with an
-  API key, run behind TLS at the proxy.
+* **Don't expose ALMa to the internet**, directly or through a proxy.
+  It has no login. See the top of this page.
 * **Don't share `data/scholar.db` across two ALMa instances.**
   SQLite WAL doesn't survive concurrent writers from two processes.
 * **Don't run as `root` in Docker.** The compose file already

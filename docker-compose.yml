@@ -108,11 +108,10 @@ services:
 
     ports:
       # Bound to localhost (127.0.0.1) ONLY by default — ALMa is reachable
-      # only from this machine. ALMa has no auth in single-user mode, so it
-      # must not be exposed to your network without a reverse proxy + auth
-      # (or at least an API_KEY). To reach it from other devices on purpose
-      # (e.g. a headless Raspberry Pi), override BIND_ADDR=0.0.0.0 — see the
-      # README "Exposing on your network". Format: HOST_IP:HOST_PORT:CONTAINER_PORT
+      # only from this machine. ALMa has no login, so never expose it to the
+      # open internet. To reach it from other devices on a private network
+      # (e.g. a headless Raspberry Pi), override BIND_ADDR=0.0.0.0 — see
+      # docs/operations/deployment.md. Format: HOST_IP:HOST_PORT:CONTAINER_PORT
       - "${BIND_ADDR:-127.0.0.1}:8000:8000"
 
     # -------------------------------------------------------------------------

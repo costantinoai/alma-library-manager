@@ -7,7 +7,7 @@ description: Backups, background jobs, performance budgets, and deployment.
 
 Operating ALMa in steady-state. The pages here cover the things you
 do *after* the install — backups, monitoring background work,
-deploying behind a reverse proxy, and making sense of performance
+reaching ALMa from other devices, and making sense of performance
 numbers.
 
 <div class="grid cards" markdown>
@@ -37,7 +37,7 @@ numbers.
 
     ---
 
-    Reverse proxy setup, Docker production hardening, secrets
+    Private-network access, Docker production hardening, secrets
     management.
 
 </div>

@@ -76,16 +76,14 @@ tar -czf alma-backup-$(date +%F).tar.gz data/ settings.json .env
 docker compose up -d
 ```
 
-If ALMa is **running**, you can still make a consistent file copy by
-forcing a SQLite checkpoint first:
+The archive holds your API keys in plain text (`secrets.json`, `.env`),
+so store it like a credential.
 
-```bash
-sqlite3 data/scholar.db "PRAGMA wal_checkpoint(TRUNCATE);"
-cp data/scholar.db data/scholar-snapshot.db
-```
-
-The checkpoint folds the WAL back into the main file, then the copy
-is consistent. Repeat as a cron job for periodic offline backups.
+If ALMa is **running**, never copy `scholar.db`: not with `cp`, not with
+`docker run … cat`, and not after a `wal_checkpoint`, because writes
+can land during the copy. Use the [online backup](#online-backup-ui)
+instead. It goes through SQLite's backup API, which is safe while ALMa
+writes.
 
 ## Restore
 
