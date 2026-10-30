@@ -24,18 +24,28 @@ const Toaster = ({ ...props }: ToasterProps) => {
         error: <OctagonX className="h-4 w-4" />,
         loading: <LoaderCircle className="h-4 w-4 animate-spin" />,
       }}
+      // Sonner injects its stylesheet unlayered, and an unlayered rule beats every
+      // Tailwind v4 utility (they live in `@layer utilities`), whatever the
+      // selector. So a toast is themed through the variables Sonner reads, and
+      // the rest carries `!`. A plain utility here silently renders Sonner's
+      // default white.
+      style={
+        {
+          '--normal-bg': 'var(--color-surface-1)',
+          '--normal-text': 'var(--color-alma-900)',
+          '--normal-border': 'var(--color-border)',
+        } as React.CSSProperties
+      }
       toastOptions={{
         classNames: {
           // Paper-warm toast surface with a thin gold left-edge ribbon
           // (the v2 trim accent). Sits on shadow-paper-lg so it floats
           // clearly above the page without going hard-shadow.
-          toast:
-            "group toast group-[.toaster]:bg-surface-1 group-[.toaster]:text-alma-900 group-[.toaster]:border group-[.toaster]:border-[var(--color-border)] group-[.toaster]:border-l-4 group-[.toaster]:border-l-gold-400 group-[.toaster]:shadow-paper-lg group-[.toaster]:rounded",
-          description: "group-[.toast]:text-slate-500",
-          actionButton:
-            "group-[.toast]:bg-alma-800 group-[.toast]:text-alma-cream group-[.toast]:rounded-sm",
-          cancelButton:
-            "group-[.toast]:bg-control-quiet group-[.toast]:text-alma-700 group-[.toast]:rounded-sm",
+          toast: "border-l-4! border-l-gold-400! shadow-paper-lg! rounded!",
+          // slate-600, not slate-500: 500 misses AA on this paper.
+          description: "text-slate-600!",
+          actionButton: "bg-alma-800! text-alma-cream! rounded-sm!",
+          cancelButton: "bg-control-quiet! text-alma-700! rounded-sm!",
         },
       }}
       {...props}
