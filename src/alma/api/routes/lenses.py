@@ -311,6 +311,10 @@ def refresh_lens_branches(
 def refresh_lens(
     lens_id: str,
     limit: int = Query(default=50, ge=1, le=200),
+    rebuild_branches: bool = Query(
+        default=False,
+        description="Recluster this lens's branches in this refresh, instead of keeping them.",
+    ),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -409,6 +413,7 @@ def refresh_lens(
                 trigger_source="user",
                 limit=limit,
                 ctx=ctx,
+                rebuild_branches=rebuild_branches,
             )
             runner_conn.commit()
 
@@ -430,6 +435,9 @@ def refresh_lens(
                 if inserted
                 else f"Lens {lens_label}: no new recommendations"
             )
+            structure = result.get("branch_structure") or {}
+            if structure.get("reason"):
+                terminal_message += f"; {structure['message']}"
             set_job_status(
                 job_id,
                 status="completed",

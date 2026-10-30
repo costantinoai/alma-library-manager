@@ -35,7 +35,7 @@ from alma.discovery.semantic_scholar import upsert_specter2_embedding
 from .. import library as library_app
 from . import channel_yield as _channel_yield  # registers diagnostic view
 from .branch_attribution import attribute_candidate
-from .branch_identity import persist_branch_identities
+from .branch_identity import branch_structure_report, persist_branch_identities
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
 from .citation_fabric import build_citation_fabric_maps
 from .exploration import build_slate
@@ -157,6 +157,7 @@ from .seed_profile import (
     _top_profile_terms,
     load_library_preference_inputs,
     preview_lens_branches,
+    lens_branch_cap,
     resolve_lens_branches,
     split_preference_pubs,
 )
@@ -284,6 +285,7 @@ def refresh_lens_recommendations(
     trigger_source: str = "user",
     limit: int = 50,
     ctx=None,
+    rebuild_branches: bool = False,
 ) -> dict | None:
     """Queue concurrent lens refreshes behind one local-retrieval work slot."""
     waiting_since = perf_counter()
@@ -306,6 +308,7 @@ def refresh_lens_recommendations(
             trigger_source=trigger_source,
             limit=limit,
             ctx=ctx,
+            rebuild_branches=rebuild_branches,
         )
 
 
@@ -316,6 +319,7 @@ def _refresh_lens_recommendations(
     trigger_source: str = "user",
     limit: int = 50,
     ctx=None,
+    rebuild_branches: bool = False,
 ) -> dict | None:
     """Generate per-lens recommendations using 4 retrieval channels."""
     overall_start = perf_counter()
@@ -350,11 +354,19 @@ def _refresh_lens_recommendations(
     # external queries. The refresh writes its identity snapshot only when the
     # completed deck is committed below.
     branch_settings = read_settings(db)
-    resolved_branches, _, _ = resolve_lens_branches(
+    branch_plan = resolve_lens_branches(
         db,
         lens,
         seeds,
-        max_branches=min(6, int(branch_settings.get("branches.max_clusters", "6"))),
+        max_branches=lens_branch_cap(branch_settings),
+        rebuild=rebuild_branches,
+    )
+    resolved_branches = branch_plan.branches
+    branch_structure = branch_structure_report(branch_plan)
+    _log(
+        "branches",
+        f"Lens '{lens_name}': {branch_structure['message']}",
+        data=branch_structure,
     )
 
     weights = lens.get("weights") or default_channel_weights(lens["context_type"])
@@ -1606,6 +1618,7 @@ def _refresh_lens_recommendations(
             now=now,
             lens=lens,
             resolved_branches=resolved_branches,
+            branch_structure=branch_plan.structure,
             trigger_source=trigger_source,
             rec_rows=rec_rows,
             ranked=ranked,
@@ -1635,6 +1648,7 @@ def _refresh_lens_recommendations(
         "channels": retrieval_summary["channels"],
         "weights": channel_weights,
         "retrieval_summary": retrieval_summary,
+        "branch_structure": branch_structure,
         "inserted": inserted,
     }
 
@@ -1695,6 +1709,7 @@ def _persist_refresh(
     now: str,
     lens: dict,
     resolved_branches: list[dict],
+    branch_structure: dict,
     trigger_source: str,
     rec_rows: list,
     ranked: list,
@@ -1709,7 +1724,9 @@ def _persist_refresh(
     inside it.
     """
     phase_started = perf_counter()
-    persist_branch_identities(db, lens_id=lens_id, branches=resolved_branches, now=now)
+    persist_branch_identities(
+        db, lens_id=lens_id, branches=resolved_branches, now=now, structure=branch_structure
+    )
     db.execute("DELETE FROM recommendations WHERE lens_id = ? AND user_action IS NULL", (lens_id,))
     db.execute(
         """

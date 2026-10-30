@@ -736,6 +736,7 @@ def init_db_schema() -> None:
                     context_config TEXT,
                     weights TEXT,
                     branch_controls TEXT,
+                    branch_structure TEXT,
                     preference_profile TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     last_refreshed_at TEXT,
@@ -751,11 +752,14 @@ def init_db_schema() -> None:
                     id TEXT PRIMARY KEY,
                     lens_id TEXT NOT NULL REFERENCES discovery_lenses(id) ON DELETE CASCADE,
                     seed_ids TEXT NOT NULL,
+                    joined_seeds TEXT NOT NULL DEFAULT '{}',
                     label TEXT NOT NULL,
                     state TEXT NOT NULL CHECK(state IN ('active', 'retired')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    retired_at TEXT
+                    retired_at TEXT,
+                    retired_reason TEXT,
+                    successor_ids TEXT NOT NULL DEFAULT '[]'
                 )"""
             )
             conn.execute(

@@ -2187,8 +2187,17 @@ def refresh_recommendations_periodic() -> None:
                         "lens_id": lens["id"],
                         "lens_name": lens["name"],
                         "inserted": inserted,
+                        "branch_structure": (result or {}).get("branch_structure"),
                     }
                 )
+                structure = (result or {}).get("branch_structure") or {}
+                if structure.get("reason"):
+                    add_job_log(
+                        job_id,
+                        f"Lens '{lens['name']}': {structure['message']}",
+                        step="branches",
+                        data=structure,
+                    )
                 logger.info(
                     "Lens '%s' (%s): %d recommendations inserted",
                     lens["name"],

@@ -499,6 +499,34 @@ class BranchPreviewItem(BaseModel):
     auto_weight_reason: str | None = None
 
 
+class BranchStructureSummary(BaseModel):
+    """The stored branch structure, and how far the papers moved since its build."""
+
+    revision: int | None = None
+    built_at: str | None = None
+    trigger: str | None = None
+    seed_count_at_build: int | None = None
+    rebuild_reason: str | None = None
+    lineage: dict[str, Any] | None = None
+    joined: int = 0
+    left: int = 0
+    misfit: int = 0
+    turnover: float = 0.0
+    misfit_share: float = 0.0
+    rebuild_recommended: bool = False
+
+
+class RetiredBranchItem(BaseModel):
+    """A branch that ended since the current structure was built."""
+
+    id: str
+    label: str
+    reason: str
+    successor_ids: list[str] = Field(default_factory=list)
+    retired_at: str
+    control_state: str | None = None
+
+
 class LensBranchPreviewResponse(BaseModel):
     """Tree-like preview of branch structure for a lens."""
 
@@ -509,6 +537,8 @@ class LensBranchPreviewResponse(BaseModel):
     temperature: float = 0.0
     resolution: float = 1.0
     generated_at: str
+    structure: BranchStructureSummary | None = None
+    retired_branches: list[RetiredBranchItem] = Field(default_factory=list)
     branches: list[BranchPreviewItem] = Field(default_factory=list)
 
 

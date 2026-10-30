@@ -16,14 +16,25 @@ import logging
 import math
 import sqlite3
 from collections import Counter, defaultdict
-from typing import Any
+from typing import Any, NamedTuple
 
 from alma.core.scoring_math import clamp
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 
-from .branch_identity import resolve_branch_identities
+from .branch_identity import (
+    FIT_FLOOR_QUANTILE,
+    MISFIT_RECOMMEND,
+    TURNOVER_RECOMMEND,
+    StoredBranch,
+    carry_controls,
+    load_stored_branches,
+    plan_branch_lineage,
+    read_retired_branches,
+    rebuild_reason,
+    resolve_branch_identities,
+)
 from .lens_crud import (
     _apply_branch_auto_lifecycle,
     _apply_branch_controls,
@@ -1012,11 +1023,9 @@ def _cluster_seed_papers_vector(
         pooled = sorted(seeds, key=_seed_strength, reverse=True)
         return [{"seeds": pooled, "centroid": centroid}]
 
-    # Rank by size then aggregate seed strength; cap to the display ceiling.
-    real.sort(
-        key=lambda c: (len(c["ids"]), sum(_seed_strength(seed_by_id[i]) for i in c["ids"])),
-        reverse=True,
-    )
+    # Rank by size, then by id, and cap to the display ceiling. Which clusters
+    # survive is structure, so a tie never reads a rating or a signal score.
+    real.sort(key=lambda c: (-len(c["ids"]), min(c["ids"])))
     cap = len(real) if max_clusters <= 0 else max(2, min(int(max_clusters), len(real)))
     retained = real[:cap]
 
@@ -1070,6 +1079,146 @@ def _attach_seeds_without_vector(clusters: list[dict[str, Any]], seeds: list[dic
             key=lambda index: len(tokens & vocabularies[index]) / max(1, len(vocabularies[index])),
         )
         clusters[best]["seeds"].append(seed)
+
+
+def _mean_unit_vector(paper_ids: list[str], vectors: dict[str, np.ndarray]) -> np.ndarray | None:
+    """Unit mean of the vectors these papers have, or None when none has one."""
+    found = [vectors[paper_id] for paper_id in paper_ids if paper_id in vectors]
+    if not found:
+        return None
+    mean = np.mean(np.vstack(found), axis=0)
+    norm = float(np.linalg.norm(mean))
+    return mean / norm if norm > 0.0 else None
+
+
+def _assign_seeds_to_stored_branches(
+    seeds: list[dict],
+    vectors: dict[str, np.ndarray],
+    stored: list[StoredBranch],
+) -> list[dict[str, Any]]:
+    """Keep every stored member in place and give each new seed a branch.
+
+    Membership reads semantics only: the stored ids, the vectors and the terms.
+    A new seed joins the nearest centroid, computed before anyone joins, so the
+    result does not depend on seed order. A seed with no vector joins by shared
+    terms, and is new again once its vector exists. A stored id that left the
+    lens simply stops being a member, and a branch with no member left is absent
+    from the result, which `persist_branch_identities` records as emptied.
+    """
+    seed_by_id = {str(seed.get("id") or ""): seed for seed in seeds}
+    clusters: list[dict[str, Any]] = []
+    placed: set[str] = set()
+    for branch in stored:
+        kept = sorted(
+            paper_id
+            for paper_id in branch.seed_ids
+            if paper_id in seed_by_id
+            and paper_id not in placed
+            and not (branch.joined.get(paper_id) == "terms" and paper_id in vectors)
+        )
+        if not kept:
+            continue
+        placed.update(kept)
+        clusters.append(
+            {
+                "branch_id": branch.id,
+                "seeds": [seed_by_id[paper_id] for paper_id in kept],
+                "centroid": _mean_unit_vector(kept, vectors),
+                "joined": {
+                    paper_id: branch.joined[paper_id]
+                    for paper_id in kept
+                    if paper_id in branch.joined
+                },
+            }
+        )
+    if not clusters:
+        return []
+
+    new_ids = sorted(set(seed_by_id) - placed)
+    with_centroid = [cluster for cluster in clusters if cluster["centroid"] is not None]
+    by_vector = [paper_id for paper_id in new_ids if paper_id in vectors and with_centroid]
+    if by_vector:
+        centroids = np.vstack([cluster["centroid"] for cluster in with_centroid])
+        nearest = np.argmax(np.vstack([vectors[i] for i in by_vector]) @ centroids.T, axis=1)
+        for paper_id, index in zip(by_vector, nearest, strict=True):
+            with_centroid[int(index)]["seeds"].append(seed_by_id[paper_id])
+            with_centroid[int(index)]["joined"][paper_id] = "vector"
+
+    by_terms = [seed_by_id[paper_id] for paper_id in new_ids if paper_id not in by_vector]
+    before = [len(cluster["seeds"]) for cluster in clusters]
+    _attach_seeds_without_vector(clusters, by_terms)
+    for cluster, count in zip(clusters, before, strict=True):
+        for seed in cluster["seeds"][count:]:
+            cluster["joined"][str(seed.get("id") or "")] = "terms"
+        cluster["seeds"].sort(key=_seed_strength, reverse=True)
+
+    clusters.sort(
+        key=lambda c: (
+            sum(_seed_strength(s) for s in c["seeds"]) / len(c["seeds"]),
+            len(c["seeds"]),
+            c["branch_id"],
+        ),
+        reverse=True,
+    )
+    return clusters
+
+
+def _measure_drift(
+    structure: dict[str, Any] | None,
+    clusters: list[dict[str, Any]],
+    vectors: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    """How far the papers have moved from the structure built for them.
+
+    Everything here comes from the stored rows and the live vectors, so a
+    preview and a refresh agree. Turnover counts papers in and out of the lens
+    since the build. A misfit is a joiner less similar to its branch than the
+    bottom tenth of the built members are to theirs, which is how a new topic
+    shows up long before turnover does.
+    """
+    built = int((structure or {}).get("seed_count") or 0)
+    members = sum(len(cluster["seeds"]) for cluster in clusters)
+    joined = sum(len(cluster["joined"]) for cluster in clusters)
+    left = max(0, built - (members - joined))
+
+    built_fit: list[float] = []
+    joiner_fit: list[float] = []
+    for cluster in clusters:
+        ids = [str(seed.get("id") or "") for seed in cluster["seeds"]]
+        anchor = _mean_unit_vector([i for i in ids if i not in cluster["joined"]], vectors)
+        if anchor is None:
+            continue
+        for paper_id in ids:
+            if paper_id in vectors:
+                fit = float(np.dot(vectors[paper_id], anchor))
+                (joiner_fit if paper_id in cluster["joined"] else built_fit).append(fit)
+    misfit = 0
+    if built_fit and joiner_fit:
+        floor = float(np.quantile(built_fit, FIT_FLOOR_QUANTILE))
+        misfit = sum(1 for fit in joiner_fit if fit < floor)
+
+    turnover = (joined + left) / max(1, built)
+    misfit_share = misfit / max(1, members)
+    return {
+        "joined": joined,
+        "left": left,
+        "misfit": misfit,
+        "turnover": round(turnover, 3),
+        "misfit_share": round(misfit_share, 3),
+        "rebuild_recommended": turnover >= TURNOVER_RECOMMEND or misfit_share >= MISFIT_RECOMMEND,
+    }
+
+
+def _cluster_seeds(
+    seeds: list[dict],
+    vectors: dict[str, np.ndarray],
+    max_clusters: int,
+    resolution: float,
+) -> list[dict[str, Any]]:
+    """The one partition step a build runs: vectors when four exist, else terms."""
+    if len(vectors) >= 4:
+        return _cluster_seed_papers_vector(seeds, vectors, max_clusters, resolution=resolution)
+    return _cluster_seed_papers_lexical(seeds, max_clusters)
 
 
 def _cluster_seed_papers_lexical(
@@ -1166,19 +1315,34 @@ def _build_seed_branches(
     resolution: float | None = None,
     lens_id: str | None = None,
 ) -> list[dict]:
+    """Cluster `seeds` from scratch and describe each cluster as a branch."""
     if not seeds:
         return []
     effective_max = max(2, min(12, int(max_branches or 6)))
     effective_temp = _resolve_branch_temperature(settings, temperature)
     effective_resolution = _resolve_branch_resolution(resolution, settings)
-
     vectors = _fetch_seed_embedding_vectors(db, seeds)
-    if len(vectors) >= 4:
-        clusters = _cluster_seed_papers_vector(
-            seeds, vectors, effective_max, resolution=effective_resolution
-        )
-    else:
-        clusters = _cluster_seed_papers_lexical(seeds, effective_max)
+    clusters = _cluster_seeds(seeds, vectors, effective_max, effective_resolution)
+    return _describe_seed_branches(
+        clusters, seeds, temperature=effective_temp, max_branches=effective_max, lens_id=lens_id
+    )
+
+
+def _describe_seed_branches(
+    clusters: list[dict[str, Any]],
+    seeds: list[dict],
+    *,
+    temperature: float,
+    max_branches: int,
+    lens_id: str | None,
+) -> list[dict]:
+    """Turn a partition into branches: topics, label, samples, score.
+
+    Everything here is derived from the members on each call, whether the
+    partition came from a build or from the stored rows.
+    """
+    effective_max = max_branches
+    effective_temp = temperature
     if not clusters:
         return []
 
@@ -1309,8 +1473,10 @@ def _build_seed_branches(
         cluster_seed_ids = [str(seed.get("id") or "") for seed in cluster_seeds]
         branches.append(
             {
-                "id": _make_branch_id(lens_id, cluster_seed_ids, core_topics),
+                "id": cluster.get("branch_id")
+                or _make_branch_id(lens_id, cluster_seed_ids, core_topics),
                 "_seed_ids": sorted(set(cluster_seed_ids)),
+                "_joined": dict(cluster.get("joined") or {}),
                 "label": label,
                 "seed_count": len(cluster_seeds),
                 "branch_score": round(branch_score, 4),
@@ -1329,6 +1495,20 @@ def _build_seed_branches(
     return branches[:effective_max]
 
 
+class BranchPlan(NamedTuple):
+    """The one branch plan a refresh runs on and a preview shows."""
+
+    branches: list[dict]
+    temperature: float
+    resolution: float
+    structure: dict[str, Any]
+
+
+def lens_branch_cap(settings: dict[str, str]) -> int:
+    """The ceiling on branches a build keeps, shared by refresh and preview."""
+    return min(6, int(settings.get("branches.max_clusters", "6")))
+
+
 def resolve_lens_branches(
     db: sqlite3.Connection,
     lens: dict,
@@ -1337,8 +1517,13 @@ def resolve_lens_branches(
     max_branches: int = 6,
     temperature: float | None = None,
     resolution: float | None = None,
-) -> tuple[list[dict], float, float]:
-    """Resolve the one branch plan consumed by preview and every refresh lane."""
+    rebuild: bool = False,
+) -> BranchPlan:
+    """Resolve the one branch plan consumed by preview and every refresh lane.
+
+    Read-only. The stored membership stands unless `rebuild_reason` names a
+    reason to recluster, so an ordinary Save never reshuffles a lens.
+    """
     lens_id = str(lens["id"])
     settings = read_settings(db)
     controls = _resolve_lens_branch_controls(lens)
@@ -1350,21 +1535,63 @@ def resolve_lens_branches(
         resolution if resolution is not None else controls.get("resolution"),
         settings,
     )
-    branches = _build_seed_branches(
-        db,
-        seeds,
-        settings=settings,
-        max_branches=max_branches,
-        temperature=effective_temp,
+    built = lens.get("branch_structure")
+    stored = load_stored_branches(db, lens_id=lens_id)
+    vectors = _fetch_seed_embedding_vectors(db, seeds)
+    assigned = _assign_seeds_to_stored_branches(seeds, vectors, stored)
+    drift = _measure_drift(built, assigned, vectors)
+    # With no member left there is nothing to join, so this starts over.
+    reason = rebuild_reason(
+        built if assigned else None,
         resolution=effective_resolution,
-        lens_id=lens_id,
+        turnover=drift["turnover"],
+        requested=rebuild,
     )
-    branches = resolve_branch_identities(db, lens_id=lens_id, branches=branches)
+
+    lineage: dict[str, Any] | None = None
+    if reason is None:
+        branches = _describe_seed_branches(
+            assigned,
+            seeds,
+            temperature=effective_temp,
+            max_branches=len(assigned),
+            lens_id=lens_id,
+        )
+        for branch in branches:
+            branch["identity_state"] = "continued"
+    else:
+        effective_max = max(2, min(12, int(max_branches or 6)))
+        branches = resolve_branch_identities(
+            db,
+            lens_id=lens_id,
+            branches=_describe_seed_branches(
+                _cluster_seeds(seeds, vectors, effective_max, effective_resolution),
+                seeds,
+                temperature=effective_temp,
+                max_branches=effective_max,
+                lens_id=lens_id,
+            ),
+        )
+        lineage = plan_branch_lineage(
+            stored,
+            branches,
+            current_seed_ids={str(seed.get("id") or "") for seed in seeds},
+            controls=controls,
+        )
+        controls = carry_controls(controls, lineage["controls_carried"])
+
+    structure = {
+        "reason": reason,
+        "resolution": effective_resolution,
+        "seed_count": len(seeds),
+        "lineage": lineage,
+        **drift,
+    }
     branches = _apply_branch_controls(branches, controls)
     branch_outcomes = _load_branch_outcome_map(db, lens_id=lens_id, days=60)
     enriched_branches = _enrich_branches_with_outcomes(branches, branch_outcomes)
     enriched_branches = _apply_branch_auto_lifecycle(enriched_branches)
-    return enriched_branches, effective_temp, effective_resolution
+    return BranchPlan(enriched_branches, effective_temp, effective_resolution, structure)
 
 
 def preview_lens_branches(
@@ -1380,25 +1607,39 @@ def preview_lens_branches(
     if lens is None:
         return None
     seeds = _attach_signal_scores_to_seeds(db, _load_seed_papers_for_lens(db, lens))
-    enriched_branches, effective_temp, effective_resolution = resolve_lens_branches(
+    plan = resolve_lens_branches(
         db,
         lens,
         seeds,
-        max_branches=max_branches,
+        max_branches=min(max_branches, lens_branch_cap(read_settings(db))),
         temperature=temperature,
         resolution=resolution,
     )
+    built = lens.get("branch_structure") or {}
     return {
         "lens_id": lens_id,
         "lens_name": lens.get("name"),
         "context_type": lens.get("context_type"),
         "seed_count": len(seeds),
-        "temperature": round(effective_temp, 3),
-        "resolution": round(effective_resolution, 3),
+        "temperature": round(plan.temperature, 3),
+        "resolution": round(plan.resolution, 3),
         "generated_at": utcnow().isoformat(),
+        "structure": {
+            "revision": built.get("revision"),
+            "built_at": built.get("built_at"),
+            "trigger": built.get("trigger"),
+            "seed_count_at_build": built.get("seed_count"),
+            "rebuild_reason": plan.structure["reason"],
+            "lineage": plan.structure["lineage"],
+            **{
+                key: plan.structure[key]
+                for key in ("joined", "left", "misfit", "turnover", "misfit_share", "rebuild_recommended")
+            },
+        },
+        "retired_branches": read_retired_branches(db, lens=lens),
         "branches": [
             {key: value for key, value in branch.items() if not key.startswith("_")}
-            for branch in enriched_branches
+            for branch in plan.branches
         ],
     }
 

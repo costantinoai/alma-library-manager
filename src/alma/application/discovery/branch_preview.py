@@ -16,7 +16,7 @@ from .seed_profile import preview_lens_branches
 # Preview is an interactive inspection, not a ranking input. Revalidate at most
 # once a minute on opening; an explicit Preview bypasses this reuse window.
 REUSE_SECONDS = 60
-PREVIEW_VERSION = 1
+PREVIEW_VERSION = 2
 
 
 def preview_key(db: sqlite3.Connection, lens_id: str, options: dict) -> str:

@@ -1739,6 +1739,60 @@ def _m_0048_drop_lens_max_seeds(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM discovery_settings WHERE key = 'lens.max_seeds'")
 
 
+def _m_0049_discovery_branch_structure(conn: sqlite3.Connection) -> None:
+    """Make branch membership the stored truth a refresh keeps (D92-29).
+
+    `discovery_branches.seed_ids` already holds each branch's members. It gains
+    which of them joined after the last build, and why a retired branch ended.
+    The lens records the structure itself, so existing rows count as one built
+    structure and an ordinary refresh after this migration does not recluster.
+    """
+    for table, columns in (
+        ("discovery_lenses", {"branch_structure": "TEXT"}),
+        (
+            "discovery_branches",
+            {
+                "joined_seeds": "TEXT NOT NULL DEFAULT '{}'",
+                "retired_reason": "TEXT",
+                "successor_ids": "TEXT NOT NULL DEFAULT '[]'",
+            },
+        ),
+    ):
+        present = _table_columns(conn, table)
+        for column, ddl in columns.items():
+            if column not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+    active = conn.execute(
+        "SELECT lens_id, seed_ids, updated_at FROM discovery_branches WHERE state = 'active'"
+    ).fetchall()
+    built: dict[str, dict] = {}
+    for lens_id, seed_ids, updated_at in active:
+        entry = built.setdefault(lens_id, {"seed_count": 0, "built_at": updated_at})
+        entry["seed_count"] += len(json.loads(seed_ids))
+        entry["built_at"] = max(entry["built_at"], updated_at)
+    for lens_id, entry in built.items():
+        row = conn.execute(
+            "SELECT branch_controls FROM discovery_lenses WHERE id = ?", (lens_id,)
+        ).fetchone()
+        controls = json.loads(row[0]) if row and row[0] else {}
+        conn.execute(
+            "UPDATE discovery_lenses SET branch_structure = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "revision": 1,
+                        "built_at": entry["built_at"],
+                        "trigger": "migrated",
+                        "resolution": float(controls.get("resolution") or 1.0),
+                        "seed_count": entry["seed_count"],
+                    }
+                ),
+                lens_id,
+            ),
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1788,6 +1842,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (46, "discovery_branch_identity", _m_0046_discovery_branch_identity),
     (47, "clear_legacy_dismiss_ratings", _m_0047_clear_legacy_dismiss_ratings),
     (48, "drop_lens_max_seeds", _m_0048_drop_lens_max_seeds),
+    (49, "discovery_branch_structure", _m_0049_discovery_branch_structure),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

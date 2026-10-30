@@ -22,6 +22,7 @@ from ..seed_profile import (
     _resolve_branch_temperature,
     _top_preferred_authors,
     _top_profile_terms,
+    lens_branch_cap,
     resolve_lens_branches,
 )
 from ._common import FAMILY_TASTE, _candidate_key, attach_hits
@@ -74,10 +75,10 @@ def _retrieve_external_channel(
             db,
             lens,
             seeds,
-            max_branches=min(6, int(settings.get("branches.max_clusters", "6"))),
+            max_branches=lens_branch_cap(settings),
             temperature=temperature,
             resolution=resolution,
-        )[0]
+        ).branches
     )
     # Branch Studio's knobs are user-facing sliders persisted through
     # `PUT /discovery/settings`. Hard-coding their default values here made the

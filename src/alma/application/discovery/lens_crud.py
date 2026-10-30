@@ -1533,6 +1533,7 @@ def _map_lens_row(row: sqlite3.Row) -> dict:
         "context_config": _json_load(row["context_config"]),
         "weights": _json_load(row["weights"]),
         "branch_controls": _normalize_branch_controls(_json_load(row["branch_controls"])),
+        "branch_structure": _json_load(row["branch_structure"]),
         "created_at": row["created_at"],
         "last_refreshed_at": row["last_refreshed_at"],
         "is_active": bool(row["is_active"]),
