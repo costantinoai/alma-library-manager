@@ -1048,6 +1048,9 @@ def fetch_related_papers(doi: str, limit: int = 20) -> list[dict]:
 #: recommendations/v1/swagger.json) and is a new-work frontier source.
 RECOMMENDATION_POOL_ALL = "all-cs"
 
+# Semantic Scholar's hard limit on each seed list of a recommendations request.
+RECOMMEND_MAX_SEEDS = 500
+
 
 def recommend_for_paper(
     seed_id: str,
@@ -1133,8 +1136,8 @@ def recommend_from_seeds(
         return []
 
     body = {
-        "positivePaperIds": list(dict.fromkeys(pos))[:500],
-        "negativePaperIds": list(dict.fromkeys(neg))[:500],
+        "positivePaperIds": list(dict.fromkeys(pos))[:RECOMMEND_MAX_SEEDS],
+        "negativePaperIds": list(dict.fromkeys(neg))[:RECOMMEND_MAX_SEEDS],
     }
     client = get_source_http_client("semantic_scholar")
     try:

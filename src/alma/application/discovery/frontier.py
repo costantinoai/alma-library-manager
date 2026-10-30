@@ -12,11 +12,12 @@ import sqlite3
 import uuid
 from collections.abc import Iterable
 from concurrent.futures import as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
+from alma.core.rotation import RotationWindow, load_cursor, save_cursors, take_window
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import candidate_dedup_key
@@ -33,6 +34,10 @@ DEFAULT_EXPIRY_DAYS = 30
 _VECTOR_FETCH_BATCH = 400
 _DISCOVERY_QUERY_LIMIT = 6
 _DISCOVERY_RESULTS_PER_QUERY = 40
+# Network budgets per maintenance pass. Each is a rotating window over the whole
+# pool, never a fixed top-N (`alma.core.rotation`).
+_S2_RELATED_SEEDS = 6
+_OPENALEX_CITING_SEEDS = 4
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +50,9 @@ class FrontierBuildResult:
     edges_written: int
     terminal_ids: int
     retryable_ids: int
+    rotation: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "candidates_considered": self.candidates_considered,
             "rows_written": self.rows_written,
@@ -54,6 +60,7 @@ class FrontierBuildResult:
             "edges_written": self.edges_written,
             "terminal_ids": self.terminal_ids,
             "retryable_ids": self.retryable_ids,
+            **({"rotation": self.rotation} if self.rotation else {}),
         }
 
 
@@ -120,10 +127,12 @@ def run_frontier_maintenance(
 
     Returns:
         ``{phase_name: FrontierBuildResult.as_dict()}`` for the three phases.
+        ``discovery_frontier`` also carries its ``rotation`` record, the pool and
+        cursors that reproduce which Library papers and topics this run used.
     """
     from alma.core.db_write import commit_unless_gated
 
-    def _log(message: str, step: str, data: dict[str, int] | None = None) -> None:
+    def _log(message: str, step: str, data: dict[str, Any] | None = None) -> None:
         if not job_id:
             return
         from alma.api.scheduler import add_job_log
@@ -167,10 +176,9 @@ def run_frontier_maintenance(
 def coupling_candidates(
     db: sqlite3.Connection,
     *,
-    limit: int = DEFAULT_BUILD_LIMIT,
     min_overlap: int = 1,
 ) -> list[tuple[str, int]]:
-    """Return uncached works cited by Library papers, ordered by overlap."""
+    """Return every uncached work cited by Library papers, ordered by overlap."""
 
     rows = db.execute(
         f"""
@@ -193,11 +201,31 @@ def coupling_candidates(
         GROUP BY pr.referenced_work_id
         HAVING overlap >= ?
         ORDER BY overlap DESC, pr.referenced_work_id ASC
-        LIMIT ?
         """,
-        (utcnow().isoformat(), max(1, int(min_overlap)), max(1, int(limit))),
+        (utcnow().isoformat(), max(1, int(min_overlap))),
     ).fetchall()
     return [(str(row["rid"]), int(row["overlap"] or 0)) for row in rows]
+
+
+def _coupling_window(
+    db: sqlite3.Connection,
+    *,
+    limit: int,
+    min_overlap: int = 1,
+) -> RotationWindow:
+    """One slice of the works to resolve.
+
+    A work OpenAlex cannot resolve stays pending at its rank, so a fixed top-N
+    would spend the whole budget on those works, run after run, and starve the
+    references of low-overlap Library papers.
+    """
+    return take_window(
+        coupling_candidates(db, min_overlap=min_overlap),
+        name="frontier_coupling",
+        budget=limit,
+        cursor=load_cursor(db, "frontier_coupling"),
+        key=lambda item: item[0],
+    )
 
 
 def build_frontier(
@@ -213,11 +241,11 @@ def build_frontier(
     HTTP provider is called while SQLite owns a write lock.
     """
 
-    coupling = coupling_candidates(db, limit=limit, min_overlap=min_overlap)
-    if not coupling:
+    window = _coupling_window(db, limit=limit, min_overlap=min_overlap)
+    if not window.picked:
         return FrontierBuildResult(0, 0, 0, 0, 0, 0)
 
-    overlap_by_work = {f"W{work_id}": overlap for work_id, overlap in coupling}
+    overlap_by_work = {f"W{work_id}": overlap for work_id, overlap in window.picked}
     work_ids = list(overlap_by_work)
 
     # Network phase.
@@ -271,14 +299,17 @@ def build_frontier(
             )
 
     rows_written, edges_written = upsert_frontier_candidates(db, gathered)
+    # Advances even when nothing resolved: that is the case rotation exists for.
+    save_cursors(db, [window])
 
     return FrontierBuildResult(
-        candidates_considered=len(coupling),
+        candidates_considered=len(window.picked),
         rows_written=rows_written,
         vectors_written=0,
         edges_written=edges_written,
         terminal_ids=0,
         retryable_ids=0,
+        rotation={window.name: window.record()},
     )
 
 
@@ -306,11 +337,17 @@ def build_discovery_frontier(
           AND {standalone_paper_sql('p')}
         GROUP BY LOWER(TRIM(pt.term))
         ORDER BY strength DESC, pt.term
-        LIMIT ?
-        """,
-        (max(1, int(query_limit)),),
+        """
     ).fetchall()
-    queries = [str(row["term"]).strip() for row in query_rows if row["term"]]
+    topics = take_window(
+        [str(row["term"]).strip() for row in query_rows if row["term"]],
+        name="frontier_topics",
+        budget=max(1, int(query_limit)),
+        cursor=load_cursor(db, "frontier_topics"),
+    )
+    queries = list(topics.picked)
+    windows: list[RotationWindow] = [topics]
+    served: list[RotationWindow] = []
 
     gathered: list[dict] = []
     if queries:
@@ -354,14 +391,20 @@ def build_discovery_frontier(
                     )
         finally:
             pool.shutdown(wait=False)
+        if gathered:
+            served.append(topics)
 
-    positive, negative = _s2_seed_identifiers(db)
-    if positive:
-        for candidate in semantic_scholar.recommend_from_seeds(
-            positive,
-            negative,
+    positive, negative = _s2_seed_windows(db)
+    windows += [positive, negative]
+    if positive.picked:
+        recommended = semantic_scholar.recommend_from_seeds(
+            list(positive.picked),
+            list(negative.picked),
             limit=max(50, int(per_query_limit)),
-        ):
+        )
+        if recommended:
+            served += [positive, negative]
+        for candidate in recommended:
             gathered.append(
                 {
                     **candidate,
@@ -369,12 +412,22 @@ def build_discovery_frontier(
                     "_frontier_relation": "recommendation",
                 }
             )
-        for seed_id in positive[:6]:
+
+        related = take_window(
+            _s2_seed_pools(db)[0],
+            name="s2_paper_neighbours",
+            budget=_S2_RELATED_SEEDS,
+            cursor=load_cursor(db, "s2_paper_neighbours"),
+        )
+        windows.append(related)
+        related_count = 0
+        for seed_id in related.picked:
             for candidate in semantic_scholar.recommend_for_paper(
                 seed_id,
                 limit=max(20, int(per_query_limit)),
                 pool=semantic_scholar.RECOMMENDATION_POOL_ALL,
             ):
+                related_count += 1
                 gathered.append(
                     {
                         **candidate,
@@ -382,14 +435,20 @@ def build_discovery_frontier(
                         "_frontier_relation": "related",
                     }
                 )
+        if related_count:
+            served.append(related)
 
     # Reverse citation neighbourhood: foundational/reference candidates alone
-    # miss newer work that builds on the user's strongest papers.
-    for seed_id in _positive_openalex_seed_ids(db, limit=4):
+    # miss newer work that builds on the user's papers.
+    citing = _openalex_seed_window(db, limit=_OPENALEX_CITING_SEEDS)
+    windows.append(citing)
+    citing_count = 0
+    for seed_id in citing.picked:
         for raw in fetch_citing_works_for_openalex_id(
             seed_id,
             limit=max(20, int(per_query_limit)),
         ):
+            citing_count += 1
             candidate = _frontier_metadata(_normalize_work(raw))
             candidate["source_api"] = "openalex"
             gathered.append(
@@ -399,8 +458,13 @@ def build_discovery_frontier(
                     "_frontier_relation": "citation",
                 }
             )
+    if citing_count:
+        served.append(citing)
 
     rows_written, edges_written = upsert_frontier_candidates(db, gathered)
+    # Only a source that answered moves on: a failed call keeps its window, in
+    # the same transaction as the leads it produced.
+    save_cursors(db, served)
     return FrontierBuildResult(
         candidates_considered=len(gathered),
         rows_written=rows_written,
@@ -408,6 +472,10 @@ def build_discovery_frontier(
         edges_written=edges_written,
         terminal_ids=0,
         retryable_ids=0,
+        rotation={
+            window.name: {**window.record(), "served": window in served}
+            for window in windows
+        },
     )
 
 
@@ -900,16 +968,20 @@ def search_frontier(
     return ranked[: max(1, int(limit))]
 
 
-def _s2_seed_identifiers(
-    db: sqlite3.Connection,
-) -> tuple[list[str], list[str]]:
+def _s2_seed_pools(db: sqlite3.Connection) -> tuple[list[str], list[str]]:
+    """Every Semantic Scholar identifier we hold, strongest first, split by verdict.
+
+    ONE rule with Library taste (`split_preference_pubs`): a paper in the Library
+    is a positive unless it was rated down. A negative is a rated-down paper or a
+    removed one, never a Dismiss (D6).
+    """
     rows = db.execute(
         f"""
         SELECT semantic_scholar_id, semantic_scholar_corpus_id, doi,
                status, rating
         FROM papers
         WHERE (
-            (status = 'library' AND COALESCE(rating, 0) >= 4)
+            status = 'library'
             OR status = 'removed'
             OR COALESCE(rating, 0) BETWEEN 1 AND 2
         )
@@ -919,8 +991,7 @@ def _s2_seed_identifiers(
               OR COALESCE(TRIM(doi), '') != ''
           )
           AND {standalone_paper_sql('papers')}
-        ORDER BY COALESCE(rating, 0) DESC, added_at DESC
-        LIMIT 150
+        ORDER BY COALESCE(rating, 0) DESC, added_at DESC, id
         """
     ).fetchall()
 
@@ -940,36 +1011,52 @@ def _s2_seed_identifiers(
         value = identifier(row)
         if not value:
             continue
-        if row["status"] == "library" and int(row["rating"] or 0) >= 4:
+        rated_down = 1 <= int(row["rating"] or 0) <= 2
+        if row["status"] == "library" and not rated_down:
             positive.append(value)
         else:
             negative.append(value)
-    return positive[:100], negative[:100]
+    return positive, negative
 
 
-def _positive_openalex_seed_ids(
-    db: sqlite3.Connection,
-    *,
-    limit: int,
-) -> list[str]:
+def _s2_seed_windows(db: sqlite3.Connection) -> tuple[RotationWindow, RotationWindow]:
+    """This pass's seeds, within Semantic Scholar's limit on each list."""
+    positive, negative = _s2_seed_pools(db)
+    return (
+        take_window(
+            positive,
+            name="s2_positive",
+            budget=semantic_scholar.RECOMMEND_MAX_SEEDS,
+            cursor=load_cursor(db, "s2_positive"),
+        ),
+        take_window(
+            negative,
+            name="s2_negative",
+            budget=semantic_scholar.RECOMMEND_MAX_SEEDS,
+            cursor=load_cursor(db, "s2_negative"),
+        ),
+    )
+
+
+def _openalex_seed_window(db: sqlite3.Connection, *, limit: int) -> RotationWindow:
+    """OpenAlex works whose citers this pass fetches."""
     rows = db.execute(
         f"""
         SELECT openalex_id
         FROM papers
         WHERE status = 'library'
-          AND COALESCE(rating, 0) >= 4
+          AND NOT COALESCE(rating, 0) BETWEEN 1 AND 2
           AND openalex_id GLOB 'W[0-9]*'
           AND {standalone_paper_sql('papers')}
-        ORDER BY COALESCE(rating, 0) DESC, added_at DESC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
+        ORDER BY COALESCE(rating, 0) DESC, added_at DESC, id
+        """
     ).fetchall()
-    return [
-        str(row["openalex_id"])
-        for row in rows
-        if str(row["openalex_id"] or "").strip()
-    ]
+    return take_window(
+        [str(row["openalex_id"]) for row in rows],
+        name="openalex_citing",
+        budget=limit,
+        cursor=load_cursor(db, "openalex_citing"),
+    )
 
 
 def _merge_frontier_metadata(
