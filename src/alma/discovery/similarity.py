@@ -1058,11 +1058,6 @@ def compute_embedding_centroid(
     return np.mean(np.stack(aligned), axis=0)
 
 
-# How many seed vectors the exemplar selection considers. Bounds the n×n
-# similarity matrix (400² floats) while covering any realistic lens.
-EXEMPLAR_POOL = 400
-
-
 def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[numpy.ndarray]:
     """The ``limit`` vectors that best COVER the whole set — greedy facility location.
 
@@ -1101,7 +1096,7 @@ def load_publication_example_embeddings(
     age could carry a whole theme with no exemplar at all, and candidates near
     it earned semantic credit only from the lens-wide centroid, which sits
     between the themes. Now the exemplars are chosen to cover the seed set
-    (:func:`select_representatives`), from a bounded pool of the same list.
+    (:func:`select_representatives`), from every publication in the list.
     One rule, used by lens scoring and by the calibration build alike.
     """
     if not _NUMPY_AVAILABLE:
@@ -1110,8 +1105,6 @@ def load_publication_example_embeddings(
     pool: list[numpy.ndarray] = []
     seen: set[str] = set()
     for pub in pubs:
-        if len(pool) >= EXEMPLAR_POOL:
-            break
         paper_id = str(pub.get("id") or "").strip()
         if not paper_id or paper_id in seen:
             continue

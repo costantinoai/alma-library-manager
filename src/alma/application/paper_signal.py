@@ -130,7 +130,6 @@ def _load_library_centroid(db: sqlite3.Connection, model: str):
             JOIN papers p ON p.id = pe.paper_id
             WHERE p.status = 'library' AND pe.model = ?
               AND {standalone_paper_sql('p')}
-            LIMIT 2000
             """,
             (model,),
         ).fetchall()

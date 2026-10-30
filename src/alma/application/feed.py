@@ -1428,25 +1428,14 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     settings = load_scoring_settings(db)
 
     # ── Gather positive / negative library papers ──
-    try:
-        pos_rows = db.execute(
-            f"SELECT id, title, authors, year, journal, abstract, doi, url, "
-            f"cited_by_count FROM papers WHERE status = 'library' AND rating >= 4 "
-            f"AND {standalone_paper_sql('papers')}"
-        ).fetchall()
-        neg_rows = db.execute(
-            f"SELECT id, title, authors, year, journal, abstract, doi, url, "
-            f"cited_by_count FROM papers WHERE status = 'library' AND rating <= 2 AND rating > 0 "
-            f"AND {standalone_paper_sql('papers')}"
-        ).fetchall()
-    except Exception:
-        pos_rows, neg_rows = [], []
+    # The one Library taste rule: a paper is an endorsement unless rated down.
+    # Reading only rating >= 4 left every plain Save out of Feed's taste.
+    from alma.application.discovery.seed_profile import load_library_preference_inputs
 
-    positive_pubs = [dict(r) for r in pos_rows]
-    negative_pubs = [dict(r) for r in neg_rows]
+    _, positive_pubs, negative_pubs = load_library_preference_inputs(db)
 
     if not positive_pubs:
-        logger.debug("No highly-rated library papers; skipping feed scoring")
+        logger.debug("No Library papers to learn from; skipping feed scoring")
         return 0
 
     # ── Build preference profile (topics, author/journal affinity, feedback) ──

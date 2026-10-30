@@ -449,7 +449,6 @@ def library_centroid(
             JOIN papers p ON p.id = pe.paper_id
             WHERE p.status = 'library' AND pe.model = ?
               AND {standalone_paper_sql('p')}
-            LIMIT 1000
             """,
             (model,),
         ).fetchall()

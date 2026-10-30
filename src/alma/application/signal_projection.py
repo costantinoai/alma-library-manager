@@ -51,6 +51,7 @@ _POSITION_WEIGHTS = {
 }
 _EVENT_HALF_LIFE_DAYS = 180.0
 _EVENT_MAX_AGE_DAYS = 730.0
+_NEIGHBOR_SEED_BLOCK = 256
 
 
 @dataclass
@@ -127,25 +128,24 @@ def load_paper_verdicts(
     stands as the newest, it has simply expired, so an older event cannot
     replace it.
 
-    ``paper_ids`` scopes the read to a batch; without it the read covers the
-    newest 5000 events.
+    ``paper_ids`` scopes the read to a batch; without it the read covers every
+    event, so an old verdict outlives a busy log.
     """
     query = """
         SELECT entity_id, event_type, value, created_at
         FROM feedback_events
         WHERE entity_type IN ('publication', 'paper'){scope}
         ORDER BY created_at DESC, rowid DESC
-        {limit}
     """
     rows: list[Any] = []
     try:
         if paper_ids is None:
-            rows = db.execute(query.format(scope="", limit="LIMIT 5000")).fetchall()
+            rows = db.execute(query.format(scope="")).fetchall()
         else:
             for chunk in _chunks(paper_ids, 500):
                 placeholders = ",".join("?" for _ in chunk)
                 scope = f" AND entity_id IN ({placeholders})"
-                rows.extend(db.execute(query.format(scope=scope, limit=""), chunk).fetchall())
+                rows.extend(db.execute(query.format(scope=scope), chunk).fetchall())
     except sqlite3.OperationalError:
         rows = []
 
@@ -554,44 +554,44 @@ def _project_semantic_neighbors(
     except (sqlite3.OperationalError, ValueError):
         return
 
-    seeds: list[tuple[str, Any]] = []
-    for row in seed_rows:
-        paper_id = str(row["paper_id"] or "")
-        signal = paper_strength.get(paper_id, 0.0)
-        if signal == 0.0:
-            continue
-        vec = decode_vector(row["embedding"])
-        norm = float(np.linalg.norm(vec))
-        if norm > 0.0:
-            seeds.append((paper_id, vec / norm))
-    if not seeds:
+    def unit_vectors(rows: list[Any], keep: Any) -> tuple[list[str], Any]:
+        ids: list[str] = []
+        vectors: list[Any] = []
+        for row in rows:
+            paper_id = str(row["paper_id"] or "")
+            if not keep(paper_id):
+                continue
+            vec = decode_vector(row["embedding"])
+            norm = float(np.linalg.norm(vec))
+            if norm > 0.0:
+                ids.append(paper_id)
+                vectors.append(vec / norm)
+        return ids, np.vstack(vectors) if vectors else None
+
+    seed_ids, seed_matrix = unit_vectors(seed_rows, lambda pid: paper_strength.get(pid, 0.0) != 0.0)
+    candidate_ids, candidate_matrix = unit_vectors(
+        all_rows, lambda pid: bool(pid) and pid not in paper_strength
+    )
+    if seed_matrix is None or candidate_matrix is None:
         return
 
-    candidates: list[tuple[str, Any]] = []
-    for row in all_rows:
-        paper_id = str(row["paper_id"] or "")
-        if not paper_id or paper_id in paper_strength:
-            continue
-        vec = decode_vector(row["embedding"])
-        norm = float(np.linalg.norm(vec))
-        if norm > 0.0:
-            candidates.append((paper_id, vec / norm))
-    if not candidates:
-        return
-
-    for seed_id, seed_vec in seeds:
-        signal = paper_strength.get(seed_id, 0.0)
-        scored: list[tuple[float, str]] = []
-        for candidate_id, candidate_vec in candidates:
-            similarity = float(np.dot(seed_vec, candidate_vec))
-            if similarity >= min_similarity:
-                scored.append((similarity, candidate_id))
-        scored.sort(reverse=True)
-        for similarity, candidate_id in scored[:top_k]:
-            # Square the [0,1] similarity so only genuinely close
-            # neighbours inherit meaningful preference signal.
-            normalized = _clamp((similarity + 1.0) / 2.0, 0.0, 1.0)
-            _add(out.semantic_neighbor, candidate_id, signal * 0.40 * normalized * normalized)
+    # A matrix product per block, so a large Library is not a Python loop over
+    # seeds × corpus.
+    for start in range(0, len(seed_ids), _NEIGHBOR_SEED_BLOCK):
+        block = seed_matrix[start : start + _NEIGHBOR_SEED_BLOCK]
+        for offset, row_sims in enumerate(block @ candidate_matrix.T):
+            signal = paper_strength[seed_ids[start + offset]]
+            close = np.flatnonzero(row_sims >= min_similarity)
+            nearest = close[np.argsort(row_sims[close], kind="stable")[::-1][:top_k]]
+            for index in nearest:
+                # Square the [0,1] similarity so only genuinely close
+                # neighbours inherit meaningful preference signal.
+                normalized = _clamp((float(row_sims[index]) + 1.0) / 2.0, 0.0, 1.0)
+                _add(
+                    out.semantic_neighbor,
+                    candidate_ids[index],
+                    signal * 0.40 * normalized * normalized,
+                )
 
 
 def _project_citation_neighbors(
