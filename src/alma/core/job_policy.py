@@ -260,7 +260,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             sources=("openalex",),
             max_concurrency=2,
         ),
-        _p("tags", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER}, max_concurrency=2),
         _p(
             "operations",
             JobClass.USER_PRODUCT,
@@ -370,7 +369,6 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
         "api/routes/operations.py",
         "api/routes/plugins.py",
         "api/routes/publications.py",
-        "api/routes/tags.py",
         "api/routes/onboarding.py",
         "application/followed_authors.py",
         "application/library.py",

@@ -424,20 +424,6 @@ def bulk_suggest_tags(conn: sqlite3.Connection, progress_callback=None) -> dict:
     errors = 0
 
     try:
-        # Ensure tag_suggestions table exists
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS tag_suggestions (
-                paper_id TEXT NOT NULL,
-                tag TEXT NOT NULL,
-                tag_id TEXT,
-                confidence REAL NOT NULL,
-                source TEXT NOT NULL,
-                accepted INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (paper_id, tag)
-            )"""
-        )
-
         # Find papers that have no suggestions yet
         pubs = conn.execute(
             """

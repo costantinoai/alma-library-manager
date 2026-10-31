@@ -555,7 +555,7 @@ export function AIConfigCard() {
       <SettingsCard
         icon={Brain}
         title="AI & Embeddings"
-        description="Configure AI providers for semantic search, clustering, and auto-tagging. All AI features are optional."
+        description="Configure AI providers for semantic search and clustering. All AI features are optional."
         roomy
       >
         <form className="space-y-6" onSubmit={onSubmit}>

@@ -980,19 +980,6 @@ def init_db_schema() -> None:
                 )"""
             )
 
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS tag_suggestions (
-                    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-                    tag TEXT NOT NULL,
-                    tag_id TEXT,
-                    confidence REAL NOT NULL,
-                    source TEXT NOT NULL,
-                    accepted INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    PRIMARY KEY (paper_id, tag)
-                )"""
-            )
-
             # ==============================================================
             # TOPICS: OpenAlex taxonomy
             # ==============================================================

@@ -314,18 +314,6 @@ def _build_ai_feature_registry(
             action="Compute Missing" if active_provider_available and not graph_ready else None,
         ),
         _feature(
-            feature_id="tag_suggestions",
-            group="metadata",
-            label="Tag suggestions",
-            status="ready" if embedding_ready else "fallback",
-            dependency="embeddings",
-            detail=(
-                "Tag suggestions can propagate labels through embedding neighbors."
-                if embedding_ready
-                else "Tag suggestions use topic and TF-IDF fallback signals."
-            ),
-        ),
-        _feature(
             feature_id="feedback_learning",
             group="feedback",
             label="Feedback learning",
@@ -339,7 +327,6 @@ def _build_ai_feature_registry(
         "embeddings": "Embeddings",
         "discovery": "Discovery",
         "library": "Library",
-        "metadata": "Metadata",
         "feedback": "Feedback Learning",
     }
     groups = [
