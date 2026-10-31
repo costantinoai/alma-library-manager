@@ -945,12 +945,9 @@ def _build_feedback_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
     summary = {
         "total_interactions": 0,
         "week_interactions": 0,
-        "streak_days": 0,
         "topic_coverage": 0,
         "source_diversity_7d": 0,
         "recommendation_engagement_rate": 0.0,
-        "xp": 0,
-        "level": 1,
     }
     top_topics: list[dict[str, Any]] = []
     top_authors: list[dict[str, Any]] = []
@@ -970,14 +967,11 @@ def _build_feedback_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
             {
                 "total_interactions": int(stats.get("total_interactions") or 0),
                 "week_interactions": int(stats.get("week_interactions") or 0),
-                "streak_days": int(stats.get("streak_days") or 0),
                 "topic_coverage": int(stats.get("topic_coverage") or 0),
                 "source_diversity_7d": int(behavioral.get("source_diversity_7d") or 0),
                 "recommendation_engagement_rate": round(
                     float(outcomes.get("engagement_rate") or 0.0), 3
                 ),
-                "xp": int(stats.get("xp") or 0),
-                "level": int(stats.get("level") or 1),
                 "background_corpus_papers": int(stats.get("background_corpus_papers") or 0),
                 "background_corpus_authors": int(stats.get("background_corpus_authors") or 0),
             }

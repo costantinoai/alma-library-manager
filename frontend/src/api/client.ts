@@ -2469,12 +2469,9 @@ export interface InsightsDiagnostics {
     summary: {
       total_interactions: number
       week_interactions: number
-      streak_days: number
       topic_coverage: number
       source_diversity_7d: number
       recommendation_engagement_rate: number
-      xp: number
-      level: number
       background_corpus_papers?: number
       background_corpus_authors?: number
     }
