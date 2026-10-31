@@ -1888,6 +1888,8 @@ def _m_0051_periodic_feed_refresh_window(conn: sqlite3.Connection) -> None:
     would put all of them into Feed's New list. Its real start is gone; the
     finish is the one known fact, and it keeps the row's "last refresh" true.
     """
+    if not _table_exists(conn, "operation_status"):
+        return
     conn.execute(
         "UPDATE operation_status SET started_at = finished_at "
         "WHERE job_id = 'periodic_feed_refresh' AND finished_at IS NOT NULL"
