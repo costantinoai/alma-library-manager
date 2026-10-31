@@ -282,14 +282,23 @@ def list_affiliation_conflicts(
     drilldown showed "everything resolved". We now scan EVERY author with
     affiliation evidence and cap only the collected results, so detection is
     stable regardless of the caller's limit.
+
+    Only an author with two sources and two names can conflict, so the query
+    leaves the rest out and Home does not score every author on each read.
     """
     try:
         rows = conn.execute(
             """
-            SELECT DISTINCT a.id, a.name, a.openalex_id, a.affiliation
+            SELECT a.id, a.name, a.openalex_id, a.affiliation
             FROM authors a
-            JOIN author_affiliation_evidence ev ON ev.author_id = a.id
             WHERE COALESCE(a.status, 'active') != 'removed'
+              AND a.id IN (
+                  SELECT author_id
+                  FROM author_affiliation_evidence
+                  WHERE COALESCE(NULLIF(TRIM(institution_name), ''), '') != ''
+                  GROUP BY author_id
+                  HAVING COUNT(DISTINCT source) > 1 AND COUNT(DISTINCT institution_name) > 1
+              )
             ORDER BY a.name ASC
             """
         ).fetchall()
