@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from alma.addons.alerts.schema import TABLES, has_user_data
+from alma.addons.alerts.schema import DDL, TABLES, has_user_data
 from alma.core.addons import AddOn, JobSpec
 from alma.core.job_policy import JobClass, JobPolicy, ResourceKind
 
@@ -91,6 +91,7 @@ ADDON = AddOn(
         ),
     ),
     job_policies=lambda: _JOB_POLICIES,
+    ddl=DDL,
     tables=TABLES,
     paper_tables=(("alerted_publications", True), ("alert_history", False)),
     settings_defaults={
