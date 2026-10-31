@@ -23,7 +23,7 @@ import os
 import sqlite3
 import stat
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException, status
@@ -1744,6 +1744,27 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
 def get_plugin_registry() -> PluginRegistry:
     """The runtime-plugin catalogue dependency."""
     return runtime_plugins()
+
+
+# ============================================================================
+# Add-on gate
+# ============================================================================
+
+
+def require_addon(addon_id: str) -> Callable[[], None]:
+    """Route dependency: a switched-off add-on answers like a route that is gone.
+
+    Same status and body as the app's catch-all, so nothing distinguishes a
+    disabled route from one that never existed. Read per request, so the switch
+    needs no restart.
+    """
+    from alma.core import addons
+
+    def _gate() -> None:
+        if not addons.is_enabled(addon_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    return _gate
 
 
 # ============================================================================

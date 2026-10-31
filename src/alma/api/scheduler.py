@@ -841,7 +841,7 @@ def _schedule_flag_enabled(key: str, default: bool = False) -> bool:
         return default
 
 
-def _register_interval_job(
+def register_interval_job(
     sched,
     *,
     job_id: str,
@@ -1641,6 +1641,12 @@ def setup_scheduler() -> None:
         interval_hours,
     )
 
+    # -- Add-on jobs (interval, only while their add-on is on) ---------------
+    from alma.core import addons
+
+    for addon in addons.present():
+        addons.sync_jobs(addon.id, sched)
+
     # -- Author suggestion discovery (interval, background-owned) ----------
     # Page navigation is a pure read: opening Authors must never enqueue
     # OpenAlex/S2 expansion or thin-author seeding. This idle-gated tick checks
@@ -1678,7 +1684,7 @@ def setup_scheduler() -> None:
     # Runs only when the page/Settings toggle (schedule.refresh_enabled) is on
     # AND the interval is > 0. Default OFF.
     refresh_hours = _discovery_schedule_interval_hours("schedule.refresh_interval_hours", 6)
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="refresh_recommendations",
         func=refresh_recommendations_periodic,
@@ -1705,7 +1711,7 @@ def setup_scheduler() -> None:
     # Minutes, not hours: this is the phone→ALMa loop, and latency is the whole
     # user experience.
     inbox_sweep_minutes = _inbox_sweep_interval_minutes()
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="inbox_capture_sweep",
         func=inbox_capture_sweep_periodic,
@@ -1722,7 +1728,7 @@ def setup_scheduler() -> None:
         "schedule.scoring_calibration_interval_hours",
         12,
     )
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="scoring_calibration_refresh",
         func=scoring_calibration_refresh_periodic,
@@ -3361,7 +3367,7 @@ def reschedule_discovery_refresh(enabled: bool, interval_hours: int) -> None:
         enabled: Whether discovery auto-refresh is opted in.
         interval_hours: Refresh interval in hours. 0 = disabled.
     """
-    _register_interval_job(
+    register_interval_job(
         get_scheduler(),
         job_id="refresh_recommendations",
         func=refresh_recommendations_periodic,
@@ -3383,7 +3389,7 @@ def reschedule_feed_refresh(enabled: bool, interval_hours: int) -> None:
         enabled: Whether feed auto-refresh is opted in.
         interval_hours: Refresh interval in hours. 0 = disabled.
     """
-    _register_interval_job(
+    register_interval_job(
         get_scheduler(),
         job_id="refresh_feed_inbox",
         func=refresh_feed_inbox_periodic,

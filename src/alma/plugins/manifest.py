@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from alma.application.inbox_schema import InboundChannel
 from alma.application.pdf_schema import PdfSource
+from alma.config import activation_setting_key
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,6 @@ InboundFactory = Callable[[], InboundChannel | None]
 AlertSender = Callable[[list[dict[str, Any]], str], Awaitable[bool]]
 ConnectionTester = Callable[[], Awaitable[dict[str, Any]]]
 PdfSourceFactory = Callable[[], list[PdfSource]]
-
-
-def activation_setting_key(plugin_id: str) -> str:
-    """Canonical flat settings key for runtime activation."""
-    return f"plugins.{plugin_id}.enabled"
 
 
 class PluginDisabledError(RuntimeError):

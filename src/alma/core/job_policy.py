@@ -321,6 +321,17 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             may_overlap_maintenance=False,
             destructive=True,
         ),
+        # Remove of an add-on: backup, drop its tables, delete its files.
+        _p(
+            "addons",
+            JobClass.DATA_MANAGEMENT,
+            50,
+            {_R.DB_WRITER, _R.DB_EXCLUSIVE},
+            coalescing=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+            destructive=True,
+        ),
         # ---- Housekeeping (DB-exclusive, quiet slot) ---------------------------
         _p(
             "db",
@@ -381,9 +392,14 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
 
 
 def policy_for(operation_key: str) -> JobPolicy | None:
-    """The policy for an operation key, resolved by its namespace prefix."""
+    """The policy for an operation key, resolved by its namespace prefix.
+
+    Add-ons declare their own namespaces, so core's catalog never names them.
+    """
+    from alma.core import addons
+
     namespace = str(operation_key or "").split(".", 1)[0].split(":", 1)[0]
-    return JOB_POLICIES.get(namespace)
+    return JOB_POLICIES.get(namespace) or addons.job_policy(namespace)
 
 
 def admit_maintenance(active_total: int, *, app_idle: bool) -> tuple[bool, str]:

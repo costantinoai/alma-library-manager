@@ -589,6 +589,11 @@ def migrate_settings_schema() -> None:
         )
 
 
+def activation_setting_key(plugin_id: str) -> str:
+    """Canonical flat settings key for runtime activation."""
+    return f"plugins.{plugin_id}.enabled"
+
+
 def plugin_activation_keys() -> list[str]:
     """Every ``plugins.<id>.enabled`` key the current schema defines."""
     return [
