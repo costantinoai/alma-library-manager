@@ -54,9 +54,11 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"(?i)([?&]key=)([^&\s#]+)"),
         r"\1" + _REDACTED,
     ),
-    # Any scheme, and a short value the generic Bearer rule below would pass.
+    # Any scheme, and a short value the generic Bearer rule below would pass. Unless
+    # the value is a closed quote, the rest of the line goes: a shorter fallback takes
+    # the scheme of `b'Bearer x` and leaves the credential, with Bearer rule blinded.
     (
-        re.compile(r"(?i)\b(authorization\s*[:=]\s*(?:[a-z]+\s+)?)[^\s&,;]+"),
+        re.compile(r"""(?i)\b(authorization["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\n]*)"""),
         r"\1" + _REDACTED,
     ),
     (
