@@ -2174,9 +2174,15 @@ def describe_task(
             or dimensions.get(key, {}).get("severity") in {"warning", "critical"}
         )
     ]
+    unmeasured_prerequisites = [
+        row["label"] for row in dependencies if row["required"] and row["pending"] is None
+    ]
     if assessment_error:
         attention_required = True
         attention_reason = "Pending work could not be measured"
+    elif unmeasured_prerequisites:
+        attention_required = True
+        attention_reason = "Prerequisite could not be measured: " + ", ".join(unmeasured_prerequisites)
     elif unhealthy_dimensions:
         attention_required = True
         attention_reason = "Health warning: " + ", ".join(
