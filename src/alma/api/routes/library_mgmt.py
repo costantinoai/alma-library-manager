@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
+from alma.core import addons
 from alma.core.db_write import run_write_unit, write_section
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.sqlite_backup import online_sqlite_backup
@@ -392,7 +393,7 @@ def _run_reset(job_id: str) -> dict:
         # gate) instead of a raw commit, so the reset serializes against any
         # concurrent writer instead of busy-polling.
         with write_section(conn, label="library reset clear-tables"):
-            for table in _RESET_TABLES:
+            for table in (*_RESET_TABLES, *addons.data_tables()):
                 if table in existing_tables:
                     try:
                         conn.execute(f"DELETE FROM {table}")  # noqa: S608 -- hardcoded allowlist

@@ -110,9 +110,10 @@ class AddOn:
     schema_version: int = 1
     #: ``(version, migrate(conn))`` pairs, run above the stored version.
     migrations: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = ()
-    #: ``(table, follows_merge)``: tables holding a ``paper_id``. Core's
-    #: paper-merge and reset passes read this for every PRESENT add-on, on or
-    #: off, so a disabled add-on's rows still follow a merged paper.
+    #: ``(table, follows_merge)``: tables holding a ``paper_id``. A preprint
+    #: group moves every one of them onto its published root; a duplicate merge
+    #: rewires only those with ``follows_merge``. Read for every PRESENT add-on,
+    #: on or off, so a disabled add-on's rows still follow their paper.
     paper_tables: tuple[tuple[str, bool], ...] = ()
     #: ``settings.json`` keys this add-on owns, with their defaults. Remove
     #: deletes them. The activation key is not one of them.
@@ -123,7 +124,7 @@ class AddOn:
     file_roots: Callable[[], Sequence[Path]] = _no_paths
     plugins: Callable[[], Sequence[Any]] = _no_plugins
     #: ``home_counts(db, day_start)``: figures for Home's activity row, each
-    #: ``{label, today, href}``.
+    #: ``{label, hint, today, href}``.
     home_counts: Callable[[sqlite3.Connection, str], Sequence[dict[str, Any]]] | None = None
     #: ``home_pills(db, now)``: pills for Home's status line.
     home_pills: Callable[[sqlite3.Connection, datetime], Sequence[dict[str, Any]]] | None = None

@@ -31,7 +31,7 @@ const QUIET: HomeBrief = {
       by_monitor_type: { authors: 0, journals: 0, other: 0 },
     },
     discovery: { today: 0, carryover: 0, lenses_today: 0 },
-    alerts: { today: 0 },
+    addons: [],
     trend: [],
   },
   status: [],
@@ -76,7 +76,9 @@ describe('HomePage', () => {
           by_monitor_type: { authors: 7, journals: 3, other: 2 },
         },
         discovery: { today: 6, carryover: 2, lenses_today: 2 },
-        alerts: { today: 1 },
+        addons: [
+          { id: 'alerts', label: 'alerts delivered', hint: 'successful digests', today: 1, href: '#/alerts?tab=history' },
+        ],
         trend: [],
       },
     })

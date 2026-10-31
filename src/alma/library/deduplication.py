@@ -16,7 +16,9 @@ import logging
 import sqlite3
 from urllib.parse import urlsplit, urlunsplit
 
+from alma.core import addons
 from alma.core.db_write import write_section
+from alma.core.paper_groups import table_has_paper_id
 from alma.core.time import utcnow
 from alma.core.utils import canonical_lookup_doi, normalize_openalex_id, normalize_orcid
 
@@ -178,9 +180,13 @@ def _rewire_paper_refs(conn: sqlite3.Connection, old_paper_id: str, new_paper_id
         # The kept PDF (the survivor's own wins) and "wrong PDF" verdicts.
         "paper_pdfs",
         "paper_pdf_rejections",
+        *addons.paper_tables(follows_merge=True),
     ]
 
     for table in tables:
+        # An add-on's tables exist only once it has been switched on.
+        if not table_has_paper_id(conn, table):
+            continue
         try:
             conn.execute(
                 f"UPDATE OR IGNORE {table} SET paper_id = ? WHERE paper_id = ?",

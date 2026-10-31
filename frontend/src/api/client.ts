@@ -5021,9 +5021,8 @@ export interface HomeBrief {
       carryover: number
       lenses_today: number
     }
-    alerts: {
-      today: number
-    }
+    /** One figure per add-on that reports one. */
+    addons: { id: string; label: string; hint: string; today: number; href: string }[]
     /** Daily inflow across the last 7 local days, oldest first. */
     trend: HomeTrendPoint[]
   }

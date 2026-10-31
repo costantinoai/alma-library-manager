@@ -22,6 +22,7 @@ from alma.application import imports as imports_app
 from alma.application import library as library_app
 from alma.application import materialized_views as mv
 from alma.application.discovery import lens_crud
+from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.services import author_attention
 from alma.services import health as health_service
@@ -472,9 +473,17 @@ def build_daily_brief(
                 "carryover": int(discovery["carryover"]),
                 "lenses_today": int(discovery["lenses_today"]),
             },
-            "alerts": {
-                "today": alerts_app.count_delivered_since(db, day_start),
-            },
+            # One entry per add-on figure; core renders them all the same way.
+            "addons": [
+                *addons.home_counts(db, day_start),
+                {
+                    "id": "alerts",
+                    "label": "alerts delivered",
+                    "hint": "successful digests",
+                    "today": alerts_app.count_delivered_since(db, day_start),
+                    "href": "#/alerts?tab=history",
+                },
+            ],
             # Oldest day first, today last — the reading order of the strip.
             "trend": _trend(db, _local_days(timezone_name, now=now)),
         },

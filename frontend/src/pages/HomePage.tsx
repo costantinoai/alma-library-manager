@@ -454,7 +454,7 @@ export function HomePage() {
   }
 
   const brief = briefQuery.data
-  const { feed, discovery, alerts } = brief.activity
+  const { feed, discovery, addons } = brief.activity
   // How many attention chips will render. A `null` count means "could not be
   // measured", which renders its own chip, so it counts here too — otherwise
   // the divider before the chips would vanish exactly when one is shown.
@@ -548,15 +548,20 @@ export function HomePage() {
               tone={discovery.today > 0 ? 'accent' : 'neutral'}
               onClick={() => navigateTo('discovery')}
             />
-            <MetricTile
-              variant="bare"
-              className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
-              label="alerts delivered"
-              value={alerts.today}
-              hint="successful digests"
-              tone={alerts.today > 0 ? 'info' : 'neutral'}
-              onClick={() => navigateTo('alerts', { tab: 'history' })}
-            />
+            {addons.map((entry) => (
+              <MetricTile
+                key={`${entry.id}-${entry.label}`}
+                variant="bare"
+                className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
+                label={entry.label}
+                value={entry.today}
+                hint={entry.hint}
+                tone={entry.today > 0 ? 'info' : 'neutral'}
+                onClick={() => {
+                  window.location.hash = entry.href
+                }}
+              />
+            ))}
             {/* Two standing queues rather than today-figures. Both are already
                 on the payload — Home was reporting them only as section pills,
                 which you cannot see until you scroll to the section. */}

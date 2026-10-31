@@ -14,6 +14,7 @@ import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from alma.core import addons
 from alma.core.time import utcnow
 from alma.core.utils import normalize_title_key
 
@@ -74,6 +75,16 @@ _ALL_PAPER_SIDECAR_TABLES = frozenset(
         "paper_pdf_attempts",
     }
 )
+
+
+def _migrate_tables() -> tuple[str, ...]:
+    """Tables a preprint moves onto its published root, add-ons included."""
+    return (*_PREPRINT_TO_PAPER_MIGRATE_TABLES, *addons.paper_tables())
+
+
+def _sidecar_tables() -> frozenset[str]:
+    """Every table holding per-paper state, add-ons included."""
+    return _ALL_PAPER_SIDECAR_TABLES | set(addons.paper_tables())
 
 
 class PaperGroupIntegrityError(ValueError):
@@ -327,7 +338,8 @@ def install_paper_group_pointer_guards(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
-def _table_has_paper_id(conn: sqlite3.Connection, table: str) -> bool:
+def table_has_paper_id(conn: sqlite3.Connection, table: str) -> bool:
+    """True when the table exists with a ``paper_id``: add-on tables may not."""
     try:
         return any(str(row[1]) == "paper_id" for row in conn.execute(f"PRAGMA table_info({table})"))
     except sqlite3.OperationalError:
@@ -337,7 +349,7 @@ def _table_has_paper_id(conn: sqlite3.Connection, table: str) -> bool:
 def _repoint_table(
     conn: sqlite3.Connection, table: str, loser_id: str, root_id: str
 ) -> int:
-    if not _table_has_paper_id(conn, table):
+    if not table_has_paper_id(conn, table):
         return 0
     try:
         conn.execute(
@@ -354,7 +366,7 @@ def _repoint_table(
 
 
 def _delete_table_rows(conn: sqlite3.Connection, table: str, paper_id: str) -> int:
-    if not _table_has_paper_id(conn, table):
+    if not table_has_paper_id(conn, table):
         return 0
     try:
         return max(
@@ -589,8 +601,8 @@ def _group_is_normalized(
     if not subordinate_ids:
         return False
     placeholders = ",".join("?" for _ in subordinate_ids)
-    for table in _ALL_PAPER_SIDECAR_TABLES:
-        if not _table_has_paper_id(conn, table):
+    for table in _sidecar_tables():
+        if not table_has_paper_id(conn, table):
             continue
         try:
             if conn.execute(
@@ -753,7 +765,7 @@ def absorb_paper_group(
         if not absorbs:
             cleaned += purge_orphan_subordinate_state(conn, pid)
             continue
-        tables = _PREPRINT_TO_PAPER_MIGRATE_TABLES
+        tables = _migrate_tables()
         for table in tables:
             count = _repoint_table(conn, table, pid, root_id)
             migrated[table] = migrated.get(table, 0) + count
@@ -761,7 +773,7 @@ def absorb_paper_group(
         preferences_migrated += _merge_preference_profile(conn, pid, root_id)
         cleaned += _clear_subordinate_user_state(conn, pid)
         # Anything not deliberately migrated must not remain on an inert child.
-        for table in _ALL_PAPER_SIDECAR_TABLES - set(tables):
+        for table in _sidecar_tables() - set(tables):
             cleaned += _delete_table_rows(conn, table, pid)
 
     # Root identity first, then flatten every member directly to it.
@@ -993,8 +1005,8 @@ def paper_group_defect_map(
         for row in rows
         if str(row["canonical_paper_id"] or "").strip() or is_component_row(row)
     ]
-    for table in _ALL_PAPER_SIDECAR_TABLES:
-        if not subordinate_ids or not _table_has_paper_id(conn, table):
+    for table in _sidecar_tables():
+        if not subordinate_ids or not table_has_paper_id(conn, table):
             continue
         placeholders = ",".join("?" for _ in subordinate_ids)
         try:
