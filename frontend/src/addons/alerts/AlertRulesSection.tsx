@@ -17,15 +17,12 @@ import {
   getInsightsDiagnostics,
   listCollections,
   listFollowedAuthors,
-  testFireRule,
-  type Alert,
-  type AlertRule,
   type Collection,
   type FeedMonitor,
   type FollowedAuthor,
   type Lens,
-  type TestFireResult,
 } from '@/api/client'
+import { testFireRule, type Alert, type AlertRule, type TestFireResult } from './api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'

@@ -4,7 +4,6 @@ import { ADDONS } from '@/addons/registry'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import {
   BarChart3,
-  Bell,
   BookMarked,
   Compass,
   FileText,
@@ -57,7 +56,6 @@ const PAGES: CommandAction[] = [
   { id: 'nav-library', name: 'Library', icon: BookMarked, url: '#/library', keywords: ['saved', 'papers', 'collections'] },
   { id: 'nav-corpus', name: 'Corpus explorer', icon: FileText, url: '#/settings?anchor=corpus-explorer', keywords: ['database', 'all papers', 'tracked', 'diagnostic', 'settings'] },
   { id: 'nav-authors', name: 'Authors', icon: UserCircle2, url: '#/authors', keywords: ['followed', 'people'] },
-  { id: 'nav-alerts', name: 'Alerts', icon: Bell, url: '#/alerts', keywords: ['digests', 'rules'] },
   { id: 'nav-analytics', name: 'Analytics', icon: BarChart3, url: '#/library?tab=analytics', keywords: ['insights', 'stats', 'metrics', 'charts', 'map'] },
   { id: 'nav-settings', name: 'Settings', icon: SettingsIcon, url: '#/settings', keywords: ['preferences', 'config'] },
 ]

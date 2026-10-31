@@ -21,8 +21,6 @@ export const pageLoaders = {
     })),
   health: () =>
     import('@/pages/HealthPage').then((m) => ({ default: m.HealthPage })),
-  alerts: () =>
-    import('@/pages/AlertsPage').then((m) => ({ default: m.AlertsPage })),
   settings: () =>
     import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 } satisfies Record<Page, PageLoader>

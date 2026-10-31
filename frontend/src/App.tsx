@@ -19,7 +19,6 @@ const LibraryPage = lazy(pageLoaders.library)
 // a redirect shim so old #/insights?tab=… deep links still land correctly.
 const InsightsRedirect = lazy(pageLoaders.insights)
 const HealthPage = lazy(pageLoaders.health)
-const AlertsPage = lazy(pageLoaders.alerts)
 const SettingsPage = lazy(pageLoaders.settings)
 // The PDF handoff page is not a Page: no nav entry, no app shell.
 const PdfReaderPage = lazy(() => import('@/pages/PdfReaderPage'))
@@ -91,8 +90,6 @@ function AppContent() {
         return <InsightsRedirect />
       case 'health':
         return <HealthPage />
-      case 'alerts':
-        return <AlertsPage />
       case 'settings':
         return <SettingsPage />
       default:

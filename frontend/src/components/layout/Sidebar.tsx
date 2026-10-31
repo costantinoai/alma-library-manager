@@ -3,7 +3,6 @@ import {
   House,
   Newspaper,
   Users,
-  Bell,
   Settings,
   Library,
   X,
@@ -29,7 +28,6 @@ export type Page =
   | 'library'
   | 'insights'
   | 'health'
-  | 'alerts'
   | 'settings'
 
 interface NavItem {
@@ -69,7 +67,6 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'authors', label: 'Authors', icon: Users },
       { id: 'library', label: 'Library', icon: Library },
-      { id: 'alerts', label: 'Alerts', icon: Bell },
     ],
   },
   {

@@ -84,15 +84,6 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Active alerts count
-    active_alerts = 0
-    try:
-        active_alerts = db.execute(
-            "SELECT COUNT(*) AS c FROM alerts WHERE enabled = 1"
-        ).fetchone()["c"]
-    except Exception:
-        pass
-
     # Discovery badge: recommendations created by latest successful refresh.
     pending_recs = 0
     new_recs = 0
@@ -137,9 +128,6 @@ def get_bootstrap(
             "active_lenses": active_lenses,
             "pending_recommendations": pending_recs,
             "new_recommendations": new_recs,
-        },
-        "alerts": {
-            "active": active_alerts,
         },
         "addons": addons.bootstrap_state(db),
         "app": {

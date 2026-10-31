@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { AlertRule } from '@/api/client'
+import type { AlertRule } from './api'
 import {
   EMPTY_FORM_VALUES,
   buildRuleConfig,

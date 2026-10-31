@@ -7,8 +7,6 @@ export function getNavBadgeCount(pageId: Page | string, data: BootstrapData): nu
       return data.feed.unread
     case 'discovery':
       return data.discovery.new_recommendations
-    case 'alerts':
-      return data.alerts.active
     default:
       return data.addons.find((addon) => addon.id === pageId)?.badge ?? 0
   }

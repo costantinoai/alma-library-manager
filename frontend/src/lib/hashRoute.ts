@@ -14,7 +14,6 @@ const PAGE_ROUTES: Record<Page, true> = {
   library: true,
   insights: true,
   health: true,
-  alerts: true,
   settings: true,
 }
 

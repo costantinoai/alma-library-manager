@@ -140,7 +140,6 @@ export type PageThemeKey =
   | 'discovery'
   | 'authors'
   | 'library'
-  | 'alerts'
   | 'health'
   | 'insights'
   | 'settings'
@@ -197,11 +196,6 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
     icon: HOME_SECTION_THEMES.reading.icon,
     medallion: 'bg-violet-700/10',
     chip: HOME_SECTION_THEMES.reading.chip,
-  },
-  alerts: {
-    icon: 'text-orange-700',
-    medallion: 'bg-orange-700/10',
-    chip: 'border-orange-700/10 bg-orange-700/10 text-orange-800',
   },
   health: {
     icon: 'text-emerald-700',

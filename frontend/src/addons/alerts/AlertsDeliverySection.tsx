@@ -15,12 +15,9 @@ import {
 } from 'lucide-react'
 import {
   api,
-  evaluateAlert,
   listPlugins,
-  type AlertRule,
-  type Alert,
-  type AlertEvaluationResult,
 } from '@/api/client'
+import { evaluateAlert, type Alert, type AlertEvaluationResult, type AlertRule } from './api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'

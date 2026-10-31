@@ -40,7 +40,6 @@ function operationToastTitle(
     key.startsWith('imports.') ? 'Import' :
     key.startsWith('graphs.') ? 'Graph' :
     key.startsWith('tags.') ? 'Tags' :
-    key.startsWith('alerts.') ? 'Alerts' :
     key.startsWith('ai.') ? 'AI' :
     key.startsWith('pdf.') ? 'PDF' :
     key.startsWith('addons.') ? 'Add-on' :
@@ -75,7 +74,11 @@ function rootsForOperation(operationKey?: string): string[] {
   }
 
   if (key === 'papers.reconcile_groups') {
-    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights']
+    return [
+      'health', 'library-info', 'library-collections', 'library-tags', 'authors', 'insights',
+      // A merge moves add-on rows too.
+      ...ADDONS.flatMap((entry) => entry.operations?.queryRoots ?? []),
+    ]
   }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
@@ -149,16 +152,6 @@ function rootsForOperation(operationKey?: string): string[] {
       'tag-suggestions',
       'tag-merge-suggestions',
       'papers',
-    ]
-  }
-
-  if (key.startsWith('alerts.')) {
-    return [
-      'alerts',
-      'alert-rules',
-      'alert-history',
-      'alert-templates',
-      'insights-diagnostics',
     ]
   }
 
