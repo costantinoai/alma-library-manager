@@ -37,6 +37,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -2441,8 +2442,12 @@ def refresh_feed_inbox_periodic() -> None:
     registered when feed auto-refresh is enabled (see ``reschedule_feed_refresh``
     / ``setup_scheduler``). Uses its own connection and the gather-then-write
     feed path, so it never holds the writer gate across network I/O.
+
+    Each run gets its own job id. One fixed id cannot restart: `set_job_status`
+    ignores `running` on a terminal row, so the row kept the `started_at` of its
+    first run, and `latest_feed_fetch_window` would have read a five-week window.
     """
-    job_id = "periodic_feed_refresh"
+    job_id = f"periodic_feed_refresh_{uuid.uuid4().hex[:10]}"
     operation_key = "feed.refresh_periodic"
     set_job_status(
         job_id,
