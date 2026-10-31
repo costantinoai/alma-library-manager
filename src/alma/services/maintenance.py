@@ -3253,7 +3253,6 @@ _RESUMABLE_OPERATION_KEYS = frozenset({
 # marker means a USER cancel (which writes a different message) is never
 # auto-resumed.
 _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
-_ORPHAN_RESUME_CONSUMED_MESSAGE = "Orphaned run resumed once"
 
 
 def _mark_orphan_handed_off(conn: sqlite3.Connection, marker_ids: list[str], continuation: str) -> None:
