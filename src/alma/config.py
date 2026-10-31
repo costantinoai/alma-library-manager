@@ -18,10 +18,14 @@ Key principles:
   authors.db + publications.db layout.
 """
 
+import errno
 import json
 import logging
 import os
 import re
+import shutil
+import tempfile
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -29,6 +33,11 @@ from typing import Any
 import platformdirs
 
 logger = logging.getLogger(__name__)
+
+# Errors that mean "this path cannot be renamed over", not "the disk failed".
+_IN_PLACE_WRITE_ERRNOS = frozenset({errno.EBUSY, errno.EACCES, errno.EPERM, errno.EROFS})
+# One writer at a time for the read-modify-write of settings.json.
+_SETTINGS_WRITE_LOCK = threading.RLock()
 
 # `.env` is loaded at the BOTTOM of this module (see `_load_env_files`),
 # after the path-resolution helpers it depends on are defined. It reads
@@ -103,6 +112,49 @@ def _looks_like_project_root(candidate: Path) -> bool:
     return any((candidate / marker).exists() for marker in _PROJECT_ROOT_MARKERS)
 
 
+def _write_settings_file(settings_path: Path, settings: dict[str, Any]) -> None:
+    """Replace ``settings.json`` whole: a crash leaves the old file or the new one.
+
+    The file holds every add-on and plugin switch, so a half-written one would
+    fail startup. The new content goes to a temporary file in the same directory
+    (same filesystem, so ``os.replace`` is one rename) and is synced before the
+    rename. ``settings.json`` may be a symlink; the link stays and its target is
+    replaced.
+
+    A single file bind-mounted into a container cannot be renamed over (EBUSY),
+    and its parent directory may not be writable at all. There the only possible
+    write is in place, so that path falls back to it, loudly. Any other error
+    propagates to the caller.
+    """
+    target = Path(os.path.realpath(settings_path))
+    payload = json.dumps(settings, indent=2) + "\n"
+    tmp_name: str | None = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        if target.exists():
+            shutil.copymode(target, tmp_name)
+        os.replace(tmp_name, target)
+        tmp_name = None
+    except OSError as exc:
+        if exc.errno not in _IN_PLACE_WRITE_ERRNOS:
+            raise
+        logger.warning(
+            "Cannot replace %s atomically (%s); writing it in place, so a crash "
+            "during this write could damage the file",
+            target,
+            exc,
+        )
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(payload)
+    finally:
+        if tmp_name is not None:
+            Path(tmp_name).unlink(missing_ok=True)
+
+
 def _write_default_settings_file(settings_path: Path) -> bool:
     """Write defaults to ``settings_path``. Returns False if the file
     isn't writable from this process (typical for a Docker bind-mount
@@ -111,9 +163,7 @@ def _write_default_settings_file(settings_path: Path) -> bool:
     """
     try:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_SETTINGS, f, indent=2)
-            f.write("\n")
+        _write_settings_file(settings_path, DEFAULT_SETTINGS)
         return True
     except (PermissionError, OSError) as exc:
         logger.warning(
@@ -441,24 +491,21 @@ def update_settings(updates: dict[str, Any]) -> None:
             if value and Path(value).is_absolute():
                 raise ValueError(f"Path for {key} must be relative, got: {value}")
 
-    # Load current settings
-    settings_path = ensure_settings_file()
-    try:
-        with open(settings_path, encoding="utf-8") as f:
-            settings = json.load(f)
-    except Exception:
-        settings = {}
+    # Read, change and write as one step, so a Settings save and an add-on
+    # switch landing together cannot lose each other's keys.
+    with _SETTINGS_WRITE_LOCK:
+        settings_path = ensure_settings_file()
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+        except Exception:
+            settings = {}
 
-    # Update with new values
-    settings.update(updates)
+        settings.update(updates)
+        _write_settings_file(settings_path, settings)
 
-    # Write back to file
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
-
-    # Clear cache to force reload
-    reload_settings()
+        # Clear cache to force reload
+        reload_settings()
     logger.info(f"Updated settings: {list(updates.keys())}")
 
 
@@ -466,23 +513,22 @@ def delete_settings_keys(keys: list[str]) -> None:
     """Delete keys from settings.json if they exist."""
     if not keys:
         return
-    settings_path = ensure_settings_file()
-    try:
-        with open(settings_path, encoding="utf-8") as f:
-            settings = json.load(f)
-    except Exception:
-        settings = {}
-    removed: list[str] = []
-    for key in keys:
-        if key in settings:
-            settings.pop(key, None)
-            removed.append(key)
-    if removed:
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-            f.write("\n")
-        reload_settings()
-        logger.info("Deleted settings keys: %s", removed)
+    with _SETTINGS_WRITE_LOCK:
+        settings_path = ensure_settings_file()
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+        except Exception:
+            settings = {}
+        removed: list[str] = []
+        for key in keys:
+            if key in settings:
+                settings.pop(key, None)
+                removed.append(key)
+        if removed:
+            _write_settings_file(settings_path, settings)
+            reload_settings()
+            logger.info("Deleted settings keys: %s", removed)
 
 
 def migrate_settings_schema() -> None:
