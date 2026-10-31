@@ -22,7 +22,6 @@ import errno
 import json
 import logging
 import os
-import re
 import shutil
 import tempfile
 import threading
@@ -57,7 +56,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # validator before any plugin can be consumed.
     "settings_schema_version": 3,
     "plugins.slack.enabled": False,
-    "plugins.email.enabled": False,
     # Paper-PDF sources (task 81). Off until the user switches them on; the
     # shadow libraries are a separate, explicit opt-in.
     "plugins.open_access.enabled": False,
@@ -91,12 +89,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # message with a `bot_id`, so pointing both at one channel is safe. A
     # dedicated channel is simply nicer — digests bury the links you send.
     "slack_inbox_channel": None,
-    "smtp_host": None,
-    "smtp_port": 587,
-    "smtp_username": None,
-    "smtp_from": None,
-    "smtp_to": None,
-    "smtp_use_tls": True,
     "id_resolution_semantic_scholar_enabled": True,
     "id_resolution_orcid_enabled": True,
     # Google Scholar scraping is opt-in and OFF by default everywhere (D14):
@@ -836,62 +828,6 @@ def get_slack_channel() -> str | None:
         return channel
 
     return None
-
-
-# ── Email / SMTP (the email-digest channel, sibling of Slack) ──────────────
-def get_smtp_host() -> str | None:
-    """SMTP server host. Env ``SMTP_HOST`` → ``smtp_host`` setting."""
-    return os.getenv("SMTP_HOST") or get_setting("smtp_host") or None
-
-
-def get_smtp_port() -> int:
-    """SMTP port (default 587 = STARTTLS). Env ``SMTP_PORT`` → setting."""
-    raw = os.getenv("SMTP_PORT") or get_setting("smtp_port") or 587
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 587
-
-
-def get_smtp_username() -> str | None:
-    """SMTP auth username. Env ``SMTP_USERNAME`` → ``smtp_username`` setting."""
-    return os.getenv("SMTP_USERNAME") or get_setting("smtp_username") or None
-
-
-def get_smtp_from() -> str | None:
-    """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
-    return os.getenv("SMTP_FROM") or get_setting("smtp_from") or get_smtp_username() or None
-
-
-def get_smtp_recipients() -> list[str]:
-    """Digest recipients, parsed from a comma/semicolon/newline list.
-
-    Env ``SMTP_TO`` → ``smtp_to`` setting.
-    """
-    raw = os.getenv("SMTP_TO") or get_setting("smtp_to") or ""
-    parts = re.split(r"[,;\n]+", str(raw))
-    return [p.strip() for p in parts if p.strip()]
-
-
-def get_smtp_use_tls() -> bool:
-    """Whether to use STARTTLS (default True). ``smtp_use_tls`` setting."""
-    val = get_setting("smtp_use_tls", True)
-    if isinstance(val, str):
-        return val.strip().lower() not in ("0", "false", "no", "")
-    return bool(val)
-
-
-def get_smtp_password() -> str | None:
-    """SMTP password. Env ``SMTP_PASSWORD`` → unified secret store."""
-    env_pw = os.getenv("SMTP_PASSWORD")
-    if env_pw:
-        return env_pw
-    try:
-        from alma.core.secrets import SECRET_SMTP_PASSWORD, get_secret
-
-        return get_secret(SECRET_SMTP_PASSWORD)
-    except Exception:
-        return None
 
 
 def get_openai_api_key() -> str | None:

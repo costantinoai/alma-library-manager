@@ -29,7 +29,6 @@ from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.activity import router as activity_router
 from alma.api.routes.addons import router as addons_router
 from alma.api.routes.ai import router as ai_router
-from alma.api.routes.alerts import router as alerts_router
 from alma.api.routes.backup import router as backup_router
 from alma.api.routes.bootstrap import router as bootstrap_router
 from alma.api.routes.discovery import router as discovery_router
@@ -653,7 +652,6 @@ app.include_router(plugins_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(library_router, prefix="/api/v1/library", tags=["library"])
 app.include_router(imports_router, prefix="/api/v1/library", tags=["library-import"])
-app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
 app.include_router(discovery_router, prefix="/api/v1/discovery", tags=["discovery"])
 app.include_router(feed_router, prefix="/api/v1/feed", tags=["feed"])
 app.include_router(lenses_router, prefix="/api/v1/lenses", tags=["discovery-lenses"])

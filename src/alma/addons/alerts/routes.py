@@ -6,9 +6,8 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from alma.api.deps import get_current_user, get_db
-from alma.api.helpers import raise_internal
-from alma.api.models import (
+from alma.addons.alerts import service as alerts_app
+from alma.addons.alerts.models import (
     AlertAutomationTemplate,
     AlertCreate,
     AlertEvaluationResult,
@@ -20,7 +19,8 @@ from alma.api.models import (
     AlertTemplateApplyResponse,
     AlertUpdate,
 )
-from alma.application import alerts as alerts_app
+from alma.api.deps import get_current_user, get_db
+from alma.api.helpers import raise_internal
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.time import utcnow
 

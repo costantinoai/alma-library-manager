@@ -1,4 +1,4 @@
-"""SMTP integration plugin for the core Alerts delivery protocol."""
+"""SMTP integration plugin for the Alerts delivery protocol."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def write_config(_db: sqlite3.Connection | None, config: BaseModel) -> None:
 
 
 def status(_db: sqlite3.Connection | None) -> dict:
-    from alma.mailer.client import get_email_notifier
+    from alma.addons.alerts.mailer import get_email_notifier
 
     configured = bool(get_email_notifier().is_configured)
     return {
@@ -93,7 +93,7 @@ def status(_db: sqlite3.Connection | None) -> dict:
 
 
 async def send_alert(papers: list[dict], alert_name: str) -> bool:
-    from alma.mailer.client import get_email_notifier
+    from alma.addons.alerts.mailer import get_email_notifier
 
     return await get_email_notifier().send_paper_alert(
         recipients=None,
@@ -103,7 +103,7 @@ async def send_alert(papers: list[dict], alert_name: str) -> bool:
 
 
 async def test_connection() -> dict:
-    from alma.mailer.client import get_email_notifier
+    from alma.addons.alerts.mailer import get_email_notifier
 
     notifier = get_email_notifier()
     try:

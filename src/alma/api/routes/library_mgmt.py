@@ -337,11 +337,6 @@ _RESET_TABLES = (
     "recommendations",
     "similarity_cache",
     "graph_cache",
-    "alerted_publications",
-    "alert_history",
-    "alert_rule_assignments",
-    "alert_rules",
-    "alerts",
 )
 
 

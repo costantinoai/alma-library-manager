@@ -301,7 +301,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             max_concurrency=1,
             fanout_budget=1,
         ),
-        _p("alerts", JobClass.NOTIFICATION, 40, {_R.DB_WRITER, _R.NETWORK}, max_concurrency=1),
         _p(
             "integrations",
             JobClass.NOTIFICATION,
@@ -362,7 +361,6 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
         "core/job_envelope.py",
         "api/routes/addons.py",
         "api/routes/ai.py",
-        "api/routes/alerts.py",
         "api/routes/authors.py",
         "api/routes/discovery.py",
         "api/routes/feed.py",

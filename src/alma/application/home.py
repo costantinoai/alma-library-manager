@@ -15,7 +15,6 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from alma.application import alerts as alerts_app
 from alma.application import feed as feed_app
 from alma.application import home_status
 from alma.application import imports as imports_app
@@ -474,16 +473,7 @@ def build_daily_brief(
                 "lenses_today": int(discovery["lenses_today"]),
             },
             # One entry per add-on figure; core renders them all the same way.
-            "addons": [
-                *addons.home_counts(db, day_start),
-                {
-                    "id": "alerts",
-                    "label": "alerts delivered",
-                    "hint": "successful digests",
-                    "today": alerts_app.count_delivered_since(db, day_start),
-                    "href": "#/alerts?tab=history",
-                },
-            ],
+            "addons": addons.home_counts(db, day_start),
             # Oldest day first, today last — the reading order of the strip.
             "trend": _trend(db, _local_days(timezone_name, now=now)),
         },

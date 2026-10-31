@@ -49,7 +49,7 @@ from alma.config import (
 logger = logging.getLogger(__name__)
 
 #: Every official add-on, in the order their routes, jobs and pills appear.
-ADDON_MODULES: tuple[str, ...] = ()
+ADDON_MODULES: tuple[str, ...] = ("alma.addons.alerts",)
 
 _PACKAGE = "alma.addons"
 _SQL_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")

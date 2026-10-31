@@ -7,9 +7,9 @@ subsystem, says how recently it did its job, and links to where you fix it.
 
 **Three tiers, so the line stays glanceable:**
 
-* `always`  — the things that produce or deliver the numbers above. Inbox and
-  Alerts appear as core capabilities; integration names belong in Settings,
-  never in this rail.
+* `always`  — the things that produce or deliver the numbers above. Inbox is a
+  core capability, and an add-on that is on may add its own pill; integration
+  names belong in Settings, never in this rail.
 * `problem` — the rest. Absent while healthy, loud when not. Suppliers and the
   map layout live here: a real OpenAlex outage shows up as Feed going stale
   anyway, so a green OpenAlex dot every day is noise.
@@ -29,6 +29,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ STATE_SEVERITY: dict[str, str] = {
 }
 
 
-def _pill(
+def pill(
     *,
     key: str,
     label: str,
@@ -131,7 +132,7 @@ def _age(stamp: object, *, now: datetime) -> timedelta | None:
     return None if parsed is None else now - parsed
 
 
-def _ago(stamp: object, *, now: datetime) -> str:
+def ago(stamp: object, *, now: datetime) -> str:
     """ "2d ago" / "4m ago" / "never". Compact enough for a pill's metric."""
     age = _age(stamp, now=now)
     if age is None:
@@ -177,7 +178,7 @@ def _last_conclusive_run(
     return dict(row) if row else None
 
 
-def _scalar(db: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
+def scalar(db: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
     """One value, or None when the table is absent on a pre-migration DB."""
     try:
         row = db.execute(sql, params).fetchone()
@@ -216,7 +217,7 @@ def _automation(db: sqlite3.Connection) -> dict[str, Any]:
             logger.debug("Scheduler job list unreadable: %s", exc)
 
     if not enabled:
-        return _pill(
+        return pill(
             key="automation",
             label="Automation",
             state="off",
@@ -230,7 +231,7 @@ def _automation(db: sqlite3.Connection) -> dict[str, Any]:
             href=SETTINGS_BACKGROUND,
         )
     if not running:
-        return _pill(
+        return pill(
             key="automation",
             label="Automation",
             state="failed",
@@ -242,7 +243,7 @@ def _automation(db: sqlite3.Connection) -> dict[str, Any]:
             tier="always",
             href=SETTINGS_BACKGROUND,
         )
-    return _pill(
+    return pill(
         key="automation",
         label="Automation",
         state="ok",
@@ -257,9 +258,9 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
     """Monitors and when they last delivered — the pill that explains a zero."""
     from alma.application import feed as feed_app
 
-    enabled = int(_scalar(db, "SELECT COUNT(*) FROM feed_monitors WHERE enabled = 1") or 0)
+    enabled = int(scalar(db, "SELECT COUNT(*) FROM feed_monitors WHERE enabled = 1") or 0)
     broken = int(
-        _scalar(
+        scalar(
             db,
             "SELECT COUNT(*) FROM feed_monitors WHERE enabled = 1 "
             "AND COALESCE(last_status, '') = 'error'",
@@ -273,7 +274,7 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
         last_refresh = None
 
     if enabled == 0:
-        return _pill(
+        return pill(
             key="feed",
             label="Feed",
             state="off",
@@ -287,11 +288,11 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
         )
 
     plural = "monitor" if enabled == 1 else "monitors"
-    metric = f"{enabled} {plural} · {_ago(last_refresh, now=now)}"
+    metric = f"{enabled} {plural} · {ago(last_refresh, now=now)}"
     age = _age(last_refresh, now=now)
 
     if broken:
-        return _pill(
+        return pill(
             key="feed",
             label="Feed",
             state="failed",
@@ -305,7 +306,7 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             checked_at=last_refresh,
         )
     if age is None:
-        return _pill(
+        return pill(
             key="feed",
             label="Feed",
             state="unknown",
@@ -315,25 +316,25 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             href="#/feed",
         )
     if age > FEED_STALE_AFTER:
-        return _pill(
+        return pill(
             key="feed",
             label="Feed",
             state="warning",
             metric=metric,
             detail=(
-                f"Your {enabled} {plural} last delivered {_ago(last_refresh, now=now)}. "
+                f"Your {enabled} {plural} last delivered {ago(last_refresh, now=now)}. "
                 "That is why today's Feed figure is low — refresh it from the Feed page."
             ),
             tier="always",
             href="#/feed",
             checked_at=last_refresh,
         )
-    return _pill(
+    return pill(
         key="feed",
         label="Feed",
         state="ok",
         metric=metric,
-        detail=f"All {enabled} {plural} are healthy and last delivered {_ago(last_refresh, now=now)}.",
+        detail=f"All {enabled} {plural} are healthy and last delivered {ago(last_refresh, now=now)}.",
         tier="always",
         href="#/feed",
         checked_at=last_refresh,
@@ -342,11 +343,11 @@ def _feed(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
 
 def _discovery(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
     """Active lenses and when they last produced suggestions."""
-    active = int(_scalar(db, "SELECT COUNT(*) FROM discovery_lenses WHERE is_active = 1") or 0)
-    last = _scalar(db, "SELECT MAX(last_refreshed_at) FROM discovery_lenses WHERE is_active = 1")
+    active = int(scalar(db, "SELECT COUNT(*) FROM discovery_lenses WHERE is_active = 1") or 0)
+    last = scalar(db, "SELECT MAX(last_refreshed_at) FROM discovery_lenses WHERE is_active = 1")
 
     if active == 0:
-        return _pill(
+        return pill(
             key="discovery",
             label="Discovery",
             state="off",
@@ -360,28 +361,28 @@ def _discovery(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
         )
 
     plural = "lens" if active == 1 else "lenses"
-    metric = f"{active} {plural} · {_ago(last, now=now)}"
+    metric = f"{active} {plural} · {ago(last, now=now)}"
     age = _age(last, now=now)
     if age is None or age > LENS_STALE_AFTER:
-        return _pill(
+        return pill(
             key="discovery",
             label="Discovery",
             state="warning",
             metric=metric,
             detail=(
-                f"Your {plural} last refreshed {_ago(last, now=now)}. New suggestions "
+                f"Your {plural} last refreshed {ago(last, now=now)}. New suggestions "
                 "only appear when a lens runs — refresh one from Discovery."
             ),
             tier="always",
             href="#/discovery",
             checked_at=last,
         )
-    return _pill(
+    return pill(
         key="discovery",
         label="Discovery",
         state="ok",
         metric=metric,
-        detail=f"{active} active {plural}, last refreshed {_ago(last, now=now)}.",
+        detail=f"{active} active {plural}, last refreshed {ago(last, now=now)}.",
         tier="always",
         href="#/discovery",
         checked_at=last,
@@ -414,13 +415,13 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
 
     label = "SPECTER2" if local_ready else ("OpenAI embeddings" if hosted_ready else "Embeddings")
 
-    papers = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
-    embedded = int(_scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
+    papers = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
+    embedded = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
                            "AND EXISTS (SELECT 1 FROM publication_embeddings pe WHERE pe.paper_id = p.id)") or 0)
     coverage = round((embedded / papers) * 100, 1) if papers else 0.0
 
     if not local_ready and not hosted_ready:
-        return _pill(
+        return pill(
             key="embeddings",
             label=label,
             state="warning",
@@ -435,7 +436,7 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
             href=SETTINGS_AI,
         )
     if coverage < EMBEDDING_READY_PCT:
-        return _pill(
+        return pill(
             key="embeddings",
             label=label,
             state="warning",
@@ -448,7 +449,7 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
             tier="always",
             href=SETTINGS_AI,
         )
-    return _pill(
+    return pill(
         key="embeddings",
         label=label,
         state="ok",
@@ -460,11 +461,11 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Core Inbox + Alerts capabilities, backed by integration providers
+# Core capabilities backed by integration providers
 # ---------------------------------------------------------------------------
 
 
-def _integration_direction(
+def integration_direction(
     capability: str,
 ) -> tuple[list[tuple[Any, dict[str, Any]]], list[tuple[Any, dict[str, Any]]]]:
     """Return (configured, ready) active providers for one core direction."""
@@ -488,15 +489,15 @@ def _integration_direction(
     return configured, ready
 
 
-def _provider_names(providers: list[tuple[Any, dict[str, Any]]]) -> str:
+def provider_names(providers: list[tuple[Any, dict[str, Any]]]) -> str:
     return ", ".join(manifest.display_name for manifest, _status in providers)
 
 
 def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
     """Core Inbox health, independent of its receive integration."""
-    configured, ready = _integration_direction("receive")
+    configured, ready = integration_direction("receive")
     if not configured:
-        return _pill(
+        return pill(
             key="inbox",
             label="Inbox",
             state="off",
@@ -506,13 +507,13 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             href=SETTINGS_PLUGINS,
         )
     if not ready:
-        return _pill(
+        return pill(
             key="inbox",
             label="Inbox",
             state="failed",
             metric="provider not working",
             detail=(
-                f"{_provider_names(configured)} is configured but cannot receive. "
+                f"{provider_names(configured)} is configured but cannot receive. "
                 "Finish or test it in Settings → Plugins."
             ),
             tier="always",
@@ -521,7 +522,7 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
 
     last = _last_conclusive_run(db, ("inbox.capture_sweep",))
     if last and str(last.get("status")) == "failed":
-        return _pill(
+        return pill(
             key="inbox",
             label="Inbox",
             state="failed",
@@ -533,112 +534,18 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             checked_at=last.get("at"),
         )
     at = (last or {}).get("at")
-    return _pill(
+    return pill(
         key="inbox",
         label="Inbox",
         state="ok",
-        metric=f"swept {_ago(at, now=now)}" if last else "provider ready",
+        metric=f"swept {ago(at, now=now)}" if last else "provider ready",
         detail=(
             str((last or {}).get("message") or "").strip()
-            or f"{_provider_names(ready)} is configured and ready to receive."
+            or f"{provider_names(ready)} is configured and ready to receive."
         ),
         tier="always",
         href=SETTINGS_PLUGINS,
         checked_at=at,
-    )
-
-
-def _latest_alert_delivery(
-    db: sqlite3.Connection,
-    provider_ids: list[str],
-) -> dict[str, Any] | None:
-    """Latest sent/failed Alert history row for a currently ready provider."""
-    try:
-        columns = {
-            str(row["name"] if isinstance(row, sqlite3.Row) else row[1])
-            for row in db.execute("PRAGMA table_info(alert_history)").fetchall()
-        }
-        if "channel" in columns:
-            placeholders = ", ".join("?" for _ in provider_ids)
-            where = f"AND channel IN ({placeholders})"
-            params: tuple[Any, ...] = tuple(provider_ids)
-        else:
-            where = ""
-            params = ()
-        error_select = "error_message" if "error_message" in columns else "NULL"
-        row = db.execute(
-            f"""
-            SELECT status, sent_at, {error_select} AS error_message
-            FROM alert_history
-            WHERE status IN ('sent', 'failed') {where}
-            ORDER BY sent_at DESC
-            LIMIT 1
-            """,
-            params,
-        ).fetchone()
-        return dict(row) if row else None
-    except sqlite3.OperationalError:
-        return None
-
-
-def _alerts_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
-    """Core Alerts health, independent of its send integration."""
-    configured, ready = _integration_direction("send")
-    if not configured:
-        return _pill(
-            key="alerts",
-            label="Alerts",
-            state="off",
-            metric="no provider",
-            detail="No active send integration is configured.",
-            tier="always",
-            href=SETTINGS_PLUGINS,
-        )
-    if not ready:
-        return _pill(
-            key="alerts",
-            label="Alerts",
-            state="failed",
-            metric="provider not working",
-            detail=(
-                f"{_provider_names(configured)} is configured but cannot send. "
-                "Finish or test it in Settings → Plugins."
-            ),
-            tier="always",
-            href=SETTINGS_PLUGINS,
-        )
-
-    latest = _latest_alert_delivery(
-        db,
-        [manifest.id for manifest, _status in ready],
-    )
-    if latest and latest["status"] == "failed":
-        return _pill(
-            key="alerts",
-            label="Alerts",
-            state="failed",
-            metric="last delivery failed",
-            detail=str(latest.get("error_message") or "").strip()
-            or "The most recent Alert delivery failed.",
-            tier="always",
-            href="#/alerts?tab=history",
-            checked_at=str(latest["sent_at"]),
-        )
-
-    rules = int(_scalar(db, "SELECT COUNT(*) FROM alert_rules") or 0)
-    checked_at = str(latest["sent_at"]) if latest else None
-    detail = f"{_provider_names(ready)} is configured and ready to send."
-    if rules == 0:
-        detail += " No Alert rules exist yet."
-    return _pill(
-        key="alerts",
-        label="Alerts",
-        state="ok",
-        metric=f"sent {_ago(checked_at, now=now)}" if checked_at else "provider ready",
-        detail=detail,
-        tier="always",
-        href="#/alerts",
-        checked_at=checked_at,
     )
 
 
@@ -676,7 +583,7 @@ def _supplier_pills(db: sqlite3.Connection) -> list[dict[str, Any]]:
         if not last or str(last.get("status")) != "failed":
             continue
         pills.append(
-            _pill(
+            pill(
                 key=key,
                 label=label,
                 state="failed",
@@ -717,7 +624,7 @@ def assess(db: sqlite3.Connection, *, now: datetime | None = None) -> list[dict[
         _discovery(db, now=moment),
         _embeddings(db),
         _inbox_pill(db, now=moment),
-        _alerts_pill(db, now=moment),
+        *addons.home_pills(db, moment),
         *_supplier_pills(db),
     ]
     return pills

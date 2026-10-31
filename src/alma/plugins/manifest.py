@@ -1,8 +1,8 @@
 """External integration-plugin contracts.
 
-Alerts and Inbox are core ALMa features. An integration manifest describes how
-an external service adapts one or both of their narrow protocols, plus identity,
-activation, configuration schema/storage, and status.
+An integration manifest describes how an external service adapts the narrow
+send and receive protocols of Alerts and the Inbox, plus identity, activation,
+configuration schema/storage, and status.
 
 Configuration models are the schema source of truth. The API serves
 ``model_json_schema()`` from the exact Pydantic class it uses to validate writes;

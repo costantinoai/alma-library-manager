@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any
 
 from alma.application.pdf_schema import TIER_ORDER, PdfSource
-from alma.plugins.email import EMAIL_PLUGIN
+from alma.core import addons
 from alma.plugins.manifest import PDF_SOURCE, RECEIVE, SEND, Capability, PluginManifest
 from alma.plugins.open_access import OPEN_ACCESS_PLUGIN
 from alma.plugins.shadow_libraries import SHADOW_LIBRARIES_PLUGIN
@@ -14,7 +14,6 @@ from alma.plugins.slack import SLACK_PLUGIN
 
 PLUGINS: tuple[PluginManifest, ...] = (
     SLACK_PLUGIN,
-    EMAIL_PLUGIN,
     OPEN_ACCESS_PLUGIN,
     SHADOW_LIBRARIES_PLUGIN,
 )
@@ -25,14 +24,21 @@ class PluginRegistry:
 
     Adapters are built from current credentials on every access. Rotating a
     token therefore takes effect immediately; the registry never caches a
-    configured client.
+    configured client. The default list is read per call, so an integration an
+    add-on brings comes and goes with that add-on's switch.
     """
 
-    def __init__(self, manifests: tuple[PluginManifest, ...] = PLUGINS):
+    def __init__(self, manifests: tuple[PluginManifest, ...] | None = None):
+        self._fixed = manifests
+        self._manifests  # noqa: B018 -- a duplicate id should fail at construction
+
+    @property
+    def _manifests(self) -> tuple[PluginManifest, ...]:
+        manifests = (*PLUGINS, *addons.plugins()) if self._fixed is None else self._fixed
         ids = [manifest.id for manifest in manifests]
         if len(ids) != len(set(ids)):
             raise ValueError("Plugin ids must be unique")
-        self._manifests = manifests
+        return manifests
 
     def ids(self) -> list[str]:
         return [manifest.id for manifest in self._manifests]

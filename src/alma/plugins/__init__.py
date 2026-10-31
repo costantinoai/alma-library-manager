@@ -1,8 +1,8 @@
 """ALMa external integration plugins.
 
 Registration, activation, schema, and configuration ownership live in
-``alma.plugins.registry``. Alerts and Inbox remain core features; integration
-plugins adapt their capability-specific protocols.
+``alma.plugins.registry``. Inbox is a core feature; integration plugins adapt
+their capability-specific protocols. An add-on may bring its own integrations.
 """
 
 from alma.plugins.registry import get_plugin_registry

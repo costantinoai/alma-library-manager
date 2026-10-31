@@ -49,8 +49,6 @@ _PREPRINT_TO_PAPER_MIGRATE_TABLES = (
     "recommendations",
     "feed_items",
     "lens_signals",
-    "alerted_publications",
-    "alert_history",
     # A preprint's kept PDF serves its published root until the root has its
     # own (repointing is UPDATE OR IGNORE, so the root's file wins); the
     # user's "wrong PDF" verdicts follow the paper too.
