@@ -10,13 +10,14 @@ import json
 import logging
 import sqlite3
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import as_completed
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
+from alma.core.http_sources import source_diagnostics_scope
 from alma.core.rotation import RotationWindow, load_cursor, save_cursors, take_window
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
@@ -313,6 +314,18 @@ def build_frontier(
     )
 
 
+def _provider_lookup(fetch: Callable[[], list[dict] | None]) -> tuple[list[dict], bool]:
+    """Run one provider lookup; return its rows and whether a provider answered.
+
+    The wrappers return ``[]`` for an empty result and for an outage alike, for
+    the sake of their other callers. The transport knows which it was, and that
+    is what a rotation has to act on.
+    """
+    with source_diagnostics_scope() as lookup:
+        rows = fetch() or []
+    return rows, bool(rows) or lookup.answered
+
+
 def build_discovery_frontier(
     db: sqlite3.Connection,
     *,
@@ -349,38 +362,44 @@ def build_discovery_frontier(
     windows: list[RotationWindow] = [topics]
     served: list[RotationWindow] = []
 
+    def _search(query: str) -> tuple[list[dict], bool]:
+        # A query counts as answered when any source answered it: an empty list
+        # from one is still a real result while another sits out a rate limit.
+        return _provider_lookup(
+            lambda: source_search.search_across_sources(
+                query,
+                limit=max(1, int(per_query_limit)),
+                from_year=utcnow().year - 6,
+                settings=settings,
+                mode="core",
+                temperature=0.28,
+                semantic_scholar_mode="interactive",
+                lane_deadline_s=20.0,
+            )
+        )
+
     gathered: list[dict] = []
     if queries:
+        answered_queries: set[str] = set()
         pool = bounded_thread_pool(
             min(3, len(queries)),
             thread_name_prefix="frontier-query",
         )
         try:
-            future_map = {
-                pool.submit(
-                    source_search.search_across_sources,
-                    query,
-                    limit=max(1, int(per_query_limit)),
-                    from_year=utcnow().year - 6,
-                    settings=settings,
-                    mode="core",
-                    temperature=0.28,
-                    semantic_scholar_mode="interactive",
-                    lane_deadline_s=20.0,
-                ): query
-                for query in queries
-            }
+            future_map = {pool.submit(_search, query): query for query in queries}
             for future in as_completed(future_map):
                 query = future_map[future]
                 try:
-                    candidates = future.result() or []
+                    candidates, answered = future.result()
                 except Exception as exc:
                     logger.warning(
                         "Frontier query failed for %r: %s",
                         query,
                         exc,
                     )
-                    candidates = []
+                    candidates, answered = [], False
+                if answered:
+                    answered_queries.add(query)
                 for candidate in candidates:
                     gathered.append(
                         {
@@ -391,18 +410,20 @@ def build_discovery_frontier(
                     )
         finally:
             pool.shutdown(wait=False)
-        if gathered:
+        if topics.served_by(answered_queries):
             served.append(topics)
 
     positive, negative = _s2_seed_windows(db)
     windows += [positive, negative]
     if positive.picked:
-        recommended = semantic_scholar.recommend_from_seeds(
-            list(positive.picked),
-            list(negative.picked),
-            limit=max(50, int(per_query_limit)),
+        recommended, answered = _provider_lookup(
+            lambda: semantic_scholar.recommend_from_seeds(
+                list(positive.picked),
+                list(negative.picked),
+                limit=max(50, int(per_query_limit)),
+            )
         )
-        if recommended:
+        if answered:
             served += [positive, negative]
         for candidate in recommended:
             gathered.append(
@@ -420,14 +441,18 @@ def build_discovery_frontier(
             cursor=load_cursor(db, "s2_paper_neighbours"),
         )
         windows.append(related)
-        related_count = 0
+        answered_seeds: set[str] = set()
         for seed_id in related.picked:
-            for candidate in semantic_scholar.recommend_for_paper(
-                seed_id,
-                limit=max(20, int(per_query_limit)),
-                pool=semantic_scholar.RECOMMENDATION_POOL_ALL,
-            ):
-                related_count += 1
+            candidates, answered = _provider_lookup(
+                lambda: semantic_scholar.recommend_for_paper(
+                    seed_id,
+                    limit=max(20, int(per_query_limit)),
+                    pool=semantic_scholar.RECOMMENDATION_POOL_ALL,
+                )
+            )
+            if answered:
+                answered_seeds.add(seed_id)
+            for candidate in candidates:
                 gathered.append(
                     {
                         **candidate,
@@ -435,20 +460,24 @@ def build_discovery_frontier(
                         "_frontier_relation": "related",
                     }
                 )
-        if related_count:
+        if related.served_by(answered_seeds):
             served.append(related)
 
     # Reverse citation neighbourhood: foundational/reference candidates alone
     # miss newer work that builds on the user's papers.
     citing = _openalex_seed_window(db, limit=_OPENALEX_CITING_SEEDS)
     windows.append(citing)
-    citing_count = 0
+    answered_works: set[str] = set()
     for seed_id in citing.picked:
-        for raw in fetch_citing_works_for_openalex_id(
-            seed_id,
-            limit=max(20, int(per_query_limit)),
-        ):
-            citing_count += 1
+        citing_works, answered = _provider_lookup(
+            lambda: fetch_citing_works_for_openalex_id(
+                seed_id,
+                limit=max(20, int(per_query_limit)),
+            )
+        )
+        if answered:
+            answered_works.add(seed_id)
+        for raw in citing_works:
             candidate = _frontier_metadata(_normalize_work(raw))
             candidate["source_api"] = "openalex"
             gathered.append(
@@ -458,7 +487,7 @@ def build_discovery_frontier(
                     "_frontier_relation": "citation",
                 }
             )
-    if citing_count:
+    if citing.served_by(answered_works):
         served.append(citing)
 
     rows_written, edges_written = upsert_frontier_candidates(db, gathered)

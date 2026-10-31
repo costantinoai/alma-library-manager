@@ -382,8 +382,9 @@ User rule: no low caps, and never always the same subset, because part of the
 Library then stays silent. The local path has no cap. A true limit, an external
 API's or a network budget, keeps the strongest half and walks the rest over
 successive runs (`core/rotation.py`). A window is a pure function of the ranked
-pool, the budget and the cursor; the job result records pool and cursors, and a
-source that failed keeps its window. The ring is ordered by a hash of each item,
+pool, the budget and the cursor; the job result records pool and cursors. A
+source that answered moves on, empty or not; a source that failed keeps its
+window (`RotationWindow.served_by`). The ring is ordered by a hash of each item,
 so a new paper never makes it skip another.
 
 Shares are read-only from prod (547 Library papers, 538 embedded) and dev (141,

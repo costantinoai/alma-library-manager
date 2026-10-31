@@ -34,6 +34,10 @@ from alma.core.url_safety import VettedUrl, clean_remote_text
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+# The provider understood and refused THIS request (an unknown seed, a rejected
+# list). Asking again gets the same reply, so unlike a 429, a 5xx or a 401 it is
+# an answer about the request rather than a verdict on the provider's health.
+_REFUSAL_STATUSES = frozenset({400, 404, 410, 422})
 
 # Hard ceiling on a single honored `Retry-After` sleep (42.2). A throttled
 # provider can advertise minutes; a background sweep must never sit in one sleep
@@ -270,12 +274,38 @@ class GuardedAdapter(requests.adapters.HTTPAdapter):
         raise UnsafeUrlError("Refused: guarded fetches never go through a proxy")
 
 
-class SourceDiagnosticsCollector:
-    """Thread-safe per-operation summary of external source usage."""
+def is_provider_answer(status_code: int) -> bool:
+    """True when this status means the provider really answered the request."""
+    return 200 <= int(status_code) < 400 or int(status_code) in _REFUSAL_STATUSES
 
-    def __init__(self) -> None:
+
+class SourceDiagnosticsCollector:
+    """Thread-safe per-operation summary of external source usage.
+
+    ``answered`` is how a caller tells "no results" from "no answer": provider
+    wrappers return ``[]`` for both, but every request passes through here.
+    A nested collector reports to its ``parent``, so a scope around one lookup
+    takes nothing away from the operation around it.
+    """
+
+    def __init__(self, parent: SourceDiagnosticsCollector | None = None) -> None:
         self._lock = threading.RLock()
         self._sources: dict[str, dict[str, Any]] = {}
+        self._parent = parent
+        self._answered = False
+
+    @property
+    def answered(self) -> bool:
+        """Whether any provider answered a request made inside this scope."""
+        with self._lock:
+            return self._answered
+
+    def mark_answered(self) -> None:
+        """Note an answer from a transport that keeps its own statistics."""
+        with self._lock:
+            self._answered = True
+        if self._parent is not None:
+            self._parent.mark_answered()
 
     def record(
         self,
@@ -324,6 +354,18 @@ class SourceDiagnosticsCollector:
             elif error:
                 entry["transport_errors"] += 1
                 entry["last_error"] = error
+        if status_code is not None and is_provider_answer(status_code):
+            self.mark_answered()
+        if self._parent is not None:
+            self._parent.record(
+                source=source,
+                method=method,
+                path=path,
+                attempt=attempt,
+                duration_ms=duration_ms,
+                status_code=status_code,
+                error=error,
+            )
 
     def summary(self) -> dict[str, dict[str, Any]]:
         with self._lock:
@@ -378,7 +420,7 @@ def bind_source_diagnostics(fn: Callable[..., Any]) -> Callable[..., Any]:
 @contextmanager
 def source_diagnostics_scope() -> Iterator[SourceDiagnosticsCollector]:
     """Collect per-source HTTP diagnostics for the current operation."""
-    collector = SourceDiagnosticsCollector()
+    collector = SourceDiagnosticsCollector(parent=get_active_source_diagnostics())
     token = _ACTIVE_DIAGNOSTICS.set(collector)
     try:
         yield collector
