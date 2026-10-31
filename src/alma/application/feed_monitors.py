@@ -572,6 +572,16 @@ def delete_feed_monitor(db: sqlite3.Connection, monitor_id: str) -> bool:
     return True
 
 
+def lost_yield(result: dict[str, Any]) -> bool:
+    """A run counts towards the health warning only if it created nothing AND
+    lost candidates. A quiet source whose candidates are all known is healthy.
+    The one rule, for a single monitor and for a whole refresh."""
+    return (
+        dropped_candidates(result.get("candidate_outcomes")) > 0
+        and int(result.get("items_created") or 0) == 0
+    )
+
+
 def update_feed_monitor_result(
     db: sqlite3.Connection,
     monitor_id: str,
@@ -586,17 +596,10 @@ def update_feed_monitor_result(
             "SELECT last_result_json FROM feed_monitors WHERE id = ?", (monitor_id,)
         ).fetchone()
         previous_result = _json_loads(previous["last_result_json"]) if previous else {}
-        # A quiet source whose candidates are all known is healthy. Only a run
-        # that yielded nothing AND lost candidates counts towards the warning.
         # The key is `drop_runs`, not the older `zero_yield_runs`: those stored
         # counts also counted quiet runs, so they must not feed this rule.
-        dropped = dropped_candidates(result.get("candidate_outcomes"))
-        lost_yield = (
-            status in {"completed", "noop"}
-            and dropped > 0
-            and int(result.get("items_created") or 0) == 0
-        )
-        result["drop_runs"] = int(previous_result.get("drop_runs") or 0) + 1 if lost_yield else 0
+        counts = status in {"completed", "noop"} and lost_yield(result)
+        result["drop_runs"] = int(previous_result.get("drop_runs") or 0) + 1 if counts else 0
     # Errors carry request URLs, and OpenAlex URLs carry `api_key=`; this row is
     # served back by GET /feed/monitors.
     if error:
