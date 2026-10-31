@@ -150,10 +150,14 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
       }),
     onSuccess: async (lens) => {
       await invalidateQueries(queryClient, ['lenses'])
-      toast({
-        title: 'Discovery lens created',
-        description: 'Refresh it in Discovery to populate recommendations.',
-      })
+      toast(
+        lens.already_existed
+          ? { title: 'Lens already exists', description: `Opened "${lens.name}" in Discovery.` }
+          : {
+              title: 'Discovery lens created',
+              description: 'Refresh it in Discovery to populate recommendations.',
+            },
+      )
       navigateTo('discovery', { lens: lens.id })
     },
     onError: () => {

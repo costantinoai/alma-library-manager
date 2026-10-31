@@ -452,6 +452,7 @@ class LensResponse(BaseModel):
     context_config: dict | None = None
     weights: dict | None = None
     created_at: str
+    already_existed: bool = False
     last_refreshed_at: str | None = None
     is_active: bool = True
     position: int = 0

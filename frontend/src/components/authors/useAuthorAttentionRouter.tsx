@@ -19,6 +19,8 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 
 export interface AuthorAttentionRouter {
   openForRow: (row: AuthorNeedsAttentionRow) => void
+  /** Open the author's panel. Runs no action: that is the row's button. */
+  openAuthor: (row: AuthorNeedsAttentionRow) => void
   isRefreshingFor: (authorId: string) => boolean
   /** Queue the automatic fix for every row that has one (see AUTO_FIX_CODES). */
   fixAll: (rows: AuthorNeedsAttentionRow[]) => void
@@ -228,8 +230,18 @@ export function useAuthorAttentionRouter(
     </>
   )
 
+  const openAuthor = (row: AuthorNeedsAttentionRow) => {
+    // A row can name an author outside the followed list; the panel loads the
+    // rest of the record from the id.
+    const author =
+      options.authorsById?.get(row.author_id) ??
+      ({ id: row.author_id, name: row.author_name, author_type: 'background' } as Author)
+    options.onOpenDetail?.(author)
+  }
+
   return {
     openForRow,
+    openAuthor,
     isRefreshingFor: (authorId) =>
       (refreshMutation.isPending && refreshMutation.variables === authorId) ||
       (backfillMutation.isPending && backfillMutation.variables === authorId),

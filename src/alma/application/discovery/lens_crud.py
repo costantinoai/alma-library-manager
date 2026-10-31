@@ -845,9 +845,19 @@ def create_lens(
     weights: dict | None = None,
     branch_controls: dict | None = None,
 ) -> dict:
-    """Create a new discovery lens."""
+    """Create a new discovery lens.
+
+    A collection has one lens: asking again returns the active one, marked
+    `already_existed`, because a second would rank the same seeds twice.
+    """
     if context_type not in VALID_CONTEXT_TYPES:
         raise ValueError(f"Invalid context_type: {context_type}")
+    if context_type == "collection":
+        collection_id = str((context_config or {}).get("collection_id") or "").strip()
+        for lens in list_lenses(db, is_active=True):
+            linked = str((lens.get("context_config") or {}).get("collection_id") or "").strip()
+            if lens.get("context_type") == "collection" and linked == collection_id:
+                return {**lens, "already_existed": True}
 
     lens_id = uuid.uuid4().hex
     now = utcnow().isoformat()

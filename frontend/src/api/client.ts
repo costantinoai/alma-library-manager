@@ -1979,6 +1979,8 @@ export interface Recommendation {
 export interface Lens {
   id: string
   name: string
+  /** Set on create when this collection already had its lens. */
+  already_existed?: boolean
   context_type: 'library_global' | 'collection' | 'topic_keyword' | 'tag'
   context_config?: Record<string, unknown> | null
   weights?: Record<string, number> | null
