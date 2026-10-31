@@ -2,8 +2,7 @@
 
 Discovery, Feed and Online Search all rank through :func:`rank_candidate`, so a
 paper cannot score differently depending on which page you opened.  Production
-uses a repaired family-level hand prior; the ridge implementation is a shadow
-challenger until enough immutable v3 observations exist.
+uses a repaired family-level hand prior.
 
 The score is built in exactly three moves, and :func:`repaired_prior_score`
 emits all three so the UI can show *only* and *all* of what produced it:
@@ -55,9 +54,6 @@ from .features import build_feature_snapshot
 # families + the retraction adjustment, nothing else, so a v7 score carries two
 # adjustment rows a v8 score does not and the two must not be mixed.
 RANKER_VERSION = "discovery-v8-calibrated-prior"
-SHADOW_VERSION = "discovery-v3-prior-centered-ridge-shadow"
-SHADOW_MIN_OBSERVATIONS = 80
-SHADOW_MIN_PER_CLASS = 20
 
 # Bounded post-family penalty. Retraction is a verified lifecycle fact, not
 # missingness, so it sits outside the families where no signal can hide it.
@@ -408,16 +404,6 @@ def _family_reading(
     return _clip(total), available, atoms
 
 
-def prior_family_values(
-    snapshot: dict, calibration: ScoringCalibration | None = None
-) -> dict[str, float]:
-    """Project atoms into the ten families. Kept for the shadow ranker's input."""
-
-    return {
-        spec.key: _family_reading(snapshot, spec, calibration)[0] for spec in FAMILY_SPECS
-    }
-
-
 def repaired_prior_score(
     snapshot: dict,
     *,
@@ -572,8 +558,6 @@ def apply_repaired_prior(
     *,
     timestamp: str,
     scoring_settings: dict[str, str] | None = None,
-    shadow_model: PriorCenteredLogisticRidge | None = None,
-    shadow_training_size: int = 0,
     calibration: ScoringCalibration | None = None,
 ) -> None:
     """Attach immutable features and write the ranking score in place."""
@@ -600,25 +584,9 @@ def apply_repaired_prior(
         candidate["exposure_features"] = exposure
         candidate["score"] = score
         candidate["prior_score"] = score
-        candidate["shadow_score"] = (
-            round(
-                100.0
-                * shadow_model.predict_probability(
-                    prior_family_values(reward, calibration)
-                ),
-                6,
-            )
-            if shadow_model is not None
-            else None
-        )
         breakdown = candidate.get("score_breakdown") or {}
         breakdown["ranker_version"] = RANKER_VERSION
         breakdown["explanation"] = explanation
-        breakdown["shadow_ranker_version"] = (
-            SHADOW_VERSION if shadow_model is not None else None
-        )
-        breakdown["shadow_training_size"] = int(shadow_training_size)
-        breakdown["shadow_score"] = candidate["shadow_score"]
         breakdown["final_score"] = score
         candidate["score_breakdown"] = breakdown
 
@@ -654,127 +622,3 @@ def resolve_family_weights(
         raise ValueError("At least one Discovery ranking weight must be positive")
     return {family: weight / total for family, weight in raw.items()}
 
-
-@dataclass
-class PriorCenteredLogisticRidge:
-    """Small-data shadow model with coefficients shrunk to a declared prior."""
-
-    feature_names: list[str]
-    coefficients: list[float]
-    intercept: float = 0.0
-
-    def predict_probability(self, features: dict[str, float]) -> float:
-        z = self.intercept + sum(
-            coefficient * float(features.get(name, 0.0) or 0.0)
-            for name, coefficient in zip(self.feature_names, self.coefficients)
-        )
-        return 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, z))))
-
-    @classmethod
-    def fit(
-        cls,
-        rows: list[dict[str, float]],
-        labels: list[int],
-        *,
-        prior: dict[str, float],
-        sample_weights: list[float] | None = None,
-        regularization: float = 12.0,
-        learning_rate: float = 0.05,
-        iterations: int = 500,
-    ) -> PriorCenteredLogisticRidge:
-        """Fit logistic loss + L2 distance to prior; intended for offline eval."""
-
-        if len(rows) != len(labels):
-            raise ValueError("rows and labels must have identical lengths")
-        if sample_weights is not None and len(sample_weights) != len(rows):
-            raise ValueError(
-                "sample_weights must have one value per training row"
-            )
-        names = sorted(prior)
-        beta = [float(prior[name]) for name in names]
-        prior_beta = list(beta)
-        intercept = 0.0
-        n = max(1, len(rows))
-        weights = (
-            [max(0.0, float(value)) for value in sample_weights]
-            if sample_weights is not None
-            else [1.0] * len(rows)
-        )
-        weight_total = max(1e-9, sum(weights))
-        for _ in range(max(1, iterations)):
-            grad = [0.0] * len(beta)
-            intercept_grad = 0.0
-            for row, label, sample_weight in zip(rows, labels, weights):
-                z = intercept + sum(
-                    beta[j] * float(row.get(name, 0.0) or 0.0)
-                    for j, name in enumerate(names)
-                )
-                probability = 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, z))))
-                error = probability - int(label)
-                intercept_grad += sample_weight * error
-                for j, name in enumerate(names):
-                    grad[j] += (
-                        sample_weight
-                        * error
-                        * float(row.get(name, 0.0) or 0.0)
-                    )
-            for j in range(len(beta)):
-                grad[j] = (
-                    grad[j] / weight_total
-                    + regularization
-                    * (beta[j] - prior_beta[j])
-                    / n
-                )
-                beta[j] -= learning_rate * grad[j]
-            intercept -= learning_rate * intercept_grad / weight_total
-        return cls(names, beta, intercept)
-
-
-def fit_shadow_ranker(
-    observations: list,
-    *,
-    scoring_settings: dict[str, str] | None = None,
-) -> tuple[PriorCenteredLogisticRidge | None, int]:
-    """Fit only on sufficient randomized v3 evidence, one row per paper."""
-
-    by_paper: dict[str, object] = {}
-    for observation in observations:
-        paper_id = str(getattr(observation, "paper_id", "") or "").strip()
-        if paper_id and paper_id not in by_paper:
-            by_paper[paper_id] = observation
-    rows = list(by_paper.values())
-    labels = [int(getattr(row, "label")) for row in rows]
-    positives = sum(labels)
-    negatives = len(labels) - positives
-    if (
-        len(rows) < SHADOW_MIN_OBSERVATIONS
-        or positives < SHADOW_MIN_PER_CLASS
-        or negatives < SHADOW_MIN_PER_CLASS
-    ):
-        return None, len(rows)
-
-    features = [
-        prior_family_values(getattr(row, "reward_features"))
-        for row in rows
-    ]
-    propensities = [
-        float(getattr(row, "inclusion_probability"))
-        * float(getattr(row, "position_probability"))
-        for row in rows
-    ]
-    # Clipped inverse-propensity weights: retain randomized correction without
-    # allowing one rare slot to dominate this single-user sample.
-    sample_weights = [
-        min(10.0, 1.0 / max(0.02, propensity))
-        for propensity in propensities
-    ]
-    prior = resolve_family_weights(scoring_settings)
-    return (
-        PriorCenteredLogisticRidge.fit(
-            features,
-            labels,
-            prior=prior,
-            sample_weights=sample_weights,
-        ),
-        len(rows),
-    )

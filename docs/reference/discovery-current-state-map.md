@@ -126,7 +126,7 @@ canonical identity, provenance and scope contracts.
 | Cluster membership, centroid, core/explore topics, branch score, outcome share | Seed vectors/text and 60-day branch action aggregation | Preview, vector search, frontier query strings and automatic controls. Structure and preference-driven allocation are partly mixed; small outcome samples can auto-mute. |
 | Source/query/graph hits, rank, RRF, channel weights | Four retrieval lanes | Candidate inclusion and fused retrieval score. Multiple hits may be correlated; a hit is evidence of reach/relevance, not user taste. |
 | Semantic/lexical similarity, topic, author, venue, recency, citation, feedback, preference | Candidate scorer and profile | Ten-family score. The current global learned profile is not branch-independent. Exact-value availability does not imply a learned coefficient. |
-| Prior score, shadow score, reward/exposure features, propensity | Candidate snapshot and slate policy | Explanation and retrospective evaluation. Only recorded, exposed decisions can supply a causal outcome. |
+| Prior score, reward/exposure features, propensity | Candidate snapshot and slate policy | Explanation and retrospective evaluation. Only recorded, exposed decisions can supply a causal outcome. |
 | Impression, action, optional reason | Visible card and canonical action | Presently only impression + action exists. A paper verdict alone confounds all its authors/topics/phrases; optional aspect selection is proposed. |
 | Qualified unseen yield, coverage, latency, source cost | **Not consistently recorded end-to-end** | These are required measures for deciding whether Discovery actually finds valuable external papers. |
 

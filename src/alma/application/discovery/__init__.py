@@ -99,12 +99,11 @@ from .lens_crud import (
 )
 from .observations import (
     insert_ranking_candidates,
-    load_ltr_observations,
     ranking_candidate_rows,
     record_impressions,
 )
 from .outcome_eval import request_outcome_eval_refresh_after_job  # registers scoring:outcome_eval
-from .ranker import RANKER_VERSION, apply_repaired_prior, fit_shadow_ranker
+from .ranker import RANKER_VERSION, apply_repaired_prior
 
 # --- D-9: re-exported from .retrieval (moved out of this god-module) ---
 from .retrieval import (
@@ -1185,16 +1184,10 @@ def _refresh_lens_recommendations(
         ),
     )
     feature_timestamp = utcnow().isoformat()
-    shadow_model, shadow_training_size = fit_shadow_ranker(
-        load_ltr_observations(db),
-        scoring_settings=scoring_settings,
-    )
     apply_repaired_prior(
         merged,
         timestamp=feature_timestamp,
         scoring_settings=scoring_settings,
-        shadow_model=shadow_model,
-        shadow_training_size=shadow_training_size,
         calibration=calibration,
     )
     # MMR consumes the same verified, same-model vectors as semantic scoring.
