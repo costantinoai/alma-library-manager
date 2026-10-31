@@ -453,6 +453,11 @@ def refresh_lens(
             structure = result.get("branch_structure") or {}
             if structure.get("reason"):
                 terminal_message += f"; {structure['message']}"
+            lost_lanes = result.get("lost_lanes") or []
+            if lost_lanes:
+                terminal_message += "; built without " + ", ".join(
+                    str(lane["label"]) for lane in lost_lanes
+                )
             set_job_status(
                 job_id,
                 status="completed",

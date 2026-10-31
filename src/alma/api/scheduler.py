@@ -2242,6 +2242,16 @@ def refresh_recommendations_periodic() -> None:
                         step="branches",
                         data=structure,
                     )
+                lost_lanes = (result or {}).get("lost_lanes") or []
+                if lost_lanes:
+                    add_job_log(
+                        job_id,
+                        f"Lens '{lens['name']}': built without "
+                        + ", ".join(str(lane["label"]) for lane in lost_lanes),
+                        level="ERROR",
+                        step="lost_lanes",
+                        data={"lost_lanes": lost_lanes},
+                    )
                 logger.info(
                     "Lens '%s' (%s): %d recommendations inserted",
                     lens["name"],

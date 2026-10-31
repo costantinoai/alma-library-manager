@@ -8,7 +8,6 @@ import logging
 import sqlite3
 import uuid
 from collections import defaultdict
-from concurrent.futures import wait
 from datetime import datetime
 from threading import Event, Lock
 from time import perf_counter
@@ -444,23 +443,18 @@ def _refresh_lens_recommendations(
 
     # Each retrieval lane is wrapped as an Activity subtask so the
     # panel can show per-lane status, duration, and any partial
-    # failures without burying them in the parent's log stream. The
-    # subtasks are sequential here (the existing ordering); each lane
-    # already has its own internal threading where it makes sense.
+    # failures without burying them in the parent's log stream.
     parent_job_id = getattr(ctx, "job_id", None) if ctx is not None else None
 
-    def _run_lane_subtask(
-        lane_name: str,
-        runner,
-        *,
-        label: str | None = None,
-    ):
-        started = perf_counter()
+    def _start_lane_subtask(lane_name: str, *, label: str) -> None:
+        """Open a lane's Activity row. Runs in the refresh thread, before the
+        lane and before its deadline: this write can queue on the writer gate,
+        and that wait is not the lane's work."""
         if not parent_job_id:
-            return runner()
+            return
         from alma.api.scheduler import add_job_log as _add_job_log
         from alma.api.scheduler import set_job_status as _set_job_status
-        pretty = label or lane_name
+
         subtask_id = f"{parent_job_id}_lane_{lane_name}"
         try:
             _set_job_status(
@@ -470,27 +464,52 @@ def _refresh_lens_recommendations(
                 trigger_source="subtask",
                 parent_job_id=parent_job_id,
                 stage=f"lane.{lane_name}",
-                stage_label=pretty,
+                stage_label=label,
                 started_at=utcnow().isoformat(),
-                message=f"{pretty} retrieval running",
+                message=f"{label} retrieval running",
             )
             _add_job_log(
                 parent_job_id,
-                f"Subtask started: {pretty}",
+                f"Subtask started: {label}",
                 step=f"lane.{lane_name}.start",
                 data={"subtask_job_id": subtask_id},
             )
         except Exception:  # never let subtask bookkeeping break the lane
             logger.debug("subtask start bookkeeping failed for %s", lane_name, exc_info=True)
+
+    def _run_lane_subtask(
+        lane_name: str,
+        runner,
+        *,
+        label: str | None = None,
+    ):
+        """Run one lane and publish its result BEFORE its Activity write.
+
+        The refresh waits on `lane_computed`, not on this thread ending. The
+        completion row can queue on the writer gate for as long as another unit
+        holds it, and a finished lane must not lose its candidates to that wait
+        (`lens_refresh_ee2c853307`, 2026-10-31: Lexical finished in 21.6 s and
+        was failed at 60 s with its status write still queued).
+        """
+        started = perf_counter()
+        pretty = label or lane_name
+        subtask_id = f"{parent_job_id}_lane_{lane_name}"
         try:
             result = runner()
         except Exception as exc:
+            lane_errors[lane_name] = exc
+            lane_computed[lane_name].set()
+            if not parent_job_id:
+                raise
             if lane_abandoned[lane_name].is_set():
                 logger.info(
                     "lens lane %s failed after it was abandoned; late result ignored",
                     lane_name,
                 )
                 raise
+            from alma.api.scheduler import add_job_log as _add_job_log
+            from alma.api.scheduler import set_job_status as _set_job_status
+
             try:
                 _set_job_status(
                     subtask_id,
@@ -511,13 +530,20 @@ def _refresh_lens_recommendations(
                 logger.debug("subtask failure bookkeeping failed for %s", lane_name, exc_info=True)
             raise
         duration_ms = int(round((perf_counter() - started) * 1000))
+        timings_ms[f"lane_{lane_name}_ms"] = duration_ms
         if lane_abandoned[lane_name].is_set():
             logger.info(
                 "lens lane %s finished after it was abandoned; late result ignored",
                 lane_name,
             )
-            timings_ms[f"lane_{lane_name}_ms"] = duration_ms
             return result
+        lane_outcomes[lane_name] = result
+        lane_computed[lane_name].set()
+        if not parent_job_id:
+            return result
+        from alma.api.scheduler import add_job_log as _add_job_log
+        from alma.api.scheduler import set_job_status as _set_job_status
+
         # `result` may be a list (lexical / vector) or a (list, summary)
         # tuple (graph / external). Count the candidates in either case.
         if isinstance(result, tuple) and result and isinstance(result[0], list):
@@ -548,7 +574,6 @@ def _refresh_lens_recommendations(
             )
         except Exception:
             logger.debug("subtask completion bookkeeping failed for %s", lane_name, exc_info=True)
-        timings_ms[f"lane_{lane_name}_ms"] = duration_ms
         return result
 
     # F3: run the 4 retrieval lanes CONCURRENTLY instead of sequentially.
@@ -573,16 +598,27 @@ def _refresh_lens_recommendations(
     # lane, keep that terminal decision explicit so the late worker cannot
     # overwrite its failed Activity row as "completed".
     lane_abandoned = {name: Event() for name, _label, _fn in lane_specs}
+    # Set the moment a lane has an answer, candidates or an exception. This is
+    # what the deadline measures; the thread may still be writing Activity rows.
+    lane_computed = {name: Event() for name, _label, _fn in lane_specs}
+    lane_outcomes: dict[str, Any] = {}
+    lane_errors: dict[str, Exception] = {}
 
     def _run_lane_with_conn(lane_name: str, label: str, fn):
-        conn = _open_lane_conn()
         try:
-            return _run_lane_subtask(lane_name, lambda: fn(conn), label=label)
-        finally:
+            conn = _open_lane_conn()
             try:
-                conn.close()
-            except Exception:
-                pass
+                return _run_lane_subtask(lane_name, lambda: fn(conn), label=label)
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            lane_errors.setdefault(lane_name, exc)
+            raise
+        finally:
+            lane_computed[lane_name].set()
 
     lane_label_by_name = {name: label for name, label, _ in lane_specs}
     # A backstop against pathological local computation, not a normal budget —
@@ -593,15 +629,19 @@ def _refresh_lens_recommendations(
         scoring_settings, "limits.lane_deadline_seconds", 60.0, 5.0, 300.0
     )
 
-    def _fail_lane_subtask(lane_name: str, reason: str) -> None:
-        """Record a lane that produced nothing, in the log AND in Activity.
+    lost_lanes: list[dict[str, str]] = []
 
-        Both destinations on purpose: the Python log is for whoever is tailing
-        the server, the subtask status and the parent's Activity entry are for
-        the person looking at the refresh and wondering why their deck is thin.
+    def _fail_lane_subtask(lane_name: str, reason: str) -> None:
+        """Record a lane that produced nothing: log, Activity, and the deck.
+
+        The Python log is for whoever is tailing the server, the subtask status
+        and the parent's Activity entry are for the person looking at the
+        refresh, and `lost_lanes` travels into `retrieval_summary`, so the page
+        can say this deck is missing a retrieval family.
         """
         pretty = lane_label_by_name.get(lane_name, lane_name)
         logger.warning("lens lane %s produced nothing: %s", lane_name, reason)
+        lost_lanes.append({"lane": lane_name, "label": pretty, "reason": reason})
         if not parent_job_id:
             return
         from alma.api.scheduler import add_job_log as _add_job_log
@@ -627,18 +667,24 @@ def _refresh_lens_recommendations(
             logger.debug("lane failure bookkeeping failed for %s", lane_name, exc_info=True)
 
     lane_results: dict[str, Any] = {}
+    for name, label, _fn in lane_specs:
+        _start_lane_subtask(name, label=label)
     lane_pool = bounded_thread_pool(4, thread_name_prefix="lens-lane-top")
     try:
-        fut_to_name = {
-            lane_pool.submit(_run_lane_with_conn, name, label, fn): name
-            for name, label, fn in lane_specs
-        }
-        done, _pending = wait(
-            fut_to_name,
-            timeout=lane_deadline_s,
-        )
-        for fut, name in fut_to_name.items():
-            if fut not in done:
+        for name, label, fn in lane_specs:
+            lane_pool.submit(_run_lane_with_conn, name, label, fn)
+        deadline = perf_counter() + lane_deadline_s
+        for name, _label, _fn in lane_specs:
+            lane_computed[name].wait(timeout=max(0.0, deadline - perf_counter()))
+        for name, _label, _fn in lane_specs:
+            empty_result = ([], {}) if name in ("graph", "external") else []
+            if name in lane_errors:
+                exc = lane_errors[name]
+                _fail_lane_subtask(name, f"{type(exc).__name__}: {exc}")
+                lane_results[name] = empty_result
+            elif lane_computed[name].is_set():
+                lane_results[name] = lane_outcomes[name]
+            else:
                 # A lane that misses the deadline costs the deck an entire
                 # retrieval family. That MUST be visible: previously this was a
                 # bare `logger.warning`, so the subtask row stayed "running"
@@ -652,17 +698,7 @@ def _refresh_lens_recommendations(
                     f"exceeded the {lane_deadline_s:.0f}s local-read deadline "
                     f"and was abandoned; this deck was built WITHOUT it",
                 )
-                lane_results[name] = (
-                    ([], {}) if name in ("graph", "external") else []
-                )
-                continue
-            try:
-                lane_results[name] = fut.result()
-            except Exception as exc:
-                _fail_lane_subtask(name, f"{type(exc).__name__}: {exc}")
-                lane_results[name] = (
-                    ([], {}) if name in ("graph", "external") else []
-                )
+                lane_results[name] = empty_result
     finally:
         lane_pool.shutdown(wait=False)
 
@@ -1362,6 +1398,7 @@ def _refresh_lens_recommendations(
         # means the frontier is empty or expired, not that no lane matched.
         "frontier_size": int(external_summary.get("frontier_size") or 0),
         "diversity": diversity_summary,
+        "lost_lanes": lost_lanes,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_timestamp": feature_timestamp,
     }
@@ -1689,6 +1726,7 @@ def _refresh_lens_recommendations(
         "retrieval_summary": retrieval_summary,
         "branch_structure": branch_structure,
         "inserted": inserted,
+        "lost_lanes": lost_lanes,
     }
 
 
