@@ -597,6 +597,7 @@ def refresh_openalex_related_network(
 
         per_candidate: dict[str, dict] = {}
         errors = 0
+        completed: list[str] = []
         for idx, seed_oid in enumerate(seeds, 1):
             # Remote call runs with NO writer lock held: the previous seed's
             # cache write closed its write_section (committed + released), so we
@@ -614,6 +615,7 @@ def refresh_openalex_related_network(
                     idx, len(seeds),
                 )
                 continue
+            completed.append(seed_oid)
             _accumulate_openalex_coauthors(
                 page.get("results") or [], seed_oid, per_candidate, now_dt
             )
@@ -645,8 +647,7 @@ def refresh_openalex_related_network(
                 f"Seed {idx}/{len(seeds)} · {len(partial)} candidates",
                 idx, len(seeds),
             )
-        # A run where every seed failed retries the same window.
-        if errors < len(seeds):
+        if window.served_by(completed):
             with write_section(conn, label="author network: rotation cursor"):
                 save_cursors(conn, [window])
         return {
@@ -750,7 +751,9 @@ def refresh_s2_related_network(
 
         per_candidate: dict[str, dict] = {}
         errors = 0
+        completed: list[str] = []
         for idx, doi in enumerate(seeds, 1):
+            errors_before = errors
             # Remote calls run with NO writer lock held — the previous seed's
             # cache write closed its write_section, so we are in autocommit here.
             try:
@@ -792,6 +795,8 @@ def refresh_s2_related_network(
                     # metadata), but keeps the bucket useful when
                     # OpenAlex is unreachable.
                     _accumulate_s2_native_authors(recs, per_candidate, now_dt)
+            if errors == errors_before:
+                completed.append(doi)
             partial = _score_from_buckets(
                 per_candidate,
                 total_seeds=len(seeds),
@@ -816,8 +821,7 @@ def refresh_s2_related_network(
                 f"DOI {idx}/{len(seeds)} · {len(partial)} candidates",
                 idx, len(seeds),
             )
-        # A run where every seed failed retries the same window.
-        if errors < len(seeds):
+        if window.served_by(completed):
             with write_section(conn, label="author network: rotation cursor"):
                 save_cursors(conn, [window])
         return {
