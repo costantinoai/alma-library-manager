@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from alma.core.network_policy import ExternalAccessError
 from alma.library import importer
 from alma.services.eta import detect_auth, estimate_eta
 
@@ -70,14 +71,14 @@ def fetch_zotero_records(
     collection_key: str | None = None,
 ) -> ParsedImportRecords:
     """Fetch Zotero items and normalize them without writing Library rows."""
-    from pyzotero import zotero
-
     try:
-        zot = zotero.Zotero(library_id, library_type, api_key)
+        zot = importer.zotero_client(library_id, library_type, api_key)
         if collection_key:
             items = zot.collection_items(collection_key, itemType="-attachment -note")
         else:
             items = zot.everything(zot.items(itemType="-attachment -note"))
+    except ExternalAccessError:
+        raise
     except Exception as exc:
         return ParsedImportRecords([], [f"Zotero fetch error: {exc}"])
 
