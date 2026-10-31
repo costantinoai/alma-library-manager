@@ -16,21 +16,6 @@
 
 import type { ScoreBreakdown, ScoreExplanation, ScoreFamily } from '@/api/client'
 
-/** Canonical family order — the backend's default-weight order. Used only to
- *  stabilise rendering; the points themselves come from the payload. */
-export const FAMILY_ORDER = [
-  'semantic',
-  'topic',
-  'retrieval',
-  'author',
-  'lexical',
-  'recency',
-  'citation',
-  'feedback',
-  'preference',
-  'venue',
-] as const
-
 /** Pull the closed score decomposition off a breakdown payload.
  *
  * Returns null for rows persisted before the current ranker, so callers render
@@ -69,16 +54,6 @@ export function topFamilies(
   limit = 3,
 ): ScoreFamily[] {
   return contributingFamilies(scoreExplanation(breakdown)).slice(0, limit)
-}
-
-/** A family's share of the positive points, for proportional bars. */
-export function familyShare(family: ScoreFamily, total: number): number {
-  return total > 0 ? family.points / total : 0
-}
-
-/** Total positive points — the denominator for share-of-score bars. */
-export function totalFamilyPoints(families: ScoreFamily[]): number {
-  return families.reduce((sum, family) => sum + Math.max(0, family.points), 0)
 }
 
 /** True when a family is running in degraded (non-embedding) mode.

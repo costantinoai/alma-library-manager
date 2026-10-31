@@ -827,55 +827,6 @@ export interface AuthorFollowFromPaperResult {
   matched_via?: string | null
 }
 
-export interface AuthorDossier {
-  author: Author
-  summary: {
-    total_publications: number
-    library_publications: number
-    background_publications: number
-    first_year?: number | null
-    latest_year?: number | null
-    tracked_corpus_ready: boolean
-    tracked_corpus_state?: string | null
-    background_coverage_ratio?: number | null
-  }
-  history: Array<{
-    year: number
-    total: number
-    library: number
-    background: number
-  }>
-  top_topics: Array<{ topic: string; count: number }>
-  top_venues: Array<{ venue: string; count: number }>
-  top_collaborators: Array<{ author_id?: string | null; name: string; count: number }>
-  recent_publications: Publication[]
-  background_publications: Publication[]
-  recommended_actions: Array<{
-    id: string
-    label: string
-    detail: string
-  }>
-  backfill?: {
-    state: string
-    stale: boolean
-    thin: boolean
-    background_publications: number
-    works_count: number
-    coverage_ratio?: number | null
-    expected_background_floor?: number
-    last_success_at?: string | null
-    age_days?: number | null
-    detail?: string | null
-    recent_runs?: Array<{
-      job_id: string
-      status: string
-      message?: string | null
-      started_at?: string | null
-      finished_at?: string | null
-    }>
-  } | null
-}
-
 export interface Publication {
   id: string
   title: string
@@ -945,14 +896,6 @@ export interface PreprintVersion {
   url?: string | null
   year?: number | null
   preprint_source?: string | null
-}
-
-export interface Stats {
-  total_authors: number
-  total_publications: number
-  total_citations: number
-  active_jobs: number
-  configured_plugins: number
 }
 
 export interface Settings {
@@ -1193,14 +1136,6 @@ export function createCollection(body: {
   return api.post<Collection>('/library/collections', body)
 }
 
-export function listTags(): Promise<Tag[]> {
-  return api.get<Tag[]>('/library/tags')
-}
-
-export function listTopics(): Promise<TopicSummary[]> {
-  return api.get<TopicSummary[]>('/library/topics')
-}
-
 export function listFollowedAuthors(): Promise<FollowedAuthor[]> {
   return api.get<FollowedAuthor[]>('/library/followed-authors')
 }
@@ -1297,29 +1232,6 @@ export function trackFollowedAuthorSuggestion(
     openalex_id: openalexId,
     suggestion_bucket: suggestionBucket ?? null,
   })
-}
-
-/**
- * D12 AUTH-SUG-3/4 — refresh the two network-backed suggestion caches
- * (OpenAlex co-author expansion + Semantic Scholar paper recommendations).
- * Returns one envelope per source; sources whose cache is fresh come
- * back with `status: 'fresh'` and no job id.
- */
-export interface AuthorNetworkRefreshJob {
-  source: 'openalex_related' | 's2_related'
-  status: 'queued' | 'already_running' | 'fresh'
-  job_id: string | null
-  operation_key: string | null
-  message: string
-}
-
-export function refreshAuthorSuggestionNetwork(
-  force = false,
-): Promise<{ jobs: AuthorNetworkRefreshJob[] }> {
-  return api.post<{ jobs: AuthorNetworkRefreshJob[] }>(
-    '/authors/suggestions/refresh-network',
-    { force },
-  )
 }
 
 /** One named contributor to an author's signal. `score` is the display
@@ -1506,10 +1418,6 @@ export function getLibraryWorkflowSummary(): Promise<LibraryWorkflowSummary> {
   return api.get<LibraryWorkflowSummary>('/library/workflow-summary')
 }
 
-export function getAuthorDossier(authorId: string): Promise<AuthorDossier> {
-  return api.get<AuthorDossier>(`/authors/${encodeURIComponent(authorId)}/dossier`)
-}
-
 export function queueAuthorHistoryBackfill(authorId: string): Promise<{ status?: string; job_id?: string; message?: string }> {
   return api.post(`/authors/${encodeURIComponent(authorId)}/history-backfill`)
 }
@@ -1580,32 +1488,6 @@ export function listPapers(params?: {
   if (params?.offset != null) qs.set('offset', String(params.offset))
   const q = qs.toString()
   return api.get<Publication[]>(`/papers${q ? `?${q}` : ''}`)
-}
-
-export interface SemanticPaperSearchItem {
-  paper: Publication
-  score: number
-  match_type: 'semantic' | string
-  embedding_model: string
-  query_model: string
-}
-
-export interface SemanticPaperSearchResponse {
-  query: string
-  scope: 'library' | 'all' | string
-  count: number
-  items: SemanticPaperSearchItem[]
-  embedding_model: string
-  query_model: string
-}
-
-export async function semanticSearchPapers(body: {
-  query: string
-  scope?: 'library' | 'all'
-  limit?: number
-}): Promise<SemanticPaperSearchResponse> {
-  const envelope = await api.post<JobEnvelope>('/papers/semantic-search', body)
-  return waitForJob<SemanticPaperSearchResponse>(envelope.job_id)
 }
 
 // ── Global Search ──
@@ -1939,15 +1821,6 @@ export interface ScoreBreakdown {
   projected_feedback_raw?: number
 }
 
-export interface RecommendationExplain {
-  id: string
-  title: string
-  score: number
-  source_type: string
-  source_key: string
-  breakdown: ScoreBreakdown | null
-}
-
 export interface Recommendation {
   id: string
   source_type: string
@@ -2001,16 +1874,6 @@ export interface Lens {
   last_suggestion_set_id?: string | null
   last_ranker_version?: string | null
   last_retrieval_summary?: Record<string, unknown> | null
-}
-
-export interface LensSignal {
-  id: number
-  lens_id: string
-  paper_id: string
-  paper_title?: string
-  signal_value: number
-  source: string
-  created_at: string
 }
 
 export interface LensRecommendation {
@@ -2138,30 +2001,6 @@ export interface LensBranchPreview {
   structure: BranchStructure | null
   retired_branches: RetiredBranch[]
   branches: LensBranchItem[]
-}
-
-export interface ManualDiscoveryItem {
-  openalex_id: string
-  title: string
-  authors: string
-  abstract?: string
-  year?: number | null
-  publication_date?: string | null
-  journal?: string
-  doi?: string
-  url?: string
-  cited_by_count?: number
-  paper_id?: string | null
-  paper_status?: string | null
-  in_library: boolean
-  like_score: number
-  score_breakdown?: ScoreBreakdown
-}
-
-export interface ManualDiscoverySearchResponse {
-  query: string
-  total: number
-  items: ManualDiscoveryItem[]
 }
 
 // ── Discovery Settings types ──
@@ -3205,10 +3044,6 @@ export function getPaperPdfDetails(paperId: string): Promise<{ title: string; pd
   return api.get(`/papers/${encodeURIComponent(paperId)}/details`)
 }
 
-export async function getPaperPdfState(paperId: string): Promise<PaperPdfState> {
-  return (await getPaperPdfDetails(paperId)).pdf
-}
-
 export function fetchPaperPdf(paperId: string): Promise<JobEnvelope> {
   return api.post<JobEnvelope>(`/papers/${encodeURIComponent(paperId)}/pdf/fetch`)
 }
@@ -3251,76 +3086,6 @@ export function discardPdfUpload(uploadId: string): Promise<{ status: string; up
   return api.delete(`/library/import/pdf/uploads/${encodeURIComponent(uploadId)}`)
 }
 
-export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {
-  return api.post('/health/operations/reference_graph/run')
-}
-
-// Default scope is `followed` (~tens of authors). `followed_plus_library`
-// adds every co-author of every saved Library paper — captures the
-// "adjacent author" signal Discovery uses without sweeping the long tail
-// of placeholder rows. `corpus` is still accepted by the API but no
-// longer exposed in the Settings UI (lifecycle decision 2026-04-26 —
-// soft-removed authors stay in the table for Discovery's negative-
-// signal reads, so a literal "every row" sweep is misleading).
-export type CorpusScope =
-  | 'followed'
-  | 'needs_metadata'
-  | 'followed_plus_library'
-  | 'library'
-  | 'corpus'
-
-export function refreshAllAuthors(body: {
-  scope: CorpusScope
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  // Bulk form of the popup "Refresh author" button — same pipeline,
-  // iterated over every author in the selected scope.
-  const qs = new URLSearchParams({ scope: body.scope, background: 'true' })
-  return api.post(`/authors/deep-refresh-all?${qs.toString()}`)
-}
-
-export function garbageCollectOrphanAuthors(body?: {
-  dryRun?: boolean
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  // Soft-remove every author who is not followed and has no live
-  // paper attachment. Eager triggers (paper-remove, unfollow) cover
-  // the steady-state cases — this endpoint catches up with historical
-  // drift. `dryRun=true` returns a preview without writing.
-  const qs = new URLSearchParams({
-    background: 'true',
-    dry_run: String(Boolean(body?.dryRun)),
-  })
-  return api.post(`/authors/garbage-collect-orphans?${qs.toString()}`)
-}
-
-export function dedupPreprints(body: {
-  scope: 'library' | 'corpus'
-  limit?: number
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  const qs = new URLSearchParams({ scope: body.scope, background: 'true' })
-  if (body.limit !== undefined) qs.set('limit', String(body.limit))
-  return api.post(`/papers/dedup-preprints?${qs.toString()}`)
-}
-
-export function rehydrateCorpusMetadata(body?: {
-  limit?: number
-  force?: boolean
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  const qs = new URLSearchParams({ force: String(Boolean(body?.force)) })
-  if (body?.limit !== undefined) qs.set('limit', String(body.limit))
-  return api.post(`/papers/rehydrate-metadata?${qs.toString()}`)
-}
-
-export function rehydrateAuthorMetadata(body?: {
-  limit?: number
-  force?: boolean
-}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  const qs = new URLSearchParams({
-    background: 'true',
-    force: String(Boolean(body?.force)),
-  })
-  if (body?.limit !== undefined) qs.set('limit', String(body.limit))
-  return api.post(`/authors/rehydrate-metadata?${qs.toString()}`)
-}
 
 export interface AuthorAlternateProfile {
   author_id: string
@@ -3425,17 +3190,6 @@ export function discoverAuthorAliases(
   authorId: string,
 ): Promise<DiscoverAliasesResponse> {
   return api.post(`/authors/${encodeURIComponent(authorId)}/discover-aliases`)
-}
-
-/** Manual sweep — walks every followed author with an OpenAlex ID,
- *  ORCID-discovers split profiles, auto-merges followed-vs-followed
- *  clusters and records orphan aliases. Activity-enveloped. */
-export function dedupAuthorsByOrcid(): Promise<{
-  job_id?: string
-  status?: string
-  message?: string
-}> {
-  return api.post('/authors/dedup-by-orcid?background=true')
 }
 
 /** Resolve a merge-conflict row by picking primary, alt, or dismissing.
@@ -3581,30 +3335,6 @@ export interface RankerOutcome {
   reason?: string | null
   cutoff?: string | null
   bars?: Partial<Record<'negative' | 'random_corpus', RankerOutcomeBar>>
-}
-
-/** One lens channel's yield: of the papers it helped surface, how many were kept. */
-export interface ChannelYieldRow {
-  surfaced: number
-  kept: number
-  rate: number | null
-  shrunk_rate: number | null
-  /** What the lens weight is multiplied by at refresh (1 = no opinion). */
-  multiplier: number
-}
-
-export interface ChannelYield {
-  enabled: boolean
-  /** null until a lens refresh has built it. */
-  channels: Record<'lexical' | 'vector' | 'graph' | 'external', ChannelYieldRow> | null
-  papers_surfaced?: number
-  pooled_rate?: number
-  /** null = the channels do not differ beyond sampling noise. */
-  shrinkage_strength?: number | null
-}
-
-export function getChannelYield(): Promise<ChannelYield> {
-  return api.get<ChannelYield>('/discovery/channel-yield')
 }
 
 export function getRankerOutcome(): Promise<RankerOutcome> {
@@ -4237,41 +3967,6 @@ export function explainRecommendation(recId: string): Promise<{
   return api.get(`/discovery/recommendations/${encodeURIComponent(recId)}/explain`)
 }
 
-export function listLensSignals(
-  lensId: string,
-  limit = 100,
-): Promise<{ lens_id: string; signals: LensSignal[] }> {
-  return api.get(`/lenses/${encodeURIComponent(lensId)}/signals?limit=${encodeURIComponent(String(limit))}`)
-}
-
-/**
- * Search OpenAlex via the manual-discovery endpoint.
- *
- * The backend now runs the OpenAlex round-trip as an Activity-tracked job so
- * the request returns immediately with a `JobEnvelope`; we auto-poll for the
- * completed result so callers still see a uniform `ManualDiscoverySearchResponse`.
- */
-export async function manualDiscoverySearch(
-  query: string,
-  limit = 20,
-): Promise<ManualDiscoverySearchResponse> {
-  const envelope = await api.post<JobEnvelope>('/discovery/manual-search', { query, limit })
-  if (!isJobEnvelope(envelope)) {
-    return envelope as unknown as ManualDiscoverySearchResponse
-  }
-  return waitForJob<ManualDiscoverySearchResponse>(envelope.job_id)
-}
-
-export function manualDiscoveryAdd(body: {
-  openalex_id?: string
-  doi?: string
-  link?: string
-  title?: string
-  query?: string
-}): Promise<Publication> {
-  return api.post('/discovery/manual-search/add', body)
-}
-
 // ── Import Phase C: online source search ──
 
 export interface OnlineSearchItem {
@@ -4307,13 +4002,6 @@ export interface OnlineSearchItem {
   topics?: unknown[]
 }
 
-export interface OnlineSearchResponse {
-  query: string
-  filters: { year_min: number | null; year_max: number | null }
-  total: number
-  items: OnlineSearchItem[]
-}
-
 export interface OnlineSearchSaveResponse {
   paper_id: string
   action: 'add' | 'like' | 'love' | 'dislike'
@@ -4322,15 +4010,6 @@ export interface OnlineSearchSaveResponse {
   match_source: string
   added_from: string
   title: string
-}
-
-export function onlineImportSearch(body: {
-  query: string
-  limit?: number
-  year_min?: number
-  year_max?: number
-}): Promise<OnlineSearchResponse> {
-  return api.post('/library/import/search', body)
 }
 
 /**
@@ -4542,15 +4221,6 @@ export interface FeedStatusResponse {
 
 export function getFeedStatus(opts?: { background?: boolean }): Promise<FeedStatusResponse> {
   return api.get('/feed/status', opts)
-}
-
-export interface DiscoveryStatusResponse {
-  last_refresh_at: string | null
-  new_count: number
-}
-
-export function getDiscoveryStatus(opts?: { background?: boolean }): Promise<DiscoveryStatusResponse> {
-  return api.get('/discovery/status', opts)
 }
 
 export function listFeedMonitors(): Promise<FeedMonitor[]> {
@@ -5084,19 +4754,6 @@ export function applyPaperAction(
   )
 }
 
-/** Inbox capture status — is a channel configured, what is waiting, what failed. */
-export interface InboxStatus {
-  configured: boolean
-  channels: string[]
-  waiting: number
-  needs_attention: number
-  last_captured_at: string | null
-}
-
-export function getInboxStatus(): Promise<InboxStatus> {
-  return api.get<InboxStatus>('/inbox/status')
-}
-
 export interface CaptureAttentionMessage {
   id: string
   channel: string
@@ -5240,21 +4897,6 @@ export function replayWalkthrough(id: string): Promise<WalkthroughState> {
 
 export function importWalkthroughFlags(ids: string[]): Promise<{ imported: string[]; ignored: string[] }> {
   return api.post<{ imported: string[]; ignored: string[] }>('/onboarding/walkthroughs/import', { ids })
-}
-
-/**
- * Create an author row from any identifier (OpenAlex / ORCID / Scholar / name).
- * The backend resolves identity, inserts as `author_type='followed'`, follows,
- * and schedules the historical backfill. Used by onboarding's identity step and
- * the suggestion-follow path (OpenAlex-only suggestions have no local id yet).
- */
-export function createAuthor(body: {
-  openalex_id?: string
-  orcid?: string
-  scholar_id?: string
-  name?: string
-}): Promise<Author> {
-  return api.post<Author>('/authors', body)
 }
 
 // ── Home ──

@@ -20,17 +20,6 @@ export const COLORS = {
   slate: '#64748b',
 }
 
-export const PIE_COLORS = [
-  COLORS.blue,
-  COLORS.green,
-  COLORS.amber,
-  COLORS.cyan,
-  COLORS.indigo,
-  COLORS.pink,
-  COLORS.purple,
-  COLORS.orange,
-]
-
 export const TOOLTIP_STYLE = {
   contentStyle: {
     background: '#0F1E36', // alma-800 (brand navy)

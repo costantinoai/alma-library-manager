@@ -48,11 +48,6 @@ export function sortBySeverity(dims: HealthDimension[]): HealthDimension[] {
   )
 }
 
-/** A dimension is "needs attention" when it is anything but healthy. */
-export function isAttention(dim: HealthDimension): boolean {
-  return dim.severity !== 'ok'
-}
-
 /**
  * H-8: an honest one-line freshness note for the unified snapshot. Corpus and
  * author health are SEPARATE materialized views, so when only one is
