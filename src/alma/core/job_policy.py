@@ -360,6 +360,7 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
     {
         "api/scheduler.py",
         "core/job_envelope.py",
+        "api/routes/addons.py",
         "api/routes/ai.py",
         "api/routes/alerts.py",
         "api/routes/authors.py",

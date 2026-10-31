@@ -27,6 +27,7 @@ from alma.api.origin_guard import (
 )
 from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.activity import router as activity_router
+from alma.api.routes.addons import router as addons_router
 from alma.api.routes.ai import router as ai_router
 from alma.api.routes.alerts import router as alerts_router
 from alma.api.routes.backup import router as backup_router
@@ -673,6 +674,7 @@ app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
 app.include_router(inbox_router, prefix="/api/v1/inbox", tags=["inbox"])
 app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
+app.include_router(addons_router, prefix="/api/v1")
 
 # Every add-on router is always mounted, behind a gate answering 404 while the
 # add-on is off. Runs before the frontend catch-all below.
