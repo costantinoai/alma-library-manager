@@ -730,7 +730,7 @@ def _normalize_embedding_vector(vec: numpy.ndarray | None) -> numpy.ndarray | No
         norm = float(np.linalg.norm(vec))
     except Exception:
         return None
-    if norm <= 0.0:
+    if not np.isfinite(norm) or norm <= 0.0:
         return None
     return (vec / norm).astype(np.float32)
 
@@ -1104,7 +1104,8 @@ def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[num
         while True:
             _, index = heapq.heappop(bounds)
             gain = _coverage_gains(matrix, [index], cover)[0]
-            if not bounds or gain >= -bounds[0][0]:
+            # `not <`, so a NaN gain ends the search instead of re-entering the heap.
+            if not bounds or not gain < -bounds[0][0]:
                 break
             heapq.heappush(bounds, (-gain, index))
         chosen.append(index)
