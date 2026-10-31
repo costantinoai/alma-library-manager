@@ -106,6 +106,27 @@ def _crossref_lookup_key(raw_doi: str) -> str:
     return f"crossref:{doi.lower()}" if doi else ""
 
 
+def _due_ids(
+    rows: list[sqlite3.Row],
+    lookup_key: Callable[[sqlite3.Row], str],
+    *,
+    limit: int | None,
+) -> list[str]:
+    """Ids of ``rows`` whose ledger entry is due, capped at ``limit``.
+
+    The stored key is compared here, through the same builder the writer uses,
+    because SQL cannot rebuild it: `trim` strips only spaces, `lower` folds only
+    ASCII, and neither knows the DOI forms `normalize_doi` strips. A row that
+    disagreed was picked again on every run, forever.
+    """
+    due = [
+        str(row["id"])
+        for row in rows
+        if row["ledger_due"] or row["stored_key"] != lookup_key(row)
+    ]
+    return due if limit is None else due[: max(1, int(limit))]
+
+
 def _ensure_enrichment_status_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS paper_enrichment_status (
@@ -757,7 +778,7 @@ def _select_crossref_abstract_candidates(
     """
 
     _ensure_enrichment_status_table(conn)
-    params: list[Any] = [CROSSREF_SOURCE, METADATA_PURPOSE]
+    params: list[Any] = [_utcnow_iso(), CROSSREF_SOURCE, METADATA_PURPOSE]
     seed_clause = ""
     if seed_paper_ids:
         unique = list(dict.fromkeys(str(pid) for pid in seed_paper_ids if str(pid).strip()))
@@ -765,14 +786,24 @@ def _select_crossref_abstract_candidates(
             placeholders = ",".join("?" for _ in unique)
             seed_clause = f"AND p.id IN ({placeholders})"
             params.extend(unique)
-    params.append(_utcnow_iso())
-    limit_clause = ""
-    if limit is not None:
-        params.append(max(1, int(limit)))
-        limit_clause = "LIMIT ?"
     rows = conn.execute(
         f"""
-        SELECT p.id
+        SELECT
+            p.id,
+            p.doi,
+            es.lookup_key AS stored_key,
+            (
+                es.paper_id IS NULL
+                OR COALESCE(es.fields_key, '') != 'crossref_v1'
+                OR COALESCE(es.status, '') IN ('pending', 'queued')
+                OR (
+                    es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
+                    AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+                )
+                OR COALESCE(es.status, '') NOT IN (
+                    'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
+                )
+            ) AS ledger_due
         FROM papers p
         LEFT JOIN paper_enrichment_status es
           ON es.paper_id = p.id
@@ -782,25 +813,11 @@ def _select_crossref_abstract_candidates(
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
           AND COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
           {seed_clause}
-          AND (
-              es.paper_id IS NULL
-              OR COALESCE(es.lookup_key, '') != ('crossref:' || lower(trim(p.doi)))
-              OR COALESCE(es.fields_key, '') != 'crossref_v1'
-              OR COALESCE(es.status, '') IN ('pending', 'queued')
-              OR (
-                  es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
-                  AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
-              )
-              OR COALESCE(es.status, '') NOT IN (
-                  'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
-              )
-          )
         ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
-        {limit_clause}
         """,
         params,
     ).fetchall()
-    return [str(row["id"]) for row in rows]
+    return _due_ids(rows, lambda row: _crossref_lookup_key(row["doi"]), limit=limit)
 
 
 def _run_crossref_abstract_phase(
@@ -875,7 +892,7 @@ def _run_crossref_abstract_phase(
                     fallback_summary["skipped_no_doi"] += 1
                     continue
                 cand = batch.works.get(doi.lower())
-                lookup_key = f"crossref:{doi.lower()}"
+                lookup_key = _crossref_lookup_key(doi)
                 failure = batch.failed.get(doi.lower())
                 if failure:
                     # Provider failure is not evidence that the DOI is absent:
@@ -1207,25 +1224,32 @@ def _select_abstract_recovery_candidates(
     target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[str]:
     _ensure_enrichment_status_table(conn)
-    params: list[Any] = [ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE]
+    params: list[Any] = [_utcnow_iso(), ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE]
     target_ids = normalize_id_list(target_paper_ids)
     target_clause = ""
     if target_ids:
         target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
         params.extend(target_ids)
-    params.append(_utcnow_iso())
-    limit_clause = ""
-    if limit is not None:
-        params.append(max(1, int(limit)))
-        limit_clause = "LIMIT ?"
-    lookup_expr = (
-        "lower(trim(COALESCE(p.oa_url, ''))) || '|' || "
-        "lower(trim(COALESCE(p.url, ''))) || '|' || "
-        "lower(trim(COALESCE(p.doi, '')))"
-    )
     rows = conn.execute(
         f"""
-        SELECT p.id
+        SELECT
+            p.id,
+            p.oa_url,
+            p.url,
+            p.doi,
+            es.lookup_key AS stored_key,
+            (
+                es.paper_id IS NULL
+                OR COALESCE(es.fields_key, '') != 'abstract_recovery_v2'
+                OR COALESCE(es.status, '') IN ('pending', 'queued')
+                OR (
+                    es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
+                    AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+                )
+                OR COALESCE(es.status, '') NOT IN (
+                    'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
+                )
+            ) AS ledger_due
         FROM papers p
         LEFT JOIN paper_enrichment_status es
           ON es.paper_id = p.id
@@ -1239,25 +1263,11 @@ def _select_abstract_recovery_candidates(
               OR COALESCE(NULLIF(TRIM(p.url), ''), '') != ''
               OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
           )
-          AND (
-              es.paper_id IS NULL
-              OR COALESCE(es.lookup_key, '') != {lookup_expr}
-              OR COALESCE(es.fields_key, '') != 'abstract_recovery_v2'
-              OR COALESCE(es.status, '') IN ('pending', 'queued')
-              OR (
-                  es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
-                  AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
-              )
-              OR COALESCE(es.status, '') NOT IN (
-                  'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
-              )
-          )
         ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
-        {limit_clause}
         """,
         params,
     ).fetchall()
-    return [str(row["id"]) for row in rows]
+    return _due_ids(rows, _abstract_recovery_lookup_key, limit=limit)
 
 
 def _run_abstract_recovery_phase(
@@ -3067,7 +3077,7 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
     doi = normalize_doi(str(row["doi"] or "")) or ""
     if not doi:
         return ("skipped", [])
-    lookup_key = f"crossref:{doi.lower()}"
+    lookup_key = _crossref_lookup_key(doi)
     try:
         candidate = fetch_work_by_doi(doi)
     except Exception as exc:
