@@ -2396,54 +2396,6 @@ export interface InsightsDiagnostics {
       last_success_at?: string | null
     }>
   }
-  alerts: {
-    summary: {
-      total_alerts: number
-      enabled_alerts: number
-      total_rules: number
-      active_alerts_30d: number
-      sent_runs_30d: number
-      failed_runs_30d: number
-      empty_runs_30d: number
-      skipped_runs_30d: number
-      papers_sent_30d: number
-      avg_papers_per_sent: number
-    }
-    top_alerts: Array<{
-      alert_id?: string | null
-      alert_name: string
-      total_runs: number
-      sent_runs: number
-      failed_runs: number
-      empty_runs: number
-      skipped_runs: number
-      papers_sent: number
-      usefulness_score: number
-    }>
-    long_horizon?: {
-      days: number
-      summary: {
-        active_alerts: number
-        sent_runs: number
-        failed_runs: number
-        empty_runs: number
-        skipped_runs: number
-        papers_sent: number
-        usefulness_score: number
-        recent_30d_usefulness_score: number
-        delta_vs_30d: number
-      }
-      weekly_trend: Array<{
-        date: string
-        sent: number
-        failed: number
-        empty: number
-        skipped: number
-        total: number
-        publication_count: number
-      }>
-    }
-  }
   feedback_learning: {
     summary: {
       total_interactions: number
@@ -2505,7 +2457,6 @@ export interface InsightsDiagnostics {
       warning_count: number
       healthy_checks: number
       embeddings_ready: boolean
-      alert_delivery_ready: boolean
       degraded_monitors: number
       disabled_sources: number
       misconfigured_channels: number
@@ -2516,17 +2467,19 @@ export interface InsightsDiagnostics {
       label: string
       severity: 'critical' | 'warning' | 'info' | string
       detail: string
-      page: string
+      page?: string
       params?: Record<string, string>
+      /** Set on a check an add-on reports. */
+      addon?: string
+      href?: string
       targets?: Array<{
         id: string
         label: string
-        kind: 'author' | 'monitor' | 'source' | 'alert' | 'plugin' | string
-        action: 'repair_author' | 'backfill_author' | 'refresh_monitor' | 'enable_source' | 'evaluate_alert' | 'test_plugin' | 'compute_embeddings' | 'compute_stale_embeddings' | 'clear_similarity_cache' | string
+        kind: 'author' | 'monitor' | 'source' | 'plugin' | string
+        action: 'repair_author' | 'backfill_author' | 'refresh_monitor' | 'enable_source' | 'test_plugin' | 'compute_embeddings' | 'compute_stale_embeddings' | 'clear_similarity_cache' | string
         author_id?: string | null
         monitor_id?: string | null
         source?: string | null
-        alert_id?: string | null
         plugin_name?: string | null
       }>
     }>
@@ -2584,23 +2537,6 @@ export interface InsightsDiagnostics {
       dismissed: number
       saved: number
     }>
-    alert_history_daily: Array<{
-      date: string
-      sent: number
-      failed: number
-      empty: number
-      skipped: number
-      total: number
-    }>
-    alert_history_weekly_90d?: Array<{
-      date: string
-      sent: number
-      failed: number
-      empty: number
-      skipped: number
-      total: number
-      publication_count: number
-    }>
     author_follows_daily?: Array<{
       date: string
       follows: number
@@ -2644,7 +2580,6 @@ export interface InsightsDiagnostics {
       params?: Record<string, string>
       priority: 'high' | 'medium' | 'low' | string
     }>
-    automation_opportunities: AlertAutomationTemplate[]
   }
 }
 
@@ -2721,7 +2656,6 @@ export const DIAGNOSTICS_SECTION_KEYS = [
   'discovery',
   'ai',
   'authors',
-  'alerts',
   'feedback',
   'operational',
   'evaluation',
@@ -2770,14 +2704,6 @@ export type DiagnosticsAuthorsSection = DiagnosticsSectionMeta & {
   identity_attention?: unknown[]
 }
 
-export type DiagnosticsAlertsSection = DiagnosticsSectionMeta & {
-  summary: InsightsDiagnostics['alerts']['summary']
-  top_alerts: InsightsDiagnostics['alerts']['top_alerts']
-  long_horizon?: InsightsDiagnostics['alerts']['long_horizon']
-  alert_history_trend: InsightsDiagnostics['trends']['alert_history_daily']
-  alert_history_weekly_90d?: InsightsDiagnostics['trends']['alert_history_weekly_90d']
-}
-
 export type DiagnosticsFeedbackSection = DiagnosticsSectionMeta & {
   summary: InsightsDiagnostics['feedback_learning']['summary']
   top_topics: InsightsDiagnostics['feedback_learning']['top_topics']
@@ -2792,7 +2718,6 @@ export type DiagnosticsOperationalSection =
 export type DiagnosticsEvaluationSection = DiagnosticsSectionMeta & {
   scorecards: InsightsDiagnostics['evaluation']['scorecards']
   recommended_actions: InsightsDiagnostics['evaluation']['recommended_actions']
-  automation_opportunities: InsightsDiagnostics['evaluation']['automation_opportunities']
   library_workflow: InsightsDiagnostics['library']['workflow']
 }
 
@@ -2801,7 +2726,6 @@ export type DiagnosticsSectionPayload = {
   discovery: DiagnosticsDiscoverySection
   ai: DiagnosticsAiSection
   authors: DiagnosticsAuthorsSection
-  alerts: DiagnosticsAlertsSection
   feedback: DiagnosticsFeedbackSection
   operational: DiagnosticsOperationalSection
   evaluation: DiagnosticsEvaluationSection

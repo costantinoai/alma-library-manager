@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
+from alma.application import materialized_views as mv
 from alma.core import addons
 from alma.core.db_write import write_section
 from alma.core.time import utcnow
@@ -29,6 +30,7 @@ router = APIRouter(
     responses={401: {"description": "Unauthorized"}},
 )
 
+_OPERATIONAL_VIEW = "insights:diag:operational"
 #: Backup, tables, files, settings: the phases Activity counts.
 _REMOVE_PHASES = 4
 
@@ -105,6 +107,12 @@ def set_addon_enabled(
         addons.set_enabled(db, addon_id, payload.enabled)
     except addons.AddonConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    # Health's operational view reads add-on checks; it must not wait for its
+    # hourly refresh to drop a check that was just switched off.
+    try:
+        mv.request_refresh(db, _OPERATIONAL_VIEW, force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not refresh the operational view: %s", exc)
     still_finishing = [] if payload.enabled else addons.active_operations(db, addon_id)
     return {**_describe(db, addon), "still_finishing": still_finishing}
 

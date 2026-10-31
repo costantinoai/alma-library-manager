@@ -128,7 +128,8 @@ class AddOn:
     home_counts: Callable[[sqlite3.Connection, str], Sequence[dict[str, Any]]] | None = None
     #: ``home_pills(db, now)``: pills for Home's status line.
     home_pills: Callable[[sqlite3.Connection, datetime], Sequence[dict[str, Any]]] | None = None
-    #: ``health_checks(db)``: entries for the Health operational states.
+    #: ``health_checks(db)``: entries for the Health operational states, each
+    #: ``{id, label, severity, detail, href}``, or nothing while healthy.
     health_checks: Callable[[sqlite3.Connection], Sequence[dict[str, Any]]] | None = None
     #: ``nav_badge(db)``: the count on this add-on's sidebar entry.
     nav_badge: Callable[[sqlite3.Connection], int] | None = None
@@ -577,9 +578,11 @@ def home_pills(conn: sqlite3.Connection, now: datetime) -> list[dict[str, Any]]:
 
 
 def health_checks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Operational states of the add-ons that are on."""
+    """Operational states of the add-ons that are on, tagged with their id."""
     return [
-        check for addon in enabled() for check in _collect(addon, addon.health_checks, conn)
+        {"addon": addon.id, **check}
+        for addon in enabled()
+        for check in _collect(addon, addon.health_checks, conn)
     ]
 
 

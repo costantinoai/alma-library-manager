@@ -24,6 +24,7 @@ from alma.application.recommendation_outcomes import (
     count_outcomes,
     recommendation_engagement,
 )
+from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
@@ -351,92 +352,6 @@ def _build_recommendation_action_trend(
     return out
 
 
-def _compute_alert_usefulness_score(
-    *, total_runs: int, failed_runs: int, empty_runs: int, papers_sent: int, sent_runs: int
-) -> int:
-    reliability = 1.0 - safe_div(failed_runs, max(1, total_runs))
-    non_empty_rate = 1.0 - safe_div(empty_runs, max(1, total_runs))
-    volume_score = min(safe_div(papers_sent, max(1, sent_runs)) / 4.0, 1.0) if sent_runs else 0.0
-    return round(((reliability * 0.45) + (non_empty_rate * 0.30) + (volume_score * 0.25)) * 100)
-
-
-def _build_alert_history_trend(
-    db: sqlite3.Connection,
-    *,
-    days: int = 30,
-    bucket: str = "day",
-) -> list[dict[str, Any]]:
-    if not table_exists(db, "alert_history"):
-        return []
-    since = (utcnow() - timedelta(days=days)).isoformat()
-    if bucket == "week":
-        rows = db.execute(
-            """
-            SELECT
-                MIN(substr(sent_at, 1, 10)) AS period_start,
-                COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
-                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-                COALESCE(SUM(CASE WHEN status = 'empty' THEN 1 ELSE 0 END), 0) AS empty,
-                COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
-                COALESCE(SUM(publication_count), 0) AS publication_count
-            FROM alert_history
-            WHERE sent_at >= ?
-            GROUP BY strftime('%Y-%W', sent_at)
-            ORDER BY period_start ASC
-            """,
-            (since,),
-        ).fetchall()
-        return [
-            {
-                "date": row["period_start"],
-                "sent": int(row["sent"] or 0),
-                "failed": int(row["failed"] or 0),
-                "empty": int(row["empty"] or 0),
-                "skipped": int(row["skipped"] or 0),
-                "total": int(row["sent"] or 0)
-                + int(row["failed"] or 0)
-                + int(row["empty"] or 0)
-                + int(row["skipped"] or 0),
-                "publication_count": int(row["publication_count"] or 0),
-            }
-            for row in rows
-            if row["period_start"]
-        ]
-
-    rows = db.execute(
-        """
-        SELECT
-            substr(sent_at, 1, 10) AS day,
-            COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
-            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-            COALESCE(SUM(CASE WHEN status = 'empty' THEN 1 ELSE 0 END), 0) AS empty,
-            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
-            COALESCE(SUM(publication_count), 0) AS publication_count
-        FROM alert_history
-        WHERE sent_at >= ?
-        GROUP BY substr(sent_at, 1, 10)
-        ORDER BY day ASC
-        """,
-        (since,),
-    ).fetchall()
-    return [
-        {
-            "date": row["day"],
-            "sent": int(row["sent"] or 0),
-            "failed": int(row["failed"] or 0),
-            "empty": int(row["empty"] or 0),
-            "skipped": int(row["skipped"] or 0),
-            "total": int(row["sent"] or 0)
-            + int(row["failed"] or 0)
-            + int(row["empty"] or 0)
-            + int(row["skipped"] or 0),
-            "publication_count": int(row["publication_count"] or 0),
-        }
-        for row in rows
-        if row["day"]
-    ]
-
-
 def _build_branch_trends(
     db: sqlite3.Connection,
     *,
@@ -588,189 +503,6 @@ def _build_feedback_trend(
         for row in rows
         if row["day"]
     ]
-
-
-def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> dict[str, Any]:
-    summary = {
-        "total_alerts": 0,
-        "enabled_alerts": 0,
-        "total_rules": 0,
-        "active_alerts_30d": 0,
-        "sent_runs_30d": 0,
-        "failed_runs_30d": 0,
-        "empty_runs_30d": 0,
-        "skipped_runs_30d": 0,
-        "papers_sent_30d": 0,
-        "avg_papers_per_sent": 0.0,
-    }
-    top_alerts: list[dict[str, Any]] = []
-
-    if table_exists(db, "alerts"):
-        row = db.execute(
-            """
-            SELECT
-                COUNT(*) AS total_alerts,
-                COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_alerts
-            FROM alerts
-            """
-        ).fetchone()
-        summary["total_alerts"] = int((row["total_alerts"] if row else 0) or 0)
-        summary["enabled_alerts"] = int((row["enabled_alerts"] if row else 0) or 0)
-
-    if table_exists(db, "alert_rules"):
-        row = db.execute("SELECT COUNT(*) AS c FROM alert_rules").fetchone()
-        summary["total_rules"] = int((row["c"] if row else 0) or 0)
-
-    if not table_exists(db, "alert_history"):
-        return {
-            "summary": summary,
-            "top_alerts": top_alerts,
-            "long_horizon": {"days": 90, "summary": {}, "weekly_trend": []},
-        }
-
-    since = (utcnow() - timedelta(days=days)).isoformat()
-    row = db.execute(
-        """
-        SELECT
-            COUNT(DISTINCT COALESCE(alert_id, '')) AS active_alerts,
-            COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent_runs,
-            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_runs,
-            COALESCE(SUM(CASE WHEN status = 'empty' THEN 1 ELSE 0 END), 0) AS empty_runs,
-            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped_runs,
-            COALESCE(SUM(CASE WHEN status = 'sent' THEN publication_count ELSE 0 END), 0) AS papers_sent
-        FROM alert_history
-        WHERE sent_at >= ?
-        """,
-        (since,),
-    ).fetchone()
-    sent_runs = int((row["sent_runs"] if row else 0) or 0)
-    papers_sent = int((row["papers_sent"] if row else 0) or 0)
-    summary.update(
-        {
-            "active_alerts_30d": int((row["active_alerts"] if row else 0) or 0),
-            "sent_runs_30d": sent_runs,
-            "failed_runs_30d": int((row["failed_runs"] if row else 0) or 0),
-            "empty_runs_30d": int((row["empty_runs"] if row else 0) or 0),
-            "skipped_runs_30d": int((row["skipped_runs"] if row else 0) or 0),
-            "papers_sent_30d": papers_sent,
-            "avg_papers_per_sent": round(safe_div(papers_sent, max(1, sent_runs)), 2)
-            if sent_runs
-            else 0.0,
-        }
-    )
-
-    rows = db.execute(
-        """
-        SELECT
-            COALESCE(ah.alert_id, '') AS alert_id,
-            COALESCE(a.name, 'Unassigned alert') AS alert_name,
-            COUNT(*) AS total_runs,
-            COALESCE(SUM(CASE WHEN ah.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent_runs,
-            COALESCE(SUM(CASE WHEN ah.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_runs,
-            COALESCE(SUM(CASE WHEN ah.status = 'empty' THEN 1 ELSE 0 END), 0) AS empty_runs,
-            COALESCE(SUM(CASE WHEN ah.status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped_runs,
-            COALESCE(SUM(CASE WHEN ah.status = 'sent' THEN ah.publication_count ELSE 0 END), 0) AS papers_sent
-        FROM alert_history ah
-        LEFT JOIN alerts a ON a.id = ah.alert_id
-        WHERE ah.sent_at >= ?
-        GROUP BY COALESCE(ah.alert_id, ''), COALESCE(a.name, 'Unassigned alert')
-        ORDER BY sent_runs DESC, papers_sent DESC, total_runs DESC
-        LIMIT 6
-        """,
-        (since,),
-    ).fetchall()
-    for row in rows:
-        total_runs = int(row["total_runs"] or 0)
-        sent_runs = int(row["sent_runs"] or 0)
-        failed_runs = int(row["failed_runs"] or 0)
-        empty_runs = int(row["empty_runs"] or 0)
-        papers_sent = int(row["papers_sent"] or 0)
-        reliability = 1.0 - safe_div(failed_runs, max(1, total_runs))
-        non_empty_rate = 1.0 - safe_div(empty_runs, max(1, total_runs))
-        volume_score = (
-            min(safe_div(papers_sent, max(1, sent_runs)) / 4.0, 1.0) if sent_runs else 0.0
-        )
-        usefulness_score = round(
-            ((reliability * 0.45) + (non_empty_rate * 0.30) + (volume_score * 0.25)) * 100
-        )
-        top_alerts.append(
-            {
-                "alert_id": row["alert_id"] or None,
-                "alert_name": row["alert_name"],
-                "total_runs": total_runs,
-                "sent_runs": sent_runs,
-                "failed_runs": failed_runs,
-                "empty_runs": empty_runs,
-                "skipped_runs": int(row["skipped_runs"] or 0),
-                "papers_sent": papers_sent,
-                "usefulness_score": usefulness_score,
-            }
-        )
-    long_horizon_days = max(days, 90)
-    long_since = (utcnow() - timedelta(days=long_horizon_days)).isoformat()
-    long_row = db.execute(
-        """
-        SELECT
-            COUNT(DISTINCT COALESCE(alert_id, '')) AS active_alerts,
-            COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS sent_runs,
-            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_runs,
-            COALESCE(SUM(CASE WHEN status = 'empty' THEN 1 ELSE 0 END), 0) AS empty_runs,
-            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped_runs,
-            COALESCE(SUM(CASE WHEN status = 'sent' THEN publication_count ELSE 0 END), 0) AS papers_sent
-        FROM alert_history
-        WHERE sent_at >= ?
-        """,
-        (long_since,),
-    ).fetchone()
-    long_total_runs = (
-        int((long_row["sent_runs"] if long_row else 0) or 0)
-        + int((long_row["failed_runs"] if long_row else 0) or 0)
-        + int((long_row["empty_runs"] if long_row else 0) or 0)
-        + int((long_row["skipped_runs"] if long_row else 0) or 0)
-    )
-    long_sent_runs = int((long_row["sent_runs"] if long_row else 0) or 0)
-    long_failed_runs = int((long_row["failed_runs"] if long_row else 0) or 0)
-    long_empty_runs = int((long_row["empty_runs"] if long_row else 0) or 0)
-    long_papers_sent = int((long_row["papers_sent"] if long_row else 0) or 0)
-    long_usefulness = _compute_alert_usefulness_score(
-        total_runs=long_total_runs,
-        failed_runs=long_failed_runs,
-        empty_runs=long_empty_runs,
-        papers_sent=long_papers_sent,
-        sent_runs=long_sent_runs,
-    )
-    recent_total_runs = (
-        int(summary["sent_runs_30d"])
-        + int(summary["failed_runs_30d"])
-        + int(summary["empty_runs_30d"])
-        + int(summary["skipped_runs_30d"])
-    )
-    recent_usefulness = _compute_alert_usefulness_score(
-        total_runs=recent_total_runs,
-        failed_runs=int(summary["failed_runs_30d"]),
-        empty_runs=int(summary["empty_runs_30d"]),
-        papers_sent=int(summary["papers_sent_30d"]),
-        sent_runs=int(summary["sent_runs_30d"]),
-    )
-    return {
-        "summary": summary,
-        "top_alerts": top_alerts,
-        "long_horizon": {
-            "days": long_horizon_days,
-            "summary": {
-                "active_alerts": int((long_row["active_alerts"] if long_row else 0) or 0),
-                "sent_runs": long_sent_runs,
-                "failed_runs": long_failed_runs,
-                "empty_runs": long_empty_runs,
-                "skipped_runs": int((long_row["skipped_runs"] if long_row else 0) or 0),
-                "papers_sent": long_papers_sent,
-                "usefulness_score": long_usefulness,
-                "recent_30d_usefulness_score": recent_usefulness,
-                "delta_vs_30d": long_usefulness - recent_usefulness,
-            },
-            "weekly_trend": _build_alert_history_trend(db, days=long_horizon_days, bucket="week"),
-        },
-    }
 
 
 def _build_cold_start_topic_validation(
@@ -1309,7 +1041,6 @@ def _build_operational_snapshot(
     *,
     monitors: list[dict[str, Any]],
     discovery_settings: dict[str, str],
-    alert_snapshot: dict[str, Any],
     authors_snapshot: dict[str, Any],
     ai_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1605,42 +1336,6 @@ def _build_operational_snapshot(
     # (The enrichment-backlog "papers_need_enrichment" state moved to the Health
     # Data tab — the enrichment dimensions own it now; de-duplicated, task 24.)
 
-    alert_summary = alert_snapshot.get("summary") or {}
-    alert_top = alert_snapshot.get("top_alerts") or []
-    enabled_alerts = int(alert_summary.get("enabled_alerts") or 0)
-    alert_delivery_ready = enabled_alerts == 0
-    unavailable_alerts = 0
-    if enabled_alerts > 0:
-        try:
-            from alma.application.alerts import configured_delivery_integrations
-
-            ready_integrations = set(configured_delivery_integrations())
-            enabled_rows = db.execute("SELECT channels FROM alerts WHERE enabled = 1").fetchall()
-            unavailable_alerts = sum(
-                1
-                for row in enabled_rows
-                if not ready_integrations.intersection(json_loads(row["channels"]) or [])
-            )
-            alert_delivery_ready = unavailable_alerts == 0
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Could not derive Alert delivery readiness: %s", exc)
-            unavailable_alerts = enabled_alerts
-
-    if not alert_delivery_ready:
-        states.append(
-            {
-                "id": "alert_delivery_unavailable",
-                "label": "Some enabled Alerts have no active delivery integration",
-                "severity": "critical",
-                "detail": (
-                    f"{unavailable_alerts} enabled "
-                    f"{'Alert has' if unavailable_alerts == 1 else 'Alerts have'} "
-                    "no activated and configured sender."
-                ),
-                "page": "settings",
-                "params": {"anchor": "plugins"},
-            }
-        )
     if misconfigured_channels > 0:
         half = [plugin for plugin in plugins if plugin.get("half_configured")]
         plugin_targets = [
@@ -1674,34 +1369,6 @@ def _build_operational_snapshot(
                 "page": "settings",
                 "params": {"anchor": "plugins"},
                 "targets": plugin_targets,
-            }
-        )
-    failed_alert_rows = [
-        item
-        for item in alert_top
-        if str(item.get("alert_id") or "").strip() and int(item.get("failed_runs") or 0) > 0
-    ]
-    failed_alert_targets = [
-        {
-            "id": str(item.get("alert_id") or item.get("alert_name") or ""),
-            "label": str(item.get("alert_name") or "Alert"),
-            "kind": "alert",
-            "action": "evaluate_alert",
-            "alert_id": str(item.get("alert_id") or ""),
-        }
-        for item in failed_alert_rows
-    ][:3]
-    if failed_alert_rows:
-        states.append(
-            {
-                "id": "failed_alert_delivery",
-                "label": "Some alerts have recent delivery failures",
-                "severity": "warning",
-                # Count the matching rows, not the [:3]-capped button list.
-                "detail": f"{len(failed_alert_rows)} alerts show recent failed runs and should be re-evaluated or repaired.",
-                "page": "alerts",
-                "params": {"section": "history"},
-                "targets": failed_alert_targets,
             }
         )
     if disabled_sources:
@@ -1738,6 +1405,9 @@ def _build_operational_snapshot(
             }
         )
 
+    # Add-ons report their own degraded states, tagged with their id.
+    states.extend(addons.health_checks(db))
+
     critical_count = sum(1 for state in states if state["severity"] == "critical")
     warning_count = sum(1 for state in states if state["severity"] == "warning")
     healthy_checks = sum(
@@ -1747,7 +1417,6 @@ def _build_operational_snapshot(
             int(author_summary.get("bridge_gap_count") or 0) == 0,
             embeddings_ready,
             int(ai_summary.get("stale_embeddings") or 0) == 0,
-            alert_delivery_ready,
             misconfigured_channels == 0,
             recent_failed_operations_24h == 0,
         )
@@ -1761,7 +1430,6 @@ def _build_operational_snapshot(
             "warning_count": warning_count,
             "healthy_checks": healthy_checks,
             "embeddings_ready": embeddings_ready,
-            "alert_delivery_ready": alert_delivery_ready,
             "degraded_monitors": degraded_monitor_count,
             "disabled_sources": len(disabled_sources),
             "misconfigured_channels": misconfigured_channels,
@@ -2613,8 +2281,8 @@ def get_insights_diagnostics(
 ):
     """Composed diagnostics payload — backed by per-section MVs.
 
-    Each of the eight named sections (feed, discovery, ai, authors,
-    alerts, feedback, operational, evaluation) is registered as a
+    Each of the seven named sections (feed, discovery, ai, authors,
+    feedback, operational, evaluation) is registered as a
     fingerprint-based materialised view in
     ``alma.api.routes.insights_diagnostics``. We pull each section's
     stored payload through ``mv.get_stored`` and recompose them into the
