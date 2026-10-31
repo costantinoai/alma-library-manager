@@ -10,23 +10,62 @@ export interface ListViewOption {
   title: string
 }
 
+/** Always-one-active segmented control, the same shape for sort and view. */
+export interface ListSegment {
+  value: string
+  ariaLabel: string
+  options: ListViewOption[]
+  onChange: (value: string) => void
+}
+
+/** Two-way sort pill. The page owns the label/state; the bar owns the look. */
+export interface ListSortToggle {
+  label: string
+  title: string
+  ariaLabel: string
+  onToggle: () => void
+}
+
 export interface ListControlBarProps {
   /** Page-specific controls rendered at the left (e.g. Feed's All/New filter). */
   leading?: ReactNode
-  /** Binary sort pill. The page owns the label/state; the bar owns the look. */
-  sort: { label: string; title: string; ariaLabel: string; onToggle: () => void }
+  /** A pill for two orders, a segmented control for more. */
+  sort: ListSortToggle | ListSegment
   count: number
   /** Noun after the count. Default "in view". */
   countLabel?: string
   /** Inline select-all toggle, shown only when `show` is true. */
   selectAll?: { allSelected: boolean; onToggle: () => void; show: boolean }
   /** Always-one-active view-mode segmented control. */
-  view: {
-    value: string
-    ariaLabel: string
-    options: ListViewOption[]
-    onChange: (value: string) => void
-  }
+  view: ListSegment
+}
+
+function SegmentedChoice({ segment }: { segment: ListSegment }) {
+  return (
+    <ToggleGroup
+      type="single"
+      value={segment.value}
+      onValueChange={(value) => {
+        // Radix lets the user deselect the active item; we require one
+        // always-active so the list always renders.
+        if (value) segment.onChange(value)
+      }}
+      aria-label={segment.ariaLabel}
+      variant="segment"
+    >
+      {segment.options.map(({ value, label, icon: Icon, title }) => (
+        <ToggleGroupItem
+          key={value}
+          value={value}
+          title={title}
+          className="h-7 min-w-0 gap-1 px-2.5 text-xs font-medium"
+        >
+          <Icon className="h-3.5 w-3.5" />
+          <span className="hidden md:inline">{label}</span>
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
 }
 
 /**
@@ -50,17 +89,21 @@ export function ListControlBar({
     <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
       {leading}
 
-      {/* Sort toggle — pill button, binary state. */}
-      <button
-        type="button"
-        onClick={sort.onToggle}
-        title={sort.title}
-        aria-label={sort.ariaLabel}
-        className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-3 text-xs font-medium text-alma-800 transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
-      >
-        <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
-        {sort.label}
-      </button>
+      {/* Sort: a pill for two orders, a segmented control for more. */}
+      {'options' in sort ? (
+        <SegmentedChoice segment={sort} />
+      ) : (
+        <button
+          type="button"
+          onClick={sort.onToggle}
+          title={sort.title}
+          aria-label={sort.ariaLabel}
+          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-3 text-xs font-medium text-alma-800 transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+        >
+          <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
+          {sort.label}
+        </button>
+      )}
 
       {/* Right cluster: counter with inline select-all, then view mode. */}
       <div className="ml-auto flex items-center gap-3">
@@ -81,29 +124,7 @@ export function ListControlBar({
           )}
         </div>
 
-        <ToggleGroup
-          type="single"
-          value={view.value}
-          onValueChange={(value) => {
-            // Radix lets the user deselect the active item; we require one
-            // always-active so the list always renders.
-            if (value) view.onChange(value)
-          }}
-          aria-label={view.ariaLabel}
-          variant="segment"
-        >
-          {view.options.map(({ value, label, icon: Icon, title }) => (
-            <ToggleGroupItem
-              key={value}
-              value={value}
-              title={title}
-              className="h-7 min-w-0 gap-1 px-2.5 text-xs font-medium"
-            >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="hidden md:inline">{label}</span>
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <SegmentedChoice segment={view} />
       </div>
     </div>
   )

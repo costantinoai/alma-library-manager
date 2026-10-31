@@ -105,7 +105,7 @@ describe('DiscoveryPage lens state', () => {
     renderPage()
     await screen.findByText('Year only')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by recent' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Date' }))
     const titles = screen.getAllByRole('button', { name: 'Why' }).map((button) => button.parentElement?.textContent)
     expect(titles).toEqual(['DatedWhy', 'Year onlyWhy'])
   })
@@ -120,5 +120,21 @@ describe('DiscoveryPage lens state', () => {
 
     const titles = screen.getAllByRole('button', { name: 'Why' }).map((button) => button.parentElement?.textContent)
     expect(titles).toEqual(['First in slateWhy', 'Strong scoreWhy'])
+  })
+
+  it('sorts by score under Ranking and back to the slate under Suggested', async () => {
+    listLensRecommendations.mockResolvedValue([
+      { id: 'strong', paper_id: 'strong', rank: 2, score: 90, created_at: '2026-09-01T12:00:00Z', paper: { id: 'strong', title: 'Strong score' } },
+      { id: 'spread', paper_id: 'spread', rank: 1, score: 40, created_at: '2026-09-01T12:00:00Z', paper: { id: 'spread', title: 'First in slate' } },
+    ])
+    renderPage()
+    await screen.findByText('First in slate')
+    const order = () => screen.getAllByRole('button', { name: 'Why' }).map((button) => button.parentElement?.textContent)
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Ranking' }))
+    expect(order()).toEqual(['Strong scoreWhy', 'First in slateWhy'])
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Suggested' }))
+    expect(order()).toEqual(['First in slateWhy', 'Strong scoreWhy'])
   })
 })

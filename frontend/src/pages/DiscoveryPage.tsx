@@ -9,7 +9,9 @@ import {
 import {
   Aperture,
   ArrowDownRight,
+  ArrowDownWideNarrow,
   ArrowUpRight,
+  CalendarDays,
   ExternalLink,
   Eye,
   EyeOff,
@@ -21,6 +23,7 @@ import {
   RefreshCw,
   Rows3,
   SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 
@@ -44,6 +47,7 @@ import {
   updateLens,
   type BranchCoverage,
   type Lens,
+  type DiscoveryImpression,
   type LensRecommendation,
   type Publication,
   type SimilarityResultItem,
@@ -92,7 +96,16 @@ import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from 
 // like the same product. `relevance` keeps the lens's ranked order;
 // `recent` re-sorts by publication date desc so the user can scan
 // what's new in the lens without losing the underlying scoring.
-type DiscoverySort = 'relevance' | 'recent'
+type DiscoverySort = 'suggested' | 'ranking' | 'date'
+
+// What an impression records. Only `relevance` counts as slate exposure when
+// learning reads impressions (`observations.py`), so a list the reader re-sorted
+// by score stays out of it, as `custom`.
+const IMPRESSION_SORT_MODE: Record<DiscoverySort, DiscoveryImpression['sort_mode']> = {
+  suggested: 'relevance',
+  ranking: 'custom',
+  date: 'recent',
+}
 // Task 50 M4: `map` is no longer a view mode — the frontier map is a panel
 // above the list (50-B), so the list density and the map are independent.
 type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
@@ -205,11 +218,11 @@ export function DiscoveryPage() {
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   // Lazily fetched explanations keyed by rec ID
   const [explanations, setExplanations] = useState<Record<string, string | null>>({})
-  // List view state — mirrors Feed: sort (relevance vs publication date)
+  // List view state: sort (slate order, score or publication date)
   // and density (compact / normal / extended).
-  const [sort, setSort] = useState<DiscoverySort>('relevance')
+  const [sort, setSort] = useState<DiscoverySort>('suggested')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
-  const observeCardImpression = useDiscoveryImpressions('discovery_card', sort)
+  const observeCardImpression = useDiscoveryImpressions('discovery_card', IMPRESSION_SORT_MODE[sort])
   const observeCompactImpression = useDiscoveryImpressions(
     'discovery_compact',
     'custom',
@@ -666,25 +679,24 @@ export function DiscoveryPage() {
   // persisted `user_action==='dismiss'` on refetch) + apply the user's sort
   // choice. Saved / read / liked cards stay in the deck showing their new state;
   // the backend scopes persisted saves/reads to the current suggestion set, so a
-  // Refresh Lens still yields a clean deck. `relevance` follows the slate's own
-  // `rank`, the order that spreads the deck across branches; a sort by raw score
-  // left small branches behind Show all. `recent` re-sorts by publication date
-  // DESC, falling back to `year` when no full date is set.
+  // Refresh Lens still yields a clean deck. `suggested` follows the slate's own
+  // `rank`, the order that spreads the deck across branches, and stays the
+  // default because a sort by raw score leaves small branches behind Show all.
+  // `ranking` is that raw score, DESC. `date` re-sorts by publication date DESC,
+  // falling back to `year` when no full date is set.
   const recommendations = useMemo(() => {
     const visible = allRecommendations.filter(
       (rec) =>
         !dismissedIds.has(rec.id) &&
         rec.user_action !== 'dismiss',
     )
-    if (sort === 'relevance') {
-      return [...visible].sort((a, b) => {
-        const ra = a.rank ?? Number.POSITIVE_INFINITY
-        const rb = b.rank ?? Number.POSITIVE_INFINITY
-        if (ra !== rb) return ra - rb
-        const sa = typeof a.score === 'number' ? a.score : 0
-        const sb = typeof b.score === 'number' ? b.score : 0
-        return sb - sa
-      })
+    const rankOf = (rec: LensRecommendation) => rec.rank ?? Number.POSITIVE_INFINITY
+    const scoreOf = (rec: LensRecommendation) => (typeof rec.score === 'number' ? rec.score : 0)
+    if (sort === 'suggested') {
+      return [...visible].sort((a, b) => rankOf(a) - rankOf(b) || scoreOf(b) - scoreOf(a))
+    }
+    if (sort === 'ranking') {
+      return [...visible].sort((a, b) => scoreOf(b) - scoreOf(a) || rankOf(a) - rankOf(b))
     }
     const dateKey = (rec: LensRecommendation): string => {
       const direct = rec.paper?.publication_date ?? ''
@@ -1380,13 +1392,14 @@ export function DiscoveryPage() {
             </>
           }
           sort={{
-            label: sort === 'relevance' ? 'Ranking' : 'Recent',
-            title:
-              sort === 'relevance'
-                ? 'Currently sorted by lens ranking — switch to recent'
-                : 'Currently sorted by recent — switch to lens ranking',
-            ariaLabel: `Sort by ${sort === 'relevance' ? 'recent' : 'relevance'}`,
-            onToggle: () => setSort(sort === 'relevance' ? 'recent' : 'relevance'),
+            value: sort,
+            ariaLabel: 'Discovery sort order',
+            onChange: (value) => setSort(value as DiscoverySort),
+            options: [
+              { value: 'suggested', label: 'Suggested', icon: Sparkles, title: 'The order the lens suggests, spread across its branches' },
+              { value: 'ranking', label: 'Ranking', icon: ArrowDownWideNarrow, title: 'Highest score first' },
+              { value: 'date', label: 'Date', icon: CalendarDays, title: 'Newest first' },
+            ],
           }}
           count={recommendations.length}
           view={{
