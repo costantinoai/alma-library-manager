@@ -145,62 +145,6 @@ def apply_capture_message_action(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get(
-    "/status",
-    summary="Inbox capture status (pure read)",
-    description=(
-        "Whether any delivery channel is configured, how many papers are "
-        "waiting in the Inbox, and how many captured messages failed to "
-        "resolve and need a human. Never writes."
-    ),
-)
-def inbox_status(
-    db: sqlite3.Connection = Depends(get_db),
-    _user: dict = Depends(get_current_user),
-):
-    from alma.api.helpers import table_exists
-    from alma.application.library import INBOX_STATUS
-
-    # Channel discovery is import-safe and self-gating: an unconfigured
-    # channel is simply absent, not an error.
-    try:
-        from alma.services.inbox_channels import available_channels
-
-        channels = [channel.name for channel in available_channels()]
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Inbox channel discovery failed: %s", exc)
-        channels = []
-
-    waiting = int(
-        db.execute("SELECT COUNT(*) AS c FROM papers WHERE status = ?", (INBOX_STATUS,)).fetchone()[
-            "c"
-        ]
-        or 0
-    )
-
-    unresolved = 0
-    last_captured_at = None
-    if table_exists(db, "inbox_messages"):
-        unresolved = int(
-            db.execute(
-                """SELECT COUNT(*) AS c FROM inbox_messages
-                   WHERE outcome IN ('unresolved', 'error')
-                     AND archived_at IS NULL"""
-            ).fetchone()["c"]
-            or 0
-        )
-        row = db.execute("SELECT MAX(created_at) AS last FROM inbox_messages").fetchone()
-        last_captured_at = row["last"] if row else None
-
-    return {
-        "configured": bool(channels),
-        "channels": channels,
-        "waiting": waiting,
-        "needs_attention": unresolved,
-        "last_captured_at": last_captured_at,
-    }
-
-
 @router.post(
     "/sweep",
     summary="Check capture channels now",

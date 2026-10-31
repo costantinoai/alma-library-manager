@@ -1,17 +1,11 @@
 """Canonical topic identity and synonym deduplication.
 
 Normalizes raw topic strings from OpenAlex into canonical forms, groups
-synonyms together, and optionally uses AI embeddings to propose additional
-merges.  The deterministic pass (``build_canonical_topics``) handles:
+synonyms together.  The deterministic pass (``build_canonical_topics``) handles:
 
 - Unicode NFKD normalisation + lowercase + punctuation stripping
 - Acronym expansion via a built-in dictionary
 - Exact-match grouping of normalized forms
-- Token-overlap similarity for fuzzy merge candidates
-
-The optional AI pass (``find_ai_merge_candidates``) uses the configured
-embedding provider to compute cosine similarity between canonical topics
-and surface near-duplicates for manual review.
 """
 
 from __future__ import annotations
@@ -265,140 +259,9 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
 # ============================================================================
 
 
-def find_similar_topics(
-    conn: sqlite3.Connection,
-    threshold: float = 0.85,
-) -> list[dict]:
-    """Find pairs of canonical topics with high token-overlap similarity.
-
-    Returns a list of merge candidate dicts:
-    ``{"topic_a": ..., "topic_b": ..., "similarity": float, "source": "token_overlap"}``
-
-    Args:
-        conn: Active SQLite connection.
-        threshold: Minimum Jaccard similarity to include.
-
-    Returns:
-        List of merge candidate dicts, sorted by similarity descending.
-    """
-    _ensure_topic_tables(conn)
-
-    rows = conn.execute(
-        "SELECT topic_id, canonical_name, normalized_name FROM topics"
-    ).fetchall()
-
-    if len(rows) < 2:
-        return []
-
-    topics = [(r["topic_id"], r["canonical_name"], r["normalized_name"]) for r in rows]
-    candidates = []
-
-    # Also check acronym expansions
-    for i in range(len(topics)):
-        for j in range(i + 1, len(topics)):
-            tid_a, name_a, norm_a = topics[i]
-            tid_b, name_b, norm_b = topics[j]
-
-            sim = token_overlap_similarity(norm_a, norm_b)
-
-            # Check if one is an acronym of the other
-            if sim < threshold:
-                expanded_a = _ACRONYM_MAP.get(norm_a, norm_a)
-                expanded_b = _ACRONYM_MAP.get(norm_b, norm_b)
-                if expanded_a != norm_a or expanded_b != norm_b:
-                    sim = max(sim, token_overlap_similarity(expanded_a, expanded_b))
-
-            if sim >= threshold:
-                candidates.append({
-                    "topic_a": {"topic_id": tid_a, "canonical_name": name_a},
-                    "topic_b": {"topic_id": tid_b, "canonical_name": name_b},
-                    "similarity": round(sim, 4),
-                    "source": "token_overlap",
-                })
-
-    candidates.sort(key=lambda c: c["similarity"], reverse=True)
-    return candidates
-
-
 # ============================================================================
 # AI-assisted dedup
 # ============================================================================
-
-
-def find_ai_merge_candidates(
-    conn: sqlite3.Connection,
-    threshold: float = 0.85,
-    max_pairs: int = 50,
-) -> list[dict]:
-    """Use embedding similarity to find additional alias candidates.
-
-    Only proposes merges (does not auto-apply).  Results include
-    ``source='ai'`` and a confidence score.
-
-    Args:
-        conn: Active SQLite connection.
-        threshold: Minimum cosine similarity to propose.
-        max_pairs: Maximum number of pairs to return.
-
-    Returns:
-        List of merge candidate dicts.
-    """
-    _ensure_topic_tables(conn)
-
-    rows = conn.execute(
-        "SELECT topic_id, canonical_name, normalized_name FROM topics"
-    ).fetchall()
-
-    if len(rows) < 2:
-        return []
-
-    # Try to get the embedding provider
-    try:
-        from alma.ai.providers import get_active_provider
-
-        provider = get_active_provider(conn)
-        if provider is None:
-            logger.info("AI provider not configured; skipping AI dedup")
-            return []
-    except Exception as e:
-        logger.info("AI provider not available for topic dedup: %s", e)
-        return []
-
-    topics = [(r["topic_id"], r["canonical_name"], r["normalized_name"]) for r in rows]
-    texts = [t[1] for t in topics]  # use canonical names for embedding
-
-    try:
-        embeddings = provider.embed(texts)
-    except Exception as e:
-        logger.warning("Failed to compute topic embeddings: %s", e)
-        return []
-
-    if not embeddings or len(embeddings) != len(topics):
-        return []
-
-    # Compute pairwise cosine similarities
-    import numpy as np
-
-    emb_matrix = np.array(embeddings)
-    # Normalize
-    norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1, norms)
-    emb_matrix = emb_matrix / norms
-
-    candidates = []
-    for i in range(len(topics)):
-        for j in range(i + 1, len(topics)):
-            sim = float(np.dot(emb_matrix[i], emb_matrix[j]))
-            if sim >= threshold:
-                candidates.append({
-                    "topic_a": {"topic_id": topics[i][0], "canonical_name": topics[i][1]},
-                    "topic_b": {"topic_id": topics[j][0], "canonical_name": topics[j][1]},
-                    "similarity": round(sim, 4),
-                    "source": "ai",
-                })
-
-    candidates.sort(key=lambda c: c["similarity"], reverse=True)
-    return candidates[:max_pairs]
 
 
 # ============================================================================

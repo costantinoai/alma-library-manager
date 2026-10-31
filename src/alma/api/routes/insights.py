@@ -8,7 +8,6 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.api.deps import get_current_user, get_db
@@ -25,7 +24,6 @@ from alma.application.recommendation_outcomes import (
     count_outcomes,
     recommendation_engagement,
 )
-from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
@@ -826,11 +824,6 @@ def _build_cold_start_topic_validation(
         "state_counts": state_counts,
         "recent": recent,
     }
-
-
-class BranchTuningActionRequest(BaseModel):
-    branch_id: str
-    action: str
 
 
 def _build_authors_snapshot(
@@ -2643,35 +2636,6 @@ def get_insights_diagnostics(
         return compose_legacy_diagnostics_payload(db)
     except Exception as exc:  # noqa: BLE001 — surface a 5xx with context
         raise_internal("Failed to compute insights diagnostics", exc)
-
-
-@router.post(
-    "/discovery/branch-action",
-    summary="Apply a branch control action from Insights",
-)
-def apply_branch_action(
-    body: BranchTuningActionRequest,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    try:
-        from alma.application import discovery as discovery_app
-
-        # Foreground write → gate the caller-owns engine call in one unit.
-        result = run_write_unit(
-            db,
-            lambda: discovery_app.apply_branch_control_action(
-                db,
-                branch_id=body.branch_id,
-                action=body.action,
-            ),
-            label="apply_branch_action",
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise_internal("Failed to apply branch action", e)
 
 
 # Side-effect import: registers the per-section diagnostics

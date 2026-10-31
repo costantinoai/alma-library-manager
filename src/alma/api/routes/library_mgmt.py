@@ -296,36 +296,6 @@ def create_backup(
         raise_internal("Failed to create backup", e)
 
 
-@router.post(
-    "/restore/{backup_name}",
-    summary="Restore from backup (refused)",
-    description=(
-        "Always answers 409. Replacing the database while ALMa runs is not safe, "
-        "so a restore is an offline step: see docs/operations/backups.md."
-    ),
-    responses={409: {"description": "ALMa is running; restore offline"}},
-    deprecated=True,
-)
-def restore_backup(
-    backup_name: str,
-    user: dict = Depends(get_current_user),
-):
-    """Refuse: a running ALMa cannot replace its own database.
-
-    Open connections, background writers and the WAL all outlive a file swap,
-    so a live overwrite can corrupt the database it was meant to recover. The
-    route stays so a script that calls it gets this reason, not a 404.
-    """
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail=(
-            f"Backup '{backup_name}' was not restored and nothing changed. ALMa cannot "
-            "replace its database while it is running. Stop ALMa, replace the database "
-            "file, then start it again. Steps: docs/operations/backups.md."
-        ),
-    )
-
-
 @router.delete(
     "/backup/{backup_name}",
     summary="Delete a backup",

@@ -989,19 +989,6 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def rate_paper(db: sqlite3.Connection, paper_id: str, rating: int) -> bool:
-    """Set rating on a paper."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        return False
-    now = utcnow().isoformat()
-    cursor = db.execute(
-        "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-        (rating, now, paper_id),
-    )
-    return cursor.rowcount > 0
-
-
 def rating_signal_value(rating: int | None) -> int:
     """Map star rating to ranking signal."""
     value = int(rating or 0)

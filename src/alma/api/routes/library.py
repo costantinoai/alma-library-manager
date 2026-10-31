@@ -890,30 +890,6 @@ def assign_tag(
     return {"paper_id": root_id, "tag_id": body.tag_id}
 
 
-@router.delete(
-    "/tags/assign/{paper_id}/{tag_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Remove tag from paper",
-)
-def remove_tag_assignment(
-    paper_id: str,
-    tag_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Remove a tag assignment from a paper."""
-    root_id = resolve_action_paper_id(db, paper_id)
-
-    def _persist() -> int:
-        cursor = db.execute(
-            "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
-            (root_id, tag_id),
-        )
-        return cursor.rowcount
-
-    if run_write_unit(db, _persist, label="tag_unassign") == 0:
-        raise HTTPException(status_code=404, detail="Tag assignment not found")
-
-
 # ===================================================================
 # Topics (canonical terms + aliases)
 # ===================================================================

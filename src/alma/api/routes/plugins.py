@@ -79,19 +79,6 @@ def list_plugins(
         ) from exc
 
 
-@router.get(
-    "/{plugin_id}",
-    response_model=PluginInfo,
-    summary="Get integration details",
-)
-def get_plugin(
-    plugin_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-    _user: dict = Depends(get_current_user),
-) -> PluginInfo:
-    return _to_plugin_info(_manifest_or_404(plugin_id).describe(db))
-
-
 class PluginActivation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

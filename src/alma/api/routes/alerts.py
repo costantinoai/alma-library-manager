@@ -417,22 +417,6 @@ def create_alert(
     return AlertResponse(**created)
 
 
-@router.get(
-    "/{alert_id}",
-    response_model=AlertResponse,
-    summary="Get a single alert",
-)
-def get_alert(
-    alert_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Return a single alert by ID with its assigned rules."""
-    row = alerts_app.get_alert(db, alert_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return AlertResponse(**row)
-
-
 @router.put(
     "/{alert_id}",
     response_model=AlertResponse,

@@ -63,8 +63,7 @@ curl http://localhost:8000/api/v1/library-mgmt/info
 curl -o alma-backup.db http://localhost:8000/api/v1/backup/export
 ```
 
-`POST /library-mgmt/restore/{name}` always answers `409` and changes
-nothing. See [Restore](#restore).
+Restoring is offline only: see [Restore](#restore).
 
 ## Offline backup (file copy)
 

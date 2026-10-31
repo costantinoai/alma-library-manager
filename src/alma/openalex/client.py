@@ -432,53 +432,6 @@ def batch_get_author_profiles(
     return result
 
 
-def get_author_metrics(
-    author_openalex_id: str,
-    mailto: str | None = None,
-) -> dict[str, object] | None:
-    """Fetch summary metrics for an author from OpenAlex.
-
-    Retrieves `works_count`, `cited_by_count`, and `summary_stats` (e.g., `h_index`)
-    via the Authors endpoint. Useful to validate our locally-computed totals or
-    to display quick stats without scanning all works.
-
-    Args:
-        author_openalex_id: OpenAlex Author ID; accepts URL or bare key.
-
-    Returns:
-        Dict with keys: id, display_name, works_count, cited_by_count, summary_stats, works_api_url
-        or None on failure.
-    """
-    try:
-        client = get_client()
-        aid = _normalize_openalex_author_id(author_openalex_id)
-        params = {
-            "select": ",".join([
-                "id",
-                "display_name",
-                "works_count",
-                "cited_by_count",
-                "summary_stats",
-                "works_api_url",
-            ])
-        }
-        resp = client.get(f"/authors/{aid}", params=params, timeout=20)
-        if resp.status_code != 200:
-            return None
-        data = resp.json() or {}
-        return {
-            "id": data.get("id"),
-            "display_name": data.get("display_name"),
-            "works_count": data.get("works_count"),
-            "cited_by_count": data.get("cited_by_count"),
-            "summary_stats": data.get("summary_stats"),
-            "works_api_url": data.get("works_api_url"),
-        }
-    except Exception as e:
-        logger.warning(f"OpenAlex author metrics fetch failed for '{author_openalex_id}': {e}")
-        return None
-
-
 def _decode_abstract(inv_index: dict[str, list[int]] | None) -> str | None:
     # OpenAlex stores abstracts as inverted indices; reconstruct string
     if not inv_index:

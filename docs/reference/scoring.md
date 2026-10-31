@@ -771,7 +771,7 @@ for candidates with more than one embedded paper.
 ### `openalex_related` / `s2_related`
 
 Pure cache reads from `author_suggestion_cache`, populated
-asynchronously by `POST /authors/suggestions/refresh-network`.
+asynchronously by the periodic author-suggestion refresh job.
 Each cached row carries a `composite_score` ∈ [0, 1] computed
 externally; the bucket simply rescales:
 

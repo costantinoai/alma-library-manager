@@ -93,7 +93,7 @@ measurement model:
 |---|---|---|
 | `POST /discovery/similar` | `routes/discovery.py` → `discovery/engine.py::discover_similar_with_meta`; OpenAlex related/citing and S2 per-paper recommendations, then a local dense fallback if network yields nothing; cached by selected seed IDs. | Used from Discovery and Library. It can fetch live external papers, but has no lens/branch context, deck snapshot or exposed branch-local outcome. Treat as a distinct similarity tool or route its leads into the shared acquisition/evidence contract. |
 | `POST /discovery/manual-search` and `/manual-search/add` | Background `openalex_manual.search_online_sources` with cross-source query fusion; selected result is added to Library. | Explicit user search, not automatic branch discovery. Frontend API functions exist but no current frontend caller was found. Reuse canonical identity, metadata and action boundaries; do not quietly train a branch from an unscoped manual addition. |
-| `GET /discovery/recommendations`, `/stats`, `/recommendations/{id}/explain`, `/{id}/seen`, and `DELETE /recommendations` | Generic recommendation read/management beside `/lenses/{id}/recommendations`. | Audit which consumer still needs the generic list/clear/seen semantics; the lens route is the Discovery page's deck read. One deck policy and one explanation source should serve both, avoiding divergent visibility or score rules. |
+| `GET /discovery/recommendations/{id}/explain` | Generic recommendation read/management beside `/lenses/{id}/recommendations`. | Audit which consumer still needs the generic list/clear/seen semantics; the lens route is the Discovery page's deck read. One deck policy and one explanation source should serve both, avoiding divergent visibility or score rules. |
 | `GET/PUT /discovery/settings`, branch preview, frontier rebuild, calibration/outcome and channel-yield diagnostics | Settings write through one route; preview and diagnostic reads have their own cached/background jobs. | Maintain a control-to-effect registry. A slider should identify the stage it changes and show the measured result; a diagnostic fit must never silently become an online branch weight. |
 
 The currently exposed API still declares a global channel-yield adaptation
@@ -194,12 +194,8 @@ Prefix `/api/v1/discovery`, file `api/routes/discovery.py`:
 | 721 | POST `/manual-search` | `manual_discovery_search` | Background network job. No frontend caller of `manualDiscoverySearch`. |
 | 806 | POST `/manual-search/add` | `manual_discovery_add` | Writer. No frontend caller of `manualDiscoveryAdd`. |
 | 863 | POST `/impressions` | `record_discovery_impressions` | Visible cards; all or nothing per batch. |
-| 890 | GET `/recommendations` | `list_recommendations` | Generic list beside the lens route. |
-| 916 | POST `/recommendations/{rec_id}/seen` | `mark_seen` | Stamps `seen`; never preference. |
 | 951 | GET `/recommendations/{rec_id}/explain` | `explain_recommendation` | Read. |
-| 998 | DELETE `/recommendations` | `clear_recommendations` | Deletes every row (`application/discovery/lens_crud.py:657`). |
 | 1031 | POST `/frontier/rebuild` | `rebuild_frontier` | The manual acquisition trigger. |
-| 1095 | GET `/stats` | `discovery_stats` | Read. |
 
 Prefix `/api/v1/lenses`, file `api/routes/lenses.py`:
 
@@ -208,11 +204,9 @@ Prefix `/api/v1/lenses`, file `api/routes/lenses.py`:
 | 34 | GET `` | `list_lenses` |
 | 47 | POST `` | `create_lens` |
 | 90 | PUT `/order` | `reorder_lenses` |
-| 104 | GET `/{lens_id}` | `get_lens` |
 | 120 | POST `/{lens_id}/seen` | `mark_lens_seen` |
 | 146 | PUT `/{lens_id}` | `update_lens` |
 | 189 | DELETE `/{lens_id}` | `delete_lens` |
-| 220 | GET `/{lens_id}/signals` | `list_lens_signals` |
 | 238 | GET `/{lens_id}/recommendations` | `list_lens_recommendations` |
 | 263 | GET `/{lens_id}/branches` | `preview_lens_branches` |
 | 289 | POST `/{lens_id}/branches/refresh` | `refresh_lens_branches` |
@@ -226,7 +220,6 @@ Other routes that act on Discovery state:
 | `api/routes/publications.py:798` | PUT `/api/v1/papers/{paper_id}/rate` | Library papers; event has no recommendation context. |
 | `api/routes/publications.py:840` | POST `/api/v1/papers/{paper_id}/undo-feedback` | Per-aspect undo; deletes events. |
 | `api/routes/insights.py:1792` | GET `/api/v1/insights/recommendations` | Engagement read. |
-| `api/routes/insights.py:2648` | POST `/api/v1/insights/discovery/branch-action` | No frontend caller found. |
 | `api/routes/feedback.py:52` | POST `/api/v1/feedback/track` | Direct `feedback_events` writer. |
 | `api/routes/feedback.py:104` | POST `/api/v1/feedback/reset` | Clears learning tables and `user_action`. |
 

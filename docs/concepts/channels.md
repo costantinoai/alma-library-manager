@@ -94,7 +94,6 @@ runtime code.
 | `GET` | `/api/v1/plugins/{id}/config` | Read validated config with masked secrets |
 | `PUT` | `/api/v1/plugins/{id}/config` | Strictly validate and replace config |
 | `POST` | `/api/v1/plugins/{id}/test` | Run the manifest test through Activity |
-| `GET` | `/api/v1/inbox/status` | Core Inbox capture status |
 | `POST` | `/api/v1/inbox/sweep` | Core Inbox action: poll active receive adapters |
 
 The same Pydantic model validates writes and produces `config_schema`; the

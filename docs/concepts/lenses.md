@@ -112,7 +112,7 @@ PUT    /api/v1/lenses/{id}         # update weights / branch controls
 DELETE /api/v1/lenses/{id}         # delete
 
 POST   /api/v1/lenses/{id}/refresh             # Activity-backed refresh
-GET    /api/v1/discovery/recommendations?lens_id={id}
+GET    /api/v1/lenses/{id}/recommendations
 ```
 
 See [REST API](../reference/api.md) for the full set.

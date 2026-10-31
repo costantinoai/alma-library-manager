@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
@@ -28,7 +28,6 @@ from alma.api.models import (
     DiscoveryWeights,
     PaperResponse,
     RecommendationExplainResponse,
-    RecommendationResponse,
     SimilarityRequest,
     SimilarityResponse,
     SimilarityResultItem,
@@ -888,67 +887,6 @@ def record_discovery_impressions(
 
 
 @router.get(
-    "/recommendations",
-    response_model=list[RecommendationResponse],
-    summary="List recommendations",
-)
-def list_recommendations(
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None, description="Filter by title/authors/source key"),
-    semantic: bool = Query(False, description="Reserved semantic filter toggle"),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Return recommendations that have not been dismissed, with pagination."""
-    try:
-        rows = discovery_app.list_recommendations(
-            db,
-            limit=limit,
-            offset=offset,
-            search=search,
-            semantic=semantic,
-        )
-        return [RecommendationResponse(**r) for r in rows]
-    except Exception as e:
-        raise_internal("Failed to list recommendations", e)
-
-
-@router.post(
-    "/recommendations/{rec_id}/seen",
-    summary="Mark recommendation as seen",
-)
-def mark_seen(
-    rec_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Mark a recommendation as seen."""
-    runner = OperationRunner(db)
-
-    def _handler(_ctx):
-        # The adapter is a shared helper now (also reached nested from the
-        # canonical paper-action route), so the caller owns the write unit.
-        out = run_write_unit(
-            db,
-            lambda: discovery_app.mark_recommendation_action(db, rec_id, "seen"),
-            label="discovery_rec_seen",
-        )
-        if out is None:
-            return OperationOutcome(status="noop", message="Recommendation not found", result={"id": rec_id})
-        return OperationOutcome(status="completed", message="Recommendation marked seen", result=out)
-
-    op = runner.run(
-        operation_key=f"discovery.recommendation.seen:{rec_id}",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
-    )
-    if op["status"] == "noop":
-        raise HTTPException(status_code=404, detail="Recommendation not found")
-    return op.get("result") or {"id": rec_id, "seen": True}
-
-
-@router.get(
     "/recommendations/{rec_id}/explain",
     response_model=RecommendationExplainResponse,
     summary="Explain a recommendation's score",
@@ -992,39 +930,6 @@ def explain_recommendation(
         source_key=str(row_data.get("source_key") or row_data.get("lens_id") or ""),
         breakdown=breakdown_response,
         explanation=None,
-    )
-
-
-@router.delete(
-    "/recommendations",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Clear all recommendations",
-)
-def clear_recommendations(
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Delete all recommendations."""
-    runner = OperationRunner(db)
-
-    def _handler(_ctx):
-        # Gated, atomic clear of the recommendation surface.
-        deleted = run_write_unit(
-            db,
-            lambda: discovery_app.clear_recommendations(db),
-            label="discovery_clear_recommendations",
-        )
-        return OperationOutcome(
-            status="completed" if deleted > 0 else "noop",
-            message=f"Cleared {deleted} recommendations" if deleted > 0 else "No recommendations to clear",
-            result={"deleted": deleted},
-        )
-
-    runner.run(
-        operation_key="discovery.recommendations.clear",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
     )
 
 
@@ -1091,16 +996,3 @@ def rebuild_frontier(
         message="Frontier rebuild queued",
     )
 
-
-@router.get(
-    "/stats",
-    summary="Get discovery stats",
-)
-def discovery_stats(
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Return aggregate discovery statistics: total, seen, liked, dismissed."""
-    try:
-        return discovery_app.recommendation_stats(db)
-    except Exception as e:
-        raise_internal("Failed to load discovery stats", e)

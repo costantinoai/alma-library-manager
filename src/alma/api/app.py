@@ -52,7 +52,6 @@ from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
 from alma.api.routes.settings import router as settings_router
 from alma.api.routes.tags import router as tags_router
-from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import (
     record_scheduler_start_failure,
     scheduler_readiness,
@@ -661,7 +660,6 @@ app.include_router(logs_router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])
 app.include_router(ai_router, prefix="/api/v1/ai", tags=["ai"])
 app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
-app.include_router(topics_router, prefix="/api/v1/topics", tags=["topics"])
 app.include_router(feedback_router, prefix="/api/v1/feedback", tags=["feedback"])
 app.include_router(search_router, prefix="/api/v1", tags=["search"])
 app.include_router(backup_router, prefix="/api/v1", tags=["backup"])

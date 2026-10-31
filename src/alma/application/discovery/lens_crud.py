@@ -111,16 +111,6 @@ def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
     return int((row["c"] if row else 0) or 0)
 
 
-def get_lens_last_seen(db: sqlite3.Connection, lens_id: str) -> str | None:
-    """When the user last rendered this lens's recommendation deck."""
-    row = db.execute(
-        "SELECT value FROM discovery_settings WHERE key = ?",
-        (f"{DISCOVERY_LENS_SEEN_PREFIX}{lens_id}",),
-    ).fetchone()
-    value = str((row["value"] if row else "") or "").strip()
-    return value or None
-
-
 def mark_lens_seen(
     db: sqlite3.Connection,
     lens_id: str,
@@ -328,79 +318,6 @@ def reset_settings_to_defaults(db: sqlite3.Connection) -> None:
     """Reset all settings keys to built-in defaults."""
     for key, value in DISCOVERY_SETTINGS_DEFAULTS.items():
         upsert_setting(db, key, value)
-
-
-def list_recommendations(
-    db: sqlite3.Connection,
-    *,
-    limit: int = 50,
-    offset: int = 0,
-    search: str | None = None,
-    semantic: bool = False,
-) -> list[dict]:
-    """List recommendations with optional lexical search, enriched with paper data."""
-    query = [
-        "SELECT r.*,"
-        " p.title AS paper_title,"
-        " p.authors AS paper_authors,"
-        " p.abstract AS paper_abstract,"
-        " p.year AS paper_year,"
-        " p.journal AS paper_journal,"
-        " p.url AS paper_url,"
-        " p.doi AS paper_doi,"
-        " p.publication_date AS paper_publication_date,"
-        " p.cited_by_count AS paper_cited_by_count,"
-        " p.status AS paper_status,"
-        " p.rating AS paper_rating,"
-        " p.openalex_id AS paper_openalex_id,"
-        " p.tldr AS paper_tldr,"
-        " p.influential_citation_count AS paper_influential_citation_count",
-        "FROM recommendations r",
-        "LEFT JOIN papers p ON p.id = r.paper_id",
-        "WHERE 1=1",
-    ]
-    params: list[object] = []
-    if search and search.strip():
-        pattern = f"%{search.strip()}%"
-        query.append("AND (p.title LIKE ? OR p.authors LIKE ? OR r.paper_id LIKE ?)")
-        params.extend([pattern, pattern, pattern])
-    if semantic:
-        # Semantic filtering is not implemented in phase-6 application layer.
-        # Keep deterministic lexical behavior.
-        pass
-    query.append(
-        "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
-        "AND COALESCE(TRIM(p.reading_status), '') = '' "
-        f"AND {standalone_paper_sql('p')} "
-        "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
-    )
-    params.extend([limit, offset])
-    rows = db.execute(" ".join(query), params).fetchall()
-    # Read-time logical-duplicate safety net (mirrors the Feed inbox). Rows are
-    # ranked score DESC, so keep the FIRST occurrence of each (year + normalized
-    # title) and drop lower-ranked twins — the v0.19.0 duplicate-identity
-    # regression surfaced the same paper under two paper_ids. canonical_paper_filter
-    # already hides rows the background collapse merged; this covers the window
-    # before it runs. Strong-id conflicts (distinct DOIs / openalex_ids) never fold.
-    from alma.core.utils import logical_dup_signature, strong_identifiers_conflict
-
-    deduped: list[sqlite3.Row] = []
-    seen: dict[str, dict] = {}
-    for r in rows:
-        sig = logical_dup_signature(r["paper_title"], r["paper_year"])
-        keeper = seen.get(sig) if sig is not None else None
-        if keeper is not None and not strong_identifiers_conflict(
-            incoming_doi=r["paper_doi"],
-            incoming_openalex_id=r["paper_openalex_id"],
-            candidate_doi=keeper["doi"],
-            candidate_openalex_id=keeper["openalex_id"],
-        ):
-            continue
-        if sig is not None:
-            seen[sig] = {"doi": r["paper_doi"], "openalex_id": r["paper_openalex_id"]}
-        deduped.append(r)
-    refresh_window = latest_discovery_refresh_window(db)
-    return [_normalize_recommendation(dict(r), refresh_window) for r in deduped]
 
 
 def mark_recommendation_action(
@@ -649,59 +566,6 @@ def _paper_dismissal_scores(rows: list[sqlite3.Row]) -> dict[str, float]:
             )
         scores[paper_id] = score
     return scores
-
-
-def clear_recommendations(db: sqlite3.Connection) -> int:
-    """Delete all recommendations and return deleted count."""
-    count_row = db.execute("SELECT COUNT(*) AS c FROM recommendations").fetchone()
-    total = int((count_row["c"] if count_row else 0) or 0)
-    db.execute("DELETE FROM recommendations")
-    return total
-
-
-def recommendation_stats(db: sqlite3.Connection) -> dict:
-    """Aggregate recommendation stats.
-
-    The ``actioned`` count is ``SUM(user_action IS NOT NULL)`` — the number
-    of recommendations where the user has taken an explicit action (save,
-    like, love, dismiss). It was previously named ``seen``, which wrongly
-    implied "viewed / impression count"; those are not recorded here.
-    """
-    row = db.execute(
-        f"""
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN r.user_action IS NOT NULL THEN 1 ELSE 0 END) AS actioned,
-            SUM(CASE WHEN r.user_action = 'save' THEN 1 ELSE 0 END) AS saved,
-            SUM(CASE WHEN r.user_action = 'like' THEN 1 ELSE 0 END) AS liked,
-            SUM(CASE WHEN r.user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed
-        FROM recommendations r
-        JOIN papers p ON p.id = r.paper_id
-        WHERE {standalone_paper_sql('p')}
-        """
-    ).fetchone()
-    return {
-        "total": int((row["total"] if row else 0) or 0),
-        "actioned": int((row["actioned"] if row else 0) or 0),
-        "saved": int((row["saved"] if row else 0) or 0),
-        "liked": int((row["liked"] if row else 0) or 0),
-        "dismissed": int((row["dismissed"] if row else 0) or 0),
-    }
-
-
-def get_recommendation(db: sqlite3.Connection, rec_id: str) -> dict | None:
-    """Get one recommendation row."""
-    row = db.execute(
-        f"""
-        SELECT r.*
-        FROM recommendations r
-        JOIN papers p ON p.id = r.paper_id
-        WHERE r.id = ?
-          AND {standalone_paper_sql('p')}
-        """,
-        (rec_id,),
-    ).fetchone()
-    return _normalize_recommendation(dict(row)) if row else None
 
 
 def list_lenses(
@@ -1325,45 +1189,6 @@ def delete_lens(db: sqlite3.Connection, lens_id: str) -> bool:
     """Delete one lens."""
     cursor = db.execute("DELETE FROM discovery_lenses WHERE id = ?", (lens_id,))
     return cursor.rowcount > 0
-
-
-def list_lens_signals(
-    db: sqlite3.Connection,
-    lens_id: str,
-    *,
-    limit: int = 100,
-) -> list[dict]:
-    """List captured lens-specific user signals."""
-    rows = db.execute(
-        """
-        SELECT
-            ls.id,
-            ls.lens_id,
-            ls.paper_id,
-            ls.signal_value,
-            ls.source,
-            ls.created_at,
-            p.title AS paper_title
-        FROM lens_signals ls
-        LEFT JOIN papers p ON p.id = ls.paper_id
-        WHERE ls.lens_id = ?
-        ORDER BY ls.created_at DESC
-        LIMIT ?
-        """,
-        (lens_id, limit),
-    ).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "lens_id": r["lens_id"],
-            "paper_id": r["paper_id"],
-            "paper_title": r["paper_title"],
-            "signal_value": int(r["signal_value"] or 0),
-            "source": r["source"] or "user",
-            "created_at": r["created_at"],
-        }
-        for r in rows
-    ]
 
 
 def list_lens_recommendations(
