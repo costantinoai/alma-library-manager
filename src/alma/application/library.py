@@ -1169,9 +1169,10 @@ def sync_surface_resolution(
 
 # Which feedback actions belong to which toggle dimension. Used so an undo
 # deletes only the signal events for the aspect being toggled off.
-_MEMBERSHIP_ACTIONS = ("add", "save", "remove", "dismiss")
-_RATING_ACTIONS = ("like", "love", "dislike", "rate")
 _SAVE_ACTIONS = ("add", "save")
+_LEAVE_ACTIONS = ("remove", "dismiss")
+_MEMBERSHIP_ACTIONS = (*_SAVE_ACTIONS, *_LEAVE_ACTIONS)
+_RATING_ACTIONS = ("like", "love", "dislike", "rate")
 UNDO_ASPECTS = ("membership", "rating", "reading", "all")
 
 
@@ -1195,15 +1196,17 @@ def _delete_feedback_actions(
 def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
     """The rating a Save replaced, or None when there is nothing of Save's to undo.
 
-    Read from the feedback events, so call it before they are deleted. The
-    first Save of the current stint holds the rating from before it; a repeated
-    Save would only report 3. None in three cases: no Save is on record; the Save
+    Read from the feedback events, so call it before they are deleted. A
+    Remove or Dismiss event ends a save cycle, so only the events after the last
+    one count: an older cycle neither chooses the value nor blocks it. The first
+    Save of the current cycle holds the rating from before it; a repeated Save
+    would only report 3. None in three cases: this cycle has no Save; that Save
     is older than ``previous_rating``, so the old rating is lost; or the rating
     no longer is the one Save left, because the user rated the paper since.
     """
     if not _table_exists(db, "feedback_events"):
         return None
-    actions = (*_SAVE_ACTIONS, *_RATING_ACTIONS)
+    actions = (*_MEMBERSHIP_ACTIONS, *_RATING_ACTIONS)
     placeholders = ", ".join("?" for _ in actions)
     events = db.execute(
         f"""
@@ -1217,6 +1220,11 @@ def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
         """,
         (paper_id, *actions),
     ).fetchall()
+    cycle_start = max(
+        (i + 1 for i, event in enumerate(events) if event["action"] in _LEAVE_ACTIONS),
+        default=0,
+    )
+    events = events[cycle_start:]
     saves = [i for i, event in enumerate(events) if event["action"] in _SAVE_ACTIONS]
     if not saves or events[saves[0]]["previous_rating"] is None:
         return None
