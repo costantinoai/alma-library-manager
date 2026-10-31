@@ -47,6 +47,7 @@ from typing import Any
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import commit_unless_gated, write_section
 from alma.core.operations.batch_outcome import batch_outcome
+from alma.core.paper_groups import is_standalone_paper
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     canonical_lookup_doi,
@@ -1408,7 +1409,7 @@ def _ensure_authorship_row(
     """Insert a `publication_authors` row linking this paper to the author."""
 
     oid = str(openalex_id or "").strip()
-    if not oid:
+    if not oid or not is_standalone_paper(conn, paper_id):
         return
     # Prefer the structured authorships entry (it carries the correct
     # display_name for THIS author as listed on THIS paper, which may

@@ -19,6 +19,7 @@ from typing import Any
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
 from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
+from alma.core.paper_groups import is_standalone_paper
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
@@ -3463,7 +3464,7 @@ def enqueue_pending_hydration(
         "SELECT id, openalex_id, doi, semantic_scholar_id, title, abstract FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone()
-    if row is None:
+    if row is None or not is_standalone_paper(conn, paper_id):
         return False
     has_oa = bool(str(row["openalex_id"] or "").strip())
     has_doi = bool(str(row["doi"] or "").strip())

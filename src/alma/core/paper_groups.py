@@ -173,6 +173,23 @@ def resolve_paper_root_id(
     return str(paper_id)
 
 
+def is_standalone_paper(conn: sqlite3.Connection, paper_id: str) -> bool:
+    """Whether this row is a paper in its own right, by the one read gate.
+
+    A merged version or a component is inert: writers skip it, or the repair
+    deletes what they wrote and the next refresh writes it again.
+    """
+    # Local import: `core.sql_helpers` imports `core.components`, which imports
+    # THIS module.
+    from alma.core.sql_helpers import standalone_paper_sql
+
+    row = conn.execute(
+        f"SELECT {standalone_paper_sql('p')} AS standalone FROM papers p WHERE p.id = ?",
+        (paper_id,),
+    ).fetchone()
+    return bool(row is not None and row[0])
+
+
 def resolve_action_paper_id(conn: sqlite3.Connection, paper_id: str) -> str | None:
     """Resolve a UI/action id to a standalone root; reject an orphan component."""
     root_id = resolve_paper_root_id(conn, paper_id, strict=False)
@@ -483,24 +500,32 @@ def _upgrade_root_scalars(
     )
 
 
-def _invalidate_group_caches(conn: sqlite3.Connection, root_id: str) -> int:
-    cleaned = _delete_table_rows(conn, "paper_network_cache", root_id)
-    cleaned += _delete_table_rows(conn, "scoring_cache", root_id)
+def _invalidate_paper_caches(conn: sqlite3.Connection, paper_id: str) -> int:
+    """Discard the per-paper caches keyed on this row."""
+    return _delete_table_rows(conn, "paper_network_cache", paper_id) + _delete_table_rows(
+        conn, "scoring_cache", paper_id
+    )
+
+
+def _discard_group_derived_views(conn: sqlite3.Connection) -> int:
+    """Discard the corpus-wide stored reads that a group change makes wrong.
+
+    These reads do not check fingerprints, and a calibration costs minutes to
+    rebuild, so this runs only for a real change: see `_group_state`. The existing
+    materialized-view workers own rebuilding, never a GET.
+    """
+    cleaned = 0
     try:
         cleaned += max(0, int(conn.execute("DELETE FROM similarity_cache").rowcount or 0))
     except sqlite3.OperationalError:
         pass
-    # These stored reads do not check fingerprints. Group identity changes
-    # their inputs even below count buckets; discard invalid evidence atomically.
-    # Existing materialized-view workers own rebuilding, never a GET.
     try:
         cleaned += max(
             0,
             int(
                 conn.execute(
                     "DELETE FROM materialized_views WHERE view_key IN "
-                    "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield', "
-                    "'discovery:channel_yield')"
+                    "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield')"
                 ).rowcount
                 or 0
             ),
@@ -508,6 +533,27 @@ def _invalidate_group_caches(conn: sqlite3.Connection, root_id: str) -> int:
     except sqlite3.OperationalError:
         pass
     return cleaned
+
+
+def _group_state(conn: sqlite3.Connection, paper_ids: Iterable[str]) -> list[tuple[Any, ...]]:
+    """What the group means to a reader: who its root is and what the user said.
+
+    Stored views read these columns. A stray sidecar on an inert child is not in
+    them, because no reader sees that row, so clearing one must leave the views
+    alone.
+    """
+    ids = sorted({str(pid) for pid in paper_ids})
+    if not ids:
+        return []
+    marks = ",".join("?" for _ in ids)
+    return [
+        tuple(row)
+        for row in conn.execute(
+            "SELECT id, canonical_paper_id, parent_paper_id, component_type, "
+            f"status, rating, reading_status FROM papers WHERE id IN ({marks}) ORDER BY id",
+            ids,
+        )
+    ]
 
 
 def _group_is_normalized(
@@ -597,11 +643,17 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
     ``papers`` row; everything that could make it independently interactive is
     removed.  A later authoritative parent link starts from this inert state.
     """
-    cleaned = _clear_subordinate_user_state(conn, paper_id)
+    # What a stored view could have read. Everything else on this row is a stray
+    # sidecar that no reader sees.
+    signal = _clear_subordinate_user_state(conn, paper_id)
+    cleaned = signal
     for table in _ALL_PAPER_SIDECAR_TABLES:
-        cleaned += _delete_table_rows(conn, table, paper_id)
+        deleted = _delete_table_rows(conn, table, paper_id)
+        cleaned += deleted
+        if table == "recommendations":
+            signal += deleted
     try:
-        cleaned += max(
+        deleted = max(
             0,
             int(
                 conn.execute(
@@ -612,10 +664,12 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
                 or 0
             ),
         )
+        cleaned += deleted
+        signal += deleted
     except sqlite3.OperationalError:
         pass
     try:
-        cleaned += max(
+        deleted = max(
             0,
             int(
                 conn.execute(
@@ -626,10 +680,14 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
                 or 0
             ),
         )
+        cleaned += deleted
+        signal += deleted
     except sqlite3.OperationalError:
         pass
     if cleaned:
-        cleaned += _invalidate_group_caches(conn, paper_id)
+        cleaned += _invalidate_paper_caches(conn, paper_id)
+    if signal:
+        cleaned += _discard_group_derived_views(conn)
     return cleaned
 
 
@@ -681,6 +739,7 @@ def absorb_paper_group(
             "skipped": True,
             "reason": "already_merged",
         }
+    state_before = _group_state(conn, rows)
     now = utcnow().isoformat()
     migrated: dict[str, int] = {}
     cleaned = feedback_migrated = preferences_migrated = 0
@@ -736,8 +795,17 @@ def absorb_paper_group(
             )
             versions += 1
 
-    # Recompute all root-derived state after its evidence/user state changed.
-    cleaned += _invalidate_group_caches(conn, root_id)
+    # Recompute root-derived state, and let the corpus-wide views go only when
+    # the group really changed: an absorb that only clears strays must not cost
+    # a calibration rebuild on every run.
+    cleaned += _invalidate_paper_caches(conn, root_id)
+    if (
+        _group_state(conn, rows) != state_before
+        or feedback_migrated
+        or preferences_migrated
+        or migrated.get("recommendations")
+    ):
+        cleaned += _discard_group_derived_views(conn)
     return {
         "skipped": False,
         "loser_id": loser_id,

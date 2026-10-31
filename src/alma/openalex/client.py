@@ -21,6 +21,7 @@ from alma.core.db_write import write_section
 from alma.core.paper_groups import (
     classify_preprint_source,
     is_component_row,
+    is_standalone_paper,
     settle_new_paper_group,
 )
 from alma.core.paper_updates import fill_only_update_paper
@@ -690,13 +691,19 @@ def upsert_work_sidecars(
     authorships: list[dict] | None = None,
     referenced_works: list[str] | None = None,
 ) -> dict[str, int]:
-    """Persist structured per-paper enrichment sidecars when available."""
+    """Persist structured per-paper enrichment sidecars when available.
+
+    A merged version or component gets none: a monitor re-delivers those works on
+    every refresh, and the group repair would delete the rows again.
+    """
     summary = {
         "topics": 0,
         "institutions": 0,
         "authorships": 0,
         "references": 0,
     }
+    if not is_standalone_paper(conn, paper_id):
+        return summary
     if topics is not None:
         _upsert_topics(conn, paper_id, topics)
         summary["topics"] = len(topics or [])
@@ -913,17 +920,21 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
             reason="openalex_component_ingest",
         )
 
+    delivered_id = str(paper_id)
     paper_id = settle_new_paper_group(
-        conn, str(paper_id), doi=None, reason="openalex_ingest"
+        conn, delivered_id, doi=None, reason="openalex_ingest"
     )
-    upsert_work_sidecars(
-        conn,
-        paper_id,
-        topics=topics,
-        institutions=institutions,
-        authorships=authorships,
-        referenced_works=referenced_works,
-    )
+    # A re-delivered preprint describes the preprint: its topics and references
+    # must not replace those of the published root it resolved to.
+    if paper_id == delivered_id:
+        upsert_work_sidecars(
+            conn,
+            paper_id,
+            topics=topics,
+            institutions=institutions,
+            authorships=authorships,
+            referenced_works=referenced_works,
+        )
 
     try:
         from alma.services.corpus_rehydrate import enqueue_pending_hydration
