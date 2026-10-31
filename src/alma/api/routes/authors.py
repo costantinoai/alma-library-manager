@@ -58,6 +58,7 @@ from alma.core.resolution import (
     resolve_paper_openalex_work,
     summarize_author_resolution,
 )
+from alma.core.scholar_access import ScholarIntent, scholarly_client
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
@@ -723,11 +724,15 @@ def _find_existing_author_row(
     return None
 
 
-def _resolve_scholar_candidates_from_local(author_name: str, sample_titles: list[str]) -> list[dict]:
+def _resolve_scholar_candidates_from_local(
+    author_name: str,
+    sample_titles: list[str],
+    *,
+    intent: ScholarIntent,
+) -> list[dict]:
     """Best-effort Scholar candidate resolution from name + sample titles."""
-    try:
-        from scholarly import scholarly as _sch
-    except Exception:
+    _sch = scholarly_client(intent)
+    if _sch is None:
         return []
 
     name = (author_name or "").strip()
@@ -813,12 +818,10 @@ def _resolve_scholar_candidates(
     )
 
     from_local: list[dict] = []
-    if mode == "manual":
-        if settings["scholar_scrape_manual_enabled"]:
-            from_local = _resolve_scholar_candidates_from_local(author_name, sample_titles)
-    elif mode == "auto":
-        if settings["scholar_scrape_auto_enabled"]:
-            from_local = _resolve_scholar_candidates_from_local(author_name, sample_titles)
+    if mode in ("auto", "manual"):
+        from_local = _resolve_scholar_candidates_from_local(
+            author_name, sample_titles, intent=mode
+        )
 
     return _merge_scholar_candidates(from_api, from_local)
 
@@ -3425,7 +3428,7 @@ def update_author_type(
 )
 def resolve_openalex_from_scholar(req: ResolveOpenAlexRequest, user: dict = Depends(get_current_user)):
     try:
-        cands = _resolve_oa(req.scholar_id)
+        cands = _resolve_oa(req.scholar_id, intent="manual")
         # Normalize response shape for UI
         for c in cands:
             c["openalex_id"] = _norm_oaid(c.get("openalex_id") or c.get("id") or "")

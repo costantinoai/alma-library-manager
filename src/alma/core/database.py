@@ -10,15 +10,8 @@ import os
 import shutil
 import sqlite3
 
+from alma.core.scholar_access import scholarly_client
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
-
-# Scholarly is optional (used only for Google Scholar backend). Avoid importing
-# it as a hard dependency at module import time to keep OpenAlex-only flows
-# working without the package installed.
-try:
-    from scholarly import scholarly  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    scholarly = None
 
 logger = logging.getLogger(__name__)
 
@@ -255,9 +248,11 @@ def add_new_author_to_json(authors_path: str, scholar_id: str) -> dict:
     logger.info(f"Adding author ID {scholar_id} to {authors_path}.")
     conn = _init_authors_db(authors_path)
     try:
+        scholarly = scholarly_client("manual")
         if scholarly is None:
             raise RuntimeError(
-                "Google Scholar backend not available: 'scholarly' package is not installed."
+                "Google Scholar is not available: it needs the 'scholarly' package, "
+                "manual Scholar lookup turned on in Settings, and network access."
             )
         try:
             author_fetched = scholarly.search_author_id(scholar_id)
