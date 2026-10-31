@@ -6,7 +6,7 @@ import logging.config
 import numbers
 from typing import Any
 
-from alma.core.redaction import redact_sensitive_text
+from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 
 # Uvicorn keeps its own handlers and does not propagate, so a traceback from
 # "Exception in ASGI application" never reaches the root console handler.
@@ -18,6 +18,22 @@ def _safe_arg(arg: Any) -> Any:
     if arg is None or isinstance(arg, numbers.Number):
         return arg
     return redact_sensitive_text(str(arg))
+
+
+def _rendered(record: logging.LogRecord) -> str:
+    """The record's message with its args filled in, redacted.
+
+    Dict args go through key-based redaction first, because `%(password)s` renders
+    to a bare value that no text pattern can recognize. A malformed logger call
+    must not fall through unredacted, so it keeps its parts instead of raising.
+    """
+    args = redact_sensitive_data(record.args) if isinstance(record.args, dict) else record.args
+    template = str(record.msg)
+    try:
+        text = template % args if args else template
+    except (TypeError, ValueError, KeyError):
+        text = f"{template} {args}"
+    return redact_sensitive_text(text)
 
 
 class RedactSecretsFilter(logging.Filter):
@@ -34,10 +50,10 @@ class RedactSecretsFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if record.args and record.name.startswith("uvicorn"):
+            if isinstance(record.args, tuple) and record.args and record.name.startswith("uvicorn"):
                 record.args = tuple(_safe_arg(arg) for arg in record.args)
             else:
-                record.msg = redact_sensitive_text(record.getMessage())
+                record.msg = _rendered(record)
                 record.args = None
             if record.exc_info and not record.exc_text:
                 record.exc_text = logging.Formatter().formatException(record.exc_info)
