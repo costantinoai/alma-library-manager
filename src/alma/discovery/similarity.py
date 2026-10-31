@@ -16,7 +16,7 @@ import logging
 import re
 import sqlite3
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1061,50 +1061,15 @@ def compute_embedding_centroid(
 
 # Rows of N similarities held in memory at once by `select_representatives`.
 _COVERAGE_BLOCK_ROWS = 1024
-# Candidates re-evaluated together after a pick. A batch costs less than the
-# same rows one at a time, and most picks are settled by the first one.
-_COVERAGE_REFRESH_ROWS = 32
-# A float32 pairwise sum of n terms near 1 is off by at most about 14 eps per
-# term in the worst case. A gain subtracts two such sums, and its bound and its
-# current value each carry that error: 56 eps, rounded up.
-_GAIN_ROUNDING_EPS = 64
 
 
-def _similarity_reader(matrix: numpy.ndarray) -> Callable[[list[int]], numpy.ndarray]:
-    """A reader of cosine rows that holds no more than one block between calls.
-
-    Which candidate wins a near-tie depends on the last bits of these values,
-    and BLAS rounds a product differently by its shape. ``matrix @ matrix.T`` and
-    a product of a few rows agree bit for bit from about 1,000 vectors up (2,112
-    shapes checked, OpenBLAS 0.3.23), and not below, so a set that fits in one
-    block is computed whole. numpy sends a lone row through ``gemv``, so it is
-    doubled to stay on the path of every other block.
-    """
-    if len(matrix) <= _COVERAGE_BLOCK_ROWS:
-        whole = matrix @ matrix.T
-        return lambda rows: whole[rows]
-
-    def read(rows: list[int]) -> numpy.ndarray:
-        return (matrix[rows * 2 if len(rows) == 1 else rows] @ matrix.T)[: len(rows)]
-
-    return read
-
-
-def _coverage_gains(
-    read_rows: Callable[[list[int]], numpy.ndarray],
-    rows: list[int],
-    cover: numpy.ndarray,
-) -> list[float]:
-    """How much each of ``rows`` would raise the coverage, one block at a time.
-
-    float32 on purpose: the picks are defined by these rounded values, and
-    summing in float64 changes which of two near-equal candidates wins.
-    """
-    total = cover.sum()
+def _coverage_gains(matrix: numpy.ndarray, rows: list[int], cover: numpy.ndarray) -> list[float]:
+    """How much each of ``rows`` would raise the coverage, one block at a time."""
+    total = cover.sum(dtype=numpy.float64)
     gains: list[float] = []
     for start in range(0, len(rows), _COVERAGE_BLOCK_ROWS):
-        block = read_rows(rows[start : start + _COVERAGE_BLOCK_ROWS])
-        gains.extend((numpy.maximum(block, cover).sum(axis=1) - total).tolist())
+        block = matrix[rows[start : start + _COVERAGE_BLOCK_ROWS]] @ matrix.T
+        gains.extend((numpy.maximum(block, cover).sum(axis=1, dtype=numpy.float64) - total).tolist())
     return gains
 
 
@@ -1114,15 +1079,14 @@ def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[num
     Each pick maximises the total gain in "how similar is every seed to its
     nearest chosen exemplar", so every theme in the set earns an exemplar in
     proportion to how much of the set it explains, and an isolated outlier
-    (which covers only itself) comes last. Deterministic for a given order, and
-    a tie goes to the lowest index. Cosine on unit vectors; ``limit >=
-    len(vectors)`` returns them all.
+    (which covers only itself) comes last. Deterministic for a given order.
+    Cosine on unit vectors; ``limit >= len(vectors)`` returns them all.
 
     Every vector takes part, so the cost must stay linear in memory: a Library
     of 25,000 papers would need 5 GB for one N x N similarity matrix. Lazy greedy
     needs no such matrix. A candidate's gain can only shrink as coverage grows
     (the objective is submodular), so its gain from an earlier pick bounds its
-    gain now and only the candidates that could still win are evaluated again.
+    gain now, and only candidates that could still win are evaluated again.
     Memory is the N x d matrix plus one block of at most 1,024 rows.
     """
     n = len(vectors)
@@ -1130,32 +1094,21 @@ def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[num
         return list(vectors)
     matrix = numpy.stack(vectors, dtype=numpy.float32)
     cover = numpy.zeros(n, dtype=numpy.float32)
-    # Rounding in the float32 sums can lift a gain above its bound, so a bound
-    # only rules a candidate out when it falls short by more than that much.
-    slack = _GAIN_ROUNDING_EPS * float(numpy.finfo(numpy.float32).eps) * n
-
-    read_rows = _similarity_reader(matrix)
     bounds = [
         (-gain, index)
-        for index, gain in enumerate(_coverage_gains(read_rows, list(range(n)), cover))
+        for index, gain in enumerate(_coverage_gains(matrix, list(range(n)), cover))
     ]
     heapq.heapify(bounds)
     chosen: list[int] = []
     for _ in range(int(limit)):
-        # Both heaps sort by (-gain, index): largest gain, then lowest index.
-        fresh: list[tuple[float, int]] = []
-        while bounds and (not fresh or bounds[0][0] <= fresh[0][0] + slack):
-            rows = [
-                heapq.heappop(bounds)[1]
-                for _ in range(min(_COVERAGE_REFRESH_ROWS, len(bounds)))
-            ]
-            for index, gain in zip(rows, _coverage_gains(read_rows, rows, cover)):
-                heapq.heappush(fresh, (-gain, index))
-        _, pick = heapq.heappop(fresh)
-        chosen.append(pick)
-        cover = numpy.maximum(cover, read_rows([pick])[0])
-        for entry in fresh:
-            heapq.heappush(bounds, entry)
+        while True:
+            _, index = heapq.heappop(bounds)
+            gain = _coverage_gains(matrix, [index], cover)[0]
+            if not bounds or gain >= -bounds[0][0]:
+                break
+            heapq.heappush(bounds, (-gain, index))
+        chosen.append(index)
+        cover = numpy.maximum(cover, matrix[index] @ matrix.T)
     return [vectors[i] for i in chosen]
 
 
