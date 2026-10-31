@@ -321,8 +321,13 @@ def startup(conn: sqlite3.Connection) -> None:
         if key not in raw:
             resolved[key] = bool(addon.default_enabled or addon.has_user_data(conn))
     if resolved:
-        update_settings(resolved)
-        logger.info("Add-on first-run switches: %s", resolved)
+        try:
+            update_settings(resolved)
+            logger.info("Add-on first-run switches: %s", resolved)
+        except OSError as exc:
+            # An unwritable settings file already runs on in-memory defaults; it
+            # must not stop the app. An absent switch reads as off.
+            logger.error("Could not store add-on switches %s: %s", resolved, exc)
     for addon in enabled():
         try:
             ensure_schema(conn, addon.id)
