@@ -1,3 +1,4 @@
+import type { BatchOutcome } from '@/lib/activity'
 import { repairDisplayText } from '@/lib/utils'
 
 const BASE_URL = '/api/v1'
@@ -344,6 +345,7 @@ export interface MaintenanceLastRun {
   processed?: number | null
   total?: number | null
   duration_seconds?: number | null
+  batch?: BatchOutcome | null
 }
 
 /** Estimated time to drain a network-bound op's backlog at the endpoint's rate. */

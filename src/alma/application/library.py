@@ -1023,6 +1023,7 @@ def record_paper_feedback(
     source_surface: str,
     recommendation_id: str | None = None,
     discovery_provenance: dict[str, str | int] | None = None,
+    previous_rating: int | None = None,
 ) -> str | None:
     """Record a paper feedback event through the one feedback engine.
 
@@ -1038,6 +1039,9 @@ def record_paper_feedback(
     engine does NOT commit — the caller owns the transaction (every caller runs
     inside a ``run_write_unit``). Returns the event id, or None when nothing
     was recorded.
+
+    A Save passes ``previous_rating``, the rating it replaced, so that
+    ``undo_paper_feedback`` can restore it.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id or not _table_exists(db, "feedback_events"):
@@ -1055,6 +1059,7 @@ def record_paper_feedback(
             "action": action,
             "rating": rating,
             "signal_value": rating_signal_value(rating),
+            **({"previous_rating": previous_rating} if previous_rating is not None else {}),
         },
         context={
             "surface": source_surface,
@@ -1166,6 +1171,7 @@ def sync_surface_resolution(
 # deletes only the signal events for the aspect being toggled off.
 _MEMBERSHIP_ACTIONS = ("add", "save", "remove", "dismiss")
 _RATING_ACTIONS = ("like", "love", "dislike", "rate")
+_SAVE_ACTIONS = ("add", "save")
 UNDO_ASPECTS = ("membership", "rating", "reading", "all")
 
 
@@ -1186,6 +1192,68 @@ def _delete_feedback_actions(
     )
 
 
+def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
+    """The rating a Save replaced, or None when there is nothing of Save's to undo.
+
+    Read from the feedback events, so call it before they are deleted. The
+    first Save of the current stint holds the rating from before it; a repeated
+    Save would only report 3. None in three cases: no Save is on record; the Save
+    is older than ``previous_rating``, so the old rating is lost; or the rating
+    no longer is the one Save left, because the user rated the paper since.
+    """
+    if not _table_exists(db, "feedback_events"):
+        return None
+    actions = (*_SAVE_ACTIONS, *_RATING_ACTIONS)
+    placeholders = ", ".join("?" for _ in actions)
+    events = db.execute(
+        f"""
+        SELECT lower(json_extract(value, '$.action')) AS action,
+               json_extract(value, '$.rating') AS rating,
+               json_extract(value, '$.previous_rating') AS previous_rating
+        FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+          AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        ORDER BY rowid
+        """,
+        (paper_id, *actions),
+    ).fetchall()
+    saves = [i for i, event in enumerate(events) if event["action"] in _SAVE_ACTIONS]
+    if not saves or events[saves[0]]["previous_rating"] is None:
+        return None
+    if any(event["action"] in _RATING_ACTIONS for event in events[saves[0]:]):
+        return None
+    row = db.execute("SELECT rating FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if row is None or row["rating"] != events[saves[-1]]["rating"]:
+        return None
+    return int(events[saves[0]]["previous_rating"])
+
+
+def _restore_lens_verdicts(db: sqlite3.Connection, paper_id: str, rating: int) -> None:
+    """Give each lens back the verdict a Save overwrote with a zero signal.
+
+    A lens keeps one signal per paper, so a Save at 3 stars replaces that lens's
+    Dislike. When the Save is undone and the rating returns, so does the signal,
+    but only in a lens whose own rating event still stands: the event names it,
+    and a Save elsewhere says nothing about this lens.
+    """
+    signal_value = rating_signal_value(rating)
+    if signal_value == 0:
+        return
+    placeholders = ", ".join("?" for _ in _RATING_ACTIONS)
+    db.execute(
+        f"""
+        UPDATE lens_signals SET signal_value = ?
+        WHERE paper_id = ? AND signal_value = 0 AND lens_id IN (
+            SELECT json_extract(context_json, '$.lens_id')
+            FROM feedback_events
+            WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+              AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        )
+        """,
+        (signal_value, paper_id, paper_id, *_RATING_ACTIONS),
+    )
+
+
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1196,8 +1264,9 @@ def undo_paper_feedback(
     only what that button did"):
 
     - ``membership`` — Save/Saved/hidden: row back to ``tracked`` + delete
-      membership events + reset feed/recommendation resolution. Rating and
-      reading state are left untouched.
+      membership events + reset feed/recommendation resolution. The rating
+      goes back to what it was before the Save (see ``_rating_before_save``);
+      a rating the user set separately and reading state are left untouched.
     - ``rating`` — Like / Love / Dislike: clear ``papers.rating`` + delete the
       like/love/dislike/rate signal events. Membership and reading are kept.
     - ``reading`` — Queue/Queued: clear ``papers.reading_status`` only.
@@ -1217,6 +1286,12 @@ def undo_paper_feedback(
     if aspect in ("membership", "all"):
         status_row = db.execute("SELECT status FROM papers WHERE id = ?", (paper_id,)).fetchone()
         globally_hidden = bool(status_row) and status_row["status"] in (DISMISSED_STATUS, REMOVED_STATUS)
+        rating_before_save = _rating_before_save(db, paper_id)
+        if rating_before_save is not None:
+            db.execute(
+                "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
+                (rating_before_save, now, paper_id),
+            )
         db.execute(
             f"UPDATE papers SET status = '{TRACKED_STATUS}', updated_at = ? "
             f"WHERE id = ? AND status IN (?, ?, ?)",
@@ -1238,6 +1313,8 @@ def undo_paper_feedback(
                 (paper_id,),
             )
         if _table_exists(db, "lens_signals"):
+            if rating_before_save is not None:
+                _restore_lens_verdicts(db, paper_id, rating_before_save)
             db.execute(
                 "DELETE FROM lens_signals WHERE paper_id = ? AND signal_value = 0",
                 (paper_id,),
@@ -1355,6 +1432,7 @@ def apply_corpus_paper_feedback(
             action=normalized_action,
             rating=applied["rating"],
             source_surface=source_surface,
+            previous_rating=applied["previous_rating"] if normalized_action == "add" else None,
         )
     else:
         dismiss_paper(db, root_id)

@@ -30,6 +30,7 @@ import { MetricTile } from '@/components/shared/MetricTile'
 import { AsyncButton, SettingsNumberField } from '@/components/settings/primitives'
 import { EtaHint } from '@/components/shared/EtaHint'
 import { JargonHint } from '@/components/shared/JargonHint'
+import { runDisplayStatus } from '@/lib/activity'
 import { formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import {
   estimateMaintenanceOperation,
@@ -158,6 +159,7 @@ export function RepairCard({
   const attentionDims = sortBySeverity(dims.filter((d) => d.severity !== 'ok'))
   const healthyCount = dims.length - attentionDims.length
   const last = op.last_run
+  const lastStatus = last ? runDisplayStatus(last.status, last.batch) : null
 
   // A thin severity-tinted left spine turns a stack of cards into an instantly
   // scannable triage column — an index tab at the frame, not a saturated fill.
@@ -281,9 +283,15 @@ export function RepairCard({
         </span>
         {last ? (
           <>
-            <StatusBadge tone={runStatusTone(last.status)} size="sm" className="capitalize">
-              {last.status}
+            <StatusBadge tone={runStatusTone(lastStatus)} size="sm" className="capitalize">
+              {lastStatus}
             </StatusBadge>
+            {lastStatus === 'partial' && last.batch ? (
+              <span>
+                {last.batch.failed} of {last.batch.attempted} {last.batch.noun} failed
+                {last.batch.incomplete ? `, ${last.batch.incomplete} incomplete` : ''}
+              </span>
+            ) : null}
             <span>{formatRelativeShort(last.finished_at ?? last.updated_at)}</span>
             {last.duration_seconds != null ? <span>· {last.duration_seconds}s</span> : null}
             {last.trigger_source ? <span>· {last.trigger_source}</span> : null}

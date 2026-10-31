@@ -8,3 +8,4 @@ from datetime import timedelta
 
 TRANSIENT_RETRY_AFTER = timedelta(hours=6)
 UNCHANGED_RECHECK_AFTER = timedelta(days=30)
+WORKS_RECHECK_AFTER = timedelta(days=14)

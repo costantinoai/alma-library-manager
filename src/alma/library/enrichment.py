@@ -20,6 +20,7 @@ from alma.config import get_api_call_delay
 from alma.core.author_names import is_name_suffix as _is_name_suffix
 from alma.core.author_names import parse_author_names as _parse_author_names
 from alma.core.db_write import write_section
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import (
     arxiv_doi,
@@ -780,6 +781,11 @@ def enrich_all_unenriched(
             processed=total,
             total=total,
             message=f"Done: {enriched} enriched, {failed} failed, {skipped} skipped",
+            result={
+                "batch": batch_outcome(
+                    attempted=enriched + failed, failed=failed, noun="papers"
+                )
+            },
         )
         if add_job_log:
             add_job_log(job_id, "Enrichment completed", step="done", data=summary)

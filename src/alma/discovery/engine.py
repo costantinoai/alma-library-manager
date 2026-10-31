@@ -74,14 +74,10 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
-    """Read discovery settings, falling back to defaults when needed."""
+    """Read discovery settings over the built-in defaults."""
     kv: dict[str, str] = dict(DEFAULTS)
-    try:
-        rows = conn.execute("SELECT key, value FROM discovery_settings").fetchall()
-        for r in rows:
-            kv[r["key"]] = r["value"]
-    except sqlite3.OperationalError:
-        pass
+    for r in conn.execute("SELECT key, value FROM discovery_settings").fetchall():
+        kv[r["key"]] = r["value"]
     return kv
 
 
@@ -1571,9 +1567,7 @@ class DiscoveryEngine:
         """Read all rows from the ``discovery_settings`` table.
 
         Returns a flat ``{key: value}`` dict, falling back to class-level
-        ``DEFAULTS`` for any missing keys.  If the table does not exist yet
-        (e.g. in test databases that skip deps.py migration), all defaults
-        are returned.
+        ``DEFAULTS`` for any missing keys.
         """
         return load_settings(conn)
 

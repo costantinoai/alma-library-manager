@@ -239,7 +239,6 @@ Every user action maps to exactly one canonical use-case. Examples:
 | Save an online search result | `alma.application.openalex_manual.save_online_search_result` |
 | Write a paper feedback event | `alma.application.paper_actions.apply_paper_action` |
 | Promote an existing tracked paper into Library | `alma.application.library.add_to_library` (same) |
-| Create a collection-backed lens from a map lasso | `alma.application.map_selection.create_collection_lens` |
 
 Two routes that mean the same thing always call the same helper.
 This is the [one intent per action](../vision.md#one-intent-per-action)
@@ -335,10 +334,6 @@ background jobs share that one writer, so a burst of work can collide as
   `application.paper_actions.apply_paper_action` owns the membership,
   surface-row settlement, and ordinary feedback writes inside one
   `run_write_unit`.
-* **Map selection is one compound transaction** —
-  `application.map_selection.create_collection_lens` re-validates the current
-  Library/Corpus scope, then creates collection, Library promotions,
-  memberships, and collection-backed lens under one `run_write_unit`.
 * **Fetch/write decoupling for network sweeps** — per-item network jobs
   (identity resolution, abstract recovery) run through
   `core.fetch_pipeline`: bounded concurrent fetch pools do the network (no DB

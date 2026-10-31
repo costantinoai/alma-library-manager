@@ -30,6 +30,7 @@ and then deleted; forward code reads only the four current keys.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -41,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import materialized_views as mv
+from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.time import utcnow
 from alma.services import health as health_service
 from alma.services.maintenance_contracts import (
@@ -498,7 +500,15 @@ def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, par
         + (f", {skipped} skipped (already running)" if skipped else "")
     )
     set_job_status(job_id, message=summary)
-    return {"processed": done, "failed": failed, "skipped": skipped, "total": total}
+    return {
+        "processed": done,
+        "failed": failed,
+        "skipped": skipped,
+        "total": total,
+        "message": summary,
+        # Skipped authors were never tried: another job holds them.
+        "batch": batch_outcome(attempted=done + failed, failed=failed, noun="corpora"),
+    }
 
 
 def _run_author_centroids(job_id: str, cap: int, target_paper_ids=None, params=None):
@@ -2011,13 +2021,22 @@ def _task_budget(
     }
 
 
+def _result_batch(result_json: str | None) -> dict[str, Any] | None:
+    """The batch outcome stored in a job's result, when the job reported one."""
+    try:
+        result = json.loads(result_json or "null")
+    except ValueError:
+        return None
+    return result.get("batch") if isinstance(result, dict) else None
+
+
 def _last_run(conn: sqlite3.Connection, operation_key: str) -> dict[str, Any] | None:
     """Most-recent operation_status row for ``operation_key`` (any trigger)."""
     try:
         row = conn.execute(
             """
             SELECT job_id, status, message, error, started_at, finished_at,
-                   updated_at, trigger_source, processed, total
+                   updated_at, trigger_source, processed, total, result_json
             FROM operation_status
             WHERE operation_key = ?
             ORDER BY COALESCE(finished_at, updated_at, started_at) DESC
@@ -2050,6 +2069,8 @@ def _last_run(conn: sqlite3.Connection, operation_key: str) -> dict[str, Any] | 
         "processed": int(row["processed"] or 0) if row["processed"] is not None else None,
         "total": int(row["total"] or 0) if row["total"] is not None else None,
         "duration_seconds": duration_seconds,
+        # Lets the Last run badge say Partial: the status is `completed` by design.
+        "batch": _result_batch(row["result_json"]),
     }
 
 

@@ -12,7 +12,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -54,8 +54,14 @@ from alma.api.routes.search import router as search_router
 from alma.api.routes.settings import router as settings_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
-from alma.api.scheduler import setup_scheduler, shutdown_scheduler
+from alma.api.scheduler import (
+    record_scheduler_start_failure,
+    scheduler_readiness,
+    setup_scheduler,
+    shutdown_scheduler,
+)
 from alma.application.materialized_views import MaterializedViewReadError
+from alma.config import get_db_path
 from alma.core.logging import setup_logging
 from alma.core.network_policy import ExternalAccessError
 from alma.core.sql_helpers import standalone_paper_sql
@@ -108,10 +114,14 @@ async def lifespan(app: FastAPI):
         logger.error("Storage validation failed: %s", e)
         raise
 
+    # A database from a newer ALMa stops startup here, before the first write.
+    from alma.config import migrate_settings_schema, validate_settings_schema
+    from alma.core.migrations import refuse_newer_database
+
+    refuse_newer_database(get_db_path())
+
     # Upgrade and validate the forward-only settings schema before any optional
     # subsystem can read activation/configuration.
-    from alma.config import migrate_settings_schema, validate_settings_schema
-
     migrate_settings_schema()
     validate_settings_schema()
 
@@ -121,22 +131,33 @@ async def lifespan(app: FastAPI):
 
     init_db_schema()
 
+    from alma.api.routes.backup import clear_stale_export_snapshots
+
+    clear_stale_export_snapshots(get_db_path())
+
     logger.info(
         "Integration plugins: %s",
         ", ".join(get_plugin_registry().ids()),
     )
 
-    # Start the scheduler and register its periodic jobs
+    # Start the scheduler and register its periodic jobs. A failure keeps the
+    # process up, so the Library and the logs stay reachable, and reads as 503
+    # on /api/v1/health. Exiting would only turn it into a restart loop.
     try:
         setup_scheduler()
-        # Serve persisted snapshots immediately. A corpus-wide assessment must
-        # not hold application startup (and every HTTP request) behind its work.
-        # Reuse the same background coordinator as mutation/periodic refreshes.
+    except Exception as e:
+        logger.error("Failed to start scheduler: %s", e, exc_info=True)
+        record_scheduler_start_failure(e)
+
+    # Serve persisted snapshots immediately. A corpus-wide assessment must
+    # not hold application startup (and every HTTP request) behind its work.
+    # Reuse the same background coordinator as mutation/periodic refreshes.
+    try:
         from alma.services.health_snapshots import request_refresh
 
         request_refresh(delay_seconds=0)
     except Exception as e:
-        logger.warning(f"Failed to start scheduler: {e}")
+        logger.warning(f"Failed to queue the Health snapshot refresh: {e}")
 
     yield
 
@@ -168,13 +189,16 @@ app = FastAPI(
     The API supports optional authentication via API key:
     - Set the `API_KEY` environment variable to enable authentication
     - Provide the key via `X-API-Key` header or `Bearer` token
-    - If no `API_KEY` is set, all requests are allowed (development mode)
+    - If no `API_KEY` is set, all requests are allowed (the normal mode)
+    - The web app sends no key, so setting `API_KEY` breaks the browser UI
 
     ## Cross-site requests
 
     Whatever the `API_KEY` setting, a browser page on another origin cannot change
-    data: unsafe methods from it get `403`. Add your own address to
-    `ALMA_ALLOWED_ORIGINS`. Requests without an `Origin` header (curl, scripts) pass.
+    data: unsafe methods from it get `403`. A request whose `Host` is not `localhost`,
+    an IP address or a listed address also gets `403`, on every method, which stops
+    DNS rebinding. List your own address in `ALMA_ALLOWED_ORIGINS`. Requests without
+    an `Origin` header (curl, scripts) pass once their `Host` is known.
 
     ## Rate Limiting
 
@@ -226,8 +250,9 @@ app = FastAPI(
 # Middleware
 # ============================================================================
 
-# One list decides both which pages may read responses (CORS) and which may send
-# writes (the origin guard added below, after the request logger).
+# One list decides which pages may read responses (CORS), which may send writes,
+# and which names this server answers to (the origin guard added below, after the
+# request logger). A malformed entry stops startup here, before any migration.
 ALLOWED_ORIGINS = allowed_origins()
 
 app.add_middleware(
@@ -458,33 +483,45 @@ async def api_root():
     "/api/v1/health",
     response_model=HealthResponse,
     summary="Health check",
-    description="Check the health status of the API and its dependencies.",
+    description=(
+        "Readiness of this process. 503 means the database or the required "
+        "scheduler failed. Providers and the internet are not checked."
+    ),
+    responses={503: {"model": HealthResponse, "description": "Database or scheduler failed"}},
     tags=["system"],
 )
-def health_check():
-    """Health check endpoint.
+def health_check(response: Response):
+    """Report whether this process can do its job.
+
+    Only local failures count. Docker and the deploy script act on the status
+    code, so anything outside the process (a provider, the internet, DNS) must
+    never change it: an outage out there would mark a working ALMa unhealthy.
 
     Runs as a sync handler so the SQLite probe goes through the anyio
     threadpool instead of the event loop. A blocked event loop would make
     health checks lie about the rest of the system being responsive.
     """
-    # Check database connection (unified scholar.db)
+    # The file check comes first because connecting would create a missing
+    # database, and reading `papers` proves this is ALMa's database: `SELECT 1`
+    # succeeds on an empty file and never touches the disk.
     database_ok = True
     try:
+        if not get_db_path().is_file():
+            raise FileNotFoundError(get_db_path())
         db = open_db_connection()
         try:
-            db.execute("SELECT 1").fetchone()
+            db.execute("SELECT 1 FROM papers LIMIT 1").fetchone()
         finally:
             db.close()
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         database_ok = False
 
-    # Determine overall status
-    if database_ok:
-        service_status = "healthy"
-    else:
-        service_status = "unhealthy"
+    scheduler = scheduler_readiness()
+    healthy = database_ok and scheduler != "failed"
+    service_status = "healthy" if healthy else "unhealthy"
+    if not healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
     uptime = time.time() - START_TIME
 
@@ -496,6 +533,7 @@ def health_check():
         version=APP_VERSION,
         uptime_seconds=uptime,
         database_ok=database_ok,
+        scheduler=scheduler,
     )
 
 

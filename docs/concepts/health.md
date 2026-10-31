@@ -161,18 +161,19 @@ them as `tracked`, never directly to your Library. Its dimension and pending
 count describe the same population. Zero eligible authors means no seed work;
 the card's Run button is disabled.
 
-**Suggested authors awaiting map placement** (`authors.unplaceable`) already
-have enough papers, but fewer than two have vectors and layout coordinates.
-They appear under observed gaps with vector/layout guidance. Fetching more
+**Suggested authors awaiting semantic placement** (`authors.unplaceable`)
+already have enough papers, but fewer than two have vectors and a place in the
+semantic partition. They appear under observed gaps with vector and partition
+guidance. Fetching more
 papers cannot fix that state and does not keep the seed repair in attention.
-Check vector-fetch and local-embedding eligibility, then rebuild map layouts
-when vectors are available. If no usable vectors are available, an author may
-remain off the map without needing another seed run.
+Check vector-fetch and local-embedding eligibility, then refresh the semantic
+partition when vectors are available. If no usable vectors are available, an
+author may stay unplaced without needing another seed run.
 
 Authors whose source could not supply enough papers are recorded as **tried
 and terminal**, shown separately as `exhausted`, and excluded from pending
 seeding. Neither fetching papers nor local compute guarantees every author can
-be placed on the map.
+be placed in the partition.
 
 ## Observed — no automatic repair
 

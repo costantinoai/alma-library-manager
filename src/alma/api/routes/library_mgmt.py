@@ -1,7 +1,7 @@
 """Library database management API endpoints.
 
-Provides endpoints for inspecting, backing up, restoring, and resetting
-the authors and publications databases.
+Provides endpoints for inspecting, backing up, and resetting the authors
+and publications databases. Restoring is an offline step (see ``restore_backup``).
 
 Backups are written gzip-compressed (``scholar_<ts>.db.gz``) — typically
 2.5–3× smaller than the raw SQLite file. Retention is capped at the
@@ -26,6 +26,7 @@ from alma.api.helpers import raise_internal
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit, write_section
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sqlite_backup import online_sqlite_backup
 from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -88,24 +89,6 @@ def _list_backups() -> list[dict]:
         except OSError:
             continue
     return backups
-
-
-def _online_sqlite_backup(src_path: Path, dst_path: Path) -> None:
-    """Copy ``src_path`` to ``dst_path`` via SQLite's online backup API.
-
-    Unlike ``shutil.copy2``, this captures a transactionally-consistent
-    snapshot even when the live DB is mid-write or has uncheckpointed
-    WAL frames.
-    """
-    src_conn = sqlite3.connect(str(src_path))
-    try:
-        dst_conn = sqlite3.connect(str(dst_path))
-        try:
-            src_conn.backup(dst_conn)
-        finally:
-            dst_conn.close()
-    finally:
-        src_conn.close()
 
 
 def _gzip_file_in_place(src: Path) -> Path:
@@ -176,7 +159,7 @@ def _create_backup() -> dict:
     ) as tmp:
         tmp_path = Path(tmp.name)
     try:
-        _online_sqlite_backup(db_src, tmp_path)
+        online_sqlite_backup(db_src, tmp_path)
         gz_path = _gzip_file_in_place(tmp_path)
         final = backups_path / f"scholar_{timestamp}.db.gz"
         gz_path.rename(final)
@@ -235,23 +218,6 @@ def _resolve_backup_file(backup_name: str) -> Path:
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"Backup '{backup_name}' not found.",
     )
-
-
-def _decompress_to_tmp(gz_path: Path) -> Path:
-    """Decompress a ``.db.gz`` backup into a tmp ``.db`` file in the same dir.
-
-    Caller is responsible for unlinking the returned path.
-    """
-    with tempfile.NamedTemporaryFile(
-        prefix="restore_",
-        suffix=".db",
-        dir=str(gz_path.parent),
-        delete=False,
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    with gzip.open(str(gz_path), "rb") as fin, tmp_path.open("wb") as fout:
-        shutil.copyfileobj(fin, fout, length=1 << 20)
-    return tmp_path
 
 
 # --------------------------------------------------------------------------
@@ -332,42 +298,32 @@ def create_backup(
 
 @router.post(
     "/restore/{backup_name}",
-    summary="Restore from backup",
-    description="Restore the unified database from a previously created backup.",
+    summary="Restore from backup (refused)",
+    description=(
+        "Always answers 409. Replacing the database while ALMa runs is not safe, "
+        "so a restore is an offline step: see docs/operations/backups.md."
+    ),
+    responses={409: {"description": "ALMa is running; restore offline"}},
+    deprecated=True,
 )
 def restore_backup(
     backup_name: str,
     user: dict = Depends(get_current_user),
 ):
-    """Restore the unified database from a named backup.
+    """Refuse: a running ALMa cannot replace its own database.
 
-    Transparently decompresses ``.db.gz`` backups into a tmp file before
-    overwriting the live DB.
+    Open connections, background writers and the WAL all outlive a file swap,
+    so a live overwrite can corrupt the database it was meant to recover. The
+    route stays so a script that calls it gets this reason, not a 404.
     """
-    tmp_decompressed: Path | None = None
-    try:
-        db_backup = _resolve_backup_file(backup_name)
-        db_dst = get_db_path()
-
-        if db_backup.name.endswith(".db.gz"):
-            tmp_decompressed = _decompress_to_tmp(db_backup)
-            shutil.copy2(str(tmp_decompressed), str(db_dst))
-        else:
-            shutil.copy2(str(db_backup), str(db_dst))
-
-        logger.info("Restored from backup file: %s", db_backup.name)
-        return {"success": True, "restored_from": db_backup.name}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise_internal(f"Failed to restore backup '{backup_name}'", e)
-    finally:
-        if tmp_decompressed and tmp_decompressed.exists():
-            try:
-                tmp_decompressed.unlink()
-            except OSError:
-                pass
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"Backup '{backup_name}' was not restored and nothing changed. ALMa cannot "
+            "replace its database while it is running. Stop ALMa, replace the database "
+            "file, then start it again. Steps: docs/operations/backups.md."
+        ),
+    )
 
 
 @router.delete(

@@ -22,16 +22,13 @@ what you keep, **Control** how it runs.
 
 **Explore**
 
-- **Home** — the daily brief. What arrived since midnight, what is waiting
-  in your Inbox and reading list, and a few Signal Lab rounds to tune the
-  ranker while you drink your coffee.
+- **Home** — the daily brief. What arrived since midnight, and what is waiting
+  in your Inbox and reading list.
 - **Feed** — a chronological inbox of new publications from the authors,
   topics, venues and queries you monitor.
 - **Discovery** — papers related to your library that the Feed never saw,
   ranked by one auditable scorer. Every suggestion can show you exactly
   what made its score.
-- **Map** — the whole corpus laid out by meaning. Lasso a region to see
-  what lives there and adopt it as a direction.
 
 **Manage**
 
@@ -54,7 +51,7 @@ what you keep, **Control** how it runs.
 </p>
 <p align="center">
   <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
-  <img src="docs/screenshots/desktop-map.png" alt="Map" width="49%">
+  <img src="docs/screenshots/desktop-health.png" alt="Health" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
@@ -130,13 +127,16 @@ irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/set
 ```
 
 Then open <http://localhost:8000>. To update later, re-run the same
-command — the installer detects an existing install and pulls the latest
-image; your data lives in named volumes, so nothing is lost.
+command — the installer pulls the new image first, keeps your settings in
+`~/alma-docker/.env`, and your data lives in named volumes, so nothing is lost.
 
-> **Other ways to install:** manual `docker run`, the three image
-> flavors (`:latest` / `:latest-gpu` / `:latest-lite`), Docker Compose,
-> auto-updates with Watchtower, and exposing ALMa on your LAN are all
-> covered in the [Docker guide](docs/getting-started/docker.md). For a
+> **More options:** running the same `docker-compose.yml` by hand, the three
+> image flavors (`:stable` / `:stable-gpu` / `:stable-lite`), Watchtower,
+> and exposing ALMa on your LAN are all covered in the
+> [Docker guide](docs/getting-started/docker.md). ALMa has no login: keep
+> it on loopback or a private network, and
+> [never expose it to the open internet](docs/operations/deployment.md).
+> For a
 > [bare-metal Python install](docs/getting-started/installation.md)
 > (development only — not recommended for everyday use), see the
 > installation docs.

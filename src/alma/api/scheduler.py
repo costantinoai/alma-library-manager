@@ -49,6 +49,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from alma.core.concurrency import enter_job_fanout
 from alma.core.db_retry import commit_with_retry
+from alma.core.operations.batch_outcome import settle_batch_fields
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
@@ -83,6 +84,7 @@ def job_admission(operation_key: str) -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 _scheduler: BackgroundScheduler | None = None
+_scheduler_start_error: str | None = None
 _job_meta: dict[str, dict] = {}
 _job_status: dict[str, dict] = {}
 _job_logs: dict[str, collections.deque[dict]] = {}
@@ -1352,6 +1354,25 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+def record_scheduler_start_failure(exc: Exception) -> None:
+    """Remember that startup could not bring the scheduler up, for readiness."""
+    global _scheduler_start_error
+    _scheduler_start_error = str(exc) or type(exc).__name__
+
+
+def scheduler_readiness() -> str:
+    """Say whether background work can run: ``running``, ``disabled`` or ``failed``.
+
+    ``disabled`` is a deliberate ``SCHEDULER_ENABLED=false``. ``failed`` covers a
+    start that raised and a scheduler that is simply not running.
+    """
+    if not _scheduler_enabled():
+        return "disabled"
+    if _scheduler_start_error is None and get_running_scheduler() is not None:
+        return "running"
+    return "failed"
+
+
 def get_running_scheduler() -> BackgroundScheduler | None:
     """Return the existing live scheduler without creating one."""
 
@@ -1853,7 +1874,8 @@ def setup_scheduler() -> None:
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""
-    global _scheduler
+    global _scheduler, _scheduler_start_error
+    _scheduler_start_error = None
     if _scheduler is not None:
         try:
             _scheduler.shutdown(wait=False)
@@ -3049,8 +3071,13 @@ def get_job_logs_page(
 
 
 def set_job_status(job_id: str, **kwargs) -> None:
-    """Merge status information for a job."""
-    kwargs = redact_sensitive_data(kwargs)
+    """Merge status information for a job.
+
+    This is the one write every terminal status crosses, whether a runner
+    stamps it or `schedule_immediate` finalizes it, so a batch outcome is
+    settled here and a sweep cannot end green with its failures left in logs.
+    """
+    kwargs = settle_batch_fields(redact_sensitive_data(kwargs))
     prev_status = None
     prev_message = None
     with _job_lock:
@@ -3349,7 +3376,9 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 candidate = result.get("message")
                 if isinstance(candidate, str) and candidate.strip():
                     done_message = candidate.strip()
-            if not done_message:
+            # A batch result writes its own headline in `set_job_status`.
+            has_batch = isinstance(result, dict) and "batch" in result
+            if not done_message and not has_batch:
                 done_message = f"Completed: {job_id}"
             payload = {
                 "status": "completed",
