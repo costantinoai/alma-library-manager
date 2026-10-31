@@ -665,9 +665,9 @@ export function DiscoveryPage() {
   // persisted `user_action==='dismiss'` on refetch) + apply the user's sort
   // choice. Saved / read / liked cards stay in the deck showing their new state;
   // the backend scopes persisted saves/reads to the current suggestion set, so a
-  // Refresh Lens still yields a clean deck. `relevance` sorts by raw score DESC
-  // so visible ordering tracks the score bars on each card; the diversity-aware
-  // `rank` value stays as a tie-breaker. `recent` re-sorts by publication date
+  // Refresh Lens still yields a clean deck. `relevance` follows the slate's own
+  // `rank`, the order that spreads the deck across branches; a sort by raw score
+  // left small branches behind Show all. `recent` re-sorts by publication date
   // DESC, falling back to `year` when no full date is set.
   const recommendations = useMemo(() => {
     const visible = allRecommendations.filter(
@@ -677,12 +677,12 @@ export function DiscoveryPage() {
     )
     if (sort === 'relevance') {
       return [...visible].sort((a, b) => {
-        const sa = typeof a.score === 'number' ? a.score : 0
-        const sb = typeof b.score === 'number' ? b.score : 0
-        if (sb !== sa) return sb - sa
         const ra = a.rank ?? Number.POSITIVE_INFINITY
         const rb = b.rank ?? Number.POSITIVE_INFINITY
-        return ra - rb
+        if (ra !== rb) return ra - rb
+        const sa = typeof a.score === 'number' ? a.score : 0
+        const sb = typeof b.score === 'number' ? b.score : 0
+        return sb - sa
       })
     }
     const dateKey = (rec: LensRecommendation): string => {

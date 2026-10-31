@@ -109,4 +109,16 @@ describe('DiscoveryPage lens state', () => {
     const titles = screen.getAllByRole('button', { name: 'Why' }).map((button) => button.parentElement?.textContent)
     expect(titles).toEqual(['DatedWhy', 'Year onlyWhy'])
   })
+
+  it('shows the deck in slate order, not by raw score', async () => {
+    listLensRecommendations.mockResolvedValue([
+      { id: 'strong', paper_id: 'strong', rank: 2, score: 90, created_at: '2026-09-01T12:00:00Z', paper: { id: 'strong', title: 'Strong score', year: 2024 } },
+      { id: 'spread', paper_id: 'spread', rank: 1, score: 40, created_at: '2026-09-01T12:00:00Z', paper: { id: 'spread', title: 'First in slate', year: 2024 } },
+    ])
+    renderPage()
+    await screen.findByText('First in slate')
+
+    const titles = screen.getAllByRole('button', { name: 'Why' }).map((button) => button.parentElement?.textContent)
+    expect(titles).toEqual(['First in slateWhy', 'Strong scoreWhy'])
+  })
 })
