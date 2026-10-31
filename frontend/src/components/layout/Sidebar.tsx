@@ -12,9 +12,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { ADDONS, type AddonUi } from '@/addons/registry'
+import { useBootstrap } from '@/hooks/useBootstrap'
 import { cn } from '@/lib/utils'
-import { getBootstrap } from '@/api/client'
 import { BrandRule } from '@/components/ui/brand-rule'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { DOCS_BASE_URL } from '@/lib/docs'
@@ -36,6 +36,13 @@ interface NavItem {
   id: Page
   label: string
   icon: ComponentType<{ className?: string }>
+}
+
+/** A row in the rail: a core page, or an add-on that is on. */
+type NavEntry = NavItem | (AddonUi & { addon: true })
+
+function isAddonEntry(entry: NavEntry): entry is AddonUi & { addon: true } {
+  return 'addon' in entry
 }
 
 interface NavGroup {
@@ -77,12 +84,12 @@ const navGroups: NavGroup[] = [
 ]
 
 interface NavRowProps {
-  item: NavItem
+  item: NavEntry
   isActive: boolean
   badge: number
   collapsed: boolean
-  onActivate: (page: Page) => void
-  onPrefetch?: (page: Page) => void
+  onActivate: (entry: NavEntry) => void
+  onPrefetch?: (entry: NavEntry) => void
 }
 
 /** One navigation row. Shared by the ungrouped Home row and every group item
@@ -90,9 +97,9 @@ interface NavRowProps {
 function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: NavRowProps) {
   return (
     <button
-      onPointerEnter={() => onPrefetch?.(item.id)}
-      onFocus={() => onPrefetch?.(item.id)}
-      onClick={() => onActivate(item.id)}
+      onPointerEnter={() => onPrefetch?.(item)}
+      onFocus={() => onPrefetch?.(item)}
+      onClick={() => onActivate(item)}
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
@@ -134,6 +141,8 @@ function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: Na
 
 interface SidebarProps {
   currentPage: Page
+  /** The add-on page on screen, if any. */
+  currentAddon?: AddonUi | null
   onNavigate: (page: Page) => void
   /** Warm a route chunk/query when navigation intent is visible. */
   onPrefetch?: (page: Page) => void
@@ -147,6 +156,7 @@ interface SidebarProps {
 
 export function Sidebar({
   currentPage,
+  currentAddon = null,
   onNavigate,
   onPrefetch,
   isOpen,
@@ -154,19 +164,36 @@ export function Sidebar({
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
-  const { data: bootstrap } = useQuery({
-    queryKey: ['bootstrap'],
-    // Timer-driven poll → background so the always-mounted Sidebar doesn't pin
-    // the app "active" between real interactions (41.1).
-    queryFn: () => getBootstrap({ background: true }),
-    staleTime: 60_000,
-    refetchInterval: 300_000,
-  })
+  const { data: bootstrap } = useBootstrap()
+
+  // Add-on rows follow the core rows of their group, and only while on.
+  const groups = navGroups.map((group) => ({
+    label: group.label,
+    items: [
+      ...group.items,
+      ...ADDONS.filter(
+        (addon) =>
+          addon.navGroup === group.label &&
+          bootstrap?.addons.some((state) => state.id === addon.id && state.enabled),
+      ).map((addon) => ({ ...addon, addon: true as const })),
+    ] as NavEntry[],
+  }))
+
+  const isActive = (entry: NavEntry) =>
+    isAddonEntry(entry)
+      ? currentAddon?.id === entry.id
+      : !currentAddon && currentPage === entry.id
 
   // Navigating always closes the mobile drawer — one behaviour for every row.
-  const handleActivate = (page: Page) => {
-    onNavigate(page)
+  const handleActivate = (entry: NavEntry) => {
+    if (isAddonEntry(entry)) window.location.hash = `#/${entry.id}`
+    else onNavigate(entry.id)
     onClose()
+  }
+
+  const handlePrefetch = (entry: NavEntry) => {
+    if (isAddonEntry(entry)) void entry.load()
+    else onPrefetch?.(entry.id)
   }
 
   return (
@@ -261,15 +288,15 @@ export function Sidebar({
           <div className="mb-4 space-y-1 border-b border-alma-700/70 pb-4">
             <NavRow
               item={homeItem}
-              isActive={currentPage === homeItem.id}
+              isActive={isActive(homeItem)}
               badge={bootstrap ? getNavBadgeCount(homeItem.id, bootstrap) : 0}
               collapsed={collapsed}
               onActivate={handleActivate}
-              onPrefetch={onPrefetch}
+              onPrefetch={handlePrefetch}
             />
           </div>
           <div className="space-y-5">
-            {navGroups.map((group) => (
+            {groups.map((group) => (
               <div key={group.label} className="space-y-1">
                 <EyebrowLabel
                   tone="muted"
@@ -281,11 +308,11 @@ export function Sidebar({
                   <NavRow
                     key={item.id}
                     item={item}
-                    isActive={currentPage === item.id}
+                    isActive={isActive(item)}
                     badge={bootstrap ? getNavBadgeCount(item.id, bootstrap) : 0}
                     collapsed={collapsed}
                     onActivate={handleActivate}
-                    onPrefetch={onPrefetch}
+                    onPrefetch={handlePrefetch}
                   />
                 ))}
               </div>

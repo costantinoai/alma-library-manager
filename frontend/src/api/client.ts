@@ -4572,6 +4572,50 @@ export function getSignalImpact(): Promise<SignalImpactData> {
   return api.get<SignalImpactData>('/reports/signal-impact')
 }
 
+// ── Add-ons ──
+
+/** What the shell needs on every page load. */
+export interface AddonState {
+  id: string
+  enabled: boolean
+  badge: number
+}
+
+export interface AddonInfo {
+  id: string
+  name: string
+  description: string
+  docs_path: string
+  default_enabled: boolean
+  requires: string[]
+  enabled: boolean
+  blocked: string | null
+  has_data: boolean
+}
+
+export interface AddonFootprint {
+  tables: { name: string; rows: number }[]
+  rows: number
+  files: number
+  bytes: number
+  settings: string[]
+  secrets: string[]
+}
+
+export const listAddons = () => api.get<AddonInfo[]>('/addons')
+
+export const getAddon = (id: string) =>
+  api.get<AddonInfo & { footprint: AddonFootprint }>(`/addons/${encodeURIComponent(id)}`)
+
+export const setAddonEnabled = (id: string, enabled: boolean) =>
+  api.put<AddonInfo & { still_finishing?: string[] }>(
+    `/addons/${encodeURIComponent(id)}/enabled`,
+    { enabled },
+  )
+
+export const removeAddon = (id: string) =>
+  api.post<JobEnvelope>(`/addons/${encodeURIComponent(id)}/remove`, { confirm: id })
+
 // ── Bootstrap ──
 
 export interface BootstrapData {
@@ -4586,6 +4630,7 @@ export interface BootstrapData {
   feed: { unread: number }
   discovery: { active_lenses: number; pending_recommendations: number; new_recommendations: number }
   alerts: { active: number }
+  addons: AddonState[]
   app: { version: string }
   onboarding: { has_owner: boolean }
 }

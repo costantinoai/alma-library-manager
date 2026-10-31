@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from alma.api.deps import get_current_user, get_db
 from alma.application import discovery as discovery_app
 from alma.application import feed as feed_app
+from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.version import get_app_version
 
@@ -140,6 +141,7 @@ def get_bootstrap(
         "alerts": {
             "active": active_alerts,
         },
+        "addons": addons.bootstrap_state(db),
         "app": {
             "version": get_app_version(),
         },

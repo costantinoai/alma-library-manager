@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Save, SlidersHorizontal, Sparkles, UserRound } from 'lucide-react'
+import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Puzzle, Save, SlidersHorizontal, Sparkles, UserRound } from 'lucide-react'
 import { PageIntro } from '@/components/ui/page-intro'
 
 import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
@@ -14,6 +14,7 @@ import { BackendCard } from '@/components/settings/BackendCard'
 import { BackgroundOpsCard } from '@/components/settings/BackgroundOpsCard'
 import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
+import { AddonsSection } from '@/components/settings/AddonsSection'
 import { PluginsSection } from '@/components/settings/PluginsSection'
 import { UserProfileCard } from '@/components/settings/UserProfileCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
@@ -48,12 +49,13 @@ import { cn } from '@/lib/utils'
  * scroll" and makes the scope of the save button legible.
  */
 
-type SectionId = 'you' | 'connections' | 'plugins' | 'intelligence' | 'system'
+type SectionId = 'you' | 'connections' | 'addons' | 'plugins' | 'intelligence' | 'system'
 type AnchorId =
   | 'user-profile'
   | 'backend'
   | 'external-apis'
   | 'id-resolution'
+  | 'addons'
   | 'plugins'
   | 'discovery-weights'
   | 'feed-monitors'
@@ -74,6 +76,7 @@ interface TocEntry {
 const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Cable }[] = [
   { id: 'you', label: 'You', caption: 'Your name and author profile', icon: UserRound },
   { id: 'connections', label: 'Connections', caption: 'Upstream publication sources', icon: Cable },
+  { id: 'addons', label: 'Add-ons', caption: 'Optional features you can switch on', icon: Puzzle },
   { id: 'plugins', label: 'Plugins', caption: 'External app and channel integrations', icon: PlugZap },
   { id: 'intelligence', label: 'Intelligence', caption: 'Discovery weights, monitor terms, AI provider', icon: Sparkles },
   { id: 'system', label: 'Data & system', caption: 'Import/export, maintenance, about', icon: Database },
@@ -84,6 +87,7 @@ const TOC: TocEntry[] = [
   { id: 'backend', label: 'Backend', section: 'connections' },
   { id: 'external-apis', label: 'External APIs', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
+  { id: 'addons', label: 'Add-ons', section: 'addons' },
   { id: 'plugins', label: 'Integration plugins', section: 'plugins' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
@@ -330,6 +334,10 @@ export function SettingsPage() {
                 Save connection settings
               </AsyncButton>
             </div>
+          </SettingsSection>
+
+          <SettingsSection id="addons" title="Add-ons" caption="Optional features. Switching one off keeps its data.">
+            <Anchor id="addons"><AddonsSection /></Anchor>
           </SettingsSection>
 
           <SettingsSection id="plugins" title="Integration plugins" caption="Connect Inbox capture, Alert delivery and PDF finding to outside services through server-defined schemas. Deactivation keeps credentials and configuration.">

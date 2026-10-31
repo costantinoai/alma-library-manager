@@ -25,6 +25,8 @@ function isMacPlatform(): boolean {
 
 interface TopBarProps {
   currentPage: Page
+  /** An add-on page's name, which replaces the core title. */
+  addonLabel?: string
   onMenuClick: () => void
   onRefresh?: () => void
   isRefreshing?: boolean
@@ -33,6 +35,7 @@ interface TopBarProps {
 
 export function TopBar({
   currentPage,
+  addonLabel,
   onMenuClick,
   onRefresh,
   isRefreshing,
@@ -56,7 +59,7 @@ export function TopBar({
             decoration on this title only, not a bar across the bar. */}
         <div className="flex flex-col items-start gap-1">
           <h1 className="font-brand text-xl font-semibold tracking-wide text-alma-800">
-            {pageTitles[currentPage]}
+            {addonLabel ?? pageTitles[currentPage]}
           </h1>
           <BrandRule center="diamond" className="w-full max-w-[140px]" />
         </div>

@@ -144,6 +144,7 @@ export type PageThemeKey =
   | 'health'
   | 'insights'
   | 'settings'
+  | 'addon'
 
 export interface PageTheme {
   /** Glyph tint. */
@@ -216,6 +217,13 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
     icon: 'text-slate-600',
     medallion: 'bg-slate-700/10',
     chip: 'border-slate-700/10 bg-slate-700/10 text-slate-700',
+  },
+  // One shared hue for every add-on page: an optional feature is not a subject
+  // the app is about, so it takes no identity of its own.
+  addon: {
+    icon: 'text-stone-600',
+    medallion: 'bg-stone-700/10',
+    chip: 'border-stone-700/10 bg-stone-700/10 text-stone-700',
   },
 }
 

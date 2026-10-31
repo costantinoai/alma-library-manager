@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AddonGate } from '@/addons/AddonGate'
 import { AppShell, type Page } from '@/components/layout/AppShell'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -74,6 +75,7 @@ function AppContent() {
 
   const renderPage = () => {
     if (!route.found) return <NotFoundPage />
+    if (route.addon) return <AddonGate addon={route.addon} />
     switch (currentPage) {
       case 'home':
         return <HomePage />
@@ -112,13 +114,14 @@ function AppContent() {
   return (
     <AppShell
       currentPage={currentPage}
+      currentAddon={route.addon}
       onNavigate={navigate}
       onPrefetch={prefetch}
       onRefresh={handleRefresh}
     >
       <Suspense fallback={<PageLoader />}>
         <PageReveal
-          key={currentPage}
+          key={route.addon?.id ?? currentPage}
           animate={!['discovery', 'authors'].includes(currentPage)}
         >
           {renderPage()}

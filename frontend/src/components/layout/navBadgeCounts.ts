@@ -1,7 +1,7 @@
 import type { BootstrapData } from '@/api/client'
 import type { Page } from './Sidebar'
 
-export function getNavBadgeCount(pageId: Page, data: BootstrapData): number {
+export function getNavBadgeCount(pageId: Page | string, data: BootstrapData): number {
   switch (pageId) {
     case 'feed':
       return data.feed.unread
@@ -10,6 +10,6 @@ export function getNavBadgeCount(pageId: Page, data: BootstrapData): number {
     case 'alerts':
       return data.alerts.active
     default:
-      return 0
+      return data.addons.find((addon) => addon.id === pageId)?.badge ?? 0
   }
 }
