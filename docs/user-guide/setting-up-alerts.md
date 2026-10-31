@@ -11,7 +11,7 @@ schedule (or on demand). The whole flow lives inside ALMa — there's no
 
 ## 1. Set up a delivery channel
 
-Alerts are core; the delivery is a plugin. Set up at least one — or both, and
+Alerts is an add-on: switch it on in **Settings → Add-ons**. Delivery is a plugin. Set up at least one — or both, and
 tick both on a digest:
 
 * **[Slack](../plugins/slack.md)** — digests posted to a channel or a DM.

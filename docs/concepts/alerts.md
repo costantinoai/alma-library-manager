@@ -177,7 +177,8 @@ each integration receives the same matched-paper set independently. The
 frontend discovers those choices from `alma.plugins.registry`, and the API
 rejects unknown or receive-only ids before they reach durable Alert state.
 
-Alerts remain core: rules, schedules, matching, deduplication, history, and
+Alerts is an [add-on](../development/integrations.md#add-ons), switched on in
+**Settings → Add-ons**: rules, schedules, matching, deduplication, history, and
 Activity live here. Integration plugins only render and deliver through the
 manifest's `AlertSender` seam. See [External integrations](channels.md)
 and the [plugin pages](../plugins/index.md).
@@ -192,7 +193,7 @@ Activity row rather than a generic "API failed."
 
 ### Email
 
-`EmailNotifier` (`alma.mailer.client`) is a stdlib `smtplib` sender
+`EmailNotifier` (`alma.addons.alerts.mailer`) is a stdlib `smtplib` sender
 that mirrors `SlackNotifier`: an `is_configured` gate (host + from +
 recipients), an async `send_paper_alert`, a `send_test_message`, and a
 `test_connection` handshake. It renders the same paper-dict shape Slack

@@ -268,14 +268,25 @@ rest.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/insights` | Overview (charts + summary). Served from a fingerprint-keyed cache; response carries `stale` / `rebuilding` / `computed_at` flags. |
-| `GET` | `/insights/diagnostics` | Composed payload — assembles all eight diagnostic sections from cache. Backwards-compatible with pre-split clients. |
-| `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
+| `GET` | `/insights/diagnostics` | Composed payload — assembles all seven diagnostic sections from cache. Backwards-compatible with pre-split clients. |
+| `GET` | `/insights/diagnostics/sections/{section}` | One of the seven diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
 | `GET` | `/reports/topic-drift` | Topic drift report |
 | `GET` | `/reports/signal-impact` | Ranking signal impact report |
 
+### Add-ons
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/addons` | Every add-on in this build, on or off |
+| `GET` | `/addons/{id}` | One add-on and what Remove would delete |
+| `PUT` | `/addons/{id}/enabled` | Switch on or off. Keeps data; lists jobs still finishing |
+| `POST` | `/addons/{id}/remove` | Delete its data for good. Needs `{"confirm": "<id>"}` and the add-on off |
+
 ### Alerts
+
+An add-on: every path here answers 404 while it is off.
 
 | Method | Path | Purpose |
 |---|---|---|

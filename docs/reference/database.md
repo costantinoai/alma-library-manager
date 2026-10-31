@@ -116,6 +116,9 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 
 ### Alerts
 
+These tables belong to the Alerts add-on. They are created on first enable, stay
+when it is switched off, and go on Remove.
+
 | Table | Purpose |
 |---|---|
 | `alerts` | Top-level alert definitions. |

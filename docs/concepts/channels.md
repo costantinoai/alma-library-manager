@@ -1,25 +1,25 @@
 ---
 title: External integrations
-description: How optional plugins connect ALMa's core Alerts, Inbox and paper PDFs to outside services.
+description: How optional plugins connect Alerts, the Inbox and paper PDFs to outside services.
 ---
 
 # External integrations
 
-**Alerts, the Inbox and a paper's PDF are core ALMa features.** They do not
-become optional merely because no external service is connected. Integration
-plugins are the adapters that let those core features reach outside — to Slack,
-to an SMTP server, to a PDF host.
+**The Inbox and a paper's PDF are core ALMa features; Alerts is an add-on.** None
+of them depends on an external service being connected. Integration plugins are
+the adapters that let those features reach outside — to Slack, to an SMTP server,
+to a PDF host.
 
 Each plugin declares which of three capabilities it implements:
 
-| Capability | Core owner | Integration responsibility |
+| Capability | Owner | Integration responsibility |
 |---|---|---|
 | `send` | [Alerts](alerts.md) selects papers, schedules, deduplicates, and records outcomes | Render and deliver the finished digest |
 | `receive` | [Inbox](inbox.md) resolves papers, lands corpus rows, deduplicates, and owns triage | Fetch external messages and acknowledge outcomes |
 | `pdf_source` | [Paper PDFs](../user-guide/reading-pdfs.md) runs the sources in order, verifies the file against the paper, and stores it | Contribute candidate sources and fetch a file from each |
 
 Four ship: [Slack](../plugins/slack.md) (`send` + `receive`),
-[Email](../plugins/email.md) (`send`), and two PDF sources,
+[Email](../plugins/email.md) (`send`, part of the Alerts add-on), and two PDF sources,
 [Open-access PDFs](../plugins/open-access-pdfs.md) and
 [Shadow libraries](../plugins/shadow-libraries.md). One Slack activation
 controls both of its directions because they share one integration and one
