@@ -6,35 +6,46 @@ import re
 from typing import Any
 
 _REDACTED = "[REDACTED]"
-# Matches dict keys whose NAME indicates a credential value.
-# Anchored on underscore boundaries + end-of-key so that public identifiers
-# (openalex_id, openai_llm_model, slack_channel) and metric names
-# (max_tokens, token_overlap, tokenizer) are NOT redacted, while credential
-# names (api_key, access_token, slack_token, smtp_password, webhook_url, etc.)
-# are. Substring matches on `openai` / `openalex` / `slack` were intentionally
-# dropped — those identify public resources, not secrets.
+
+# THE one list of secret NAMES, shared by text and dict-key redaction so the two
+# cannot drift. A name is listed because its VALUE is a credential.
+#
+# ``_key`` is deliberately NOT a blanket suffix: `zotero_key`, `operation_key`,
+# `view_key` and `cache_key` are public handles that Activity and the UI must keep
+# showing. Only the kinds below are secrets. `member_key` is listed because in
+# ALMa it IS one (Anna's Archive). A new handle stays safe by staying off this
+# list; a new secret field must end in one of these names.
+_SECRET_NAME = r"""(?:
+    (?:api|member|access|secret|private)[_-]?key
+  | (?:(?:access|refresh|bearer|api|auth|slack|github|gitlab|openai|openalex|anthropic)[_-]?)?token
+  | pass(?:word|wd|phrase)
+  | secret
+  | credentials?
+  | cookie
+  | webhook(?:[_-]?url)?
+)"""
+
+# Dict keys: the name must be the whole key or its last `_`, `-` or `.` part, so
+# public names (openalex_id, max_tokens, token_overlap, tokenizer) are untouched.
 _SENSITIVE_KEY_RE = re.compile(
-    r"""
-    (?:^|_)(?:
-        api[_-]?key
-      | (?:access|refresh|bearer|api|auth|slack|github|gitlab|openai|openalex|anthropic)[_-]?token
-      | token
-      | password
-      | secret
-      | authorization
-      | webhook(?:_url)?
-    )$
-    """,
+    rf"(?:^|[._-])(?:authorization|{_SECRET_NAME})$",
     re.IGNORECASE | re.VERBOSE,
 )
+
+# Never start inside a word, but do start after `_`, `-` or `.`: `\b` does not
+# fire after `_`, which is how `openalex_api_key=` used to walk through.
+_NOT_IN_WORD = r"(?<![A-Za-z0-9])"
+
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # `name=value`, `name: value` and a dict repr's `'name': 'value'`. An
+    # unquoted value runs to whitespace or `&`: eating a stray bracket is
+    # cosmetic, leaving the tail of a password is not.
     (
-        re.compile(r"(?i)\b(api[_-]?key|token|access[_-]?token|password|secret)\s*=\s*([^&\s]+)"),
-        r"\1=" + _REDACTED,
-    ),
-    (
-        re.compile(r"(?i)\b(api[_-]?key|token|access[_-]?token|password|secret)\s*:\s*([^\s,;]+)"),
-        r"\1: " + _REDACTED,
+        re.compile(
+            rf"""{_NOT_IN_WORD}({_SECRET_NAME})(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&]+)""",
+            re.IGNORECASE | re.VERBOSE,
+        ),
+        r"\1\2" + _REDACTED,
     ),
     # A bare ``key`` URL query parameter is a credential by convention (Anna's
     # Archive member API, Google APIs). Only redacted inside a query string
@@ -51,13 +62,28 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-+/=]{8,}"),
         "Bearer " + _REDACTED,
     ),
+    # Self-describing tokens, whatever name they sit under.
     (
-        re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]+\b"),
+        re.compile(rf"{_NOT_IN_WORD}xox[a-z](?:\.xox[a-z])?-[A-Za-z0-9\-]+"),
         _REDACTED,
     ),
     (
-        re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"),
+        re.compile(rf"{_NOT_IN_WORD}xapp-[A-Za-z0-9\-]+"),
         _REDACTED,
+    ),
+    (
+        re.compile(rf"{_NOT_IN_WORD}sk-[A-Za-z0-9_\-]{{10,}}"),
+        _REDACTED,
+    ),
+    # A Slack webhook's path IS the secret.
+    (
+        re.compile(r"(?i)(https://hooks\.slack\.com/)[^\s'\"<>]+"),
+        r"\1" + _REDACTED,
+    ),
+    # `scheme://user:password@host` and `scheme://token@host`.
+    (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@'\"?#]+@"),
+        r"\1" + _REDACTED + "@",
     ),
 ]
 
