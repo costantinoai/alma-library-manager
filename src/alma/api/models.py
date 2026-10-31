@@ -69,53 +69,6 @@ class AuthorResponse(BaseModel):
     background_corpus_coverage_ratio: float | None = None
 
 
-class RelatedWork(BaseModel):
-    """One row in a Prior/Derivative Works panel (T6).
-
-    Distinct from `PaperResponse` — we intentionally surface a
-    trimmed-down projection so the paper detail dialog renders
-    fast. `paper_id` is the local UUID when the referenced work is
-    already in our corpus; null when it only lives in S2. `source`
-    tags where the row came from so the UI can show a "from
-    Semantic Scholar" hint on network-origin rows.
-    """
-
-    paper_id: str | None = None
-    title: str
-    authors: str | None = None
-    year: int | None = None
-    doi: str | None = None
-    url: str | None = None
-    journal: str | None = None
-    abstract: str | None = None
-    tldr: str | None = None
-    cited_by_count: int = 0
-    influential_citation_count: int = 0
-    openalex_id: str | None = None
-    semantic_scholar_id: str | None = None
-    status: str | None = None
-    rating: int | None = None
-    # Whether this edge (reference or citation) was classified as
-    # influential by S2. Meaningful only on citation rows; always
-    # False on reference rows for now.
-    is_influential: bool = False
-    source: str = "local"  # "local" | "s2_remote"
-
-
-class RelatedWorksResponse(BaseModel):
-    """Response envelope for prior/derivative works.
-
-    `direction` = `"prior"` (papers this paper references) or
-    `"derivative"` (papers citing this paper).
-    """
-
-    direction: str
-    source_paper_id: str
-    works: list[RelatedWork] = Field(default_factory=list)
-    local_count: int = 0
-    remote_count: int = 0
-
-
 class AuthorSuggestionSignal(BaseModel):
     """One piece of evidence backing an author suggestion.
 
@@ -275,50 +228,8 @@ class PaperActionRequest(BaseModel):
     rating: int | None = Field(None, ge=0, le=5)
 
 
-class PaperRateRequest(BaseModel):
-    """Request model for rating a paper."""
-
-    paper_id: str = Field(..., description="Paper UUID")
-    rating: int = Field(..., ge=0, le=5)
-
-
-class PaperCreateRequest(BaseModel):
-    """Request model for manually adding a paper."""
-
-    title: str = Field(..., min_length=1)
-    authors: str | None = None
-    year: int | None = None
-    journal: str | None = None
-    abstract: str | None = None
-    url: str | None = None
-    doi: str | None = None
-    status: str = Field("library", description="Initial status: tracked | library")
-    added_from: str = Field("manual", description="Source: manual | import | feed | discovery")
-
-
 # Legacy compatibility aliases
 PublicationResponse = PaperResponse
-
-
-class PublicationSendItem(BaseModel):
-    """Item to send via a plugin from a preview."""
-
-    paper_id: str | None = Field(None, description="Paper UUID (preferred)")
-    # Legacy fields for backward compatibility
-    author_id: str | None = None
-    title: str = ""
-    authors: str = ""
-    year: int | None = None
-    abstract: str | None = None
-    url: str | None = None
-    citations: int | None = 0
-    journal: str | None = None
-
-
-class SavePublicationsRequest(BaseModel):
-    """Request to save previewed publications to the database."""
-
-    items: list[PublicationSendItem]
 
 
 # ============================================================================
@@ -541,18 +452,6 @@ class LensBranchPreviewResponse(BaseModel):
     structure: BranchStructureSummary | None = None
     retired_branches: list[RetiredBranchItem] = Field(default_factory=list)
     branches: list[BranchPreviewItem] = Field(default_factory=list)
-
-
-class SuggestionSetResponse(BaseModel):
-    """Response model for a suggestion set."""
-
-    id: str
-    lens_id: str
-    context_type: str
-    trigger_source: str
-    retrieval_summary: dict | None = None
-    ranker_version: str | None = None
-    created_at: str
 
 
 class DiscoveryImpressionItem(BaseModel):
@@ -880,12 +779,6 @@ class CollectionResponse(BaseModel):
     activity_status: str | None = None
 
 
-class CollectionAddPaperRequest(BaseModel):
-    """Request to add a paper to a collection."""
-
-    paper_id: str
-
-
 class TagCreate(BaseModel):
     """Request model for creating a tag."""
 
@@ -899,13 +792,6 @@ class TagResponse(BaseModel):
     id: str
     name: str
     color: str
-
-
-class PaperTagRequest(BaseModel):
-    """Request to tag a paper."""
-
-    paper_id: str
-    tag_id: str
 
 
 class FollowAuthorRequest(BaseModel):

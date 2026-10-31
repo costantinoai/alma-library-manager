@@ -173,14 +173,6 @@ class ManualAddRequest(BaseModel):
     query: str | None = None
 
 
-class RecommendationLibraryActionRequest(BaseModel):
-    rating: int | None = Field(default=None, ge=0, le=5)
-    collection_ids: list[str] | None = Field(
-        default=None,
-        description="On save: also file the paper into these local collections (create-then-add is done client-side; ids only here).",
-    )
-
-
 def _parse_breakdown(raw: str | None) -> dict | None:
     """Parse a JSON score_breakdown string into a dict, returning None on failure."""
     if not raw:

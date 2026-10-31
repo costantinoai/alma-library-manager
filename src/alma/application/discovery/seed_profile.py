@@ -402,26 +402,6 @@ def load_library_preference_inputs(
     return library_pubs, positive_pubs, negative_pubs
 
 
-def library_taste_direction(db: sqlite3.Connection) -> np.ndarray | None:
-    """The Rocchio direction of the Library's taste: positive centroid minus
-    negative centroid (or the positive centroid alone when nothing was rated
-    down). ``None`` without an embedded positive set.
-
-    One owner for "which way does the user's taste point in embedding space".
-    """
-    from alma.discovery.similarity import compute_embedding_centroid
-
-    _, positive_pubs, negative_pubs = load_library_preference_inputs(db)
-    positive = compute_embedding_centroid(positive_pubs, db) if positive_pubs else None
-    if positive is None:
-        return None
-    negative = compute_embedding_centroid(negative_pubs, db) if negative_pubs else None
-    direction = np.asarray(positive, dtype=np.float32)
-    if negative is not None:
-        direction = direction - np.asarray(negative, dtype=np.float32)
-    return direction
-
-
 def _top_profile_terms(
     weights: dict[str, float],
     *,
@@ -761,27 +741,6 @@ def _negative_preference_context(
         "authors": negative_authors,
         "journals": negative_journals,
     }
-
-
-def _top_negative_terms(
-    values: dict[str, float],
-    *,
-    limit: int,
-    field_name: str,
-) -> list[dict[str, Any]]:
-    ranked = [
-        {field_name: key, "weight": round(float(weight), 4)}
-        for key, weight in sorted(
-            (
-                (str(key).strip(), float(weight))
-                for key, weight in values.items()
-                if str(key).strip() and float(weight or 0.0) > 0.0
-            ),
-            key=lambda item: item[1],
-            reverse=True,
-        )[: max(1, limit)]
-    ]
-    return ranked
 
 
 def _candidate_negative_preference_penalty(

@@ -56,13 +56,6 @@ def _import_openai_module():
     return openai
 
 
-def _import_requests_module():
-    """Import and return the requests module."""
-    import requests
-
-    return requests
-
-
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------

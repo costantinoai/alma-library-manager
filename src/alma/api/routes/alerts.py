@@ -352,11 +352,6 @@ def apply_alert_template(
     return AlertTemplateApplyResponse(**applied)
 
 
-def _build_alert_response(alert_dict: dict, db: sqlite3.Connection) -> AlertResponse:
-    """Build an AlertResponse including assigned rules for the given alert row."""
-    return AlertResponse(**alerts_app.build_alert_response(db, alert_dict))
-
-
 @router.get(
     "/",
     response_model=list[AlertResponse],

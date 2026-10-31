@@ -109,45 +109,6 @@ def has_active_embeddings(conn: sqlite3.Connection, *, min_count: int = 1) -> bo
         return False
 
 
-def compute_tfidf_vectors(texts: list[str]):
-    """Compute TF-IDF vectors from a list of texts.
-
-    Each text is typically a concatenation of a publication's title and abstract.
-
-    Args:
-        texts: List of text strings to vectorize.
-
-    Returns:
-        Sparse TF-IDF matrix (n_documents x n_features), or None if
-        scikit-learn is unavailable or the input is empty.
-    """
-    if not _SKLEARN_AVAILABLE:
-        logger.warning("scikit-learn not available; cannot compute TF-IDF vectors")
-        return None
-
-    if not texts:
-        return None
-
-    # Filter out empty/whitespace-only texts by replacing with a placeholder
-    # so matrix dimensions stay consistent with input indices.
-    cleaned = [t.strip() if t and t.strip() else "empty" for t in texts]
-
-    try:
-        vectorizer = TfidfVectorizer(
-            max_features=5000,
-            stop_words="english",
-            min_df=1,
-            max_df=0.95,
-            sublinear_tf=True,
-        )
-        tfidf_matrix = vectorizer.fit_transform(cleaned)
-        return tfidf_matrix
-    except ValueError as exc:
-        # Raised when all documents are empty or contain only stop words
-        logger.debug("TF-IDF vectorization failed: %s", exc)
-        return None
-
-
 def _tokenize_lexical_terms(text: str) -> list[str]:
     return [tok for tok in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(tok) >= 3]
 
@@ -261,58 +222,6 @@ def build_lexical_profile(
         logger.debug("Character lexical profile failed: %s", exc)
 
     return profile
-
-
-def find_similar_publications(
-    liked_texts: list[str],
-    candidate_texts: list[str],
-    threshold: float = 0.15,
-    top_n: int = 20,
-) -> list[tuple[int, float]]:
-    """Find candidate publications similar to liked publications using TF-IDF cosine similarity.
-
-    Args:
-        liked_texts: Text (title + abstract) for each liked publication.
-        candidate_texts: Text (title + abstract) for each candidate publication.
-        threshold: Minimum cosine similarity score to include a candidate.
-        top_n: Maximum number of similar candidates to return.
-
-    Returns:
-        List of (candidate_index, score) tuples sorted by score descending.
-        Returns an empty list if scikit-learn is not available, inputs are empty,
-        or no candidates meet the threshold.
-    """
-    if not _SKLEARN_AVAILABLE:
-        logger.warning("scikit-learn not available; similarity search disabled")
-        return []
-
-    if not liked_texts or not candidate_texts:
-        return []
-
-    # Combine all texts so the vectorizer learns a shared vocabulary
-    all_texts = liked_texts + candidate_texts
-    n_liked = len(liked_texts)
-
-    tfidf_matrix = compute_tfidf_vectors(all_texts)
-    if tfidf_matrix is None:
-        return []
-
-    liked_vectors = tfidf_matrix[:n_liked]
-    candidate_vectors = tfidf_matrix[n_liked:]
-
-    # Compute cosine similarity between each candidate and all liked papers
-    sim_matrix = cosine_similarity(candidate_vectors, liked_vectors)
-
-    # For each candidate, take the maximum similarity to any liked paper
-    results: list[tuple[int, float]] = []
-    for cand_idx in range(sim_matrix.shape[0]):
-        max_score = float(sim_matrix[cand_idx].max())
-        if max_score >= threshold:
-            results.append((cand_idx, max_score))
-
-    # Sort by score descending and limit to top_n
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results[:top_n]
 
 
 # Sentinel: "caller did not pass a provider → resolve lazily" vs "passed None
@@ -1150,41 +1059,6 @@ def load_publication_example_embeddings(
 # ---------------------------------------------------------------------------
 
 
-def compute_semantic_similarity(
-    candidate_embedding: numpy.ndarray | None,
-    positive_centroid: numpy.ndarray | None,
-    negative_centroid: numpy.ndarray | None = None,
-) -> float:
-    """Compute semantic similarity score for a candidate paper.
-
-    Uses cosine similarity between a *precomputed* candidate embedding
-    and a positive centroid, optionally penalising similarity to a
-    negative centroid. The caller is responsible for producing the
-    candidate vector with the active provider so all three vectors share
-    the same dimensionality — this function will not re-encode text.
-
-    The formula is::
-
-        score = cos_sim(candidate, positive) - 0.5 * cos_sim(candidate, negative)
-
-    The result is clamped to the ``[0, 1]`` range.
-
-    Returns:
-        Similarity score in ``[0, 1]``, or ``0.0`` when any required
-        input vector is missing.
-    """
-    if candidate_embedding is None or positive_centroid is None:
-        return 0.0
-
-    score = _cosine_similarity_np(candidate_embedding, positive_centroid)
-
-    if negative_centroid is not None:
-        neg_sim = _cosine_similarity_np(candidate_embedding, negative_centroid)
-        score -= 0.5 * neg_sim
-
-    return float(max(0.0, min(1.0, score)))
-
-
 def feedback_semantic_signal(
     candidate_embedding: numpy.ndarray | None,
     positive_centroid: numpy.ndarray | None,
@@ -1300,28 +1174,6 @@ def compute_semantic_similarity_details(
         "negative_signal_raw": round(float(negative_signal), 4),
         "candidate_embedding_ready": True,
     }
-
-
-def compute_lexical_similarity(
-    candidate_text: str,
-    positive_texts: list[str],
-    negative_texts: list[str] | None = None,
-    *,
-    profile: LexicalProfile | None = None,
-) -> float:
-    """Compute lexical similarity as a robust fallback when embeddings are unavailable.
-
-    Uses TF-IDF cosine similarity when scikit-learn is available, otherwise falls
-    back to a lightweight token-overlap scorer.
-    """
-    return float(
-        compute_lexical_similarity_details(
-            candidate_text,
-            positive_texts,
-            negative_texts=negative_texts,
-            profile=profile,
-        ).get("raw_score", 0.0)
-    )
 
 
 def compute_lexical_similarity_details(

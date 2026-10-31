@@ -217,10 +217,6 @@ def _text_tokens(value: object) -> list[str]:
     return re.findall(r"[a-z0-9]+", str(value or "").lower())
 
 
-def _normalized_text(value: object) -> str:
-    return " ".join(_text_tokens(value))
-
-
 def _term_matches_tokens(term: str, tokens: list[str]) -> bool:
     if not term or not tokens:
         return False
@@ -345,10 +341,6 @@ def _monitor_match_details(query: str, candidate: dict) -> dict[str, float | int
         "abstract_window_hit": abstract_window_hit,
         "topic_window_hit": topic_window_hit,
     }
-
-
-def _monitor_match_score(query: str, candidate: dict) -> float:
-    return float(_monitor_match_details(query, candidate)["score"])
 
 
 def _monitor_has_explicit_support(

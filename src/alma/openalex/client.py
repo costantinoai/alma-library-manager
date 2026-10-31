@@ -1380,32 +1380,6 @@ def batch_fetch_recent_works_for_authors(
     return result
 
 
-def search_works_for_title(title: str, per_title: int = 5) -> list[dict]:
-    """Search OpenAlex /works for a single title. Returns raw work dicts.
-
-    Thin wrapper for concurrent execution in the bulk resolution pipeline.
-    """
-    if not (title or "").strip():
-        return []
-    try:
-        client = get_client()
-        resp = client.get(
-            "/works",
-            params={
-                "search": title.strip(),
-                "per-page": max(1, min(int(per_title), 10)),
-                "select": "display_name,cited_by_count,authorships",
-            },
-            timeout=20,
-        )
-        if resp.status_code != 200:
-            return []
-        return (resp.json() or {}).get("results") or []
-    except Exception as e:
-        logger.warning("Works search failed for '%s': %s", title[:80], e)
-        return []
-
-
 # Flip known-ID batch fetchers to the free singleton path once the
 # server-reported remaining daily credits fall to this reserve.
 _SINGLETON_FALLBACK_RESERVE = 25
@@ -1824,96 +1798,6 @@ def backfill_missing_publication_references(
         "papers_updated": papers_updated,
         "references_inserted": references_inserted,
         "terminal_no_references": terminal_stamped,
-    }
-
-
-def materialize_missing_referenced_works(
-    conn: sqlite3.Connection,
-    *,
-    seed_paper_ids: list[str] | None = None,
-    seed_statuses: list[str] | None = None,
-    limit: int = 250,
-    batch_size: int = 50,
-    max_workers: int = 4,
-) -> dict[str, int]:
-    """Fetch and persist referenced works that are still missing from local papers.
-
-    This turns bare `publication_references` edges into locally materialized
-    papers with authorships/topics so downstream adjacency logic can operate on a
-    richer local graph instead of depending on the cited work already being
-    present in `papers`.
-    """
-    _ensure_schema(conn)
-    default_statuses = seed_statuses or ["library"]
-    params: list[object] = []
-    where_clauses = [
-        "pr.referenced_work_id IS NOT NULL",
-        "target.id IS NULL",
-    ]
-
-    if seed_paper_ids:
-        clean_ids = [str(paper_id or "").strip() for paper_id in seed_paper_ids if str(paper_id or "").strip()]
-        if not clean_ids:
-            return {"candidates": 0, "fetched": 0, "materialized": 0}
-        placeholders = ",".join("?" for _ in clean_ids)
-        where_clauses.append(f"seed.id IN ({placeholders})")
-        params.extend(clean_ids)
-    elif default_statuses:
-        placeholders = ",".join("?" for _ in default_statuses)
-        where_clauses.append(f"seed.status IN ({placeholders})")
-        params.extend(default_statuses)
-
-    # Restore the ``W`` prefix on the references side so the JOIN
-    # matches papers.openalex_id (canonical bare W-form). A function
-    # wrapper on either column would defeat the index — string concat
-    # on the integer column does not.
-    sql = f"""
-        SELECT DISTINCT pr.referenced_work_id
-        FROM publication_references pr
-        JOIN papers seed ON seed.id = pr.paper_id
-        LEFT JOIN papers target
-          ON target.openalex_id = ('W' || pr.referenced_work_id)
-        WHERE {' AND '.join(where_clauses)}
-        ORDER BY COALESCE(seed.updated_at, seed.created_at, seed.publication_date, '') DESC
-        LIMIT ?
-    """
-    params.append(max(1, int(limit or 250)))
-
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        return {"candidates": 0, "fetched": 0, "materialized": 0}
-
-    target_ids: list[str] = []
-    for row in rows:
-        raw = row["referenced_work_id"] if isinstance(row, sqlite3.Row) else row[0]
-        if raw is None:
-            continue
-        target_ids.append(f"W{raw}")
-    if not target_ids:
-        return {"candidates": 0, "fetched": 0, "materialized": 0}
-
-    raw_works = batch_fetch_works_by_openalex_ids(
-        target_ids,
-        batch_size=batch_size,
-        max_workers=max_workers,
-    )
-    _ensure_schema(conn)
-    materialized = 0
-    # Network batch fetch already returned above; the upsert window is
-    # local-only — gate it instead of a raw commit.
-    with write_section(conn, label="openalex materialize_referenced_works"):
-        for work_id in target_ids:
-            raw_work = raw_works.get(work_id)
-            if not raw_work:
-                continue
-            normalized = _normalize_work(raw_work)
-            if _upsert_single_paper(conn, normalized):
-                materialized += 1
-    return {
-        "candidates": len(target_ids),
-        "fetched": len(raw_works),
-        "materialized": materialized,
     }
 
 

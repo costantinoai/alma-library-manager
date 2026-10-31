@@ -1212,94 +1212,6 @@ def _sample_titles_for_openalex_author(
     return titles
 
 
-def _top_topics_for_followed_authors(db: sqlite3.Connection, *, limit: int = 12) -> dict[str, float]:
-    if not _table_exists(db, "publication_topics") or not _table_exists(db, "publication_authors"):
-        return {}
-    try:
-        rows = db.execute(
-            """
-            SELECT pt.term, COUNT(DISTINCT pt.paper_id) AS paper_count
-            FROM publication_topics pt
-            JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-            JOIN followed_authors fa ON fa.author_id = a.id
-            WHERE pt.term IS NOT NULL AND TRIM(pt.term) <> ''
-            GROUP BY pt.term
-            ORDER BY paper_count DESC, pt.term ASC
-            LIMIT ?
-            """,
-            (max(4, limit),),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return {}
-    out: dict[str, float] = {}
-    for row in rows:
-        term = str(row["term"] if isinstance(row, sqlite3.Row) else row[0]).strip().lower()
-        count = float(row["paper_count"] if isinstance(row, sqlite3.Row) else row[1] or 0.0)
-        if term:
-            out[term] = count
-    return out
-
-
-def _top_venues_for_followed_authors(db: sqlite3.Connection, *, limit: int = 8) -> dict[str, float]:
-    if not _table_exists(db, "publication_authors"):
-        return {}
-    try:
-        rows = db.execute(
-            """
-            SELECT p.journal, COUNT(DISTINCT p.id) AS paper_count
-            FROM papers p
-            JOIN publication_authors pa ON pa.paper_id = p.id
-            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-            JOIN followed_authors fa ON fa.author_id = a.id
-            WHERE COALESCE(TRIM(p.journal), '') <> ''
-            GROUP BY lower(trim(p.journal)), p.journal
-            ORDER BY paper_count DESC, p.journal ASC
-            LIMIT ?
-            """,
-            (max(3, limit),),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return {}
-    out: dict[str, float] = {}
-    for row in rows:
-        journal = str(row["journal"] if isinstance(row, sqlite3.Row) else row[0]).strip()
-        count = float(row["paper_count"] if isinstance(row, sqlite3.Row) else row[1] or 0.0)
-        if journal:
-            out[journal.lower()] = count
-    return out
-
-
-def _shared_followed_authors_for_candidate(
-    db: sqlite3.Connection,
-    openalex_id: str,
-    *,
-    limit: int = 3,
-) -> list[str]:
-    if not _table_exists(db, "publication_authors"):
-        return []
-    rows = db.execute(
-        """
-        SELECT a.name, COUNT(DISTINCT pa.paper_id) AS shared_papers
-        FROM publication_authors pa
-        JOIN publication_authors candidate_pa ON candidate_pa.paper_id = pa.paper_id
-        JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-        JOIN followed_authors fa ON fa.author_id = a.id
-        WHERE lower(trim(candidate_pa.openalex_id)) = lower(trim(?))
-          AND lower(trim(pa.openalex_id)) <> lower(trim(candidate_pa.openalex_id))
-        GROUP BY a.name
-        ORDER BY shared_papers DESC, a.name ASC
-        LIMIT ?
-        """,
-        (_normalize_openalex_id(openalex_id), max(1, limit)),
-    ).fetchall()
-    return [
-        str(row["name"] if isinstance(row, sqlite3.Row) else row[0]).strip()
-        for row in rows
-        if str(row["name"] if isinstance(row, sqlite3.Row) else row[0]).strip()
-    ]
-
-
 def _shared_topics_for_candidate(
     db: sqlite3.Connection,
     openalex_id: str,
@@ -1948,59 +1860,6 @@ def _shared_library_authors_for_candidate(
         for row in rows
         if str(row["name"] if isinstance(row, sqlite3.Row) else row[0]).strip()
     ]
-
-
-def _expand_library_reference_graph(
-    db: sqlite3.Connection,
-    *,
-    limit: int = 80,
-) -> dict[str, int]:
-    """Bounded citation expansion for author-adjacency suggestions.
-
-    The goal is to materialize directly referenced works for library papers so
-    adjacent-author suggestions can use the local graph even when the cited work
-    was not previously present in `papers`.
-    """
-    if not _table_exists(db, "publication_references"):
-        return {"references_inserted": 0, "materialized": 0}
-    try:
-        rows = db.execute(
-            f"""
-            SELECT id
-            FROM papers
-            WHERE status = 'library'
-              AND {standalone_paper_sql('papers')}
-              AND COALESCE(TRIM(openalex_id), '') <> ''
-            ORDER BY COALESCE(updated_at, created_at, publication_date, '') DESC
-            LIMIT ?
-            """,
-            (max(8, min(int(limit or 80), 120)),),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return {"references_inserted": 0, "materialized": 0}
-
-    paper_ids = [
-        str(row["id"] if isinstance(row, sqlite3.Row) else row[0]).strip()
-        for row in rows
-        if str(row["id"] if isinstance(row, sqlite3.Row) else row[0]).strip()
-    ]
-    if not paper_ids:
-        return {"references_inserted": 0, "materialized": 0}
-
-    try:
-        from alma.openalex.client import (
-            backfill_missing_publication_references,
-            materialize_missing_referenced_works,
-        )
-
-        ref_summary = backfill_missing_publication_references(db, paper_ids=paper_ids, limit=max(len(paper_ids), 24))
-        materialized_summary = materialize_missing_referenced_works(db, seed_paper_ids=paper_ids, limit=limit)
-        return {
-            "references_inserted": int(ref_summary.get("references_inserted") or 0),
-            "materialized": int(materialized_summary.get("materialized") or 0),
-        }
-    except Exception:
-        return {"references_inserted": 0, "materialized": 0}
 
 
 def _semantic_similar_candidates(
@@ -2714,17 +2573,6 @@ def list_author_suggestions(
         seen_candidates.add(openalex_id)
         if len(suggestions) >= limit:
             break
-
-    # NOTE: `_expand_library_reference_graph` (OpenAlex
-    # `materialize_missing_referenced_works` + `backfill_missing_...`)
-    # used to run HERE synchronously in the GET handler. Measured 117s
-    # per request on a library without an OpenAlex API key set (401 +
-    # exp-backoff retries). That violates the "API endpoints: reads vs
-    # writes" rule in `lessons.md`. The materialization is a write/
-    # enrichment concern and belongs on the Activity-envelope refresh
-    # path (`refresh_openalex_related_network`) or a scheduled job, not
-    # on every author-suggestions GET. Kept the helper around because
-    # it's still useful in those contexts.
 
     # D12 bucket — `cited_by_high_signal`. Runs BEFORE the generic
     # `adjacent` bucket so when an author qualifies for both (e.g. they
@@ -3522,15 +3370,6 @@ def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
             )
     db.execute("DELETE FROM authors WHERE id = ?", (author_id,))
     return {"id": row["id"], "name": row["name"]}
-
-
-def touch_last_fetched(db: sqlite3.Connection, author_id: str) -> bool:
-    """Mark an author as fetched now."""
-    cursor = db.execute(
-        "UPDATE authors SET last_fetched_at = ? WHERE id = ?",
-        (utcnow().isoformat(), author_id),
-    )
-    return cursor.rowcount > 0
 
 
 SUGGESTION_REVIEW_WINDOW = 30

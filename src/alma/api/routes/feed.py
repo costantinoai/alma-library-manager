@@ -38,10 +38,6 @@ class FeedBulkActionRequest(BaseModel):
     action: str
 
 
-class FeedAddRequest(BaseModel):
-    collection_ids: list[str] = Field(default_factory=list)
-
-
 class FeedSettings(BaseModel):
     """Opt-in auto-refresh settings for the feed inbox.
 
@@ -378,58 +374,6 @@ def update_feed_monitor(
         raise
     except Exception as exc:
         raise_internal("Failed to update feed monitor", exc)
-
-
-def _run_feed_action(
-    *,
-    feed_item_id: str,
-    action: str,
-    db: sqlite3.Connection,
-    user: dict,
-    collection_ids: list[str] | None = None,
-) -> dict:
-    existing = feed_app.get_feed_item(db, feed_item_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Feed item not found")
-
-    runner = OperationRunner(db)
-
-    def _handler(_ctx):
-        # The adapter no longer opens its own write unit (it is also reached
-        # nested, from the canonical paper-action route), so THIS caller owns
-        # the gate + BEGIN IMMEDIATE + retry.
-        result = run_write_unit(
-            db,
-            lambda: feed_app.apply_feed_action(
-                db, feed_item_id, action, collection_ids=collection_ids
-            ),
-            label="feed_action_route",
-        )
-        if result is None:
-            return OperationOutcome(
-                status="noop",
-                message=f"Feed item {feed_item_id} no longer exists",
-                result={"changed": False},
-            )
-        return OperationOutcome(
-            status="completed",
-            message=f"Applied '{action}' to feed item {feed_item_id}",
-            result=result,
-        )
-
-    operation = runner.run(
-        operation_key=f"feed.action:{action}",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
-        queued=False,
-        running_message=f"Applying '{action}' action to feed item",
-    )
-    item = feed_app.get_feed_item(db, feed_item_id)
-    return {
-        "item": FeedItemResponse(**item).model_dump() if item else None,
-        "operation": operation,
-    }
 
 
 @router.post(

@@ -363,13 +363,6 @@ def _build_ai_feature_registry(
     return {"summary": summary, "groups": groups, "items": items}
 
 
-def _dependency_ready(dependencies: dict[str, dict], name: str) -> bool:
-    info = dependencies.get(name) or {}
-    if "runtime_importable" in info:
-        return bool(info.get("runtime_importable"))
-    return bool(info.get("installed"))
-
-
 def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     """Return S2 vector backfill eligibility counts for the corpus."""
     fetch_status_available = table_exists(conn, "publication_embedding_fetch_status")

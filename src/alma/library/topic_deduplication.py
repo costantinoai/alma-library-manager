@@ -131,20 +131,6 @@ def _token_set(text: str) -> set[str]:
     return {t for t in text.split() if len(t) >= 2}
 
 
-def token_overlap_similarity(a: str, b: str) -> float:
-    """Compute Jaccard-like token overlap between two normalized strings.
-
-    Returns a value in [0, 1].
-    """
-    tokens_a = _token_set(a)
-    tokens_b = _token_set(b)
-    if not tokens_a or not tokens_b:
-        return 0.0
-    intersection = tokens_a & tokens_b
-    union = tokens_a | tokens_b
-    return len(intersection) / len(union) if union else 0.0
-
-
 # ============================================================================
 # Build canonical topics from existing data
 # ============================================================================

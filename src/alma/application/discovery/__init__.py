@@ -146,7 +146,6 @@ from .seed_profile import (
     _seed_strength,
     _seed_token_set,
     _tokenize_for_keywords,
-    _top_negative_terms,
     _top_preferred_authors,
     _top_profile_terms,
     load_library_preference_inputs,

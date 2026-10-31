@@ -12,7 +12,6 @@ import logging
 import re
 import sqlite3
 import time
-from difflib import SequenceMatcher
 
 import requests
 
@@ -34,7 +33,6 @@ from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
     _ensure_schema,
     _normalize_openalex_author_id,
-    _normalize_work,
     _upsert_institutions,
     _upsert_topics,
     backfill_missing_publication_references,
@@ -160,60 +158,6 @@ def _author_tokens(authors_raw: str) -> set[str]:
     return tokens
 
 
-def _score_work_candidate(candidate: dict, pub: dict) -> float:
-    cand_title = (candidate.get("display_name") or "").strip()
-    src_title = (pub.get("title") or "").strip()
-    if not cand_title or not src_title:
-        return 0.0
-
-    t_a = _normalize_text(src_title)
-    t_b = _normalize_text(cand_title)
-    if not t_a or not t_b:
-        return 0.0
-
-    title_score = SequenceMatcher(None, t_a, t_b).ratio() * 6.0
-    if t_a == t_b:
-        title_score += 2.0
-    elif t_a in t_b or t_b in t_a:
-        title_score += 1.0
-
-    year_score = 0.0
-    src_year = pub.get("year")
-    cand_year = candidate.get("publication_year")
-    try:
-        sy = int(src_year) if src_year is not None else None
-        cy = int(cand_year) if cand_year is not None else None
-        if sy is not None and cy is not None:
-            if sy == cy:
-                year_score = 1.5
-            elif abs(sy - cy) <= 1:
-                year_score = 0.7
-    except Exception:
-        pass
-
-    doi_score = 0.0
-    src_doi = normalize_doi(pub.get("doi") or "")
-    cand_doi = normalize_doi(candidate.get("doi") or "")
-    if src_doi and cand_doi and src_doi == cand_doi:
-        doi_score = 3.0
-
-    author_score = 0.0
-    src_tokens = _author_tokens(pub.get("authors") or "")
-    cand_authorships = candidate.get("authorships") or []
-    cand_tokens: set[str] = set()
-    for a in cand_authorships[:10]:
-        an = ((a or {}).get("author") or {}).get("display_name") or ""
-        for p in re.split(r"\s+", an.strip()):
-            if p:
-                cand_tokens.add(p.lower())
-    if src_tokens and cand_tokens:
-        overlap = len(src_tokens.intersection(cand_tokens))
-        if overlap > 0:
-            author_score = min(2.0, 0.8 * overlap)
-
-    return title_score + year_score + doi_score + author_score
-
-
 def _search_work_candidates(title_query: str, per_page: int = 10) -> list[dict]:
     try:
         client = get_client()
@@ -232,89 +176,6 @@ def _search_work_candidates(title_query: str, per_page: int = 10) -> list[dict]:
         return []
     except Exception:
         return []
-
-
-def _fetch_work_by_doi_diagnostic(doi: str) -> tuple[dict | None, str | None]:
-    """DOI lookup with explicit failure diagnostics (vs silent None)."""
-    if not doi:
-        return None, None
-    try:
-        client = get_client()
-        clean_doi = normalize_doi(doi) or doi
-        resp = client.get(
-            f"/works/doi:{clean_doi}",
-            params={
-                "select": _WORKS_SELECT_FIELDS,
-            },
-            timeout=20,
-        )
-        if resp.status_code == 404:
-            return None, None
-        if resp.status_code == 429:
-            return None, "openalex_rate_limited"
-        if resp.status_code >= 500:
-            return None, f"openalex_http_{resp.status_code}"
-        resp.raise_for_status()
-        data = resp.json() or {}
-        if not data.get("display_name"):
-            return None, None
-        return _normalize_work(data), None
-    except requests.exceptions.RequestException:
-        return None, "openalex_unreachable"
-    except Exception:
-        return None, "openalex_lookup_error"
-
-
-def _fetch_work_by_title_diagnostic(title: str) -> tuple[dict | None, str | None]:
-    """Title lookup with diagnostics and slightly broader candidate sweep."""
-    if not title or not title.strip():
-        return None, None
-    try:
-        client = get_client()
-        resp = client.get(
-            "/works",
-            params={
-                "search": title.strip(),
-                "per-page": 5,
-                "select": _WORKS_SELECT_FIELDS,
-            },
-            timeout=20,
-        )
-        if resp.status_code == 429:
-            return None, "openalex_rate_limited"
-        if resp.status_code >= 500:
-            return None, f"openalex_http_{resp.status_code}"
-        resp.raise_for_status()
-        results = (resp.json() or {}).get("results") or []
-        if not results:
-            return None, None
-
-        t_norm = _normalize_text(title)
-        best = None
-        best_score = 0.0
-        for cand in results:
-            cand_title = (cand.get("display_name") or "").strip()
-            if not cand_title:
-                continue
-            c_norm = _normalize_text(cand_title)
-            if not c_norm:
-                continue
-            if t_norm == c_norm:
-                score = 1.0
-            elif t_norm in c_norm or c_norm in t_norm:
-                score = 0.9
-            else:
-                score = SequenceMatcher(None, t_norm, c_norm).ratio()
-            if score > best_score:
-                best = cand
-                best_score = score
-        if not best or best_score < 0.72:
-            return None, None
-        return _normalize_work(best), None
-    except requests.exceptions.RequestException:
-        return None, "openalex_unreachable"
-    except Exception:
-        return None, "openalex_lookup_error"
 
 
 def _resolve_work(

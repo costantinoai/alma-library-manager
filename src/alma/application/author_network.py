@@ -514,27 +514,6 @@ def _score_from_buckets(
     return scored
 
 
-def _score_candidates(
-    db: sqlite3.Connection,
-    per_candidate: dict[str, dict],
-    *,
-    total_seeds: int,
-    now: datetime,
-) -> list[dict]:
-    """Back-compat wrapper: load state + call `_score_from_buckets` once."""
-
-    library_state = paper_signal.load_library_state(db)
-    return _score_from_buckets(
-        per_candidate,
-        total_seeds=total_seeds,
-        library_state=library_state,
-        library_topics=set(library_state.topic_weights),
-        lib_venues=_library_venue_set(db),
-        corpus_oids=_corpus_author_oids(db),
-        weights=_resolve_candidate_weights(db),
-    )
-
-
 def _library_venue_set(db: sqlite3.Connection) -> set[str]:
     try:
         rows = db.execute(

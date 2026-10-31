@@ -50,20 +50,6 @@ def _get_existing_tags(
         return set()
 
 
-def _get_existing_suggestions(
-    paper_id: str, conn: sqlite3.Connection,
-) -> set[str]:
-    """Return the set of tags already suggested for a publication."""
-    try:
-        rows = conn.execute(
-            "SELECT tag FROM tag_suggestions WHERE paper_id = ?",
-            (paper_id,),
-        ).fetchall()
-        return {row["tag"] for row in rows}
-    except sqlite3.OperationalError:
-        return set()
-
-
 def _embedding_based_suggestions(
     paper_id: str,
     conn: sqlite3.Connection,

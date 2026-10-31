@@ -413,19 +413,6 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def list_alt_openalex_ids(
-    db: sqlite3.Connection, primary_author_id: str
-) -> list[str]:
-    """All alt OpenAlex IDs already merged into this primary."""
-    ensure_alt_identifiers_table(db)
-    rows = db.execute(
-        "SELECT alt_openalex_id FROM author_alt_identifiers "
-        "WHERE primary_author_id = ? ORDER BY created_at ASC",
-        (primary_author_id,),
-    ).fetchall()
-    return [str(r["alt_openalex_id"]) for r in rows if r["alt_openalex_id"]]
-
-
 def list_all_alt_openalex_ids(db: sqlite3.Connection) -> set[str]:
     """Every alt OpenAlex ID across all merges, lowercased.
 

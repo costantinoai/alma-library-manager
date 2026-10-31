@@ -487,16 +487,6 @@ def score_papers_batch(
     return results
 
 
-def compute_paper_signal_score(
-    db: sqlite3.Connection,
-    paper_id: str,
-    state: LibraryState | None = None,
-) -> float:
-    """Single-paper convenience wrapper over `score_papers_batch`."""
-
-    return score_papers_batch(db, [paper_id], state).get(paper_id, 0.0)
-
-
 # -- helpers ----------------------------------------------------------
 
 def _days_since(ts: str | None, now: datetime) -> float | None:

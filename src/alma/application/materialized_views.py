@@ -584,19 +584,12 @@ def request_refresh(conn: sqlite3.Connection, view_key: str, *, force: bool = Fa
     raise RuntimeError(f"Could not schedule {view_key} refresh")
 
 
-def enqueue_after_write(conn: sqlite3.Connection, view_key: str, *, label: str) -> None:
-    """Request an asynchronous rebuild after the caller releases its write lock."""
-    from alma.core.db_write import run_after_gate_release
-
-    run_after_gate_release(lambda: enqueue_rebuild(view_key), conn=conn, label=label)
-
-
 def request_refresh_after_write(conn: sqlite3.Connection, view_key: str, *, label: str) -> None:
     """Like :func:`request_refresh`, but safe to call from inside a job that may
     still hold the write lock: the freshness check AND the scheduling run once
-    this thread's lock is released, on a throwaway connection. Unlike
-    :func:`enqueue_after_write` it rebuilds only when the inputs moved, so a
-    caller can ask after every run without paying for a rebuild each time.
+    this thread's lock is released, on a throwaway connection. It rebuilds only
+    when the inputs moved, so a caller can ask after every run without paying
+    for a rebuild each time.
     A failure is logged, never raised: the caller's own work already succeeded.
     """
     from alma.core.db_write import run_after_gate_release
@@ -668,79 +661,6 @@ def read_variant_row(conn: sqlite3.Connection, variant_key: str) -> dict | None:
     return _read_row(conn, variant_key)
 
 
-def get_or_build_variant(
-    conn: sqlite3.Connection,
-    *,
-    view_key: str,
-    build_fn: Callable[[sqlite3.Connection], dict],
-    make_fingerprint: Callable[[], str],
-    is_fresh: Callable[[str], bool],
-) -> dict:
-    """Durable cache for a DYNAMIC view with a custom freshness policy.
-
-    Unlike :func:`get` (registry-backed, exact-fingerprint, SWR background
-    rebuild), this serves an unbounded key space:
-
-    * ``is_fresh(stored_fingerprint) -> bool`` decides whether the cached row is
-      still good. Graph variants pass a PROPORTIONAL gauge — fresh while the data
-      drifted below a threshold AND every algo version matches — so a cached
-      variant survives small corpus churn and rebuilds on a real shift or a code
-      change.
-    * ``make_fingerprint() -> str`` produces the signature stored on (re)build
-      (the gauge's build-time data size + watermark + versions).
-
-    On a fresh hit the cached payload is returned. Otherwise ``build_fn`` runs
-    INLINE (a variant miss has nothing to serve stale, so there is no background
-    SWR — same as the prior in-memory cache, but the result is now durable), the
-    payload is persisted with the fresh fingerprint, and the per-base row set is
-    pruned to :data:`VARIANT_ROWS_PER_BASE`.
-    """
-    row = _read_row(conn, view_key)
-    if row is not None:
-        cached = _decode_payload(row.get("payload"))
-        if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
-            return cached
-
-    # The build is a PURE READ (the graph builders persist nothing — they pass
-    # persist=False) and is SLOW, so it runs OUTSIDE any write transaction: never
-    # hold the writer gate across a multi-second build (SQLite write-discipline
-    # rule 2). The fingerprint (a few cheap reads) is computed here too.
-    started = perf_counter()
-    payload = build_fn(conn)
-    if not isinstance(payload, dict):
-        raise TypeError(
-            f"variant build_fn for {view_key!r} returned {type(payload).__name__}, expected dict"
-        )
-    compute_ms = int(round((perf_counter() - started) * 1000))
-    fingerprint = make_fingerprint()
-
-    # Persist through the DRY central gated write route: BEGIN IMMEDIATE takes the
-    # write lock up front (so the INSERT can't lose the read→write upgrade race and
-    # "database is locked"), the in-process gate serialises against every other
-    # writer, and transient cross-process locks retry. _write_row /
-    # _prune_variant_rows commit_unless_gated → no-op inside this unit, which owns
-    # the single commit. A persistent-lock failure is swallowed: the cache is an
-    # optimisation, so the user still gets their graph (the response never blocks
-    # on or 500s from a cache write).
-    encoded_payload = json.dumps(payload, default=str)
-
-    def _persist() -> None:
-        _write_row(
-            conn,
-            view_key=view_key,
-            fingerprint=fingerprint,
-            payload=encoded_payload,
-            compute_ms=compute_ms,
-        )
-        _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
-
-    try:
-        run_write_unit(conn, _persist, label=f"mv.variant:{view_key}")
-    except Exception:  # noqa: BLE001 — cache write must never break the response
-        logger.exception("materialized_views: failed to persist variant %s", view_key)
-    return payload
-
-
 def get_or_enqueue_variant(
     conn: sqlite3.Connection,
     *,
@@ -751,7 +671,7 @@ def get_or_enqueue_variant(
     job_label: str,
     may_enqueue: Callable[[], bool] | None = None,
 ) -> dict | None:
-    """Async twin of :func:`get_or_build_variant`: NEVER builds inline.
+    """Cached variant read that NEVER builds inline.
 
     Task 50 M1 — a variant build is a full re-cluster/re-layout (the >200 s
     author-network case), so a GET must not run it in-request. A fresh cached
