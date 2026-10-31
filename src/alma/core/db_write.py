@@ -91,12 +91,23 @@ def gate_held_by_current_thread() -> bool:
     return bool(getattr(_GATE_STATE, "held", False))
 
 
-def _defer(fn: Callable[[], None]) -> None:
-    """Queue ``fn`` on this thread's post-gate-release stack."""
+def _defer(fn: Callable[[], None], coalesce_key: str | None = None) -> None:
+    """Queue ``fn`` on this thread's post-gate-release stack.
+
+    Callbacks sharing a ``coalesce_key`` run once per write unit.
+    """
     queue = getattr(_GATE_STATE, "deferred", None)
     if queue is None:
         queue = []
         _GATE_STATE.deferred = queue
+    if coalesce_key is not None:
+        keys = getattr(_GATE_STATE, "deferred_keys", None)
+        if keys is None:
+            keys = set()
+            _GATE_STATE.deferred_keys = keys
+        if coalesce_key in keys:
+            return
+        keys.add(coalesce_key)
     queue.append(fn)
 
 
@@ -105,6 +116,7 @@ def run_after_gate_release(
     *,
     conn: sqlite3.Connection,
     label: str = "deferred callback",
+    coalesce_key: str | None = None,
 ) -> None:
     """Run ``fn`` only once THIS thread's SQLite write lock is released.
 
@@ -143,13 +155,17 @@ def run_after_gate_release(
         conn: the caller's connection — the one that may be holding the write
             lock. Required: passing it is what makes case 2 detectable.
         label: short description for commit-retry log lines.
+        coalesce_key: callbacks with the same key run once per write unit. For a
+            per-row hook whose side effect is one idempotent job: a 200-row unit
+            otherwise replays it 200 times after commit, each replay reading
+            Activity and writing a status row.
 
     Errors from deferred callbacks are logged, never raised — they are
     fire-and-forget side effects, and the write unit they rode on has already
     committed.
     """
     if gate_held_by_current_thread():
-        _defer(fn)
+        _defer(fn, coalesce_key)
         return
     if conn.in_transaction:
         # Ungated caller with staged, uncommitted writes. Close the window
@@ -198,6 +214,7 @@ def run_gated_or_deferred(fn: Callable[[], None], *, label: str) -> None:
 
 def _drain_deferred() -> None:
     queue = getattr(_GATE_STATE, "deferred", None)
+    _GATE_STATE.deferred_keys = set()
     if not queue:
         return
     _GATE_STATE.deferred = []
@@ -268,6 +285,7 @@ def _writer_gate(label: str) -> Iterator[None]:
                 _GATE_STATE.held = False
     except BaseException:
         _GATE_STATE.deferred = []
+        _GATE_STATE.deferred_keys = set()
         raise
     _drain_deferred()
 

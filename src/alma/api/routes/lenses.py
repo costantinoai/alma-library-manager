@@ -77,6 +77,7 @@ def create_lens(
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
             queued=False,
+            write_unit=True,
         )
         lens_id = str((op.get("result") or {}).get("lens_id") or "")
         lens = discovery_app.get_lens(db, lens_id)
@@ -177,6 +178,7 @@ def update_lens(
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
             queued=False,
+            write_unit=True,
         )
         if op["status"] == "noop":
             raise HTTPException(status_code=404, detail="Lens not found")
@@ -211,6 +213,7 @@ def delete_lens(
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
             queued=False,
+            write_unit=True,
         )
         if op["status"] == "noop":
             raise HTTPException(status_code=404, detail="Lens not found")

@@ -665,6 +665,28 @@ def _load_statuses_from_db(limit: int = _ACTIVITY_STATUS_LIMIT) -> list[dict]:
         return []
 
 
+def _load_active_statuses_from_db(operation_key: str) -> list[dict]:
+    """Active rows of one operation key, read through its index.
+
+    `find_active_job` runs once per scheduled job, and it used to load and
+    redact the 2,000 latest Activity rows to find these: 0.35 s of CPU a call.
+    """
+    placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
+    try:
+        conn = _activity_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM operation_status "
+                f"WHERE operation_key = ? AND status IN ({placeholders})",
+                (operation_key, *sorted(_ACTIVE_STATUSES)),
+            ).fetchall()
+            return [_row_to_status(r) for r in rows]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
 def _load_job_logs_from_db(job_id: str, limit: int = 100) -> list[dict]:
     try:
         conn = _activity_conn()
@@ -2941,12 +2963,8 @@ def find_active_job(operation_key: str) -> dict | None:
             and st.get("status") in _ACTIVE_STATUSES
             and not _is_stale_active_status(st)
         )
-    for st in _load_statuses_from_db(limit=_ACTIVITY_STATUS_LIMIT):
-        if (
-            st.get("operation_key") == operation_key
-            and st.get("status") in _ACTIVE_STATUSES
-            and not _is_stale_active_status(st)
-        ):
+    for st in _load_active_statuses_from_db(operation_key):
+        if not _is_stale_active_status(st):
             candidates.append((str(st.get("job_id")), st))
     if not candidates:
         return None

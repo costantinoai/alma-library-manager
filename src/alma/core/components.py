@@ -50,6 +50,17 @@ COMPONENT_PEER_REVIEW = "peer_review"
 COMPONENT_DATASET = "dataset"
 
 
+# Asserted by the bootstrap DDL. `link_orphan_components` runs once per ingested
+# work inside a write section, and without this index it walks all of `papers`.
+_ORPHAN_COMPONENT_WHERE = (
+    "component_type IS NOT NULL AND parent_paper_id IS NULL AND doi IS NOT NULL"
+)
+ORPHAN_COMPONENT_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_papers_orphan_component ON papers(doi) "
+    f"WHERE {_ORPHAN_COMPONENT_WHERE}"
+)
+
+
 def not_component_sql(alias: str = "p") -> str:
     """SQL predicate selecting standalone papers (NOT components).
 
@@ -248,10 +259,13 @@ def link_orphan_components(
     pdoi = normalize_doi(parent_doi)
     if not pdoi:
         return 0
+    # The DOI test runs in SQL: a child's DOI contains its parent's, so the usual
+    # answer is no rows, and every row fetched is a round trip through the GIL
+    # inside a write section. `classify_component` below still decides.
     rows = conn.execute(
-        "SELECT id, doi FROM papers "
-        "WHERE component_type IS NOT NULL AND parent_paper_id IS NULL "
-        "AND doi IS NOT NULL"
+        f"SELECT id, doi FROM papers WHERE {_ORPHAN_COMPONENT_WHERE} "
+        "AND instr(lower(doi), ?) > 0",
+        (f"{pdoi.lower()}.",),
     ).fetchall()
     linked = 0
     for row in rows:

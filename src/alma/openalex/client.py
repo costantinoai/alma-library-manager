@@ -8,6 +8,7 @@ rate-limit tracking, automatic retries).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -624,22 +625,21 @@ def _upsert_referenced_works(
             "DELETE FROM publication_references WHERE paper_id = ?",
             (paper_id,),
         )
-        inserted = 0
-        seen: set[int] = set()
+        work_ids: dict[int, None] = {}
         for raw_work_id in referenced_work_ids or []:
             work_id_int = _work_id_to_int(str(raw_work_id or ""))
-            if work_id_int is None or work_id_int in seen:
-                continue
-            seen.add(work_id_int)
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO publication_references (paper_id, referenced_work_id)
-                VALUES (?, ?)
-                """,
-                (paper_id, work_id_int),
-            )
-            inserted += 1
-        return inserted
+            if work_id_int is not None:
+                work_ids[work_id_int] = None
+        # One statement, not one per reference: this runs per work inside a
+        # write section, and a work can cite hundreds of papers.
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO publication_references (paper_id, referenced_work_id)
+            SELECT ?, value FROM json_each(?)
+            """,
+            (paper_id, json.dumps(list(work_ids))),
+        )
+        return len(work_ids)
     except sqlite3.OperationalError as e:
         logger.warning("Failed to upsert references for paper %s: %s", paper_id, e)
         return 0

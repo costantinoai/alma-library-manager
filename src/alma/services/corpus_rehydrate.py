@@ -3604,5 +3604,13 @@ def enqueue_pending_hydration(
         # until `busy_timeout` expired, logged "database is locked" and DROPPED
         # the row — every Activity write in the ensuing sweep paid the same 5 s,
         # which is why `test_importer_create_paper_parity` took ~310 s.
-        run_after_gate_release(_schedule, conn=conn, label="enqueue_pending_hydration")
+        #
+        # One sweep per write unit: the sweep drains the whole ledger, so a
+        # 200-work unit needs one, not 200 `find_active_job` reads after commit.
+        run_after_gate_release(
+            _schedule,
+            conn=conn,
+            label="enqueue_pending_hydration",
+            coalesce_key="pending_hydration_sweep",
+        )
     return queued
