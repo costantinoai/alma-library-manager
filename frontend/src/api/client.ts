@@ -4315,11 +4315,15 @@ export interface AddonInfo {
   enabled: boolean
   blocked: string | null
   has_data: boolean
+  /** What switching off costs right now. Set, it needs a confirmation. */
+  disable_warning: string | null
 }
 
 export interface AddonFootprint {
   tables: { name: string; rows: number }[]
   rows: number
+  /** Rows it owns inside core tables, named for the dialog. */
+  core_rows: { label: string; table: string; rows: number }[]
   files: number
   bytes: number
   settings: string[]

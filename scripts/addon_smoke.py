@@ -41,6 +41,7 @@ CORE_READS = (
     "/api/v1/library/saved",
     "/api/v1/library/collections",
     "/api/v1/library/tags",
+    "/api/v1/tags/merge-suggestions",
     "/api/v1/library/workflow-summary",
     "/api/v1/library-mgmt/info",
     "/api/v1/health",
@@ -49,6 +50,7 @@ CORE_READS = (
     "/api/v1/insights/diagnostics",
     "/api/v1/settings",
     "/api/v1/settings/export",
+    "/api/v1/ai/status",
     "/api/v1/plugins",
     "/api/v1/addons",
 )
@@ -99,6 +101,9 @@ def describe() -> int:
                     "jobs": [spec.job_id for spec in addon.jobs],
                     "tables": list(addon.tables),
                     "plugins": [manifest.id for manifest in addon.plugins()],
+                    "embedding_provider": (
+                        addon.embedding_provider().name if addon.embedding_provider else None
+                    ),
                 }
                 for addon in addons.present()
             }
@@ -184,6 +189,31 @@ def check(args: argparse.Namespace) -> int:
         created = client.post("/api/v1/library/collections", json={"name": "D27"})
         if created.status_code >= 300:
             failures.append(f"create a collection -> {created.status_code}")
+
+        # A tag merge runs through a write hook, and provider choice through a
+        # lookup: both must work with no add-on answering.
+        for name in ("one", "One!"):
+            made = client.post("/api/v1/library/tags", json={"name": name})
+            if made.status_code >= 300:
+                failures.append(f"create a tag -> {made.status_code}")
+        tags = client.get("/api/v1/library/tags").json()
+        if len(tags) == 2:
+            merged = client.post(
+                "/api/v1/tags/merge",
+                json={"source_tag_id": tags[0]["id"], "target_tag_id": tags[1]["id"]},
+            )
+            if merged.status_code >= 300:
+                failures.append(f"merge tags -> {merged.status_code} {merged.text[:200]}")
+        for provider in ("none", "local"):
+            configured = client.post("/api/v1/ai/configure", json={"provider": provider})
+            if configured.status_code >= 300:
+                failures.append(f"choose provider {provider} -> {configured.status_code}")
+        status = client.get("/api/v1/ai/status").json()
+        if status.get("embeddings", {}).get("model") != "allenai/specter2_base":
+            failures.append(f"readers are not on SPECTER2: {status.get('embeddings', {}).get('model')}")
+        listed_providers = {entry["name"] for entry in status.get("providers", [])}
+        if expected["embedding_provider"] in listed_providers:
+            failures.append(f"provider {expected['embedding_provider']} is still listed")
 
         queued = client.post("/api/v1/library-mgmt/deduplicate")
         if queued.status_code >= 300:

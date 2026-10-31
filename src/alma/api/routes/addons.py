@@ -65,6 +65,7 @@ def _describe(db: sqlite3.Connection, addon: addons.AddOn) -> dict[str, Any]:
         "enabled": addons.is_enabled(addon.id),
         "blocked": addons.blocked_reason(addon.id),
         "has_data": bool(addon.has_user_data(db)),
+        "disable_warning": addon.disable_warning(db) if addon.disable_warning else None,
     }
 
 
@@ -152,9 +153,14 @@ def _run_remove(job_id: str, addon_id: str) -> dict[str, Any]:
         with write_section(conn, label=f"addon remove {addon_id}"):
             _require_switch_off()
             tables = addons.drop_tables(conn, addon_id)
+            core_rows = addons.delete_core_rows(conn, addon_id)
     finally:
         conn.close()
-    _progress("tables", f"Dropped {len(tables)} tables", {"tables": tables})
+    _progress(
+        "tables",
+        f"Dropped {len(tables)} tables",
+        {"tables": tables, "core_rows": core_rows},
+    )
 
     # After the commit: slow file I/O never runs inside a write transaction.
     files = addons.remove_files(addon_id)
@@ -163,7 +169,20 @@ def _run_remove(job_id: str, addon_id: str) -> dict[str, Any]:
     removed = addons.remove_settings(addon_id)
     _progress("settings", "Deleted settings and credentials", removed)
 
-    return {"backup_name": backup_name, "tables": tables, "folders": files, **removed}
+    # A state on Health may name what just went, such as a removed provider.
+    probe = open_db_connection()
+    try:
+        mv.request_refresh_after_write(probe, _OPERATIONAL_VIEW, label="addon remove")
+    finally:
+        probe.close()
+
+    return {
+        "backup_name": backup_name,
+        "tables": tables,
+        "core_rows": core_rows,
+        "folders": files,
+        **removed,
+    }
 
 
 @router.post(
@@ -172,8 +191,9 @@ def _run_remove(job_id: str, addon_id: str) -> dict[str, Any]:
     description=(
         "Needs `confirm` to equal the add-on id, and the add-on switched off first "
         "(409 otherwise, and 409 while one of its jobs is active). Drops its tables, "
-        "deletes its files, settings and credentials, after a backup. Papers and "
-        "core data are never touched. Switching it on again starts empty."
+        "deletes the rows it declares in core tables, its files, settings and "
+        "credentials, after a backup. Papers are never touched. Switching it on again "
+        "starts empty."
     ),
 )
 def remove_addon(

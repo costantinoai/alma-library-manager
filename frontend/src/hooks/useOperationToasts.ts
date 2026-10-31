@@ -60,7 +60,7 @@ function rootsForOperation(operationKey?: string): string[] {
 
   // Remove changes what the shell, Settings and Home show.
   if (key.startsWith('addons.')) {
-    return ['addons', 'bootstrap', 'plugins', 'home', 'home-brief', 'health']
+    return ['addons', 'bootstrap', 'plugins', 'home', 'home-brief', 'health', 'ai-status']
   }
 
   // Paper PDFs (task 81): a fetch/attach refreshes that paper's PDF state; a

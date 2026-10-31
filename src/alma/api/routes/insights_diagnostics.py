@@ -1299,7 +1299,7 @@ _FEEDBACK_FINGERPRINT_SQL = """
 
 _OPERATIONAL_FINGERPRINT_SQL = """
     SELECT
-      'op-logic-v4',  -- logic-version token: bump when the states-list logic changes
+      'op-logic-v5',  -- logic-version token: bump when the states-list logic changes
                       -- (data fingerprints can't see code changes — task 24 de-dupe).
       strftime('%Y-%m-%dT%H', 'now'),
                       -- Hour bucket: the payload embeds now()-relative facts the data
@@ -1316,7 +1316,8 @@ _OPERATIONAL_FINGERPRINT_SQL = """
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.semantic_scholar.enabled'), ''),
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.crossref.enabled'), ''),
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.arxiv.enabled'), ''),
-      COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.biorxiv.enabled'), '')
+      COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.biorxiv.enabled'), ''),
+      COALESCE((SELECT value FROM discovery_settings WHERE key = 'ai.provider'), '')
 """
 
 _EVALUATION_FINGERPRINT_SQL = f"""
