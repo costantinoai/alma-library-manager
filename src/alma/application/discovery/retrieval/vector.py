@@ -26,7 +26,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
 from alma.discovery import similarity as sim_module
 
 from ..branch_attribution import branch_can_retrieve
@@ -141,16 +141,15 @@ def _load_seed_vectors(
 
     from alma.core.vector_blob import decode_vector
 
-    placeholders = ",".join("?" for _ in seed_ids)
     rows = db.execute(
         f"""
         SELECT pe.paper_id, pe.embedding
         FROM publication_embeddings pe
         JOIN papers p ON p.id = pe.paper_id
-        WHERE pe.model = ? AND pe.paper_id IN ({placeholders})
+        WHERE pe.model = ? AND pe.paper_id {IN_ID_LIST}
           AND {standalone_paper_sql('p')}
         """,
-        [active_model, *seed_ids],
+        [active_model, id_list(seed_ids)],
     ).fetchall()
 
     out: dict[str, Any] = {}
@@ -309,16 +308,15 @@ def _direction_centroids(
         members = [str(m).strip() for m in (direction.get("member_paper_ids") or []) if str(m or "").strip()]
         if not members:
             continue
-        placeholders = ",".join("?" for _ in members)
         rows = db.execute(
             f"""
             SELECT pe.embedding
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
-            WHERE pe.model = ? AND pe.paper_id IN ({placeholders})
+            WHERE pe.model = ? AND pe.paper_id {IN_ID_LIST}
               AND {standalone_paper_sql('p')}
             """,
-            [active_model, *members],
+            [active_model, id_list(members)],
         ).fetchall()
         vecs = []
         for row in rows:

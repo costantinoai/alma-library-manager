@@ -46,7 +46,7 @@ from alma.core.scoring_math import (
 from alma.core.scoring_math import (
     log_prevalence_weights,
 )
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import candidate_paper_id
 from alma.discovery import similarity as sim_module
@@ -139,17 +139,16 @@ def compute_centroid_from_ids(
     import numpy as np
 
     active_model = sim_module.get_active_embedding_model(conn)
-    placeholders = ",".join("?" * len(paper_ids))
     rows = conn.execute(
         f"""
         SELECT pe.embedding
         FROM publication_embeddings pe
         JOIN papers p ON p.id = pe.paper_id
         WHERE pe.model = ?
-          AND pe.paper_id IN ({placeholders})
+          AND pe.paper_id {IN_ID_LIST}
           AND {standalone_paper_sql('p')}
         """,
-        [active_model, *paper_ids],
+        [active_model, id_list(paper_ids)],
     ).fetchall()
     if not rows:
         return None

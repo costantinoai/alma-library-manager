@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
 
 from ..ppr import SEED_LIBRARY, SEED_LOVED, compute_ppr_variants
 from ._common import (
@@ -154,24 +154,23 @@ def _direct_reference_candidates(
     *,
     limit: int,
 ) -> list[dict]:
-    placeholders = ",".join("?" for _ in seed_ids)
     rows = db.execute(
         f"""
         SELECT CAST(pr.referenced_work_id AS TEXT) AS rid,
                COUNT(DISTINCT pr.paper_id) AS corpus_overlap,
-               SUM(CASE WHEN pr.paper_id IN ({placeholders}) THEN 1 ELSE 0 END)
+               SUM(CASE WHEN pr.paper_id {IN_ID_LIST} THEN 1 ELSE 0 END)
                    AS seed_overlap
         FROM publication_references pr
         WHERE pr.referenced_work_id IN (
             SELECT DISTINCT referenced_work_id
             FROM publication_references
-            WHERE paper_id IN ({placeholders})
+            WHERE paper_id {IN_ID_LIST}
         )
         GROUP BY pr.referenced_work_id
         ORDER BY corpus_overlap DESC, seed_overlap DESC, pr.referenced_work_id
         LIMIT ?
         """,
-        [*seed_ids, *seed_ids, max(1, int(limit))],
+        [id_list(seed_ids), id_list(seed_ids), max(1, int(limit))],
     ).fetchall()
     if not rows:
         return []
@@ -208,25 +207,24 @@ def _bibliographic_coupling_candidates(
 ) -> list[dict]:
     """Local papers sharing references with the lens seeds."""
 
-    placeholders = ",".join("?" for _ in seed_ids)
     rows = db.execute(
         f"""
         WITH seed_references AS (
             SELECT DISTINCT referenced_work_id
             FROM publication_references
-            WHERE paper_id IN ({placeholders})
+            WHERE paper_id {IN_ID_LIST}
         )
         SELECT pr.paper_id,
                COUNT(DISTINCT pr.referenced_work_id) AS overlap
         FROM publication_references pr
         JOIN seed_references sr
           ON sr.referenced_work_id = pr.referenced_work_id
-        WHERE pr.paper_id NOT IN ({placeholders})
+        WHERE pr.paper_id NOT {IN_ID_LIST}
         GROUP BY pr.paper_id
         ORDER BY overlap DESC, pr.paper_id
         LIMIT ?
         """,
-        [*seed_ids, *seed_ids, max(1, int(limit))],
+        [id_list(seed_ids), id_list(seed_ids), max(1, int(limit))],
     ).fetchall()
     candidates = _candidates_by_paper_id(
         db,
@@ -261,15 +259,14 @@ def _cocitation_candidates(
 ) -> list[dict]:
     """Works cited alongside a lens seed by papers in the local corpus."""
 
-    placeholders = ",".join("?" for _ in seed_ids)
     seed_rows = db.execute(
         f"""
         SELECT CAST(SUBSTR(openalex_id, 2) AS INTEGER) AS work_id
         FROM papers
-        WHERE id IN ({placeholders})
+        WHERE id {IN_ID_LIST}
           AND openalex_id GLOB 'W[0-9]*'
         """,
-        seed_ids,
+        [id_list(seed_ids)],
     ).fetchall()
     seed_work_ids = [
         int(row["work_id"])
@@ -278,24 +275,23 @@ def _cocitation_candidates(
     ]
     if not seed_work_ids:
         return []
-    work_placeholders = ",".join("?" for _ in seed_work_ids)
     rows = db.execute(
         f"""
         WITH seed_citers AS (
             SELECT DISTINCT paper_id
             FROM publication_references
-            WHERE referenced_work_id IN ({work_placeholders})
+            WHERE referenced_work_id {IN_ID_LIST}
         )
         SELECT CAST(pr.referenced_work_id AS TEXT) AS rid,
                COUNT(DISTINCT pr.paper_id) AS cocitation_count
         FROM publication_references pr
         JOIN seed_citers sc ON sc.paper_id = pr.paper_id
-        WHERE pr.referenced_work_id NOT IN ({work_placeholders})
+        WHERE pr.referenced_work_id NOT {IN_ID_LIST}
         GROUP BY pr.referenced_work_id
         ORDER BY cocitation_count DESC, pr.referenced_work_id
         LIMIT ?
         """,
-        [*seed_work_ids, *seed_work_ids, max(1, int(limit))],
+        [id_list(seed_work_ids), id_list(seed_work_ids), max(1, int(limit))],
     ).fetchall()
     candidates = _candidates_by_openalex_id(
         db,
