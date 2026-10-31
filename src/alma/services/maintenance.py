@@ -1784,17 +1784,24 @@ def task_pending_count(
         ) from exc
 
 
-def planning_health_payload(conn: sqlite3.Connection) -> dict[str, Any]:
-    """One health input for planning, ordering, recommendation, and resume."""
+def merge_health_payloads(corpus: dict[str, Any], authors: dict[str, Any]) -> dict[str, Any]:
+    """The corpus health payload with the author dimensions added."""
 
-    corpus = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-    authors = (mv.get(conn, health_service.HEALTH_AUTHORS_VIEW_KEY).get("payload")) or {}
     dimensions: dict[str, dict[str, Any]] = {}
     for row in [*(corpus.get("dimensions") or []), *(authors.get("dimensions") or [])]:
         key = str(row.get("key") or "")
         if key:
             dimensions[key] = row
     return {**corpus, "dimensions": list(dimensions.values())}
+
+
+def planning_health_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    """One health input for planning, ordering, recommendation, and resume."""
+
+    return merge_health_payloads(
+        mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload") or {},
+        mv.get(conn, health_service.HEALTH_AUTHORS_VIEW_KEY).get("payload") or {},
+    )
 
 
 def _validated_spec(task: MaintenanceTask, spec: MaintenanceRunSpec) -> MaintenanceRunSpec:
@@ -2174,9 +2181,15 @@ def describe_task(
             or dimensions.get(key, {}).get("severity") in {"warning", "critical"}
         )
     ]
+    unmeasured_prerequisites = [
+        row["label"] for row in dependencies if row["required"] and row["pending"] is None
+    ]
     if assessment_error:
         attention_required = True
         attention_reason = "Pending work could not be measured"
+    elif unmeasured_prerequisites:
+        attention_required = True
+        attention_reason = "Prerequisite could not be measured: " + ", ".join(unmeasured_prerequisites)
     elif unhealthy_dimensions:
         attention_required = True
         attention_reason = "Health warning: " + ", ".join(
@@ -2628,7 +2641,7 @@ def run_task_now(
     availability_blocker = _task_availability_blocker(conn, task)
     if availability_blocker:
         return MaintenanceLaunch(
-            status="blocked_external",
+            status="blocked_unavailable",
             job_id=None,
             plan=plan,
             message=str(availability_blocker["message"]),
@@ -3240,7 +3253,6 @@ _RESUMABLE_OPERATION_KEYS = frozenset({
 # marker means a USER cancel (which writes a different message) is never
 # auto-resumed.
 _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
-_ORPHAN_RESUME_CONSUMED_MESSAGE = "Orphaned run resumed once"
 
 
 def _mark_orphan_handed_off(conn: sqlite3.Connection, marker_ids: list[str], continuation: str) -> None:

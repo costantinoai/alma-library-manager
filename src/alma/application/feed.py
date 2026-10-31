@@ -2253,19 +2253,13 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     summary["candidate_outcomes"] = outcomes
     failures = sum(d.get("status") in {"failed", "degraded"} for d in monitor_diagnostics)
     summary["monitors_failed"] = failures
-    previous_runs = int(discovery_settings.get("feed.zero_yield_runs") or 0)
-    zero_yield = papers_found > 0 and items_created == 0 and failures == 0
-    runs = previous_runs + 1 if zero_yield else 0
+    previous_runs = int(discovery_settings.get("feed.drop_runs") or 0)
+    runs = previous_runs + 1 if failures == 0 and monitor_app.lost_yield(summary) else 0
     with write_section(db, label="feed refresh health"):
         from alma.application.discovery.lens_crud import upsert_setting
 
-        upsert_setting(db, "feed.zero_yield_runs", str(runs))
-    summary["zero_yield_runs"] = runs
-    if runs >= monitor_app.ZERO_YIELD_WARNING_RUNS:
-        summary["health_warning"] = (
-            f"Sources returned candidates but no new items in {runs} consecutive refreshes; "
-            "see candidate outcomes for duplicates, dismissals and components"
-        )
+        upsert_setting(db, "feed.drop_runs", str(runs))
+    summary["drop_runs"] = runs
     _, message = feed_refresh_outcome(summary)
     _log("refresh_outcome", message, data=redact_sensitive_data(summary))
     logger.info(
@@ -2292,9 +2286,7 @@ def feed_refresh_outcome(result: dict) -> tuple[str, str]:
     message = f"Added {created} new papers to feed inbox" if created else "No new papers found from active monitors"
     if failures:
         message += f"; {failures} monitors failed (see diagnostics)"
-    if result.get("health_warning"):
-        message += f"; Warning: {result['health_warning']}"
-    elif int(result.get("drop_runs") or 0) >= monitor_app.ZERO_YIELD_WARNING_RUNS:
+    if int(result.get("drop_runs") or 0) >= monitor_app.ZERO_YIELD_WARNING_RUNS:
         message += "; Warning: candidates were repeatedly dropped with no new items; see monitor diagnostics"
     return status, message
 

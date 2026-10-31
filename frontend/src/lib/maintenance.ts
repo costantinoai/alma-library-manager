@@ -6,9 +6,9 @@ import { describeJobLaunch, type LaunchMessage } from '@/lib/activity'
  * button that launches a maintenance task (Health's repair cards, the
  * drilldown's Fix selected, Settings' Reconcile Paper Groups).
  *
- * Only the two outcomes particular to maintenance live here — the network
- * switch and the provider daily cap, where nothing was launched and the
- * backend explains why. Started / already running / nothing to do are the
+ * Only the outcomes particular to maintenance live here — the network switch,
+ * a missing dependency and the provider daily cap, where nothing was launched
+ * and the backend explains why. Started / already running / nothing to do are the
  * generic job-launch wording (`describeJobLaunch`), so a maintenance run and
  * any other background job read the same.
  */
@@ -20,6 +20,12 @@ export function describeMaintenanceLaunch(
     return {
       title: 'External network access is off',
       description: result.message ?? 'Enable network access in Settings → Connections.',
+    }
+  }
+  if (result.status === 'blocked_unavailable') {
+    return {
+      title: 'A required dependency is unavailable',
+      description: result.message ?? 'Check the task\'s requirements in Settings.',
     }
   }
   if (result.status === 'skipped_daily_cap') {

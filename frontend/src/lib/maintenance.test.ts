@@ -37,6 +37,16 @@ describe('describeMaintenanceLaunch', () => {
     expect(capped.title).toBe('Daily API limit reached')
   })
 
+  it('names a missing dependency, not the network', () => {
+    const message = 'No active embedding provider is available.'
+    const blocked = describeMaintenanceLaunch(
+      run({ status: 'blocked_unavailable', job_id: null, message }),
+      'Local embeddings',
+    )
+    expect(blocked.title).toBe('A required dependency is unavailable')
+    expect(blocked.description).toBe(message)
+  })
+
   it('reports a noop as nothing to run', () => {
     expect(describeMaintenanceLaunch(run({ status: 'noop', job_id: null }), 'Reconcile').title).toBe(
       'Nothing to run',

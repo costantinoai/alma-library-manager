@@ -74,7 +74,7 @@ The installer reads these from the environment and saves them in
 | `BIND_ADDR` | `127.0.0.1` | Host address for port 8000. See [Exposing on your network](#exposing-on-your-network). |
 | `ALMA_IMAGE_TAG` | `stable`, plus the flavor suffix | The exact image tag. `0.25.0`, for example. |
 | `ALMA_VERSION` | `stable` | The version or channel. The flavor suffix is added for you. |
-| `ALMA_FLAVOR` | autodetected | `cpu`, `gpu` or `lite`. |
+| `ALMA_FLAVOR` | the saved flavor, else autodetected | `cpu`, `gpu` or `lite`. |
 | `OPENALEX_EMAIL` | empty | Optional contact email (sets a courteous User-Agent). |
 
 For example:

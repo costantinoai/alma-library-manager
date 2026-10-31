@@ -185,13 +185,23 @@ function Find-Flavor {
     return "cpu"
 }
 
+function Get-TagFlavor([string]$imageTag) {
+    # The flavor the tag names, ignoring any pinned digest.
+    $name = $imageTag.Split("@")[0]
+    if ($name -like "*gpu*") { return "gpu" }
+    if ($name -like "*lite*") { return "lite" }
+    return "cpu"
+}
+
+$savedTag = Get-Saved "ALMA_IMAGE_TAG"
+if (-not $savedTag) { $savedTag = $carried["ALMA_IMAGE_TAG"] }
 $tag = $env:ALMA_IMAGE_TAG
 if (-not $tag -and -not $env:ALMA_VERSION) {
-    $tag = Get-Saved "ALMA_IMAGE_TAG"
-    if (-not $tag) { $tag = $carried["ALMA_IMAGE_TAG"] }
+    $tag = $savedTag
 }
 if (-not $tag) {
-    $flavor = if ($env:ALMA_FLAVOR) { $env:ALMA_FLAVOR } else { Find-Flavor }
+    # A version pin moves the version only: the saved tag still names the flavor.
+    $flavor = if ($env:ALMA_FLAVOR) { $env:ALMA_FLAVOR } elseif ($savedTag) { Get-TagFlavor $savedTag } else { Find-Flavor }
     $tag = if ($env:ALMA_VERSION) { $env:ALMA_VERSION } else { "stable" }
     if ($flavor -eq "gpu")  { $tag = "$tag-gpu" }
     if ($flavor -eq "lite") { $tag = "$tag-lite" }

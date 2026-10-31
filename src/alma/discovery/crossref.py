@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
@@ -12,6 +13,9 @@ from alma.core.utils import normalize_doi
 logger = logging.getLogger(__name__)
 
 _JATS_TAG_RE = re.compile(r"<[^>]+>")
+#: Crossref refused the request itself, so the same DOIs would be refused again.
+#: 401/403/429 are left out on purpose: they say nothing about the DOIs.
+_REJECTED_STATUSES = frozenset({400, 414, 422})
 
 
 def _strip_jats(text: str) -> str:
@@ -188,13 +192,38 @@ def fetch_work_by_doi(doi: str) -> dict | None:
     return _crossref_to_candidate(message, score=1.0)
 
 
-def _fetch_works_chunk(
-    chunk: list[str], *, raise_on_error: bool = False
-) -> dict[str, dict]:
-    """Single-chunk worker for `fetch_works_by_dois`. Public via the
-    parallel orchestrator below; otherwise treat as private."""
+@dataclass
+class CrossrefBatch:
+    """What one by-DOI lookup settled, keyed by lowercased normalized DOI.
+
+    ``works`` holds the candidates found and ``failed`` the cause for each DOI
+    Crossref could not answer about, so a caller can defer exactly those. A DOI
+    in neither is one Crossref does not have.
+    """
+
+    works: dict[str, dict] = field(default_factory=dict)
+    failed: dict[str, str] = field(default_factory=dict)
+
+    def merge(self, other: CrossrefBatch) -> None:
+        self.works.update(other.works)
+        self.failed.update(other.failed)
+
+
+def _fetch_works_chunk(chunk: list[str]) -> CrossrefBatch:
+    """Single-chunk worker for `fetch_works_by_dois`; never raises for a chunk.
+
+    One malformed DOI gets the whole filter refused, which says nothing about
+    the other DOIs in it. So a rejected chunk is halved until the rejected DOI
+    stands alone, and that DOI counts as absent: it can never resolve.
+    """
+    batch = CrossrefBatch()
     if not chunk:
-        return {}
+        return batch
+
+    def failed(cause: str) -> CrossrefBatch:
+        batch.failed.update({doi.lower(): cause for doi in chunk})
+        return batch
+
     filter_value = ",".join(f"doi:{doi}" for doi in chunk)
     params = {
         "filter": filter_value,
@@ -210,43 +239,44 @@ def _fetch_works_chunk(
         logger.warning(
             "Crossref batch DOI lookup failed for %d DOIs: %s", len(chunk), exc
         )
-        if raise_on_error:
-            raise
-        return {}
+        return failed(f"{type(exc).__name__}: {exc}")
+    if resp.status_code in _REJECTED_STATUSES:
+        if len(chunk) == 1:
+            logger.warning("Crossref rejected DOI %s: HTTP %d", chunk[0], resp.status_code)
+            return batch
+        middle = len(chunk) // 2
+        batch.merge(_fetch_works_chunk(chunk[:middle]))
+        batch.merge(_fetch_works_chunk(chunk[middle:]))
+        return batch
     if resp.status_code != 200:
-        logger.debug(
+        logger.warning(
             "Crossref batch DOI lookup returned HTTP %d for %d DOIs",
             resp.status_code,
             len(chunk),
         )
-        if raise_on_error:
-            raise RuntimeError(f"Crossref batch DOI lookup returned HTTP {resp.status_code}")
-        return {}
+        return failed(f"HTTP {resp.status_code}")
     try:
         items = (((resp.json() or {}).get("message") or {}).get("items")) or []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            doi_raw = str(item.get("DOI") or "").strip()
+            if not doi_raw:
+                continue
+            normalized = normalize_doi(doi_raw) or doi_raw
+            candidate = _crossref_to_candidate(item, score=1.0)
+            if candidate:
+                batch.works[normalized.lower()] = candidate
     except Exception as exc:
-        logger.warning("Crossref batch JSON decode failed: %s", exc)
-        if raise_on_error:
-            raise
-        return {}
-    out: dict[str, dict] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        doi_raw = str(item.get("DOI") or "").strip()
-        if not doi_raw:
-            continue
-        normalized = normalize_doi(doi_raw) or doi_raw
-        candidate = _crossref_to_candidate(item, score=1.0)
-        if candidate:
-            out[normalized.lower()] = candidate
-    return out
+        logger.warning("Crossref batch response unreadable: %s", exc)
+        batch.works.clear()
+        return failed(f"{type(exc).__name__}: {exc}")
+    return batch
 
 
 def fetch_works_by_dois(
-    dois: list[str], *, batch_size: int = 50, max_workers: int = 3,
-    raise_on_error: bool = False,
-) -> dict[str, dict]:
+    dois: list[str], *, batch_size: int = 50, max_workers: int = 3
+) -> CrossrefBatch:
     """Fetch multiple Crossref works in one HTTP call per chunk.
 
     Uses ``GET /works?filter=doi:DOI1,doi:DOI2,...&rows=N`` (Crossref
@@ -274,9 +304,9 @@ def fetch_works_by_dois(
             (polite-pool list-query concurrency limit).
 
     Returns:
-        dict keyed by lowercased normalized DOI → candidate dict (same
-        shape as ``fetch_work_by_doi``). DOIs that didn't resolve are
-        absent from the dict.
+        A `CrossrefBatch`: candidates (same shape as ``fetch_work_by_doi``)
+        for the DOIs found, and the cause for every DOI whose chunk failed.
+        A failed chunk costs only its own DOIs.
     """
     normalized_dois: list[str] = []
     seen: set[str] = set()
@@ -290,7 +320,7 @@ def fetch_works_by_dois(
         seen.add(key)
         normalized_dois.append(norm)
     if not normalized_dois:
-        return {}
+        return CrossrefBatch()
 
     chunk_size = max(1, min(int(batch_size or 50), 50))
     chunks = [
@@ -299,29 +329,18 @@ def fetch_works_by_dois(
     ]
     workers = max(1, min(int(max_workers or 1), 3))
 
-    out: dict[str, dict] = {}
+    batch = CrossrefBatch()
     if workers == 1 or len(chunks) == 1:
         for chunk in chunks:
-            out.update(_fetch_works_chunk(chunk, raise_on_error=raise_on_error))
-        return out
-
-    from concurrent.futures import as_completed
+            batch.merge(_fetch_works_chunk(chunk))
+        return batch
 
     from alma.core.concurrency import bounded_thread_pool
 
     with bounded_thread_pool(workers) as ex:
-        futures = [
-            ex.submit(_fetch_works_chunk, chunk, raise_on_error=raise_on_error)
-            for chunk in chunks
-        ]
-        for fut in as_completed(futures):
-            try:
-                out.update(fut.result())
-            except Exception as exc:
-                logger.warning("Crossref batch chunk failed in pool: %s", exc)
-                if raise_on_error:
-                    raise
-    return out
+        for result in ex.map(_fetch_works_chunk, chunks):
+            batch.merge(result)
+    return batch
 
 
 def search_works(

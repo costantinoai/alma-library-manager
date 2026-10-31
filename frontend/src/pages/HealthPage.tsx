@@ -165,6 +165,7 @@ export function HealthPage() {
       // the generic "nothing to run".
       const capSkipped = result.status === 'skipped_daily_cap'
       const networkBlocked = result.status === 'blocked_external'
+      const dependencyMissing = result.status === 'blocked_unavailable'
       if (variables.sequence) {
         // Enqueue succeeded, but a background FAILURE is not this mutation's
         // onError — so we can't trust "started" as "will finish". If nothing was
@@ -172,7 +173,7 @@ export function HealthPage() {
         // hand off to the job watcher, which advances only on COMPLETED.
         if (!launched) {
           stopSequence(
-            (capSkipped || networkBlocked) && result.message
+            (capSkipped || networkBlocked || dependencyMissing) && result.message
               ? result.message
               : 'The recommended step had nothing eligible to run — auto-advance stopped.',
           )
