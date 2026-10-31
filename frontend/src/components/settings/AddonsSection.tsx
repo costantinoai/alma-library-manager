@@ -179,7 +179,7 @@ function RemoveDialog({ addon, onClose }: { addon: AddonInfo; onClose: () => voi
             {footprint.tables.map((table) => (
               <li key={table.name} className="flex justify-between gap-3">
                 <span className="font-mono text-xs">{table.name}</span>
-                <span>{table.rows.toLocaleString()} rows</span>
+                <span>{table.rows.toLocaleString()} {table.rows === 1 ? 'row' : 'rows'}</span>
               </li>
             ))}
             {footprint.files > 0 && (

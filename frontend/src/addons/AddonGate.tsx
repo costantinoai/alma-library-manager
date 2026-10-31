@@ -33,7 +33,7 @@ export function AddonGate({ addon }: { addon: AddonUi }) {
     <EmptyState
       icon={PlugZap}
       title={`${addon.label} is switched off`}
-      description="Turn it on in Settings under Add-ons. Anything it stored is still there."
+      description="Turn it on in Settings under Add-ons. Switching off keeps its data; only Remove deletes it."
       action={
         <Button variant="outline" onClick={() => navigateTo('settings', { anchor: 'addons' })}>
           Open Settings

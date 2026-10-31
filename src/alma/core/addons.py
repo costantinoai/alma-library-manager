@@ -464,6 +464,8 @@ def _file_root(path: Path) -> Path:
 
 def footprint(conn: sqlite3.Connection, addon_id: str) -> dict[str, Any]:
     """What Remove would delete: rows per table, files and bytes. Read-only."""
+    from alma.core.secrets import get_secret
+
     addon = get(addon_id)
     existing = _existing_tables(conn, addon.tables)
     tables = [
@@ -489,7 +491,7 @@ def footprint(conn: sqlite3.Connection, addon_id: str) -> dict[str, Any]:
         "files": files,
         "bytes": size,
         "settings": sorted(key for key in addon.settings_defaults if key in settings),
-        "secrets": list(addon.secret_keys),
+        "secrets": [key for key in addon.secret_keys if get_secret(key)],
     }
 
 
