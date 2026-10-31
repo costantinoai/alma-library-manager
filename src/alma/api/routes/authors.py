@@ -234,7 +234,7 @@ def _id_resolution_settings() -> dict[str, bool]:
         "semantic_scholar_enabled": bool(cfg.get("id_resolution_semantic_scholar_enabled", True)),
         "orcid_enabled": bool(cfg.get("id_resolution_orcid_enabled", True)),
         "scholar_scrape_auto_enabled": bool(cfg.get("id_resolution_scholar_scrape_auto_enabled", False)),
-        "scholar_scrape_manual_enabled": bool(cfg.get("id_resolution_scholar_scrape_manual_enabled", True)),
+        "scholar_scrape_manual_enabled": bool(cfg.get("id_resolution_scholar_scrape_manual_enabled", False)),
     }
 
 
@@ -4168,9 +4168,8 @@ def deep_refresh_author(
 ):
     """Deep refresh: full re-fetch of all publications ignoring ``last_fetched_at``.
 
-    Unlike the incremental ``refresh-cache`` endpoint, this always uses the
-    configured ``from_year`` from settings (not the last-fetched timestamp),
-    ensuring a complete re-fetch of the author's publication history.
+    This always uses the configured ``from_year`` from settings (not the
+    last-fetched timestamp), ensuring a complete re-fetch of the author's publication history.
     """
     from alma.api.scheduler import (
         activity_envelope,

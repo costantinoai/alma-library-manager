@@ -114,7 +114,7 @@ export function SettingsPage() {
     id_resolution_semantic_scholar_enabled: true,
     id_resolution_orcid_enabled: true,
     id_resolution_scholar_scrape_auto_enabled: false,
-    id_resolution_scholar_scrape_manual_enabled: true,
+    id_resolution_scholar_scrape_manual_enabled: false,
   })
 
   const [saveSuccess, setSaveSuccess] = useState(false)
