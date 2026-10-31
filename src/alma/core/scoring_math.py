@@ -330,11 +330,3 @@ def calibrate_similarity_score(
         return score
     return float(max(0.0, min(1.0, interpolate_calibration(score, points))))
 
-
-def shrink_toward(total: float, n: float, grand_mean: float, strength: float) -> float:
-    """A group's mean pulled toward the grand mean by ``strength``
-    pseudo-observations. THE shrinkage expression: every caller goes through
-    it, so they differ in what they count and how hard they shrink, never in
-    the maths."""
-    return (total + strength * grand_mean) / (n + strength)
-
