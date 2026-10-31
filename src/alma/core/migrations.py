@@ -1819,14 +1819,21 @@ def _m_0050_legacy_branch_controls(conn: sqlite3.Connection) -> None:
             "SELECT payload FROM materialized_views WHERE view_key LIKE 'discovery:branches:%'"
         ).fetchall()
         for (payload,) in rows:
-            preview = json.loads(payload or "{}")
+            # A stored view is a cache: one unreadable row costs its evidence,
+            # never the upgrade.
+            try:
+                preview = json.loads(payload or "{}")
+            except ValueError:
+                continue
             for branch in preview.get("branches") or []:
                 entry = previewed.setdefault(
                     (preview.get("lens_id"), branch.get("id")),
                     {"label": branch.get("label"), "seeds": set()},
                 )
                 entry["seeds"].update(
-                    str(seed["paper_id"]) for seed in branch.get("seed_context") or []
+                    str(seed["paper_id"])
+                    for seed in branch.get("seed_context") or []
+                    if seed.get("paper_id")
                 )
 
     lenses = conn.execute(
@@ -1838,7 +1845,7 @@ def _m_0050_legacy_branch_controls(conn: sqlite3.Connection) -> None:
     ).fetchall()
     now = utcnow().isoformat()
     for lens_id, raw_controls in lenses:
-        controls = json.loads(raw_controls)
+        controls = json.loads(raw_controls) or {}
         branch_ids = {
             branch_id
             for key in ("pinned", "boosted", "muted")
