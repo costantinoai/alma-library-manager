@@ -26,6 +26,7 @@ from ..seed_profile import (
     _plan_branch_queries_deterministic,
     _resolve_branch_resolution,
     _resolve_branch_temperature,
+    _top_negative_terms,
     _top_preferred_authors,
     _top_profile_terms,
     lens_branch_cap,
@@ -118,6 +119,47 @@ def _retrieve_external_channel(
 ) -> tuple[list[dict], dict[str, Any]]:
     """Run lens-specific query/identity retrievers against local frontier."""
 
+    profile = preference_profile or {}
+    scope_ids = (
+        {str(seed["id"]) for seed in seeds if seed.get("id")}
+        if str(lens.get("context_type") or "") != "library_global"
+        else None
+    )
+    # What the lens has learned exists with or without leads to search, and it
+    # is what the page's taste ledger shows after every refresh.
+    preferred_topics = _top_profile_terms(dict(profile.get("topic_weights") or {}), limit=4)
+    recent_wins = _build_recent_win_queries(db, list(positive_pubs or []), limit=3)
+    preferred_authors = _top_preferred_authors(db, limit=4, scope_paper_ids=scope_ids)
+    preferred_venues = _top_profile_terms(
+        dict(profile.get("journal_affinity") or {}),
+        limit=3,
+        min_weight=0.14,
+    )
+    negative_context = _negative_preference_context(db, profile)
+    taste_summary = {
+        "taste_profile": {
+            "topics": [
+                {"term": term, "weight": round(weight, 4)} for term, weight in preferred_topics
+            ],
+            "authors": [
+                {"name": name, "weight": round(float(weight), 4)}
+                for name, weight in preferred_authors
+            ],
+            "venues": [
+                {"name": name, "weight": round(weight, 4)} for name, weight in preferred_venues
+            ],
+            "recent_wins": [
+                {"query": query, "strength": round(float(strength), 4)}
+                for query, strength in recent_wins
+            ],
+        },
+        "negative_profile": {
+            "topics": _top_negative_terms(negative_context["topics"], limit=4, field_name="term"),
+            "authors": _top_negative_terms(negative_context["authors"], limit=4, field_name="name"),
+            "venues": _top_negative_terms(negative_context["journals"], limit=3, field_name="name"),
+        },
+    }
+
     frontier = load_live_frontier(db)
     if not frontier:
         return [], {
@@ -125,6 +167,7 @@ def _retrieve_external_channel(
             "lane_runs": [],
             "network_calls": 0,
             "frontier_size": 0,
+            **taste_summary,
         }
     frontier_search = build_frontier_search_index(frontier)
 
@@ -137,12 +180,6 @@ def _retrieve_external_channel(
     resolution = _resolve_branch_resolution(
         controls.get("resolution"),
         settings,
-    )
-    profile = preference_profile or {}
-    scope_ids = (
-        {str(seed["id"]) for seed in seeds if seed.get("id")}
-        if str(lens.get("context_type") or "") != "library_global"
-        else None
     )
 
     runs: list[tuple[str, str, list[dict], dict[str, Any]]] = []
@@ -201,10 +238,7 @@ def _retrieve_external_channel(
                     )
                 )
 
-    for topic, _weight in _top_profile_terms(
-        dict(profile.get("topic_weights") or {}),
-        limit=4,
-    ):
+    for topic, _weight in preferred_topics:
         runs.append(
             (
                 "taste_topic",
@@ -213,11 +247,7 @@ def _retrieve_external_channel(
                 {},
             )
         )
-    for query, _strength in _build_recent_win_queries(
-        db,
-        list(positive_pubs or []),
-        limit=3,
-    ):
+    for query, _strength in recent_wins:
         runs.append(
             (
                 "recent_win",
@@ -227,11 +257,6 @@ def _retrieve_external_channel(
             )
         )
 
-    preferred_authors = _top_preferred_authors(
-        db,
-        limit=4,
-        scope_paper_ids=scope_ids,
-    )
     for author, _weight in preferred_authors:
         author_key = " ".join(author.lower().split())
         matched = [
@@ -243,11 +268,7 @@ def _retrieve_external_channel(
         ][: max(8, limit // 2)]
         runs.append(("taste_author", author, matched, {}))
 
-    for venue, _weight in _top_profile_terms(
-        dict(profile.get("journal_affinity") or {}),
-        limit=3,
-        min_weight=0.14,
-    ):
+    for venue, _weight in preferred_venues:
         venue_key = " ".join(venue.lower().split())
         matched = [
             {**candidate, "score": 1.0}
@@ -258,7 +279,6 @@ def _retrieve_external_channel(
         ][: max(8, limit // 2)]
         runs.append(("taste_venue", venue, matched, {}))
 
-    negative_context = _negative_preference_context(db, profile)
     merged: dict[str, dict] = {}
     lane_runs: list[dict[str, Any]] = []
     for lane_type, query, candidates, metadata in runs:
@@ -325,4 +345,5 @@ def _retrieve_external_channel(
         "lane_runs": lane_runs,
         "network_calls": 0,
         "frontier_size": len(frontier),
+        **taste_summary,
     }
