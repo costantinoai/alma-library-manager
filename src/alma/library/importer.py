@@ -2196,6 +2196,20 @@ def _lookup_import_target(
     return None
 
 
+# Imported coauthors are represented in publication_authors; only the selected
+# primary also appears in papers.author_id. Treat either link as evidence, or
+# every non-primary coauthor is skipped and becomes later maintenance debt
+# despite arriving with the paper. Each `IN` builds its set once per statement:
+# neither link has a usable index, so a correlated EXISTS scans the whole table
+# for every author.
+_LINKED_PUBLICATION_SQL = """
+    a.id IN (SELECT p.author_id FROM papers p WHERE p.author_id IS NOT NULL)
+    OR lower(trim(a.name)) IN (
+        SELECT lower(trim(pa.display_name)) FROM publication_authors pa
+    )
+"""
+
+
 def _trigger_background_enrichment(
     result: ImportResult,
     imported_refs: list[str] | None = None,
@@ -2225,24 +2239,13 @@ def _trigger_background_enrichment(
         """
         from alma.api.routes.authors import _resolve_identifiers_bulk_optimized
 
-        # Imported coauthors are represented in publication_authors; only the
-        # selected primary also appears in papers.author_id. Treat either link as
-        # evidence, or every non-primary coauthor is skipped and becomes later
-        # maintenance debt despite arriving with the paper.
-        linked_publication_sql = """
-            EXISTS (SELECT 1 FROM papers p WHERE p.author_id = a.id)
-            OR EXISTS (
-                SELECT 1 FROM publication_authors pa
-                WHERE lower(trim(pa.display_name)) = lower(trim(a.name))
-            )
-        """
         unresolved_no_publications = int(
             conn.execute(
                 f"""
                 SELECT COUNT(*) AS c
                 FROM authors a
                 WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT ({linked_publication_sql})
+                  AND NOT ({_LINKED_PUBLICATION_SQL})
                 """
             ).fetchone()["c"] or 0
         )
@@ -2253,7 +2256,7 @@ def _trigger_background_enrichment(
                 FROM authors a
                 WHERE a.id LIKE 'import_author_%'
                   AND COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT ({linked_publication_sql})
+                  AND NOT ({_LINKED_PUBLICATION_SQL})
                 """
             ).fetchone()["c"] or 0
         )
@@ -2266,7 +2269,7 @@ def _trigger_background_enrichment(
             SELECT a.id, a.name
             FROM authors a
             WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-              AND ({linked_publication_sql})
+              AND ({_LINKED_PUBLICATION_SQL})
             ORDER BY a.name
             LIMIT 5000
             """
