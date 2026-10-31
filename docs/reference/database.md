@@ -81,7 +81,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 |---|---|
 | `discovery_settings` | Key/value store mirroring the Discovery section of `settings.json` (used by some hot paths). Also holds `user.name` (the user's display name captured during onboarding) and walkthrough state: one `walkthrough.<id>` row per walkthrough, a JSON record `{version, outcome, at, source}` owned by `application/walkthroughs.py`. The startup migrator `migrate_walkthrough_state` replaces the earlier `onboarding.completed` and `onboarding.completed_at` keys and deletes them. |
 | `discovery_lenses` | Saved lens definitions. |
-| `lens_signals` | Per-lens positive / negative feedback counters. |
+| `lens_signals` | Legacy per-lens feedback rows. Nothing writes or reads them; rows stay until a migrator drops the table. |
 | `recommendations` | Materialised recommendations from the last lens refresh. `user_action` is used for suggestion-resolution actions such as `save`, `read`, and `dismiss`; Discovery like / love / dislike are rating signals and do not resolve the row. |
 | `suggestion_sets` | Each refresh produces a suggestion set; rows track which set produced which recommendation. |
 | `feedback_events` | The append-only preference-signal store. Save / Like / Love / Dislike / Remove and Signal-Lab events land here with `context_json` (lens id, source bucket, surface, etc.). Dismiss is visibility only and writes no event. Paper actions are commonly stored as `event_type='paper_action'`, `entity_type='publication'`, `entity_id=<paper_id>`, with JSON `value` containing `action`, `rating`, and `signal_value`. Ranking code treats historical dismiss events as neutral. |

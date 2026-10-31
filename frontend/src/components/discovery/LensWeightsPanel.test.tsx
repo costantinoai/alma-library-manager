@@ -22,7 +22,7 @@ describe('LensWeightsPanel', () => {
     render(
       <QueryClientProvider client={client}>
         <LensWeightsPanel
-          lens={{ id: 'lens-1', name: 'Lens', context_type: 'library_global', created_at: '', is_active: true, signal_count: 0, recommendation_count: 0, weights: { lexical: 0.4, vector: 0.3, graph: 0.2, external: 0.1 } }}
+          lens={{ id: 'lens-1', name: 'Lens', context_type: 'library_global', created_at: '', is_active: true, recommendation_count: 0, weights: { lexical: 0.4, vector: 0.3, graph: 0.2, external: 0.1 } }}
           onSave={onSave}
         />
       </QueryClientProvider>,

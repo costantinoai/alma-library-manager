@@ -363,11 +363,11 @@ def mark_recommendation_action(
     def _persist() -> None:
         # One atomic discovery-action unit (writer gate + BEGIN IMMEDIATE +
         # retry): paper membership/rating → recommendation stamp →
-        # cross-surface reconcile → signal event → per-lens signal, committed
-        # together. add_to_library defers enrichment scheduling past the gate;
-        # record_paper_feedback (now the shared engine adapter) and
-        # record_lens_signal do not commit. The engine keys on paper_id so it
-        # won't double the explicit recommendation/lens writes below.
+        # cross-surface reconcile → signal event, committed together.
+        # add_to_library defers enrichment scheduling past the gate;
+        # record_paper_feedback (now the shared engine adapter) does not commit.
+        # The engine keys on paper_id so it won't double the explicit
+        # recommendation write below.
         nonlocal effective_rating, feedback_action, event_id
         if action == "save":
             effective_rating = max(current_rating, int(rating or 3), 3)
@@ -403,8 +403,8 @@ def mark_recommendation_action(
         elif action == "dismiss":
             # RESOLUTION, not valence (D6 as amended 2026-07-26). Dismiss says
             # "not in this lens's suggestions for a while" and writes nothing
-            # else: no rating, no feedback event, no lens signal. Leaving
-            # `feedback_action` unset is what suppresses those three writes
+            # else: no rating, no feedback event. Leaving
+            # `feedback_action` unset is what suppresses those writes
             # below. `effective_rating` keeps the paper's CURRENT rating so the
             # response reports the truth rather than stamping a phantom 1.
             #
@@ -477,16 +477,6 @@ def mark_recommendation_action(
                     "ranking_candidate_id": str(snapshot["id"]) if snapshot else "",
                 },
                 previous_rating=current_rating if feedback_action == "save" else None,
-            )
-        lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
-        if lens_id and paper_id and feedback_action:
-            signal_value = library_app.rating_signal_value(effective_rating)
-            record_lens_signal(
-                db,
-                lens_id=str(lens_id),
-                paper_id=paper_id,
-                signal_value=signal_value,
-                source="recommendation_action",
             )
 
     # Shared write helper: reachable standalone (its own route) AND nested inside
@@ -586,7 +576,6 @@ def list_lenses(
         f"""
         SELECT
             l.*,
-            COALESCE(ls.signal_count, 0) AS signal_count,
             COALESCE(r.recommendation_count, 0) AS recommendation_count,
             (
                 SELECT ss.id
@@ -610,11 +599,6 @@ def list_lenses(
                 LIMIT 1
             ) AS last_retrieval_summary
         FROM discovery_lenses l
-        LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS signal_count
-            FROM lens_signals
-            GROUP BY lens_id
-        ) ls ON ls.lens_id = l.id
         LEFT JOIN (
             SELECT r.lens_id, COUNT(*) AS recommendation_count
             FROM recommendations r
@@ -655,7 +639,6 @@ def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
         f"""
         SELECT
             l.*,
-            COALESCE(ls.signal_count, 0) AS signal_count,
             COALESCE(r.recommendation_count, 0) AS recommendation_count,
             (
                 SELECT ss.id
@@ -679,11 +662,6 @@ def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
                 LIMIT 1
             ) AS last_retrieval_summary
         FROM discovery_lenses l
-        LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS signal_count
-            FROM lens_signals
-            GROUP BY lens_id
-        ) ls ON ls.lens_id = l.id
         LEFT JOIN (
             SELECT r.lens_id, COUNT(*) AS recommendation_count
             FROM recommendations r
@@ -1328,31 +1306,6 @@ def default_channel_weights(context_type: str) -> dict[str, float]:
     return {k: float(v) / total for k, v in weights.items()}
 
 
-def record_lens_signal(
-    db: sqlite3.Connection,
-    *,
-    lens_id: str,
-    paper_id: str,
-    signal_value: int,
-    source: str = "user",
-) -> bool:
-    """Insert or update a lens-specific feedback signal."""
-    row = db.execute("SELECT id FROM discovery_lenses WHERE id = ?", (lens_id,)).fetchone()
-    if not row:
-        return False
-    db.execute(
-        """
-        INSERT INTO lens_signals (lens_id, paper_id, signal_value, source)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(lens_id, paper_id, source) DO UPDATE SET
-            signal_value = excluded.signal_value,
-            created_at = datetime('now')
-        """,
-        (lens_id, paper_id, int(signal_value), source),
-    )
-    return True
-
-
 def _normalize_channel_weights(raw: dict) -> dict[str, float]:
     keys = ("lexical", "vector", "graph", "external")
     parsed = {k: float(raw.get(k, 0.0) or 0.0) for k in keys}
@@ -1375,7 +1328,6 @@ def _map_lens_row(row: sqlite3.Row) -> dict:
         "last_refreshed_at": row["last_refreshed_at"],
         "is_active": bool(row["is_active"]),
         "position": int(row["position"] or 0),
-        "signal_count": int(row["signal_count"] or 0),
         "recommendation_count": int(row["recommendation_count"] or 0),
         "last_suggestion_set_id": row["last_suggestion_set_id"],
         "last_ranker_version": row["last_ranker_version"],

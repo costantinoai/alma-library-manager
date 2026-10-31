@@ -168,12 +168,9 @@ def record_feedback(
             _update_preference_profile(conn, entity_type, paper_target_id, delta)
             _propagate_to_topics_and_authors(conn, paper_target_id, delta)
 
-    if entity_type == "publication" and paper_target_id:
-        _record_publication_lens_signal(conn, rec_target, event_type, value or {}, delta)
-
     # Caller owns the transaction: this is the single feedback-recording
     # engine, always invoked inside a `run_write_unit` (foreground routes) so
-    # the event + recommendation/profile/propagation/lens writes commit
+    # the event + recommendation/profile/propagation writes commit
     # atomically together. No commit here (SQLite write discipline).
     return event_id
 
@@ -364,55 +361,6 @@ def _apply_recommendation_feedback(
             "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
             (action, utcnow().isoformat(), recommendation_id),
         )
-
-
-def _record_publication_lens_signal(
-    conn: sqlite3.Connection,
-    recommendation_row: sqlite3.Row | None,
-    event_type: str,
-    value: dict[str, Any],
-    delta: float,
-) -> None:
-    """Write per-lens publication feedback to lens_signals."""
-    if recommendation_row is None:
-        return
-
-    lens_id = str(recommendation_row["lens_id"] or "").strip()
-    paper_id = str(recommendation_row["paper_id"] or "").strip()
-    if not lens_id or not paper_id:
-        return
-
-    signal_value = 0
-    if event_type == "swipe":
-        choice = str(value.get("choice") or "").strip().lower()
-        if choice in {"like", "superlike"}:
-            signal_value = 1
-        elif choice == "pass":
-            signal_value = -1
-    elif event_type == "tier_sort":
-        tier = str(value.get("tier") or "").strip().upper()
-        if tier in {"S", "A"}:
-            signal_value = 1
-        elif tier == "C":
-            signal_value = -1
-    elif delta > 0:
-        signal_value = 1
-    elif delta < 0:
-        signal_value = -1
-
-    conn.execute(
-        """
-        INSERT INTO lens_signals (lens_id, paper_id, signal_value, source)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(lens_id, paper_id, source) DO UPDATE SET
-            signal_value = excluded.signal_value,
-            created_at = datetime('now')
-        """,
-        # NOTE: the literal source label is a stored value in `lens_signals`
-        # (part of its ON CONFLICT key), so it outlives the feature it was
-        # named after. Renaming it needs a data migration, not an edit here.
-        (lens_id, paper_id, int(signal_value), "signal_lab"),
-    )
 
 
 def _reaction_multiplier(reaction_ms_raw: Any) -> float:

@@ -97,8 +97,8 @@ event is recorded against `feedback_events` with the lens id stamped
 into `context_json`. Two consequences:
 
 1. **Lens-scoped recall** — Discovery queries can show "all positive
-   signals on this lens" or "all dismissals on this lens" via the
-   lens signal counters.
+   signals on this lens" or "all dismissals on this lens" from those
+   events.
 2. **Lens-scoped ranking** — future refreshes weight feedback within
    the same lens more heavily than feedback elsewhere. Dismissing a
    topic in one lens doesn't permanently mute it everywhere.

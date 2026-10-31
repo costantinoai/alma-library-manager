@@ -193,7 +193,7 @@ def defer_from_inbox(db: sqlite3.Connection, paper_id: str) -> bool:
 
     Means "I looked at this and have no action for it" — emphatically NOT "this
     is bad". So it writes membership and nothing else: no rating, no
-    `feedback_events` row, no lens signal. The paper returns to `tracked`, its
+    `feedback_events` row. The paper returns to `tracked`, its
     ordinary corpus resting state.
 
     This is why it cannot reuse `dismiss`. `library.dismiss_paper` sets
@@ -237,7 +237,7 @@ def set_reading_status(
     disagreed: only two resolved the paper-group root, only three bumped
     `updated_at`, only one validated the value, and "off the list" was NULL in
     one and `''` in another. Orthogonal to membership (D2) and valence-free: no
-    rating, no feedback event, no lens signal.
+    rating, no feedback event.
 
     One deliberate exception: group absorption (`core.paper_groups`) carries a
     child's reading state onto its root. That MOVES a value the user already
@@ -310,7 +310,7 @@ def apply_paper_action(
     every path lands in :func:`apply_valence`, the owner of the rating
     contract. What is genuinely per-surface is *resolution*: Feed settles its
     own `feed_items` row and records monitor provenance; Discovery settles one
-    `recommendations` row and records a lens signal. Those adapters keep that
+    `recommendations` row. Those adapters keep that
     context, because flattening it would break outcome calibration — it is
     real difference, not duplication.
 

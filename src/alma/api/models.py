@@ -367,7 +367,6 @@ class LensResponse(BaseModel):
     last_refreshed_at: str | None = None
     is_active: bool = True
     position: int = 0
-    signal_count: int = 0
     recommendation_count: int = 0
     last_suggestion_set_id: str | None = None
     last_ranker_version: str | None = None

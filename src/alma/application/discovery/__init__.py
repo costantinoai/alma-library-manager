@@ -91,7 +91,6 @@ from .lens_crud import (
     mark_lens_seen,
     mark_recommendation_action,
     read_settings,
-    record_lens_signal,
     reorder_lenses,
     reset_settings_to_defaults,
     update_lens,

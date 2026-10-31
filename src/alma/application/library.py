@@ -1100,31 +1100,6 @@ def sync_surface_resolution(
                 (recommendation_action, now, paper_id),
             )
 
-            signal_value = 1
-            if action == "love":
-                signal_value = 2
-            # Dismiss is a visibility stamp only. Likes/saves may still teach
-            # each affected lens; Discovery itself records its signal locally.
-            if action != "dismiss" and source_surface != "discovery":
-                try:
-                    from alma.application.discovery import record_lens_signal
-
-                    seen_lenses: set[str] = set()
-                    for row in rec_rows:
-                        lens_id = str(row["lens_id"] or "").strip()
-                        if not lens_id or lens_id in seen_lenses:
-                            continue
-                        seen_lenses.add(lens_id)
-                        record_lens_signal(
-                            db,
-                            lens_id=lens_id,
-                            paper_id=paper_id,
-                            signal_value=signal_value,
-                            source=f"{source_surface}_handoff",
-                        )
-                except Exception:
-                    pass
-
 
 # Which feedback actions belong to which toggle dimension. Used so an undo
 # deletes only the signal events for the aspect being toggled off.
@@ -1195,32 +1170,6 @@ def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
     return int(events[saves[0]]["previous_rating"])
 
 
-def _restore_lens_verdicts(db: sqlite3.Connection, paper_id: str, rating: int) -> None:
-    """Give each lens back the verdict a Save overwrote with a zero signal.
-
-    A lens keeps one signal per paper, so a Save at 3 stars replaces that lens's
-    Dislike. When the Save is undone and the rating returns, so does the signal,
-    but only in a lens whose own rating event still stands: the event names it,
-    and a Save elsewhere says nothing about this lens.
-    """
-    signal_value = rating_signal_value(rating)
-    if signal_value == 0:
-        return
-    placeholders = ", ".join("?" for _ in _RATING_ACTIONS)
-    db.execute(
-        f"""
-        UPDATE lens_signals SET signal_value = ?
-        WHERE paper_id = ? AND signal_value = 0 AND lens_id IN (
-            SELECT json_extract(context_json, '$.lens_id')
-            FROM feedback_events
-            WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
-              AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
-        )
-        """,
-        (signal_value, paper_id, paper_id, *_RATING_ACTIONS),
-    )
-
-
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1279,13 +1228,6 @@ def undo_paper_feedback(
                 f"WHERE paper_id = ? {scope}",
                 (paper_id,),
             )
-        if _table_exists(db, "lens_signals"):
-            if rating_before_save is not None:
-                _restore_lens_verdicts(db, paper_id, rating_before_save)
-            db.execute(
-                "DELETE FROM lens_signals WHERE paper_id = ? AND signal_value = 0",
-                (paper_id,),
-            )
 
     if aspect in ("rating", "all"):
         db.execute(
@@ -1293,25 +1235,17 @@ def undo_paper_feedback(
             (now, paper_id),
         )
         _delete_feedback_actions(db, paper_id, _RATING_ACTIONS)
-        # The lens signal mirrors the verdict just withdrawn.
-        if _table_exists(db, "lens_signals"):
-            db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
 
     if aspect in ("reading", "all"):
         paper_actions.set_reading_status(db, paper_id, None)
 
     if aspect == "all":
-        # Full clear: nuke any remaining events + lens signals.
+        # Full clear: nuke any remaining events.
         if _table_exists(db, "feedback_events"):
             db.execute(
                 "DELETE FROM feedback_events WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
                 (paper_id,),
             )
-        if _table_exists(db, "lens_signals"):
-            try:
-                db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
-            except sqlite3.OperationalError:
-                pass
 
     row = db.execute(
         "SELECT status, rating, reading_status FROM papers WHERE id = ?", (paper_id,)

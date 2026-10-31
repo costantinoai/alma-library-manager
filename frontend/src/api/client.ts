@@ -1869,7 +1869,6 @@ export interface Lens {
   last_refreshed_at?: string | null
   is_active: boolean
   position?: number
-  signal_count: number
   recommendation_count: number
   last_suggestion_set_id?: string | null
   last_ranker_version?: string | null
