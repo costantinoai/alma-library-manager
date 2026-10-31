@@ -16,6 +16,8 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from alma.core.url_safety import web_link
+
 logger = logging.getLogger(__name__)
 
 # Maximum papers per Slack message (Block Kit has a 50-block limit)
@@ -77,8 +79,7 @@ class SlackNotifier:
 
         if self._token:
             logger.info(
-                "SlackNotifier initialized (token=%s..., channel=%s)",
-                self._token[:10],
+                "SlackNotifier initialized (channel=%s)",
                 self._default_channel or "<not set>",
             )
         else:
@@ -541,6 +542,7 @@ class SlackNotifier:
         if url and url.startswith("10."):
             # Bare DOI -> resolvable link
             url = f"https://doi.org/{url}"
+        url = web_link(url)
         authors = paper.get("authors", "")
         year = paper.get("year") or ""
         # Prefer a YYYY-MM-DD when we have one; fall back to bare year.
@@ -662,11 +664,7 @@ class SlackNotifier:
     def _format_recommendation_block(self, rec: dict) -> dict:
         """Create a Block Kit section for one recommendation."""
         title = rec.get("recommended_title") or rec.get("title", "Untitled")
-        url = (
-            rec.get("recommended_url")
-            or rec.get("url")
-            or ""
-        )
+        url = web_link(rec.get("recommended_url") or rec.get("url"))
         authors = rec.get("recommended_authors") or rec.get("authors", "")
         score = rec.get("score")
         source_type = rec.get("source_type", "")
