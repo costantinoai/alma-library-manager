@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+|stable)$ ]] || { echo "Usage: scripts/deploy-prod.sh X.Y.Z|stable [--gpu|--lite|--cpu]"; exit 2; }
 
-# ALMA_FLAVOR empty means setup.sh autodetects.
+# ALMA_FLAVOR empty keeps the saved flavor; setup.sh autodetects only without one.
 ALMA_VERSION="$VERSION" ALMA_FLAVOR="$FLAVOR" bash "$(dirname "$0")/../setup.sh"
 
 ALMA_HOME="${ALMA_HOME:-$HOME/alma-docker}"

@@ -194,13 +194,25 @@ detect_flavor() {
   echo cpu
 }
 
+flavor_of_tag() {  # TAG: the flavor it names, ignoring any pinned digest
+  case "${1%%@*}" in
+    *gpu*) echo gpu ;;
+    *lite*) echo lite ;;
+    *) echo cpu ;;
+  esac
+}
+
+SAVED_TAG="$(env_get ALMA_IMAGE_TAG)"
+[ -n "$SAVED_TAG" ] || SAVED_TAG="$(carried_value ALMA_IMAGE_TAG)"
 TAG="${ALMA_IMAGE_TAG:-}"
 if [ -z "$TAG" ] && [ -z "${ALMA_VERSION:-}" ]; then
-  TAG="$(env_get ALMA_IMAGE_TAG)"
-  [ -n "$TAG" ] || TAG="$(carried_value ALMA_IMAGE_TAG)"
+  TAG="$SAVED_TAG"
 fi
 if [ -z "$TAG" ]; then
-  flavor="${ALMA_FLAVOR:-$(detect_flavor)}"
+  # A version pin moves the version only: the saved tag still names the flavor.
+  flavor="${ALMA_FLAVOR:-}"
+  [ -n "$flavor" ] || [ -z "$SAVED_TAG" ] || flavor="$(flavor_of_tag "$SAVED_TAG")"
+  [ -n "$flavor" ] || flavor="$(detect_flavor)"
   TAG="${ALMA_VERSION:-stable}"
   case "$flavor" in
     gpu)  TAG="$TAG-gpu" ;;
