@@ -29,8 +29,8 @@ alma/
 │   ├── openalex/                 # OpenAlex HTTP client + helpers
 │   ├── services/                 # Thin domain services (S2 vectors, Inbox adapters)
 │   ├── plugins/                  # External integration manifests + schemas
+│   ├── addons/                   # Optional features, one folder each (never imported by core)
 │   ├── slack/                    # Slack notifier client
-│   ├── mailer/                   # SMTP / email digest client
 │   ├── cli/                      # `alma` CLI entry point
 │   └── config.py                 # Centralised configuration loading
 │
@@ -80,8 +80,11 @@ flowchart TD
   (signal lab, S2 vectors).
 * **Domain modules** — `discovery/`, `library/`, `ai/`, `openalex/`
   encapsulate their own state, helpers, and external-API contracts.
-* **Integration plugins** — optional external adapters only. Core Alerts and
-  Inbox own their workflows; each package under `plugins/` owns a strict config
+* **Add-ons** — optional features under `addons/`, listed by name in
+  `core/addons.py`. Core never imports them and works with any of them deleted.
+  See [Building an integration](integrations.md#add-ons).
+* **Integration plugins** — optional external adapters only. The Inbox and the
+  Alerts add-on own their workflows; each integration owns a strict config
   schema and implements `send`, `receive`, or both. See
   [Building an integration](integrations.md).
 

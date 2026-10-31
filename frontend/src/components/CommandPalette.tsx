@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { ADDONS } from '@/addons/registry'
+import { useBootstrap } from '@/hooks/useBootstrap'
 import {
   BarChart3,
-  Bell,
   BookMarked,
   Compass,
   FileText,
@@ -55,7 +56,6 @@ const PAGES: CommandAction[] = [
   { id: 'nav-library', name: 'Library', icon: BookMarked, url: '#/library', keywords: ['saved', 'papers', 'collections'] },
   { id: 'nav-corpus', name: 'Corpus explorer', icon: FileText, url: '#/settings?anchor=corpus-explorer', keywords: ['database', 'all papers', 'tracked', 'diagnostic', 'settings'] },
   { id: 'nav-authors', name: 'Authors', icon: UserCircle2, url: '#/authors', keywords: ['followed', 'people'] },
-  { id: 'nav-alerts', name: 'Alerts', icon: Bell, url: '#/alerts', keywords: ['digests', 'rules'] },
   { id: 'nav-analytics', name: 'Analytics', icon: BarChart3, url: '#/library?tab=analytics', keywords: ['insights', 'stats', 'metrics', 'charts', 'map'] },
   { id: 'nav-settings', name: 'Settings', icon: SettingsIcon, url: '#/settings', keywords: ['preferences', 'config'] },
 ]
@@ -85,6 +85,21 @@ function getCategoryIcon(type: SearchResult['type']) {
 export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const debouncedQuery = useDebounce(query, 300)
+  const { data: bootstrap } = useBootstrap()
+
+  // Add-on pages join the list only while they are on.
+  const pages: CommandAction[] = [
+    ...PAGES,
+    ...ADDONS.filter((addon) =>
+      bootstrap?.addons.some((state) => state.id === addon.id && state.enabled),
+    ).map((addon) => ({
+      id: `nav-${addon.id}`,
+      name: addon.label,
+      icon: addon.icon,
+      url: `#/${addon.id}`,
+      keywords: addon.keywords,
+    })),
+  ]
 
   // Server-side search. cmdk's own filtering is disabled below via
   // `shouldFilter={false}` so the static PAGES/QUICK_ACTIONS groups stay
@@ -139,7 +154,7 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
             {!hasQuery && (
               <>
                 <CommandGroup heading="Pages">
-                  {PAGES.map((route) => {
+                  {pages.map((route) => {
                     const Icon = route.icon
                     return (
                       <CommandItem

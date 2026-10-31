@@ -24,11 +24,11 @@ import {
 import {
   Activity,
   AlertTriangle,
-  Bell,
   CheckCircle2,
   Cpu,
   Globe,
   Plug,
+  Puzzle,
   Rss,
   Users,
   type LucideIcon,
@@ -39,7 +39,6 @@ import {
   ApiError,
   api,
   clearDiscoverySimilarityCache,
-  evaluateAlert,
   getApiErrorMessage,
   getDiscoverySettings,
   queueAuthorHistoryBackfill,
@@ -81,7 +80,6 @@ interface OperationalTarget {
   author_id?: string | null
   monitor_id?: string | null
   source?: string | null
-  alert_id?: string | null
   plugin_name?: string | null
 }
 interface OperationalState {
@@ -89,9 +87,12 @@ interface OperationalState {
   label: string
   severity: string
   detail: string
-  page: string
+  page?: string
   params?: Record<string, string>
   targets?: OperationalTarget[]
+  /** Set on a check an add-on reports, with where to deal with it. */
+  addon?: string
+  href?: string
 }
 // A review-only line (no one-click fix) — e.g. a rate-limited upstream source.
 interface ReviewItem {
@@ -119,6 +120,8 @@ interface SystemComponent {
   reviewOverflow?: number
   ownerPage: string
   ownerParams?: Record<string, string>
+  /** An add-on check's own address, which replaces the owner page. */
+  ownerHref?: string
 }
 
 // Loosely-typed diagnostics rows — the section payloads are dynamic JSON; we
@@ -350,15 +353,15 @@ const humanizeSourceError = (s: SourceRow): string => {
 // Which component a degraded state belongs to — by remediation kind, falling
 // back to its id when a state has no actionable target (e.g. alert_delivery_unavailable).
 function componentOfState(s: OperationalState): string {
+  if (s.addon) return 'addons'
   const kinds = new Set((s.targets ?? []).map((t) => t.kind))
   if (kinds.has('monitor')) return 'monitors'
   if (kinds.has('author')) return 'authors'
   if (kinds.has('ai')) return 'ai'
   if (kinds.has('plugin')) return 'plugins'
-  if (kinds.has('alert')) return 'alerts'
   if (kinds.has('source')) return 'sources'
   const id = s.id.toLowerCase()
-  if (id.includes('slack') || id.includes('alert')) return 'alerts'
+  if (id.includes('slack')) return 'plugins'
   if (id.includes('source')) return 'sources'
   if (id.includes('embedding') || id.includes('similarity') || id.includes('vector')) return 'ai'
   if (id.includes('author')) return 'authors'
@@ -375,7 +378,6 @@ const HEALTHY_NOTE: Record<string, string> = {
   sources: 'Recent feed and discovery refreshes completed without upstream HTTP errors (Semantic Scholar, Crossref, arXiv and the other enrichment APIs).',
   ai: 'An embedding provider is configured and operational — Discovery similarity is powered.',
   authors: 'Every tracked author has a clean identity bridge and an up-to-date historical corpus.',
-  alerts: 'Scheduled digests are configured and delivering.',
   plugins: 'All configured integrations passed their last connection test.',
   jobs: 'No background jobs have failed in the last 24 hours.',
 }
@@ -491,14 +493,6 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     },
     onError: () => errorToast('Source enable failed'),
   })
-  const evaluateAlertMutation = useMutation({
-    mutationFn: (alertId: string) => evaluateAlert(alertId),
-    onSuccess: () => {
-      invalidateOperational(['alerts'])
-      toast({ title: 'Alert evaluated', description: 'Re-run to verify delivery and matches.' })
-    },
-    onError: () => errorToast('Alert evaluation failed'),
-  })
   const testPluginMutation = useMutation({
     mutationFn: (pluginName: string) => testPluginConnection(pluginName),
     onSuccess: (result, pluginName) => {
@@ -528,7 +522,6 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     backfill_author: { mutation: historyBackfillMutation, getArg: (t) => t.author_id ?? undefined, verb: 'Backfill' },
     refresh_monitor: { mutation: refreshMonitorMutation, getArg: (t) => t.monitor_id ?? undefined, verb: 'Refresh' },
     enable_source: { mutation: enableSourceMutation, getArg: (t) => t.source ?? undefined, verb: 'Enable' },
-    evaluate_alert: { mutation: evaluateAlertMutation, getArg: (t) => t.alert_id ?? undefined, verb: 'Re-run' },
     test_plugin: { mutation: testPluginMutation, getArg: (t) => t.plugin_name ?? undefined, verb: 'Test' },
     compute_stale_embeddings: { mutation: computeStaleEmbeddingsMutation, getArg: () => 'compute_stale_embeddings', verb: 'Recompute', argless: true, icon: <Cpu className="mr-1 h-4 w-4" /> },
     clear_similarity_cache: { mutation: clearSimilarityCacheMutation, getArg: () => 'clear_similarity_cache', verb: 'Clear', argless: true },
@@ -543,7 +536,6 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     backfill_author: (t) => (t.author_id ? queueAuthorHistoryBackfill(t.author_id) : null),
     refresh_monitor: (t) => (t.monitor_id ? refreshFeedMonitor(t.monitor_id) : null),
     enable_source: (t) => (t.source ? enableSource(t.source) : null),
-    evaluate_alert: (t) => (t.alert_id ? evaluateAlert(t.alert_id) : null),
     test_plugin: (t) => (t.plugin_name ? testPluginConnection(t.plugin_name) : null),
     compute_stale_embeddings: () => api.post('/ai/compute-embeddings?scope=stale'),
     clear_similarity_cache: () => clearDiscoverySimilarityCache(),
@@ -568,7 +560,7 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
       }
     }
     setFixAllPending(false)
-    invalidateOperational(['authors'], ['feed-monitors'], ['feed-inbox'], ['alerts'], ['discovery-settings'])
+    invalidateOperational(['authors'], ['feed-monitors'], ['feed-inbox'], ['discovery-settings'])
     if (failed === 0) {
       toast({ title: `Queued ${ok} fix${ok === 1 ? '' : 'es'}`, description: 'Track progress in Activity.' })
     } else {
@@ -808,19 +800,21 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
 
     // Conditional components — only shown when relevant, so the grid stays a
     // signal, not a wall of "n/a" cards.
-    if (at('alerts').length > 0) {
+    if (at('addons').length > 0) {
       list.push(
         mk(
           {
-            id: 'alerts',
-            name: 'Alerts',
-            icon: Bell,
-            description: 'Scheduled digests and their active delivery integrations.',
-            states: at('alerts'),
+            id: 'addons',
+            name: 'Add-ons',
+            icon: Puzzle,
+            description: 'Checks reported by the add-ons that are on.',
+            states: at('addons'),
             reviewItems: [],
-            ownerPage: 'alerts',
+            ownerPage: 'settings',
+            ownerParams: { anchor: 'addons' },
+            ownerHref: at('addons')[0]?.href,
           },
-          { count: 0, countLabel: 'issues', healthyLabel: 'delivering', attentionLabel: 'delivery degraded' },
+          { count: 0, countLabel: 'issues', healthyLabel: 'healthy', attentionLabel: 'needs attention' },
         ),
       )
     }
@@ -909,7 +903,6 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     authors: 'Open in Authors',
     settings: 'Open in Settings',
     insights: 'Open in Activity',
-    alerts: 'Open in Alerts',
     feed: 'Open in Feed',
     discovery: 'Open in Discovery',
     library: 'Open in Library',
@@ -1097,14 +1090,19 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
                   className="shrink-0"
                   onClick={() => {
                     const page = openComp.ownerPage
+                    const href = openComp.ownerHref
                     setOpenId(null)
+                    if (href) {
+                      window.location.hash = href
+                      return
+                    }
                     navigateTo(
                       page as Parameters<typeof buildHashRoute>[0],
                       openComp.ownerParams ?? {},
                     )
                   }}
                 >
-                  {OWNER_LABEL[openComp.ownerPage] ?? 'Open owner'}
+                  {openComp.ownerHref ? 'Open' : (OWNER_LABEL[openComp.ownerPage] ?? 'Open owner')}
                 </AsyncButton>
               </div>
             </>

@@ -5,7 +5,7 @@ description: The manifest, schema, activation, transport, and test contract for 
 
 # Building an integration
 
-An integration connects an external service to core [Alerts](../concepts/alerts.md),
+An integration connects an external service to the [Alerts](../concepts/alerts.md) add-on,
 core [Inbox](../concepts/inbox.md), core [paper PDFs](../user-guide/reading-pdfs.md),
 or several of them. It is not a place to implement matching rules, paper
 resolution, triage, scheduling, or file storage.
@@ -194,7 +194,47 @@ Settings → Plugins, never something the code infers. `is_enabled()` falls back
 to `False`, so a plugin whose activation key is not in `DEFAULT_SETTINGS` yet is
 inert rather than fatal — but add the key anyway, because
 `validate_settings_schema` checks every key the schema declares, and
-`tests/test_channel_registry.py` fails if a registered plugin has none.
+`tests/test_channel_registry.py` fails if a registered plugin has none. An
+integration an add-on brings declares its key in that add-on's `settings_defaults`
+instead, and needs no settings migration.
+
+## Add-ons
+
+An integration adapts one outside service. An add-on is a whole optional feature:
+its routes, jobs, tables, settings and page. Alerts is one; its Email integration
+lives inside it. The test for what belongs in core is mechanical (D27): delete the
+folder and Feed, Discovery, Authors and Library still work.
+
+One add-on is one folder, `src/alma/addons/<id>/`, whose `__init__.py` declares
+`ADDON = AddOn(...)` from `alma.core.addons`, plus one string in `ADDON_MODULES`.
+That string is the only place core names it. Core never imports `alma.addons`;
+an add-on may import core. The manifest file stays light, because core reaches it
+while still importing: routes, jobs and hooks sit behind lazy callables.
+
+| You declare | What core does with it |
+|---|---|
+| `default_enabled`, `has_user_data` | Startup writes a missing `plugins.<id>.enabled` once, as `default_enabled or has_user_data(conn)`. A key that exists is never changed. |
+| `requires` | The switch refuses, in both directions, while a dependency is off or a dependent is on. |
+| `routers` | Always mounted, behind a gate that answers 404 while off. `/openapi.json` keeps listing them. |
+| `jobs`, `job_policies` | Registered while on, removed while off. A tick already dispatched checks the switch first; a job already running finishes. |
+| `ddl`, `tables`, `schema_version`, `migrations` | Created on first enable by `ensure_schema`, never by core bootstrap. The version is the `discovery_settings` row `addon.<id>.schema_version`. A newer stored version blocks that add-on alone. |
+| `paper_tables` | Core's merge and purge passes follow these rows while the add-on is off too. |
+| `settings_defaults`, `secret_keys`, `file_roots` | What Remove deletes. File roots must sit inside the data directory. |
+| `plugins` | Integrations that exist only while the add-on is on. |
+| `home_counts`, `home_pills`, `health_checks`, `nav_badge` | Read by Home, Health and the sidebar. A hook that raises costs its own entry, never the surface. |
+
+Frontend: a folder `frontend/src/addons/<id>/` with an `index.ts` manifest. A
+build-time glob finds it, so deleting the folder cannot break the build. Add-on
+pages lazy-load, and a disabled page's chunk is never fetched.
+
+Disable keeps everything. Remove is separate: it needs the add-on off, refuses
+while one of its jobs is active, takes a database backup, then drops its tables
+and deletes its files, settings and credentials. Papers are never touched.
+
+Three checks hold the boundary: `tests/test_addons_boundary.py` (no core import,
+no add-on table named in core, and the app driven with the import blocked), and
+`scripts/test_local.py full`, which deletes each folder from a copy, then runs
+and builds that copy.
 
 ## What "off" means
 

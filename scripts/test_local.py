@@ -12,7 +12,9 @@ import ast
 import fnmatch
 import json
 import random
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -220,6 +222,49 @@ def run_frontend(*, dry_run: bool) -> int:
     return 0
 
 
+def run_addon_removal(*, dry_run: bool) -> int:
+    """D27, for real: delete each add-on from a copy, then run and build the copy.
+
+    The import blocker in the test suite cannot see `import.meta.glob`, data files
+    or the frontend build. This can, at the cost of a typecheck and a build per
+    add-on, so it runs with `full` and never in the inner loop. `node_modules` is
+    linked, not copied: only `vite build` reads it here, and that writes to the copy.
+    """
+    python = str(ROOT / ".venv/bin/python")
+    smoke = str(ROOT / "scripts/addon_smoke.py")
+    env = {**os.environ, "PYTHONPATH": str(SOURCE), "PYTHONDONTWRITEBYTECODE": "1"}
+    described = subprocess.run(
+        [python, smoke, "describe"], env=env, cwd=ROOT, text=True, capture_output=True, check=True,
+    )
+    addons = json.loads(described.stdout)
+    print(f"Add-on removal: {sorted(addons)}", flush=True)
+    if dry_run:
+        return 0
+    for addon_id, expected in addons.items():
+        with tempfile.TemporaryDirectory(prefix=f"alma-remove-{addon_id}-") as tmp:
+            copy = Path(tmp)
+            skip = shutil.ignore_patterns("__pycache__", "node_modules", "dist", "*.tsbuildinfo")
+            shutil.copytree(ROOT / "src", copy / "src", ignore=skip)
+            shutil.copytree(ROOT / "frontend", copy / "frontend", ignore=skip, symlinks=True)
+            shutil.copy(ROOT / "pyproject.toml", copy / "pyproject.toml")
+            (copy / "frontend/node_modules").symlink_to((ROOT / "frontend/node_modules").resolve())
+            shutil.rmtree(copy / "src/alma/addons" / addon_id)
+            shutil.rmtree(copy / "frontend/src/addons" / addon_id, ignore_errors=True)
+            steps = [
+                ("smoke", [python, smoke, "check", addon_id, "--expect", json.dumps(expected),
+                           "--expect-root", str(copy / "src")], copy),
+                ("typecheck", ["npm", "run", "typecheck"], copy / "frontend"),
+                ("build", ["npm", "run", "build"], copy / "frontend"),
+            ]
+            for name, command, cwd in steps:
+                print(f"Add-on removal, {addon_id}: {name}", flush=True)
+                step_env = {**env, "PYTHONPATH": str(copy / "src")}
+                if subprocess.call(command, cwd=cwd, env=step_env):
+                    print(f"Add-on removal FAILED: {addon_id} {name}")
+                    return 1
+    return 0
+
+
 def print_graph(fmt: str) -> None:
     graph = {
         name: {
@@ -284,6 +329,8 @@ def main() -> int:
     full_parser.add_argument("--dry-run", action="store_true")
     full_parser.add_argument("--workers", type=int, default=4)
     full_parser.add_argument("--shuffle-seed", type=int, help="shuffle file order within each worker")
+    removal_parser = sub.add_parser("addon-removal", help="delete each add-on from a copy, run and build it")
+    removal_parser.add_argument("--dry-run", action="store_true")
     link_parser = sub.add_parser("link", help="create an independent local-test worktree for another source worktree")
     link_parser.add_argument("worktree", type=Path)
     args = parser.parse_args()
@@ -333,8 +380,11 @@ def main() -> int:
         return 1
     if args.command == "group":
         return run_pytest(tests_for(set(args.groups)), dry_run=args.dry_run, workers=args.workers, shuffle_seed=args.shuffle_seed)
+    if args.command == "addon-removal":
+        return run_addon_removal(dry_run=args.dry_run)
     if args.command == "full":
-        return run_pytest(test_files(), dry_run=args.dry_run, workers=args.workers, shuffle_seed=args.shuffle_seed)
+        failed = run_pytest(test_files(), dry_run=args.dry_run, workers=args.workers, shuffle_seed=args.shuffle_seed)
+        return failed or run_addon_removal(dry_run=args.dry_run)
 
     changed = changed_paths(args.base)
     frontend_changed = any(p.startswith("frontend/") for p in changed)

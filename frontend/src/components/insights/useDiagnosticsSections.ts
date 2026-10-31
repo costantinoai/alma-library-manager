@@ -14,7 +14,6 @@ import {
   refreshDiagnostics,
   type DiagnosticsSectionKey,
   type DiagnosticsAiSection,
-  type DiagnosticsAlertsSection,
   type DiagnosticsAuthorsSection,
   type DiagnosticsDiscoverySection,
   type DiagnosticsEvaluationSection,
@@ -42,13 +41,12 @@ export interface InsightsDiagnosticsSections {
   discovery: SectionState<DiagnosticsDiscoverySection>
   ai: SectionState<DiagnosticsAiSection>
   authors: SectionState<DiagnosticsAuthorsSection>
-  alerts: SectionState<DiagnosticsAlertsSection>
   feedback: SectionState<DiagnosticsFeedbackSection>
   operational: SectionState<DiagnosticsOperationalSection>
   evaluation: SectionState<DiagnosticsEvaluationSection>
 }
 
-const SECTIONS: DiagnosticsSectionKey[] = ['feed', 'discovery', 'ai', 'authors', 'alerts', 'feedback', 'operational', 'evaluation']
+const SECTIONS: DiagnosticsSectionKey[] = ['feed', 'discovery', 'ai', 'authors', 'feedback', 'operational', 'evaluation']
 
 export function useDiagnosticsSections() {
   const { building, buildError, refresh } = useAsyncRefresh({

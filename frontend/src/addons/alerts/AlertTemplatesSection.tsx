@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, BellRing, FolderOpen, GitBranch, Loader2, Rss, UserRound, Workflow } from 'lucide-react'
 
-import { applyAlertTemplate, getAlertTemplates, type AlertAutomationTemplate } from '@/api/client'
+import { applyAlertTemplate, getAlertTemplates, type AlertAutomationTemplate } from './api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

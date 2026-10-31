@@ -16,7 +16,7 @@ export const HOME_TOUR: TourStep[] = [
   {
     target: '[data-tour="home-brief"]',
     title: 'Your daily brief',
-    body: 'What arrived since midnight and what is still waiting — Feed, Discovery, alerts, Inbox, reading list. Every figure is a link to the page it counts.',
+    body: 'What arrived since midnight and what is still waiting — Feed, Discovery, Inbox, reading list. Every figure is a link to the page it counts.',
   },
   {
     target: '[data-tour="home-status"]',

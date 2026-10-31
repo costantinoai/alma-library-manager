@@ -47,7 +47,6 @@ One file per top-level surface, in `frontend/src/pages/`:
 | `LibraryPage.tsx` | `#/library` |
 | `InsightsPage.tsx` | `#/insights` |
 | `HealthPage.tsx` | `#/health` |
-| `AlertsPage.tsx` | `#/alerts` |
 | `SettingsPage.tsx` | `#/settings` |
 
 Each page composes feature components from `components/<feature>/`

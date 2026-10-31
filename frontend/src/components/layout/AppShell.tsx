@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { WifiOff } from 'lucide-react'
 import { getNetworkPolicy } from '@/api/client'
+import type { AddonUi } from '@/addons/registry'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { PageThemeProvider } from '@/components/ui/page-theme'
@@ -16,6 +17,7 @@ import { useConnectorStatus } from '@/hooks/useConnectorStatus'
 
 interface AppShellProps {
   currentPage: Page
+  currentAddon?: AddonUi | null
   onNavigate: (page: Page) => void
   onPrefetch?: (page: Page) => void
   onRefresh?: () => void
@@ -36,6 +38,7 @@ function readInitialCollapsed(): boolean {
 
 export function AppShell({
   currentPage,
+  currentAddon = null,
   onNavigate,
   onPrefetch,
   onRefresh,
@@ -98,6 +101,7 @@ export function AppShell({
     <div className="min-h-screen">
       <Sidebar
         currentPage={currentPage}
+        currentAddon={currentAddon}
         onNavigate={onNavigate}
         onPrefetch={onPrefetch}
         isOpen={sidebarOpen}
@@ -119,6 +123,7 @@ export function AppShell({
       >
         <TopBar
           currentPage={currentPage}
+          addonLabel={currentAddon?.label}
           onMenuClick={() => setSidebarOpen(true)}
           onRefresh={onRefresh}
           isRefreshing={isRefreshing}
@@ -150,7 +155,7 @@ export function AppShell({
         {/* One assignment for the whole app: the routed page decides the
             identity hue, and every piece of structural chrome under `main`
             reads it from context. No page passes a colour prop. */}
-        <PageThemeProvider theme={PAGE_THEMES[currentPage] ?? null}>
+        <PageThemeProvider theme={(currentAddon ? PAGE_THEMES.addon : PAGE_THEMES[currentPage]) ?? null}>
           <main className="p-4 pb-16 lg:p-6 lg:pb-16">{children}</main>
         </PageThemeProvider>
       </div>

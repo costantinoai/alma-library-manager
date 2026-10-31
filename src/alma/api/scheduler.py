@@ -20,14 +20,12 @@ Feed's author monitors (``application.feed.refresh_feed_inbox``, batched).
 Environment variables
 ---------------------
 SCHEDULER_ENABLED           -- set to "false" to disable scheduler (default: true)
-ALERT_CHECK_INTERVAL_HOURS  -- interval between alert evaluation sweeps (default: 1)
 ALMA_UNATTENDED_NETWORK     -- may the scheduler start network work on its own
                                (default: on for the prod profile, off otherwise)
 ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
                             -- idle-gated suggestion-cache cadence (default: 6)
 """
 
-import asyncio
 import base64
 import collections
 import functools
@@ -776,13 +774,6 @@ def _scheduler_enabled() -> bool:
     return os.getenv("SCHEDULER_ENABLED", "true").lower() not in ("false", "0", "no")
 
 
-def _alert_check_interval_hours() -> int:
-    try:
-        return max(1, int(os.getenv("ALERT_CHECK_INTERVAL_HOURS", "1")))
-    except (ValueError, TypeError):
-        return 1
-
-
 def _inbox_sweep_interval_minutes() -> int:
     """How often to poll Inbox delivery channels, in minutes (0 = never).
 
@@ -841,7 +832,7 @@ def _schedule_flag_enabled(key: str, default: bool = False) -> bool:
         return default
 
 
-def _register_interval_job(
+def register_interval_job(
     sched,
     *,
     job_id: str,
@@ -1621,25 +1612,11 @@ def setup_scheduler() -> None:
             ),
         }
 
-    # -- Alert evaluation sweep (interval) ----------------------------------
-    interval_hours = _alert_check_interval_hours()
-    sched.add_job(
-        evaluate_scheduled_alerts,
-        trigger=IntervalTrigger(hours=interval_hours),
-        id="evaluate_alerts",
-        name="Evaluate scheduled alerts",
-        replace_existing=True,
-    )
-    with _job_lock:
-        _job_meta["evaluate_alerts"] = {
-            "action": "evaluate_alerts",
-            "name": "Evaluate scheduled alerts",
-            "description": f"Checks all non-manual alerts every {interval_hours}h",
-        }
-    logger.info(
-        "Registered evaluate_alerts job (interval=%dh)",
-        interval_hours,
-    )
+    # -- Add-on jobs (interval, only while their add-on is on) ---------------
+    from alma.core import addons
+
+    for addon in addons.present():
+        addons.sync_jobs(addon.id, sched)
 
     # -- Author suggestion discovery (interval, background-owned) ----------
     # Page navigation is a pure read: opening Authors must never enqueue
@@ -1678,7 +1655,7 @@ def setup_scheduler() -> None:
     # Runs only when the page/Settings toggle (schedule.refresh_enabled) is on
     # AND the interval is > 0. Default OFF.
     refresh_hours = _discovery_schedule_interval_hours("schedule.refresh_interval_hours", 6)
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="refresh_recommendations",
         func=refresh_recommendations_periodic,
@@ -1705,7 +1682,7 @@ def setup_scheduler() -> None:
     # Minutes, not hours: this is the phone→ALMa loop, and latency is the whole
     # user experience.
     inbox_sweep_minutes = _inbox_sweep_interval_minutes()
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="inbox_capture_sweep",
         func=inbox_capture_sweep_periodic,
@@ -1722,7 +1699,7 @@ def setup_scheduler() -> None:
         "schedule.scoring_calibration_interval_hours",
         12,
     )
-    _register_interval_job(
+    register_interval_job(
         sched,
         job_id="scoring_calibration_refresh",
         func=scoring_calibration_refresh_periodic,
@@ -1867,148 +1844,6 @@ def shutdown_scheduler() -> None:
 # ===================================================================
 # Core scheduled jobs
 # ===================================================================
-
-
-def evaluate_scheduled_alerts() -> None:
-    """Sweep all enabled, non-manual digests and evaluate due ones."""
-    job_id = "periodic_alert_evaluation"
-    operation_key = "alerts.evaluate_scheduled"
-    set_job_status(
-        job_id,
-        status="running",
-        trigger_source="scheduler",
-        operation_key=operation_key,
-        started_at=utcnow().isoformat(),
-        message="Evaluating scheduled alerts",
-    )
-    logger.info("Starting scheduled alert evaluation sweep")
-    try:
-        from alma.api.deps import open_db_connection
-        from alma.application import alerts as alerts_app
-
-        conn = open_db_connection()
-
-        try:
-            alerts = conn.execute(
-                "SELECT * FROM alerts WHERE enabled = 1 AND schedule != 'manual'"
-            ).fetchall()
-        except sqlite3.OperationalError as exc:
-            logger.warning("Cannot query alerts table (may not exist yet): %s", exc)
-            conn.close()
-            return
-
-        now = utcnow()
-        evaluated_count = 0
-        sent_total = 0
-        failed_total = 0
-
-        for alert_row in alerts:
-            alert = dict(alert_row)
-            alert_id = alert["id"]
-            schedule = str(alert.get("schedule") or "").strip().lower()
-            schedule_config = {}
-            try:
-                raw_schedule = alert.get("schedule_config")
-                if raw_schedule:
-                    schedule_config = json.loads(raw_schedule)
-                    if not isinstance(schedule_config, dict):
-                        schedule_config = {}
-            except Exception:
-                schedule_config = {}
-            last_eval_str = str(alert.get("last_evaluated_at") or "").strip() or None
-
-            try:
-                if not _is_due(
-                    schedule=schedule,
-                    schedule_config=schedule_config,
-                    last_evaluated_at=last_eval_str,
-                    now=now,
-                ):
-                    continue
-
-                logger.info("Alert %s (%s) is due -- evaluating", alert["name"], alert_id)
-                result = asyncio.run(
-                    alerts_app.evaluate_digest(conn, alert_id, trigger_source="scheduler")
-                )
-                # `open_db_connection` does NOT auto-commit (unlike the
-                # request-scoped `get_db` dependency).  `evaluate_digest`
-                # writes to `alerted_publications`, `alert_history`, and
-                # `alerts.last_evaluated_at`; without an explicit commit
-                # the connection close at the end of the sweep rolls them
-                # back -- the Slack DM goes out (network side-effect) but
-                # the dedup record is lost, so the same paper re-fires on
-                # the next sweep.  Same class of fix as
-                # `routes/alerts.py:evaluate_alert` in v0.10.0.
-                # evaluate_digest's writes (dedup / history / last_evaluated_at)
-                # all run AFTER its search + Slack send, so the lock is never
-                # held across network; commit_with_retry flushes them with
-                # transient-lock retry on this own (scheduler) connection.
-                commit_with_retry(conn, label="evaluate_scheduled_alerts")
-                if result is None:
-                    continue
-                sent_total += int(result.get("papers_sent") or 0)
-                failed_total += int(result.get("papers_failed") or 0)
-                evaluated_count += 1
-
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                logger.exception("Error evaluating alert %s", alert_id)
-
-        # Retention: trim history older than the application-defined window
-        # (kept well above the 90-day Insights trend horizon). Same own-
-        # connection commit discipline as the evaluations above.
-        pruned = 0
-        try:
-            pruned = alerts_app.prune_alert_history(conn)
-            if pruned:
-                commit_with_retry(conn, label="prune_alert_history")
-                logger.info("Pruned %d alert_history rows past retention", pruned)
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            logger.exception("alert_history retention prune failed")
-
-        conn.close()
-        logger.info(
-            "Alert evaluation sweep complete: %d/%d alerts evaluated",
-            evaluated_count,
-            len(alerts),
-        )
-        set_job_status(
-            job_id,
-            status="completed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Scheduled alert evaluation complete",
-            result={
-                "evaluated": evaluated_count,
-                "total": len(alerts),
-                "papers_sent": sent_total,
-                "papers_failed": failed_total,
-                "history_pruned": pruned,
-            },
-        )
-
-    except Exception as exc:
-        logger.exception("Fatal error in evaluate_scheduled_alerts")
-        set_job_status(
-            job_id,
-            status="failed",
-            trigger_source="scheduler",
-            operation_key=operation_key,
-            finished_at=utcnow().isoformat(),
-            message="Scheduled alert evaluation failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        add_job_log(
-            job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error"
-        )
 
 
 @scheduled_network_job("authors.suggestions_periodic")
@@ -2768,33 +2603,6 @@ def drain_pending_hydration_periodic() -> None:
 
 
 # ===================================================================
-# Internal helpers for alert evaluation
-# ===================================================================
-
-
-def _is_due(
-    *,
-    schedule: str,
-    schedule_config: dict | None,
-    last_evaluated_at: str | None,
-    now: datetime,
-) -> bool:
-    """Return True when the current schedule slot has not been processed.
-
-    Thin delegate — the slot math lives in ``alma.application.alerts``
-    (single owner shared with the API's ``next_due_at`` field).
-    """
-    from alma.application.alerts import is_due
-
-    return is_due(
-        schedule=schedule,
-        schedule_config=schedule_config,
-        last_evaluated_at=last_evaluated_at,
-        now=now,
-    )
-
-
-# ===================================================================
 # Public scheduler API
 # ===================================================================
 
@@ -3361,7 +3169,7 @@ def reschedule_discovery_refresh(enabled: bool, interval_hours: int) -> None:
         enabled: Whether discovery auto-refresh is opted in.
         interval_hours: Refresh interval in hours. 0 = disabled.
     """
-    _register_interval_job(
+    register_interval_job(
         get_scheduler(),
         job_id="refresh_recommendations",
         func=refresh_recommendations_periodic,
@@ -3383,7 +3191,7 @@ def reschedule_feed_refresh(enabled: bool, interval_hours: int) -> None:
         enabled: Whether feed auto-refresh is opted in.
         interval_hours: Refresh interval in hours. 0 = disabled.
     """
-    _register_interval_job(
+    register_interval_job(
         get_scheduler(),
         job_id="refresh_feed_inbox",
         func=refresh_feed_inbox_periodic,

@@ -1,8 +1,8 @@
 """External integration-plugin contracts.
 
-Alerts and Inbox are core ALMa features. An integration manifest describes how
-an external service adapts one or both of their narrow protocols, plus identity,
-activation, configuration schema/storage, and status.
+An integration manifest describes how an external service adapts the narrow
+send and receive protocols of Alerts and the Inbox, plus identity, activation,
+configuration schema/storage, and status.
 
 Configuration models are the schema source of truth. The API serves
 ``model_json_schema()`` from the exact Pydantic class it uses to validate writes;
@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from alma.application.inbox_schema import InboundChannel
 from alma.application.pdf_schema import PdfSource
+from alma.config import activation_setting_key
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,6 @@ InboundFactory = Callable[[], InboundChannel | None]
 AlertSender = Callable[[list[dict[str, Any]], str], Awaitable[bool]]
 ConnectionTester = Callable[[], Awaitable[dict[str, Any]]]
 PdfSourceFactory = Callable[[], list[PdfSource]]
-
-
-def activation_setting_key(plugin_id: str) -> str:
-    """Canonical flat settings key for runtime activation."""
-    return f"plugins.{plugin_id}.enabled"
 
 
 class PluginDisabledError(RuntimeError):

@@ -53,7 +53,7 @@ today's arrivals with what is standing on the desk:
 |---|---|---|
 | **new Feed papers** (distinct papers) | today | [Feed](feed.md) |
 | **new suggestions** across active lenses | today | [Discovery](discovery.md) |
-| **alerts delivered successfully** | today | Alerts → History |
+| **alerts delivered successfully** | today, while the Alerts add-on is on | Alerts → History |
 | **waiting in Inbox** | now | scrolls to the Inbox below |
 | **on your reading list** | now | Library → Reading |
 | **in the last 7 days** | the week | — |
@@ -154,11 +154,12 @@ half-row.
 ## System status
 
 The left half of the status line carries compact pills such as Automation,
-Feed, Discovery, the active embedding stack, Inbox, and Alerts. Only the
+Feed, Discovery, the active embedding stack, Inbox, and Alerts while that add-on
+is on. Only the
 severity dot and owner name are visible; metric, explanation, and check time
 live on hover.
 
-Inbox and Alerts are core capabilities, so Home never labels either pill
+Home names capabilities, not providers, so it never labels either pill
 “Slack”, “SMTP”, or another provider. Their provider-independent state is:
 
 - green — at least one supporting integration is configured, active, and

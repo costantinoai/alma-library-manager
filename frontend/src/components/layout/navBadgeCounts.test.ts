@@ -7,7 +7,7 @@ describe('getNavBadgeCount', () => {
     library: { papers: 10, candidates: 20, authors: 3, followed_authors: 2, collections: 4, tags: 5 },
     feed: { unread: 2 },
     discovery: { active_lenses: 2, pending_recommendations: 99, new_recommendations: 3 },
-    alerts: { active: 1 },
+    addons: [{ id: 'some_addon', enabled: true, badge: 3 }],
     app: { version: 'test' },
     onboarding: { has_owner: true },
   }

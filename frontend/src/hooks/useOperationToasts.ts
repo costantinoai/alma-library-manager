@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
+import { ADDONS } from '@/addons/registry'
 import { invalidateAfterPaperMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
 import { toast } from './useToast'
@@ -30,7 +31,8 @@ function operationToastTitle(
 ): string {
   const key = (operationKey ?? '').trim()
   const domain =
-    key === 'papers.reconcile_groups' ? 'Paper groups' :
+    addonForOperation(key)?.operations?.label ??
+    (key === 'papers.reconcile_groups' ? 'Paper groups' :
     key.startsWith('discovery.') ? 'Discovery refresh' :
     key.startsWith('feed.') ? 'Feed refresh' :
     key.startsWith('authors.') ? 'Authors' :
@@ -38,17 +40,29 @@ function operationToastTitle(
     key.startsWith('imports.') ? 'Import' :
     key.startsWith('graphs.') ? 'Graph' :
     key.startsWith('tags.') ? 'Tags' :
-    key.startsWith('alerts.') ? 'Alerts' :
     key.startsWith('ai.') ? 'AI' :
     key.startsWith('pdf.') ? 'PDF' :
-    'Operation')
+    key.startsWith('addons.') ? 'Add-on' :
+    'Operation'))
   if (outcome === 'failed') return `${domain} failed`
   return outcome === 'partial' ? `${domain} partly done` : `${domain} complete`
+}
+
+function addonForOperation(key: string) {
+  return ADDONS.find((addon) => addon.operations && key.startsWith(addon.operations.prefix))
 }
 
 function rootsForOperation(operationKey?: string): string[] {
   const key = (operationKey ?? '').trim()
   if (!key) return []
+
+  const addon = addonForOperation(key)
+  if (addon?.operations) return addon.operations.queryRoots
+
+  // Remove changes what the shell, Settings and Home show.
+  if (key.startsWith('addons.')) {
+    return ['addons', 'bootstrap', 'plugins', 'home', 'home-brief', 'health']
+  }
 
   // Paper PDFs (task 81): a fetch/attach refreshes that paper's PDF state; a
   // PDF-first import can add a paper to the Library.
@@ -60,7 +74,11 @@ function rootsForOperation(operationKey?: string): string[] {
   }
 
   if (key === 'papers.reconcile_groups') {
-    return ['health', 'library-info', 'library-collections', 'library-tags', 'authors', 'alerts', 'insights']
+    return [
+      'health', 'library-info', 'library-collections', 'library-tags', 'authors', 'insights',
+      // A merge moves add-on rows too.
+      ...ADDONS.flatMap((entry) => entry.operations?.queryRoots ?? []),
+    ]
   }
 
   if (key === 'feed.refresh_inbox' || key.startsWith('feed.monitor.refresh:')) {
@@ -134,16 +152,6 @@ function rootsForOperation(operationKey?: string): string[] {
       'tag-suggestions',
       'tag-merge-suggestions',
       'papers',
-    ]
-  }
-
-  if (key.startsWith('alerts.')) {
-    return [
-      'alerts',
-      'alert-rules',
-      'alert-history',
-      'alert-templates',
-      'insights-diagnostics',
     ]
   }
 

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AddonGate } from '@/addons/AddonGate'
 import { AppShell, type Page } from '@/components/layout/AppShell'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -18,7 +19,6 @@ const LibraryPage = lazy(pageLoaders.library)
 // a redirect shim so old #/insights?tab=… deep links still land correctly.
 const InsightsRedirect = lazy(pageLoaders.insights)
 const HealthPage = lazy(pageLoaders.health)
-const AlertsPage = lazy(pageLoaders.alerts)
 const SettingsPage = lazy(pageLoaders.settings)
 // The PDF handoff page is not a Page: no nav entry, no app shell.
 const PdfReaderPage = lazy(() => import('@/pages/PdfReaderPage'))
@@ -74,6 +74,7 @@ function AppContent() {
 
   const renderPage = () => {
     if (!route.found) return <NotFoundPage />
+    if (route.addon) return <AddonGate addon={route.addon} />
     switch (currentPage) {
       case 'home':
         return <HomePage />
@@ -89,8 +90,6 @@ function AppContent() {
         return <InsightsRedirect />
       case 'health':
         return <HealthPage />
-      case 'alerts':
-        return <AlertsPage />
       case 'settings':
         return <SettingsPage />
       default:
@@ -112,13 +111,14 @@ function AppContent() {
   return (
     <AppShell
       currentPage={currentPage}
+      currentAddon={route.addon}
       onNavigate={navigate}
       onPrefetch={prefetch}
       onRefresh={handleRefresh}
     >
       <Suspense fallback={<PageLoader />}>
         <PageReveal
-          key={currentPage}
+          key={route.addon?.id ?? currentPage}
           animate={!['discovery', 'authors'].includes(currentPage)}
         >
           {renderPage()}

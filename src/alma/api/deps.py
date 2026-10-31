@@ -15,7 +15,7 @@ Schema initialisation is performed **once** at startup via
 does no DDL work, eliminating lock contention with background jobs.
 
 v3 Schema: UUID-based papers table, discovery lenses, feed items,
-digest-based alerts.  Clean reset — no migration code.
+Clean reset — no migration code.
 """
 
 import logging
@@ -23,7 +23,7 @@ import os
 import sqlite3
 import stat
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException, status
@@ -277,8 +277,8 @@ def init_db_schema() -> None:
     handler).  This keeps heavy DDL work out of per-request ``get_db()``,
     eliminating SQLite lock contention with background jobs.
 
-    v3 schema: clean reset with UUID-based papers, discovery lenses,
-    feed items, and digest-based alerts.
+    v3 schema: clean reset with UUID-based papers, discovery lenses and feed
+    items. An add-on's tables are not here: ``alma.core.addons`` creates them.
     """
     global _schema_initialized, _schema_initialized_path
 
@@ -1249,73 +1249,6 @@ def init_db_schema() -> None:
                 conn.execute(statement)
 
             # ==============================================================
-            # ALERTS: Digest-based system (rules + digests + assignments)
-            # ==============================================================
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS alert_rules (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    rule_type TEXT NOT NULL,
-                    rule_config TEXT NOT NULL,
-                    channels TEXT NOT NULL,
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL
-                )"""
-            )
-
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS alerts (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    channels TEXT NOT NULL,
-                    schedule TEXT NOT NULL DEFAULT 'manual',
-                    schedule_config TEXT,
-                    format TEXT DEFAULT 'grouped',
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    last_evaluated_at TEXT
-                )"""
-            )
-
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS alert_rule_assignments (
-                    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
-                    rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-                    PRIMARY KEY (alert_id, rule_id)
-                )"""
-            )
-
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS alert_history (
-                    id TEXT PRIMARY KEY,
-                    rule_id TEXT,
-                    alert_id TEXT,
-                    channel TEXT NOT NULL,
-                    paper_id TEXT,
-                    sent_at TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    message_preview TEXT,
-                    publications TEXT,
-                    publication_count INTEGER DEFAULT 0,
-                    error_message TEXT
-                )"""
-            )
-
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS alerted_publications (
-                    id TEXT PRIMARY KEY,
-                    alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
-                    paper_id TEXT NOT NULL,
-                    channel TEXT NOT NULL,
-                    alerted_at TEXT NOT NULL,
-                    UNIQUE(alert_id, paper_id, channel)
-                )"""
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_alerted_alert_paper ON alerted_publications(alert_id, paper_id)"
-            )
-
-            # ==============================================================
             # FEEDBACK + PREFERENCES
             # ==============================================================
             conn.execute(
@@ -1744,6 +1677,27 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
 def get_plugin_registry() -> PluginRegistry:
     """The runtime-plugin catalogue dependency."""
     return runtime_plugins()
+
+
+# ============================================================================
+# Add-on gate
+# ============================================================================
+
+
+def require_addon(addon_id: str) -> Callable[[], None]:
+    """Route dependency: a switched-off add-on answers like a route that is gone.
+
+    Same status and body as the app's catch-all, so nothing distinguishes a
+    disabled route from one that never existed. Read per request, so the switch
+    needs no restart.
+    """
+    from alma.core import addons
+
+    def _gate() -> None:
+        if not addons.is_enabled(addon_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    return _gate
 
 
 # ============================================================================

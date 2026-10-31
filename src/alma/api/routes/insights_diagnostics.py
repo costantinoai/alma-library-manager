@@ -20,8 +20,6 @@ from alma.api.routes.insights import (
     _aggregate_http_source_diagnostics,
     _aggregate_openalex_usage,
     _build_ai_snapshot,
-    _build_alert_history_trend,
-    _build_alert_quality_snapshot,
     _build_author_follow_trend,
     _build_authors_snapshot,
     _build_branch_trends,
@@ -54,7 +52,6 @@ DIAGNOSTICS_SECTION_KEYS: tuple[str, ...] = (
     "discovery",
     "ai",
     "authors",
-    "alerts",
     "feedback",
     "operational",
     "evaluation",
@@ -507,20 +504,6 @@ def _build_diag_authors(db: sqlite3.Connection) -> dict[str, Any]:
     return {**snapshot, "author_follow_trend": author_follow_trend}
 
 
-# ── Section: alerts -------------------------------------------------------
-
-
-def _build_diag_alerts(db: sqlite3.Connection) -> dict[str, Any]:
-    snapshot = _build_alert_quality_snapshot(db, days=30)
-    alert_history_trend = _build_alert_history_trend(db, days=30)
-    weekly_90d = (snapshot.get("long_horizon") or {}).get("weekly_trend") or []
-    return {
-        **snapshot,
-        "alert_history_trend": alert_history_trend,
-        "alert_history_weekly_90d": weekly_90d,
-    }
-
-
 # ── Section: feedback ----------------------------------------
 
 
@@ -548,13 +531,11 @@ def _build_diag_operational(db: sqlite3.Connection) -> dict[str, Any]:
     discovery_settings = discovery_app.read_settings(db)
     ai_payload = _stored_section(db, "ai")
     authors_payload = _stored_section(db, "authors")
-    alerts_payload = _stored_section(db, "alerts")
 
     return _build_operational_snapshot(
         db,
         monitors=monitors,
         discovery_settings=discovery_settings,
-        alert_snapshot=alerts_payload,
         authors_snapshot=authors_payload,
         ai_snapshot=ai_payload,
     )
@@ -631,7 +612,6 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
     discovery_payload = _stored_section(db, "discovery")
     ai_payload = _stored_section(db, "ai")
     authors_payload = _stored_section(db, "authors")
-    alerts_payload = _stored_section(db, "alerts")
     feedback_payload = _stored_section(db, "feedback")
     operational_payload = _stored_section(db, "operational")
 
@@ -800,34 +780,6 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
         ),
     )
 
-    alerts_summary = alerts_payload.get("summary") or {}
-    sent_runs_30d = _safe_int(alerts_summary.get("sent_runs_30d"))
-    failed_runs_30d = _safe_int(alerts_summary.get("failed_runs_30d"))
-    empty_runs_30d = _safe_int(alerts_summary.get("empty_runs_30d"))
-    alerts_score = max(
-        0,
-        min(
-            100,
-            round(
-                (
-                    (
-                        (1.0 - safe_div(failed_runs_30d, max(1, sent_runs_30d + failed_runs_30d)))
-                        * 0.45
-                    )
-                    + (
-                        (1.0 - safe_div(empty_runs_30d, max(1, sent_runs_30d + empty_runs_30d)))
-                        * 0.30
-                    )
-                    + (
-                        min(_safe_float(alerts_summary.get("avg_papers_per_sent")) / 4.0, 1.0)
-                        * 0.25
-                    )
-                )
-                * 100
-            ),
-        ),
-    )
-
     feedback_summary = feedback_payload.get("summary") or {}
     signal_score = max(
         0,
@@ -915,15 +867,9 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
     # is empty the card reports "insufficient data" instead of a misleading
     # number (I-26). Rate cards (discovery / branch) need a real sample before a
     # rate is trustworthy; configuration/progress cards (monitors / library /
-    # authors) just need one entity; alerts need a few runs (they run rarely).
+    # authors) just need one entity.
     branch_total = sum(_safe_int(item.get("count")) for item in active_branch_rows)
     raw_tracked_authors = _safe_int(authors_summary.get("tracked_authors"))
-    alert_runs_30d = (
-        sent_runs_30d
-        + failed_runs_30d
-        + empty_runs_30d
-        + _safe_int(alerts_summary.get("skipped_runs_30d"))
-    )
     week_interactions = _safe_int(feedback_summary.get("week_interactions"))
     operational_checks = (
         _safe_int(operational_summary.get("healthy_checks"))
@@ -1036,26 +982,6 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
             insufficient_summary="No tracked authors yet.",
         ),
         _make_scorecard(
-            id="alert_automation_quality",
-            label="Alert Automation Quality",
-            sample_size=alert_runs_30d,
-            min_sample=3,
-            score=alerts_score,
-            summary=(
-                f"{sent_runs_30d} sent runs, {failed_runs_30d} failed, "
-                f"{empty_runs_30d} empty in the last 30 days."
-            ),
-            detail=(
-                "Alert score balances delivery reliability, non-empty output, "
-                "and papers delivered per successful run."
-            ),
-            # I-26: with no runs the old formula scored ~75 ("good"). Now no
-            # runs (or too few) is honestly "insufficient data".
-            insufficient_summary=(
-                f"Only {alert_runs_30d} alert runs in 30 days — too few to judge automation quality."
-            ),
-        ),
-        _make_scorecard(
             id="feedback_learning",
             label="Feedback Learning",
             sample_size=week_interactions,
@@ -1079,7 +1005,7 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
             score=operational_score,
             summary=(
                 f"{_safe_int(operational_summary.get('issues_total'))} active issues "
-                "across embeddings, monitors, sources, alerts, and plugins."
+                "across embeddings, monitors, sources, add-ons, and plugins."
             ),
             detail=(
                 "Operational health focuses on degraded capabilities that directly "
@@ -1144,35 +1070,6 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 ),
                 "page": "settings",
                 "params": {"section": "discovery"},
-                "priority": "medium",
-            }
-        )
-    best_branch = next(
-        (
-            item
-            for item in sorted(
-                branch_quality,
-                key=lambda row: (_safe_float(row.get("engagement_rate")), _safe_float(row.get("count"))),
-                reverse=True,
-            )
-            # I-25: only "operationalize" a branch once it has a defensible
-            # sample, not after 3 outcomes.
-            if _safe_int(item.get("count")) >= MIN_RATE_SAMPLE
-            and _safe_float(item.get("engagement_rate")) >= 0.25
-        ),
-        None,
-    )
-    if best_branch:
-        recommended_actions.append(
-            {
-                "id": "operationalize_branch",
-                "title": "Operationalize a strong branch",
-                "detail": (
-                    f"{best_branch['branch_label']} is already engaging well "
-                    "enough to turn into an alert or branch watch."
-                ),
-                "page": "alerts",
-                "params": {"section": "rules"},
                 "priority": "medium",
             }
         )
@@ -1271,29 +1168,6 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 "priority": "high",
             }
         )
-    low_usefulness_alert = next(
-        (
-            item
-            for item in (alerts_payload.get("top_alerts") or [])
-            if _safe_int(item.get("total_runs")) >= 3
-            and _safe_int(item.get("usefulness_score")) <= 55
-        ),
-        None,
-    )
-    if low_usefulness_alert is not None:
-        recommended_actions.append(
-            {
-                "id": "tune_low_usefulness_alerts",
-                "title": "Tune low-usefulness alerts",
-                "detail": (
-                    f"{low_usefulness_alert.get('alert_name', 'This alert')} is "
-                    "generating too many empty or low-yield runs."
-                ),
-                "page": "alerts",
-                "params": {"section": "history"},
-                "priority": "medium",
-            }
-        )
     if _safe_int(feedback_summary.get("week_interactions")) < 8:
         recommended_actions.append(
             {
@@ -1326,18 +1200,9 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
             }
         )
 
-    automation_opportunities: list[dict[str, Any]] = []
-    try:
-        from alma.application import alerts as alerts_app
-
-        automation_opportunities = alerts_app.list_alert_templates(db)[:4]
-    except Exception:
-        automation_opportunities = []
-
     return {
         "scorecards": scorecards,
         "recommended_actions": recommended_actions[:8],
-        "automation_opportunities": automation_opportunities,
         "library_workflow": workflow_snapshot,
     }
 
@@ -1426,14 +1291,6 @@ _AUTHORS_FINGERPRINT_SQL = """
       COALESCE((SELECT MAX(last_checked_at) FROM feed_monitors WHERE monitor_type = 'author'), '')
 """
 
-_ALERTS_FINGERPRINT_SQL = """
-    SELECT
-      COALESCE((SELECT COUNT(*) FROM alerts), 0),
-      COALESCE((SELECT COUNT(*) FROM alert_rules), 0),
-      COALESCE((SELECT COUNT(*) FROM alert_history), 0),
-      COALESCE((SELECT MAX(sent_at) FROM alert_history), '')
-"""
-
 _FEEDBACK_FINGERPRINT_SQL = """
     SELECT
       COALESCE((SELECT COUNT(*) FROM feedback_events), 0),
@@ -1442,7 +1299,7 @@ _FEEDBACK_FINGERPRINT_SQL = """
 
 _OPERATIONAL_FINGERPRINT_SQL = """
     SELECT
-      'op-logic-v3',  -- logic-version token: bump when the states-list logic changes
+      'op-logic-v4',  -- logic-version token: bump when the states-list logic changes
                       -- (data fingerprints can't see code changes — task 24 de-dupe).
       strftime('%Y-%m-%dT%H', 'now'),
                       -- Hour bucket: the payload embeds now()-relative facts the data
@@ -1453,7 +1310,6 @@ _OPERATIONAL_FINGERPRINT_SQL = """
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feed'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:ai'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:authors'), ''),
-      COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:alerts'), ''),
       COALESCE((SELECT MAX(COALESCE(finished_at, updated_at, started_at))
                 FROM operation_status WHERE status = 'failed'), ''),
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.openalex.enabled'), ''),
@@ -1469,7 +1325,6 @@ _EVALUATION_FINGERPRINT_SQL = f"""
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:discovery'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:ai'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:authors'), ''),
-      COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:alerts'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feedback'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:operational'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'health:corpus'), ''),
@@ -1482,15 +1337,14 @@ _SECTION_BUILDS: dict[str, tuple[str, Any]] = {
     "discovery": (_DISCOVERY_FINGERPRINT_SQL, _build_diag_discovery),
     "ai": (_AI_FINGERPRINT_SQL, _build_diag_ai),
     "authors": (_AUTHORS_FINGERPRINT_SQL, _build_diag_authors),
-    "alerts": (_ALERTS_FINGERPRINT_SQL, _build_diag_alerts),
     "feedback": (_FEEDBACK_FINGERPRINT_SQL, _build_diag_feedback),
     "operational": (_OPERATIONAL_FINGERPRINT_SQL, _build_diag_operational),
     "evaluation": (_EVALUATION_FINGERPRINT_SQL, _build_diag_evaluation),
 }
 
 _SECTION_DEPENDENCIES = {
-    "operational": ("feed", "ai", "authors", "alerts"),
-    "evaluation": ("feed", "discovery", "ai", "authors", "alerts", "feedback", "operational"),
+    "operational": ("feed", "ai", "authors"),
+    "evaluation": ("feed", "discovery", "ai", "authors", "feedback", "operational"),
 }
 
 for _section, (_fp_sql, _build_fn) in _SECTION_BUILDS.items():
@@ -1581,7 +1435,6 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
     discovery_payload = _stored_section(db, "discovery")
     ai_payload = _stored_section(db, "ai")
     authors_payload = _stored_section(db, "authors")
-    alerts_payload = _stored_section(db, "alerts")
     feedback_payload = _stored_section(db, "feedback")
     operational_payload = _stored_section(db, "operational")
     evaluation_payload = _stored_section(db, "evaluation")
@@ -1634,11 +1487,6 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
             "suggestions": authors_payload.get("suggestions") or [],
             "corpus_health": authors_payload.get("corpus_health") or [],
         },
-        "alerts": {
-            "summary": alerts_payload.get("summary") or {},
-            "top_alerts": alerts_payload.get("top_alerts") or [],
-            "long_horizon": alerts_payload.get("long_horizon") or {},
-        },
         "feedback_learning": {
             "summary": feedback_payload.get("summary") or {},
             "top_topics": feedback_payload.get("top_topics") or [],
@@ -1658,11 +1506,6 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
                 "recommendation_action_trend"
             )
             or [],
-            "alert_history_daily": alerts_payload.get("alert_history_trend") or [],
-            "alert_history_weekly_90d": alerts_payload.get(
-                "alert_history_weekly_90d"
-            )
-            or [],
             "author_follows_daily": authors_payload.get("author_follow_trend") or [],
             "feedback_learning_daily": feedback_payload.get(
                 "feedback_learning_trend"
@@ -1672,10 +1515,6 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
         "evaluation": {
             "scorecards": evaluation_payload.get("scorecards") or [],
             "recommended_actions": evaluation_payload.get("recommended_actions")
-            or [],
-            "automation_opportunities": evaluation_payload.get(
-                "automation_opportunities"
-            )
             or [],
         },
     }

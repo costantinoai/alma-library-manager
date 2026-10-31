@@ -18,10 +18,13 @@ Key principles:
   authors.db + publications.db layout.
 """
 
+import errno
 import json
 import logging
 import os
-import re
+import shutil
+import tempfile
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,11 @@ from typing import Any
 import platformdirs
 
 logger = logging.getLogger(__name__)
+
+# Errors that mean "this path cannot be renamed over", not "the disk failed".
+_IN_PLACE_WRITE_ERRNOS = frozenset({errno.EBUSY, errno.EACCES, errno.EPERM, errno.EROFS})
+# One writer at a time for the read-modify-write of settings.json.
+_SETTINGS_WRITE_LOCK = threading.RLock()
 
 # `.env` is loaded at the BOTTOM of this module (see `_load_env_files`),
 # after the path-resolution helpers it depends on are defined. It reads
@@ -48,7 +56,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # validator before any plugin can be consumed.
     "settings_schema_version": 3,
     "plugins.slack.enabled": False,
-    "plugins.email.enabled": False,
     # Paper-PDF sources (task 81). Off until the user switches them on; the
     # shadow libraries are a separate, explicit opt-in.
     "plugins.open_access.enabled": False,
@@ -82,12 +89,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # message with a `bot_id`, so pointing both at one channel is safe. A
     # dedicated channel is simply nicer — digests bury the links you send.
     "slack_inbox_channel": None,
-    "smtp_host": None,
-    "smtp_port": 587,
-    "smtp_username": None,
-    "smtp_from": None,
-    "smtp_to": None,
-    "smtp_use_tls": True,
     "id_resolution_semantic_scholar_enabled": True,
     "id_resolution_orcid_enabled": True,
     # Google Scholar scraping is opt-in and OFF by default everywhere (D14):
@@ -103,6 +104,49 @@ def _looks_like_project_root(candidate: Path) -> bool:
     return any((candidate / marker).exists() for marker in _PROJECT_ROOT_MARKERS)
 
 
+def _write_settings_file(settings_path: Path, settings: dict[str, Any]) -> None:
+    """Replace ``settings.json`` whole: a crash leaves the old file or the new one.
+
+    The file holds every add-on and plugin switch, so a half-written one would
+    fail startup. The new content goes to a temporary file in the same directory
+    (same filesystem, so ``os.replace`` is one rename) and is synced before the
+    rename. ``settings.json`` may be a symlink; the link stays and its target is
+    replaced.
+
+    A single file bind-mounted into a container cannot be renamed over (EBUSY),
+    and its parent directory may not be writable at all. There the only possible
+    write is in place, so that path falls back to it, loudly. Any other error
+    propagates to the caller.
+    """
+    target = Path(os.path.realpath(settings_path))
+    payload = json.dumps(settings, indent=2) + "\n"
+    tmp_name: str | None = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        if target.exists():
+            shutil.copymode(target, tmp_name)
+        os.replace(tmp_name, target)
+        tmp_name = None
+    except OSError as exc:
+        if exc.errno not in _IN_PLACE_WRITE_ERRNOS:
+            raise
+        logger.warning(
+            "Cannot replace %s atomically (%s); writing it in place, so a crash "
+            "during this write could damage the file",
+            target,
+            exc,
+        )
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(payload)
+    finally:
+        if tmp_name is not None:
+            Path(tmp_name).unlink(missing_ok=True)
+
+
 def _write_default_settings_file(settings_path: Path) -> bool:
     """Write defaults to ``settings_path``. Returns False if the file
     isn't writable from this process (typical for a Docker bind-mount
@@ -111,9 +155,7 @@ def _write_default_settings_file(settings_path: Path) -> bool:
     """
     try:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_SETTINGS, f, indent=2)
-            f.write("\n")
+        _write_settings_file(settings_path, DEFAULT_SETTINGS)
         return True
     except (PermissionError, OSError) as exc:
         logger.warning(
@@ -441,24 +483,21 @@ def update_settings(updates: dict[str, Any]) -> None:
             if value and Path(value).is_absolute():
                 raise ValueError(f"Path for {key} must be relative, got: {value}")
 
-    # Load current settings
-    settings_path = ensure_settings_file()
-    try:
-        with open(settings_path, encoding="utf-8") as f:
-            settings = json.load(f)
-    except Exception:
-        settings = {}
+    # Read, change and write as one step, so a Settings save and an add-on
+    # switch landing together cannot lose each other's keys.
+    with _SETTINGS_WRITE_LOCK:
+        settings_path = ensure_settings_file()
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+        except Exception:
+            settings = {}
 
-    # Update with new values
-    settings.update(updates)
+        settings.update(updates)
+        _write_settings_file(settings_path, settings)
 
-    # Write back to file
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
-
-    # Clear cache to force reload
-    reload_settings()
+        # Clear cache to force reload
+        reload_settings()
     logger.info(f"Updated settings: {list(updates.keys())}")
 
 
@@ -466,23 +505,22 @@ def delete_settings_keys(keys: list[str]) -> None:
     """Delete keys from settings.json if they exist."""
     if not keys:
         return
-    settings_path = ensure_settings_file()
-    try:
-        with open(settings_path, encoding="utf-8") as f:
-            settings = json.load(f)
-    except Exception:
-        settings = {}
-    removed: list[str] = []
-    for key in keys:
-        if key in settings:
-            settings.pop(key, None)
-            removed.append(key)
-    if removed:
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-            f.write("\n")
-        reload_settings()
-        logger.info("Deleted settings keys: %s", removed)
+    with _SETTINGS_WRITE_LOCK:
+        settings_path = ensure_settings_file()
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+        except Exception:
+            settings = {}
+        removed: list[str] = []
+        for key in keys:
+            if key in settings:
+                settings.pop(key, None)
+                removed.append(key)
+        if removed:
+            _write_settings_file(settings_path, settings)
+            reload_settings()
+            logger.info("Deleted settings keys: %s", removed)
 
 
 def migrate_settings_schema() -> None:
@@ -541,6 +579,11 @@ def migrate_settings_schema() -> None:
                 "plugins.shadow_libraries.enabled": False,
             }
         )
+
+
+def activation_setting_key(plugin_id: str) -> str:
+    """Canonical flat settings key for runtime activation."""
+    return f"plugins.{plugin_id}.enabled"
 
 
 def plugin_activation_keys() -> list[str]:
@@ -785,62 +828,6 @@ def get_slack_channel() -> str | None:
         return channel
 
     return None
-
-
-# ── Email / SMTP (the email-digest channel, sibling of Slack) ──────────────
-def get_smtp_host() -> str | None:
-    """SMTP server host. Env ``SMTP_HOST`` → ``smtp_host`` setting."""
-    return os.getenv("SMTP_HOST") or get_setting("smtp_host") or None
-
-
-def get_smtp_port() -> int:
-    """SMTP port (default 587 = STARTTLS). Env ``SMTP_PORT`` → setting."""
-    raw = os.getenv("SMTP_PORT") or get_setting("smtp_port") or 587
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 587
-
-
-def get_smtp_username() -> str | None:
-    """SMTP auth username. Env ``SMTP_USERNAME`` → ``smtp_username`` setting."""
-    return os.getenv("SMTP_USERNAME") or get_setting("smtp_username") or None
-
-
-def get_smtp_from() -> str | None:
-    """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
-    return os.getenv("SMTP_FROM") or get_setting("smtp_from") or get_smtp_username() or None
-
-
-def get_smtp_recipients() -> list[str]:
-    """Digest recipients, parsed from a comma/semicolon/newline list.
-
-    Env ``SMTP_TO`` → ``smtp_to`` setting.
-    """
-    raw = os.getenv("SMTP_TO") or get_setting("smtp_to") or ""
-    parts = re.split(r"[,;\n]+", str(raw))
-    return [p.strip() for p in parts if p.strip()]
-
-
-def get_smtp_use_tls() -> bool:
-    """Whether to use STARTTLS (default True). ``smtp_use_tls`` setting."""
-    val = get_setting("smtp_use_tls", True)
-    if isinstance(val, str):
-        return val.strip().lower() not in ("0", "false", "no", "")
-    return bool(val)
-
-
-def get_smtp_password() -> str | None:
-    """SMTP password. Env ``SMTP_PASSWORD`` → unified secret store."""
-    env_pw = os.getenv("SMTP_PASSWORD")
-    if env_pw:
-        return env_pw
-    try:
-        from alma.core.secrets import SECRET_SMTP_PASSWORD, get_secret
-
-        return get_secret(SECRET_SMTP_PASSWORD)
-    except Exception:
-        return None
 
 
 def get_openai_api_key() -> str | None:

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { findAddon, type AddonUi } from '@/addons/registry'
 import type { Page } from '@/components/layout/AppShell'
 
 // Record<Page, true> so tsc fails when a new Page is added but not routed —
@@ -13,14 +14,15 @@ const PAGE_ROUTES: Record<Page, true> = {
   library: true,
   insights: true,
   health: true,
-  alerts: true,
   settings: true,
 }
 
 const VALID_PAGES = Object.keys(PAGE_ROUTES) as Page[]
 
 export interface HashRoute {
+  /** A core page. Holds `home` while `addon` is set, so `Page` stays core-only. */
   page: Page
+  addon: AddonUi | null
   found: boolean
   params: URLSearchParams
   raw: string
@@ -33,11 +35,13 @@ export function parseHashRoute(rawHash?: string): HashRoute {
   const [pagePart, queryPart = ''] = normalized.split('?', 2)
   // An empty hash lands on Home (task 47 Phase 6); Feed stays one click away.
   const pageCandidate = pagePart === 'map' ? 'discovery' : pagePart || 'home'
-  const found = VALID_PAGES.includes(pageCandidate as Page)
-  const page = found ? (pageCandidate as Page) : 'home'
+  const addon = findAddon(pageCandidate)
+  const isPage = VALID_PAGES.includes(pageCandidate as Page)
+  const page = isPage ? (pageCandidate as Page) : 'home'
   return {
     page,
-    found,
+    addon,
+    found: isPage || addon !== null,
     params: new URLSearchParams(queryPart),
     raw,
   }

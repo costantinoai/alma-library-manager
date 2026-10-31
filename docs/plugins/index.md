@@ -5,9 +5,9 @@ description: The four optional adapters ALMa ships — what each one does, and t
 
 # Plugins
 
-ALMa's features are core. Alerts, the Inbox and a paper's PDF work as part of
-the app; a plugin is only the optional adapter that connects one of them to an
-outside service. Nothing here is required to use ALMa.
+The Inbox and a paper's PDF work as part of the app, and Alerts is an add-on you
+switch on in **Settings → Add-ons**. A plugin is only the optional adapter that
+connects one of them to an outside service. Nothing here is required to use ALMa.
 
 Four ship with it:
 
@@ -18,7 +18,8 @@ Four ship with it:
 | **[Open-access PDFs](open-access-pdfs.md)** | Finds a paper's PDF from arXiv, PubMed Central, OpenAlex, Unpaywall, Crossref, the publisher's page and Semantic Scholar | [Paper PDFs](../user-guide/reading-pdfs.md) |
 | **[Shadow libraries](shadow-libraries.md)** | Tries the Sci-Hub and Anna's Archive mirrors you add, after every open-access source has failed | [Paper PDFs](../user-guide/reading-pdfs.md) |
 
-They all live in one place: **Settings → Plugins**.
+They all live in one place: **Settings → Plugins**. Email belongs to Alerts, so
+it appears there only while Alerts is on.
 
 ## What is true of every plugin
 

@@ -50,6 +50,7 @@ from alma.config import (
 from alma.config import (
     update_settings as config_update_settings,
 )
+from alma.core import addons
 from alma.core.http_sources import get_source_http_client
 from alma.core.network_policy import (
     NETWORK_ACCESS_SETTING,
@@ -386,15 +387,12 @@ def export_data_snapshot():
         "tags",
         "publication_tags",
         "followed_authors",
-        "alerts",
-        "alert_rules",
-        "alert_rule_assignments",
-        "alert_history",
         "recommendations",
         "publication_topics",
         "publication_institutions",
         "operation_status",
         "operation_logs",
+        *addons.data_tables(),
     ]
 
     dump: dict[str, list[dict]] = {}

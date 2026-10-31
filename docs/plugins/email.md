@@ -11,7 +11,8 @@ instead of, or alongside, [Slack](slack.md).
 
 ## Set it up
 
-**Settings → Plugins → Email**, switch it on, and fill the fields that appear:
+Switch on **Alerts** in **Settings → Add-ons** first: Email is part of it. Then
+open **Settings → Plugins → Email**, switch it on, and fill the fields that appear:
 
 | Field | What to put in it |
 |---|---|

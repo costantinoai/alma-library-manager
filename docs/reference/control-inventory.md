@@ -162,6 +162,7 @@ These live in the same table but not in `DISCOVERY_SETTINGS_DEFAULTS`. The last 
 <!-- inventory: kv -->
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
+| `addon.<id>.schema_version` | `src/alma/core/addons.py` | unset until first enable | `addons.ensure_schema` | Schema version of one add-on's tables. A value above the build's own blocks that add-on alone. Not for tuning; Remove deletes it. | no measure | nowhere | dynamic |
 | `branches.resolution` | `src/alma/application/discovery/seed_profile.py` | unset, then `1.0` | `_resolve_branch_resolution` | Global cluster detail when a lens has no override. Not in the defaults, and no route writes it. | Branch panel. | nowhere | live |
 | `schedule.scoring_calibration_interval_hours` | `src/alma/api/scheduler.py` | unset, then 12 | `setup_scheduler` | Hours between scoring calibration checks. 0 stops the job. Not in the defaults, and no route writes it. | Job result. | nowhere | live |
 | `ai.provider` | `src/alma/api/deps.py` | `local` when the AI packages import, else `none` | `get_active_provider`, `ai_configure` | Who computes missing embeddings: `local`, `openai` or `none`. | Health embedding coverage. | Settings: AI | live |
@@ -245,9 +246,18 @@ Stored on each row of `discovery_lenses`. Written by `PUT /api/v1/lenses/{id}` a
 | `source_id` (monitor) | `src/alma/application/feed_monitors.py` | required for venue | `feed._run_monitor_source_search` | The OpenAlex source of a venue monitor. | Feed refresh result. | Feed page, venue picker | live |
 | `semantic_scholar_enabled` (monitor) | `src/alma/application/feed.py` | false | `feed._monitor_search_plan` | Adds Semantic Scholar to a preprint monitor. No screen writes it. | no measure | API only | live |
 | `temperature` (monitor) | `src/alma/application/feed.py` | 0.34 | `feed._monitor_search_plan` | Floor on a branch monitor's search temperature. No screen writes it. | no measure | API only | live |
-| `schedule` (alert) | `src/alma/application/alerts.py` | `manual` | `evaluate_scheduled_alerts` | When an alert fires. | Alert history. | Alerts page | live |
-| `schedule_config` (alert) | `src/alma/application/alerts.py` | unset | `next_slot`, `reference_slot` | The day and time slot of that schedule. | Alert history. | Alerts page | live |
-| `rule_config` (alert) | `src/alma/application/alerts.py` | required | alert rule evaluation | What a rule matches. | Alert history. | Alerts page | live |
+| `schedule` (alert) | `src/alma/addons/alerts/service.py` | `manual` | `evaluate_scheduled_alerts` | When an alert fires. | Alert history. | Alerts page | live |
+| `schedule_config` (alert) | `src/alma/addons/alerts/service.py` | unset | `next_slot`, `reference_slot` | The day and time slot of that schedule. | Alert history. | Alerts page | live |
+| `rule_config` (alert) | `src/alma/addons/alerts/service.py` | required | alert rule evaluation | What a rule matches. | Alert history. | Alerts page | live |
+
+## Add-ons
+
+An add-on is a folder under `src/alma/addons/` listed in `ADDON_MODULES` (`src/alma/core/addons.py`). Each one has a switch, read on every request, so a change needs no restart. While it is off its routes answer 404, its jobs are not scheduled, and its nav entry, pills and figures are gone. Its data stays until an explicit Remove. If the switch is missing from `settings.json`, startup writes it once as `default_enabled or has_user_data(conn)`; a switch that exists is never changed. `GET /api/v1/addons` lists them.
+
+<!-- inventory: addon -->
+| Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
+|---|---|---|---|---|---|---|---|
+| `plugins.alerts.enabled` | `src/alma/addons/alerts/__init__.py` | `False`, or `True` when `alerts` or `alert_rules` has rows | `addons.is_enabled`, `require_addon` | Everything Alerts does: routes, the sweep, the sidebar entry, Home figure and pill, the Health check, and the Email plugin. | no measure | Settings: Add-ons | live |
 
 ## App settings
 
@@ -270,14 +280,14 @@ Stored in `settings.json`, through `alma.config`. `PUT /api/v1/settings` writes 
 | `id_resolution_scholar_scrape_manual_enabled` | `src/alma/config.py` | `False` | `routes.authors` resolver options | Google Scholar scraping from the Authors page. | Authors needing review on Health. | Settings: Identifier Resolution | live |
 | `slack_channel` | `src/alma/config.py` | `None` | `get_slack_channel`, `plugins.slack` | Channel of Slack alerts. | Alert history. | Settings: Plugins, Slack | live |
 | `slack_inbox_channel` | `src/alma/config.py` | `None` | `SlackInboxChannel`, `plugins.slack` | Channel ALMa reads for Inbox capture. Empty means capture off. | Inbox ledger. | Settings: Plugins, Slack | live |
-| `smtp_host` | `src/alma/config.py` | `None` | `get_smtp_host`, `plugins.email` | Mail server for alert digests. | Alert history. | Settings: Plugins, Email | live |
-| `smtp_port` | `src/alma/config.py` | `587` | `get_smtp_port`, `plugins.email` | Mail server port. | Alert history. | Settings: Plugins, Email | live |
-| `smtp_username` | `src/alma/config.py` | `None` | `get_smtp_username`, `plugins.email` | Mail login name, and the sender when `smtp_from` is empty. | Alert history. | Settings: Plugins, Email | live |
-| `smtp_from` | `src/alma/config.py` | `None` | `get_smtp_from`, `plugins.email` | Sender address. | Alert history. | Settings: Plugins, Email | live |
-| `smtp_to` | `src/alma/config.py` | `None` | `get_smtp_recipients`, `plugins.email` | Digest recipients. | Alert history. | Settings: Plugins, Email | live |
-| `smtp_use_tls` | `src/alma/config.py` | `True` | `get_smtp_use_tls`, `plugins.email` | STARTTLS. | Alert history. | Settings: Plugins, Email | live |
+| `smtp_host` | `src/alma/addons/alerts/__init__.py` | `None` | `get_smtp_host`, `plugins.email` | Mail server for alert digests. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
+| `smtp_port` | `src/alma/addons/alerts/__init__.py` | `587` | `get_smtp_port`, `plugins.email` | Mail server port. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
+| `smtp_username` | `src/alma/addons/alerts/__init__.py` | `None` | `get_smtp_username`, `plugins.email` | Mail login name, and the sender when `smtp_from` is empty. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
+| `smtp_from` | `src/alma/addons/alerts/__init__.py` | `None` | `get_smtp_from`, `plugins.email` | Sender address. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
+| `smtp_to` | `src/alma/addons/alerts/__init__.py` | `None` | `get_smtp_recipients`, `plugins.email` | Digest recipients. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
+| `smtp_use_tls` | `src/alma/addons/alerts/__init__.py` | `True` | `get_smtp_use_tls`, `plugins.email` | STARTTLS. | Alert history. | Settings: Plugins, Email, while Alerts is on | live |
 | `plugins.slack.enabled` | `src/alma/config.py` | `False` | `PluginManifest.is_enabled` | Activates Slack delivery and capture. Saved credentials alone do nothing. | Plugin status. | Settings: Plugins | live |
-| `plugins.email.enabled` | `src/alma/config.py` | `False` | `PluginManifest.is_enabled` | Activates email delivery. | Plugin status. | Settings: Plugins | live |
+| `plugins.email.enabled` | `src/alma/addons/alerts/__init__.py` | `False` | `PluginManifest.is_enabled` | Activates email delivery. A switch inside Alerts: it does nothing while Alerts is off. | Plugin status. | Settings: Plugins, while Alerts is on | live |
 | `plugins.open_access.enabled` | `src/alma/config.py` | `False` | `PluginManifest.is_enabled` | Activates open-access PDF finding. | PDF attempts in Activity. | Settings: Plugins | live |
 | `plugins.open_access.use_openalex_content` | `src/alma/config.py` | `False` | `plugins.open_access._sources` | Adds OpenAlex cached PDFs as a last resort, at 100 credits a PDF. | Quota readout. | Settings: Plugins, advanced | live |
 | `plugins.shadow_libraries.enabled` | `src/alma/config.py` | `False` | `PluginManifest.is_enabled` | Activates shadow-library PDF finding. | PDF attempts in Activity. | Settings: Plugins | live |
@@ -298,7 +308,7 @@ Names and purposes only. They live in the secret store and can also come from th
 | `SECRET_SEMANTIC_SCHOLAR_API_KEY` | `src/alma/core/secrets.py` | unset | `get_semantic_scholar_api_key` | Semantic Scholar API key. | Settings status check. | Settings: External APIs | live |
 | `SECRET_OPENAI_API_KEY` | `src/alma/core/secrets.py` | unset | `get_openai_api_key` | OpenAI embeddings key. | AI status. | Settings: AI | live |
 | `SECRET_SLACK_BOT_TOKEN` | `src/alma/core/secrets.py` | unset | `get_slack_token` | Slack bot token. | Plugin Test button. | Settings: Plugins, Slack | live |
-| `SECRET_SMTP_PASSWORD` | `src/alma/core/secrets.py` | unset | `get_smtp_password` | Mail password. | Plugin Test button. | Settings: Plugins, Email | live |
+| `SECRET_SMTP_PASSWORD` | `src/alma/core/secrets.py` | unset | `get_smtp_password` | Mail password. | Plugin Test button. | Settings: Plugins, Email, while Alerts is on | live |
 | `SECRET_ANNAS_ARCHIVE_KEY` | `src/alma/core/secrets.py` | unset | `plugins.shadow_libraries._settings` | Anna's Archive member key. | Plugin Test button. | Settings: Plugins, advanced | live |
 
 ## Environment variables
@@ -332,7 +342,7 @@ Names and purposes only. They live in the secret store and can also come from th
 | `DEBUG` | `src/alma/api/app.py` | `false` | `__main__` block | Reload when run as a script. | no measure | env | live |
 | `SCHEDULER_ENABLED` | `src/alma/api/scheduler.py` | `true` | `_scheduler_enabled` | Off registers no periodic job at all. | no measure | env | live |
 | `ALMA_SCHEDULER_WORKERS` | `src/alma/api/scheduler.py` | `5` | `_scheduler_max_workers`, clamped 1 to 16 | Background jobs running at once. | Writes failing with lock errors means lower; queues that never drain mean raise. | env | live |
-| `ALERT_CHECK_INTERVAL_HOURS` | `src/alma/api/scheduler.py` | `1` | `_alert_check_interval_hours` | Hours between alert evaluations. | Alert history lateness. | env | live |
+| `ALERT_CHECK_INTERVAL_HOURS` | `src/alma/addons/alerts/jobs.py` | `1` | `alert_check_interval_minutes` | Hours between alert evaluations. | Alert history lateness. | env | live |
 | `INBOX_SWEEP_INTERVAL_MINUTES` | `src/alma/api/scheduler.py` | `5` | `_inbox_sweep_interval_minutes` | Minutes between Inbox capture polls. 0 disables. | Inbox ledger latency. | env; `.env` | live |
 | `ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS` | `src/alma/api/scheduler.py` | `6` | `setup_scheduler` | Hours between checks for stale suggestion caches. | Job result. | env | live |
 | `ALMA_IDLE_MAINTENANCE_INTERVAL_HOURS` | `src/alma/api/scheduler.py` | `1` | `setup_scheduler` | Hours between idle healer ticks. | Health page backlog. | env | live |
@@ -363,12 +373,12 @@ Secrets are listed by name and purpose only.
 | `SLACK_API_TOKEN` | `src/alma/config.py` | unset | `get_slack_token` | Alias of `SLACK_TOKEN`. Secret. | no measure | env | live |
 | `SLACK_CHANNEL` | `src/alma/config.py` | unset | `get_slack_channel`, `slack.client` | Alert channel, wins over the setting. | Alert history. | env; `.env` | live |
 | `SLACK_DEFAULT_CHANNEL` | `src/alma/config.py` | unset | `get_slack_channel` | Alias of `SLACK_CHANNEL`. | no measure | env | live |
-| `SMTP_HOST` | `src/alma/config.py` | unset | `get_smtp_host` | Mail server, wins over the setting. | Alert history. | env | live |
-| `SMTP_PORT` | `src/alma/config.py` | `587` | `get_smtp_port` | Mail port. | Alert history. | env | live |
-| `SMTP_USERNAME` | `src/alma/config.py` | unset | `get_smtp_username` | Mail login. | Alert history. | env | live |
-| `SMTP_PASSWORD` | `src/alma/config.py` | unset | `get_smtp_password` | Mail password. Secret. | Alert history. | env | live |
-| `SMTP_FROM` | `src/alma/config.py` | unset | `get_smtp_from` | Sender address. | Alert history. | env | live |
-| `SMTP_TO` | `src/alma/config.py` | unset | `get_smtp_recipients` | Recipients. | Alert history. | env | live |
+| `SMTP_HOST` | `src/alma/addons/alerts/mailer.py` | unset | `get_smtp_host` | Mail server, wins over the setting. | Alert history. | env | live |
+| `SMTP_PORT` | `src/alma/addons/alerts/mailer.py` | `587` | `get_smtp_port` | Mail port. | Alert history. | env | live |
+| `SMTP_USERNAME` | `src/alma/addons/alerts/mailer.py` | unset | `get_smtp_username` | Mail login. | Alert history. | env | live |
+| `SMTP_PASSWORD` | `src/alma/addons/alerts/mailer.py` | unset | `get_smtp_password` | Mail password. Secret. | Alert history. | env | live |
+| `SMTP_FROM` | `src/alma/addons/alerts/mailer.py` | unset | `get_smtp_from` | Sender address. | Alert history. | env | live |
+| `SMTP_TO` | `src/alma/addons/alerts/mailer.py` | unset | `get_smtp_recipients` | Recipients. | Alert history. | env | live |
 
 ### Deployment files
 
@@ -419,7 +429,7 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 |---|---|---|---|---|---|---|---|
 | `health_snapshot_periodic` | `src/alma/api/scheduler.py` | every 5 min | `rebuild_health_snapshots` | Rebuilds stored Health payloads. | Staleness on Health. | nowhere | live |
 | `reap_orphan_jobs` | `src/alma/api/scheduler.py` | every `_ORPHAN_REAP_INTERVAL_MINUTES` | `reap_orphan_jobs` | Closes Activity rows whose worker died. | Ghost rows in Activity. | nowhere | live |
-| `evaluate_alerts` | `src/alma/api/scheduler.py` | hourly, `ALERT_CHECK_INTERVAL_HOURS` | `evaluate_scheduled_alerts` | Checks non-manual alerts. | Alert history lateness. | env | live |
+| `evaluate_alerts` | `src/alma/addons/alerts/__init__.py` | hourly, `ALERT_CHECK_INTERVAL_HOURS` | `evaluate_scheduled_alerts` | Checks non-manual alerts. | Alert history lateness. | env | live |
 | `refresh_author_suggestions` | `src/alma/api/scheduler.py` | 6 h, `ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS` | `refresh_author_suggestions_periodic` | Refreshes stale suggestion caches while idle. | Job result; Quota readout. | env | live |
 | `refresh_recommendations` | `src/alma/api/scheduler.py` | off, 6 h when on | `refresh_recommendations_periodic` | Refreshes active lenses. | Home Connections rail. | Discovery page; Settings | live |
 | `refresh_feed_inbox` | `src/alma/api/scheduler.py` | off, 6 h when on | `refresh_feed_inbox_periodic` | Refreshes the Feed. | Feed refresh result. | Feed page | live |
@@ -650,8 +660,9 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 | `_QUEUED_STATE_THRESHOLD` | `src/alma/services/health.py` | `0.9` | `assess_corpus` | Share of a gap never attempted for it to read as queued instead of warning. | Health page. | nowhere | live |
 | `LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD` | `src/alma/library/importer.py` | `0.7` | `_should_stage_import` | Title confidence below which an import stays staged. | Imports staged for review. | nowhere | live |
 | `DEFAULT_LIBRARY_RATING` | `src/alma/application/library.py` | `3` | `add_to_library` | Rating of a plain save. | no measure | nowhere | live |
-| `ALERT_HISTORY_RETENTION_DAYS` | `src/alma/application/alerts.py` | `180` | `prune_alert_history` | How long alert history stays. Floor 90. | no measure | nowhere | live |
-| `_MAX_PAPERS_PER_EMAIL` | `src/alma/mailer/client.py` | `50` | email digest sender in `mailer.client` | Papers per email. | no measure | nowhere | live |
+| `ALERT_HISTORY_RETENTION_DAYS` | `src/alma/addons/alerts/service.py` | `180` | `prune_alert_history` | How long alert history stays. Floor 90. | no measure | nowhere | live |
+| `_FAILURE_WINDOW_DAYS` | `src/alma/addons/alerts/surfaces.py` | `30` | `delivery_check` | How far back a failed digest run still reads as a current problem on Health. | Alert history. | nowhere | live |
+| `_MAX_PAPERS_PER_EMAIL` | `src/alma/addons/alerts/mailer.py` | `50` | email digest sender in `alerts.mailer` | Papers per email. | no measure | nowhere | live |
 | `_MAX_PAPERS_PER_MESSAGE` | `src/alma/slack/client.py` | `15` | Slack digest sender in `slack.client` | Papers per Slack message. | no measure | nowhere | live |
 | `FETCH_LIMIT` | `src/alma/services/inbox_channels/slack.py` | `100` | `fetch` | Messages read per sweep. The rest waits for the next. | Inbox ledger. | nowhere | live |
 

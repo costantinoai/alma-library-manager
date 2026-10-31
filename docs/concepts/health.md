@@ -57,7 +57,7 @@ Sharing the same panel as the ribbon — directly below it — is a **one-line
 strip** of clickable **component chips**, one per running-system component:
 **Feed monitors**, **Upstream sources** (OpenAlex / Crossref / Semantic
 Scholar), **AI & embeddings**, **Tracked authors**, and — when relevant —
-**Plugins**, **Alerts**, and **Background jobs**. Each chip is compact: a
+**Plugins**, **Add-ons** (while one reports a problem), and **Background jobs**. Each chip is compact: a
 colored **status dot** (healthy / warning / critical), an icon, the component
 name, and its metric ("2 with errors", "maintenance due", "all healthy").
 Worst-first, so a degraded component leads.
@@ -69,7 +69,7 @@ explaining that component:
   component is configured.
 - **Degraded** — the issues, each with the same **one-click remediation** as
   before (refresh a monitor, repair or backfill an author, re-enable a source,
-  refresh stale embeddings / clear the similarity cache, re-run an alert, test a
+  refresh stale embeddings / clear the similarity cache, test a
   plugin), plus a jump to the component's owner page. The strip is fed from a
   stale-while-revalidate snapshot, so a listed issue can occasionally be one that
   was already resolved; remediating such a phantom (its target returns 404)

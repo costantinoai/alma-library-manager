@@ -1,4 +1,4 @@
-import type { Alert, AlertRule } from '@/api/client'
+import type { Alert, AlertRule } from './api'
 
 /**
  * Rules not assigned to ANY digest. An orphan rule never runs — evaluation

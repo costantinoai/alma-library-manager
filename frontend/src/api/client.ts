@@ -1512,102 +1512,6 @@ export function globalSearch(query: string): Promise<GlobalSearchResponse> {
   return api.get<GlobalSearchResponse>(`/search?q=${encodeURIComponent(query)}`)
 }
 
-// ── Alerts types ──
-
-export interface AlertRule {
-  id: string
-  name: string
-  rule_type: 'author' | 'collection' | 'keyword' | 'topic' | 'similarity' | 'discovery_lens' | 'feed_monitor' | 'branch' | 'library_workflow'
-  rule_config: Record<string, unknown>
-  channels: string[]
-  enabled: boolean
-  created_at: string
-}
-
-export interface Alert {
-  id: string
-  name: string
-  channels: string[]
-  schedule: 'manual' | 'daily' | 'weekly' | string
-  schedule_config?: Record<string, unknown>
-  format: string
-  enabled: boolean
-  created_at: string
-  last_evaluated_at?: string
-  /** Worst status of the most recent evaluation batch (failed > skipped > sent > empty). */
-  last_outcome?: string | null
-  /** Next slot the hourly sweep can fire this digest; null for manual/disabled. */
-  next_due_at?: string | null
-  rules?: AlertRule[]
-}
-
-export interface AlertEvaluationResult {
-  alert_id: string
-  alert_name: string
-  digest_id?: string
-  digest_name?: string
-  matched_rules?: number
-  papers_found: number
-  papers_new: number
-  papers_sent: number
-  papers_failed?: number
-  channels: string[]
-  channel_results?: Record<
-    string,
-    { status: string; error?: string | null; papers_new?: number; papers_sent?: number }
-  >
-  trigger_source?: string
-  dry_run: boolean
-  papers?: Record<string, unknown>[]
-}
-
-/** Dry-run result of one rule (no digest, no delivery, no dedup). */
-export interface TestFireResult {
-  rule_id: string
-  rule_type: AlertRule['rule_type']
-  matches_found: number
-  matches: string[]
-  note: string
-}
-
-export interface AlertHistory {
-  id: string
-  rule_id?: string
-  alert_id?: string
-  channel: string
-  paper_id?: string
-  publications?: string[]
-  publication_count?: number
-  sent_at: string
-  status: 'sent' | 'failed' | 'pending' | 'empty' | 'skipped' | string
-  message_preview?: string
-  error_message?: string
-}
-
-export interface AlertAutomationTemplate {
-  key: string
-  category: 'author' | 'collection' | 'feed_monitor' | 'branch' | 'library_workflow' | string
-  title: string
-  description: string
-  rationale?: string | null
-  metrics: Record<string, number | string | boolean | null>
-  rule: {
-    name: string
-    rule_type: AlertRule['rule_type']
-    rule_config: Record<string, unknown>
-    channels: string[]
-    enabled: boolean
-  }
-  alert: {
-    name: string
-    channels: string[]
-    schedule: string
-    schedule_config?: Record<string, unknown>
-    format: string
-    enabled: boolean
-  }
-}
-
 export interface FeedInboxPaper {
   id: string
   title: string
@@ -2396,54 +2300,6 @@ export interface InsightsDiagnostics {
       last_success_at?: string | null
     }>
   }
-  alerts: {
-    summary: {
-      total_alerts: number
-      enabled_alerts: number
-      total_rules: number
-      active_alerts_30d: number
-      sent_runs_30d: number
-      failed_runs_30d: number
-      empty_runs_30d: number
-      skipped_runs_30d: number
-      papers_sent_30d: number
-      avg_papers_per_sent: number
-    }
-    top_alerts: Array<{
-      alert_id?: string | null
-      alert_name: string
-      total_runs: number
-      sent_runs: number
-      failed_runs: number
-      empty_runs: number
-      skipped_runs: number
-      papers_sent: number
-      usefulness_score: number
-    }>
-    long_horizon?: {
-      days: number
-      summary: {
-        active_alerts: number
-        sent_runs: number
-        failed_runs: number
-        empty_runs: number
-        skipped_runs: number
-        papers_sent: number
-        usefulness_score: number
-        recent_30d_usefulness_score: number
-        delta_vs_30d: number
-      }
-      weekly_trend: Array<{
-        date: string
-        sent: number
-        failed: number
-        empty: number
-        skipped: number
-        total: number
-        publication_count: number
-      }>
-    }
-  }
   feedback_learning: {
     summary: {
       total_interactions: number
@@ -2505,7 +2361,6 @@ export interface InsightsDiagnostics {
       warning_count: number
       healthy_checks: number
       embeddings_ready: boolean
-      alert_delivery_ready: boolean
       degraded_monitors: number
       disabled_sources: number
       misconfigured_channels: number
@@ -2516,17 +2371,19 @@ export interface InsightsDiagnostics {
       label: string
       severity: 'critical' | 'warning' | 'info' | string
       detail: string
-      page: string
+      page?: string
       params?: Record<string, string>
+      /** Set on a check an add-on reports. */
+      addon?: string
+      href?: string
       targets?: Array<{
         id: string
         label: string
-        kind: 'author' | 'monitor' | 'source' | 'alert' | 'plugin' | string
-        action: 'repair_author' | 'backfill_author' | 'refresh_monitor' | 'enable_source' | 'evaluate_alert' | 'test_plugin' | 'compute_embeddings' | 'compute_stale_embeddings' | 'clear_similarity_cache' | string
+        kind: 'author' | 'monitor' | 'source' | 'plugin' | string
+        action: 'repair_author' | 'backfill_author' | 'refresh_monitor' | 'enable_source' | 'test_plugin' | 'compute_embeddings' | 'compute_stale_embeddings' | 'clear_similarity_cache' | string
         author_id?: string | null
         monitor_id?: string | null
         source?: string | null
-        alert_id?: string | null
         plugin_name?: string | null
       }>
     }>
@@ -2584,23 +2441,6 @@ export interface InsightsDiagnostics {
       dismissed: number
       saved: number
     }>
-    alert_history_daily: Array<{
-      date: string
-      sent: number
-      failed: number
-      empty: number
-      skipped: number
-      total: number
-    }>
-    alert_history_weekly_90d?: Array<{
-      date: string
-      sent: number
-      failed: number
-      empty: number
-      skipped: number
-      total: number
-      publication_count: number
-    }>
     author_follows_daily?: Array<{
       date: string
       follows: number
@@ -2644,7 +2484,6 @@ export interface InsightsDiagnostics {
       params?: Record<string, string>
       priority: 'high' | 'medium' | 'low' | string
     }>
-    automation_opportunities: AlertAutomationTemplate[]
   }
 }
 
@@ -2721,7 +2560,6 @@ export const DIAGNOSTICS_SECTION_KEYS = [
   'discovery',
   'ai',
   'authors',
-  'alerts',
   'feedback',
   'operational',
   'evaluation',
@@ -2770,14 +2608,6 @@ export type DiagnosticsAuthorsSection = DiagnosticsSectionMeta & {
   identity_attention?: unknown[]
 }
 
-export type DiagnosticsAlertsSection = DiagnosticsSectionMeta & {
-  summary: InsightsDiagnostics['alerts']['summary']
-  top_alerts: InsightsDiagnostics['alerts']['top_alerts']
-  long_horizon?: InsightsDiagnostics['alerts']['long_horizon']
-  alert_history_trend: InsightsDiagnostics['trends']['alert_history_daily']
-  alert_history_weekly_90d?: InsightsDiagnostics['trends']['alert_history_weekly_90d']
-}
-
 export type DiagnosticsFeedbackSection = DiagnosticsSectionMeta & {
   summary: InsightsDiagnostics['feedback_learning']['summary']
   top_topics: InsightsDiagnostics['feedback_learning']['top_topics']
@@ -2792,7 +2622,6 @@ export type DiagnosticsOperationalSection =
 export type DiagnosticsEvaluationSection = DiagnosticsSectionMeta & {
   scorecards: InsightsDiagnostics['evaluation']['scorecards']
   recommended_actions: InsightsDiagnostics['evaluation']['recommended_actions']
-  automation_opportunities: InsightsDiagnostics['evaluation']['automation_opportunities']
   library_workflow: InsightsDiagnostics['library']['workflow']
 }
 
@@ -2801,7 +2630,6 @@ export type DiagnosticsSectionPayload = {
   discovery: DiagnosticsDiscoverySection
   ai: DiagnosticsAiSection
   authors: DiagnosticsAuthorsSection
-  alerts: DiagnosticsAlertsSection
   feedback: DiagnosticsFeedbackSection
   operational: DiagnosticsOperationalSection
   evaluation: DiagnosticsEvaluationSection
@@ -2817,33 +2645,6 @@ export function getDiagnosticsSection<K extends DiagnosticsSectionKey>(
 
 export function refreshDiagnostics(force = false): Promise<{ job_id: string | null }> {
   return api.post(`/insights/diagnostics/refresh?force=${force}`)
-}
-
-/**
- * Evaluate (and send) an alert digest. Returns the AlertEvaluationResult
- * after polling the Activity envelope to completion.
- *
- * The endpoint now runs the full evaluation -- including the Slack send --
- * on the scheduler thread pool, so the user can also watch progress in the
- * Activity tab via `operation_key="alerts.evaluate:<id>"`.
- */
-export async function evaluateAlert(alertId: string): Promise<AlertEvaluationResult> {
-  const resp = await api.post<JobEnvelope | AlertEvaluationResult>(
-    `/alerts/${encodeURIComponent(alertId)}/evaluate`,
-  )
-  if (isJobEnvelope(resp)) {
-    // The dedupe envelope keeps the job's real status ("running"/"queued")
-    // and flags the duplicate via `already_running` — status itself is never
-    // the string 'already_running'.
-    if (resp.already_running === true) {
-      // Surface an interpretable error for callers; matches what the user
-      // sees if they double-click "Evaluate".
-      throw new Error('Alert is already being evaluated; check Activity for progress.')
-    }
-    return waitForJob<AlertEvaluationResult>(resp.job_id, { timeoutMs: 120_000 })
-  }
-  // Backwards-compat path (shouldn't trigger after Phase D).
-  return resp as AlertEvaluationResult
 }
 
 export interface IntegrationTestResult {
@@ -3319,33 +3120,6 @@ export function getRankerOutcome(): Promise<RankerOutcome> {
 
 export function refreshRankerOutcome(force = false): Promise<{ job_id: string | null }> {
   return api.post(`/discovery/outcome-evaluation/refresh?force=${force}`)
-}
-
-export function getAlertTemplates(): Promise<AlertAutomationTemplate[]> {
-  return api.get<AlertAutomationTemplate[]>('/alerts/templates')
-}
-
-export interface AlertTemplateApplyResult {
-  template_key: string
-  template_title: string
-  rule: AlertRule
-  alert: Alert
-}
-
-/**
- * Materialize one suggested automation. The backend recomputes the template
- * from its key and creates the rule + digest in a single transaction, so a
- * mid-flight failure can't leave an orphan rule behind.
- */
-export function applyAlertTemplate(templateKey: string): Promise<AlertTemplateApplyResult> {
-  return api.post<AlertTemplateApplyResult>(
-    `/alerts/templates/${encodeURIComponent(templateKey)}/apply`,
-  )
-}
-
-/** Dry-run one rule: returns matching titles, sends nothing, records nothing. */
-export function testFireRule(ruleId: string): Promise<TestFireResult> {
-  return api.post<TestFireResult>(`/alerts/test/${encodeURIComponent(ruleId)}`)
 }
 
 export interface AIDependency {
@@ -4572,6 +4346,50 @@ export function getSignalImpact(): Promise<SignalImpactData> {
   return api.get<SignalImpactData>('/reports/signal-impact')
 }
 
+// ── Add-ons ──
+
+/** What the shell needs on every page load. */
+export interface AddonState {
+  id: string
+  enabled: boolean
+  badge: number
+}
+
+export interface AddonInfo {
+  id: string
+  name: string
+  description: string
+  docs_path: string
+  default_enabled: boolean
+  requires: string[]
+  enabled: boolean
+  blocked: string | null
+  has_data: boolean
+}
+
+export interface AddonFootprint {
+  tables: { name: string; rows: number }[]
+  rows: number
+  files: number
+  bytes: number
+  settings: string[]
+  secrets: string[]
+}
+
+export const listAddons = () => api.get<AddonInfo[]>('/addons')
+
+export const getAddon = (id: string) =>
+  api.get<AddonInfo & { footprint: AddonFootprint }>(`/addons/${encodeURIComponent(id)}`)
+
+export const setAddonEnabled = (id: string, enabled: boolean) =>
+  api.put<AddonInfo & { still_finishing?: string[] }>(
+    `/addons/${encodeURIComponent(id)}/enabled`,
+    { enabled },
+  )
+
+export const removeAddon = (id: string) =>
+  api.post<JobEnvelope>(`/addons/${encodeURIComponent(id)}/remove`, { confirm: id })
+
 // ── Bootstrap ──
 
 export interface BootstrapData {
@@ -4585,7 +4403,7 @@ export interface BootstrapData {
   }
   feed: { unread: number }
   discovery: { active_lenses: number; pending_recommendations: number; new_recommendations: number }
-  alerts: { active: number }
+  addons: AddonState[]
   app: { version: string }
   onboarding: { has_owner: boolean }
 }
@@ -4976,9 +4794,8 @@ export interface HomeBrief {
       carryover: number
       lenses_today: number
     }
-    alerts: {
-      today: number
-    }
+    /** One figure per add-on that reports one. */
+    addons: { id: string; label: string; hint: string; today: number; href: string }[]
     /** Daily inflow across the last 7 local days, oldest first. */
     trend: HomeTrendPoint[]
   }

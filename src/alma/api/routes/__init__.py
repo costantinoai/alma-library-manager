@@ -2,7 +2,6 @@
 
 from .activity import router as activity_router
 from .ai import router as ai_router
-from .alerts import router as alerts_router
 from .authors import router as authors_router
 from .discovery import router as discovery_router
 from .feed import router as feed_router
@@ -21,7 +20,6 @@ from .tags import router as tags_router
 __all__ = [
     "activity_router",
     "ai_router",
-    "alerts_router",
     "authors_router",
     "discovery_router",
     "feed_router",

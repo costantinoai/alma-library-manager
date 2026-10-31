@@ -12,14 +12,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from alma.api.compression import MediaAwareGZipMiddleware
-from alma.api.deps import get_plugin_registry, open_db_connection
+from alma.api.deps import get_plugin_registry, open_db_connection, require_addon
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.origin_guard import (
     OriginGuardMiddleware,
@@ -27,8 +27,8 @@ from alma.api.origin_guard import (
 )
 from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.activity import router as activity_router
+from alma.api.routes.addons import router as addons_router
 from alma.api.routes.ai import router as ai_router
-from alma.api.routes.alerts import router as alerts_router
 from alma.api.routes.backup import router as backup_router
 from alma.api.routes.bootstrap import router as bootstrap_router
 from alma.api.routes.discovery import router as discovery_router
@@ -59,6 +59,7 @@ from alma.api.scheduler import (
 )
 from alma.application.materialized_views import MaterializedViewReadError
 from alma.config import get_db_path
+from alma.core import addons
 from alma.core.logging import setup_logging
 from alma.core.network_policy import ExternalAccessError
 from alma.core.sql_helpers import standalone_paper_sql
@@ -131,6 +132,14 @@ async def lifespan(app: FastAPI):
     from alma.api.routes.backup import clear_stale_export_snapshots
 
     clear_stale_export_snapshots(get_db_path())
+
+    # First-run switches and add-on schema, after core bootstrap so an add-on
+    # may rely on core tables, before the scheduler reads the switches.
+    addon_conn = open_db_connection()
+    try:
+        addons.startup(addon_conn)
+    finally:
+        addon_conn.close()
 
     logger.info(
         "Integration plugins: %s",
@@ -643,7 +652,6 @@ app.include_router(plugins_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(library_router, prefix="/api/v1/library", tags=["library"])
 app.include_router(imports_router, prefix="/api/v1/library", tags=["library-import"])
-app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
 app.include_router(discovery_router, prefix="/api/v1/discovery", tags=["discovery"])
 app.include_router(feed_router, prefix="/api/v1/feed", tags=["feed"])
 app.include_router(lenses_router, prefix="/api/v1/lenses", tags=["discovery-lenses"])
@@ -664,6 +672,18 @@ app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
 app.include_router(inbox_router, prefix="/api/v1/inbox", tags=["inbox"])
 app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
+app.include_router(addons_router, prefix="/api/v1")
+
+# Every add-on router is always mounted, behind a gate answering 404 while the
+# add-on is off. Runs before the frontend catch-all below.
+for _addon in addons.present():
+    for _router, _prefix, _tags in _addon.routers():
+        app.include_router(
+            _router,
+            prefix=_prefix,
+            tags=list(_tags),
+            dependencies=[Depends(require_addon(_addon.id))],
+        )
 
 # ============================================================================
 # React Frontend (Production Build)

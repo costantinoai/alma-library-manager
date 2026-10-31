@@ -301,7 +301,6 @@ JOB_POLICIES: dict[str, JobPolicy] = {
             max_concurrency=1,
             fanout_budget=1,
         ),
-        _p("alerts", JobClass.NOTIFICATION, 40, {_R.DB_WRITER, _R.NETWORK}, max_concurrency=1),
         _p(
             "integrations",
             JobClass.NOTIFICATION,
@@ -313,6 +312,17 @@ JOB_POLICIES: dict[str, JobPolicy] = {
         # ---- Data-management / destructive utilities ---------------------------
         _p(
             "library",
+            JobClass.DATA_MANAGEMENT,
+            50,
+            {_R.DB_WRITER, _R.DB_EXCLUSIVE},
+            coalescing=True,
+            max_concurrency=1,
+            may_overlap_maintenance=False,
+            destructive=True,
+        ),
+        # Remove of an add-on: backup, drop its tables, delete its files.
+        _p(
+            "addons",
             JobClass.DATA_MANAGEMENT,
             50,
             {_R.DB_WRITER, _R.DB_EXCLUSIVE},
@@ -349,8 +359,8 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
     {
         "api/scheduler.py",
         "core/job_envelope.py",
+        "api/routes/addons.py",
         "api/routes/ai.py",
-        "api/routes/alerts.py",
         "api/routes/authors.py",
         "api/routes/discovery.py",
         "api/routes/feed.py",
@@ -381,9 +391,14 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
 
 
 def policy_for(operation_key: str) -> JobPolicy | None:
-    """The policy for an operation key, resolved by its namespace prefix."""
+    """The policy for an operation key, resolved by its namespace prefix.
+
+    Add-ons declare their own namespaces, so core's catalog never names them.
+    """
+    from alma.core import addons
+
     namespace = str(operation_key or "").split(".", 1)[0].split(":", 1)[0]
-    return JOB_POLICIES.get(namespace)
+    return JOB_POLICIES.get(namespace) or addons.job_policy(namespace)
 
 
 def admit_maintenance(active_total: int, *, app_idle: bool) -> tuple[bool, str]:

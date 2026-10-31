@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
 
+from alma.config import get_setting
 from alma.core.url_safety import web_link
 
 logger = logging.getLogger(__name__)
@@ -267,22 +270,67 @@ class EmailNotifier:
         return "\n".join(lines)
 
 
+def get_smtp_host() -> str | None:
+    """SMTP server host. Env ``SMTP_HOST`` → ``smtp_host`` setting."""
+    return os.getenv("SMTP_HOST") or get_setting("smtp_host") or None
+
+
+def get_smtp_port() -> int:
+    """SMTP port (default 587 = STARTTLS). Env ``SMTP_PORT`` → setting."""
+    raw = os.getenv("SMTP_PORT") or get_setting("smtp_port") or 587
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 587
+
+
+def get_smtp_username() -> str | None:
+    """SMTP auth username. Env ``SMTP_USERNAME`` → ``smtp_username`` setting."""
+    return os.getenv("SMTP_USERNAME") or get_setting("smtp_username") or None
+
+
+def get_smtp_from() -> str | None:
+    """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
+    return os.getenv("SMTP_FROM") or get_setting("smtp_from") or get_smtp_username() or None
+
+
+def get_smtp_recipients() -> list[str]:
+    """Digest recipients, parsed from a comma/semicolon/newline list.
+
+    Env ``SMTP_TO`` → ``smtp_to`` setting.
+    """
+    raw = os.getenv("SMTP_TO") or get_setting("smtp_to") or ""
+    parts = re.split(r"[,;\n]+", str(raw))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def get_smtp_use_tls() -> bool:
+    """Whether to use STARTTLS (default True). ``smtp_use_tls`` setting."""
+    val = get_setting("smtp_use_tls", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in ("0", "false", "no", "")
+    return bool(val)
+
+
+def get_smtp_password() -> str | None:
+    """SMTP password. Env ``SMTP_PASSWORD`` → unified secret store."""
+    env_pw = os.getenv("SMTP_PASSWORD")
+    if env_pw:
+        return env_pw
+    try:
+        from alma.core.secrets import SECRET_SMTP_PASSWORD, get_secret
+
+        return get_secret(SECRET_SMTP_PASSWORD)
+    except Exception:
+        return None
+
+
 def get_email_notifier() -> EmailNotifier:
     """Build an :class:`EmailNotifier` from current config / secret store.
 
     Returns a dry-run notifier (``is_configured == False``) when SMTP isn't
     fully set up — exactly the graceful pattern of :func:`get_slack_notifier`.
     """
-    from alma.config import (
-        get_smtp_from,
-        get_smtp_host,
-        get_smtp_password,
-        get_smtp_port,
-        get_smtp_recipients,
-        get_smtp_use_tls,
-        get_smtp_username,
-    )
-
     return EmailNotifier(
         host=get_smtp_host(),
         port=get_smtp_port(),

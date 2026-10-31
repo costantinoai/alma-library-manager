@@ -1,7 +1,7 @@
 # External integration plugins
 
-Inbox and Alerts are core features. Packages in this directory adapt external
-services to those core protocols.
+Packages in this directory adapt external services to the send and receive
+protocols of the core Inbox and the Alerts add-on.
 
 ```
 plugins/
@@ -9,12 +9,18 @@ plugins/
 ├── configs.py        # strict shared config base
 ├── registry.py       # explicit catalogue
 ├── slack/            # send + receive; one Slack transport
-└── email/            # SMTP send
+├── open_access/      # PDF sources
+└── shadow_libraries/ # PDF sources
 ```
 
 Each integration package owns its Pydantic config model, masked read/write
 mapping, direction status, transport callbacks, and exported `PluginManifest`.
-`registry.PLUGINS` is the only list. There is no auto-discovery.
+`registry.PLUGINS` is the list of core integrations. There is no auto-discovery.
+
+An add-on may bring its own integration through the `plugins` field of its
+manifest: Email lives in `alma/addons/alerts/email_plugin.py`. The registry reads
+those per call, so such an integration exists only while its add-on is on, and
+`plugins.<id>.enabled` stays a separate switch inside it.
 
 The core seams are intentionally different:
 

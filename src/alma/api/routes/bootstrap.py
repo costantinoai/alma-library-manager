@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from alma.api.deps import get_current_user, get_db
 from alma.application import discovery as discovery_app
 from alma.application import feed as feed_app
+from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.version import get_app_version
 
@@ -83,15 +84,6 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Active alerts count
-    active_alerts = 0
-    try:
-        active_alerts = db.execute(
-            "SELECT COUNT(*) AS c FROM alerts WHERE enabled = 1"
-        ).fetchone()["c"]
-    except Exception:
-        pass
-
     # Discovery badge: recommendations created by latest successful refresh.
     pending_recs = 0
     new_recs = 0
@@ -137,9 +129,7 @@ def get_bootstrap(
             "pending_recommendations": pending_recs,
             "new_recommendations": new_recs,
         },
-        "alerts": {
-            "active": active_alerts,
-        },
+        "addons": addons.bootstrap_state(db),
         "app": {
             "version": get_app_version(),
         },

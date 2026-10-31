@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Alert, AlertRule } from '@/api/client'
+import type { Alert, AlertRule } from './api'
 import { orphanRuleIds } from './alertDerive'
 
 function rule(id: string): AlertRule {

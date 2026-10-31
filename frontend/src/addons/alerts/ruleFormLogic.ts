@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import type { AlertRule } from '@/api/client'
+import type { AlertRule } from './api'
 
 // ── Rule-type registry ─────────────────────────────────────────────────────
 // One source of truth for the 9 rule types: human label, form schema, and

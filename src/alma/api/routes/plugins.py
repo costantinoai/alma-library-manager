@@ -1,8 +1,8 @@
 """Central external-integration routes.
 
 The manifest registry owns discovery, activation, generated configuration
-schema/storage, status, and actions. Alerts and Inbox remain core features;
-integrations only implement their declared send/receive seams.
+schema/storage, status, and actions. Integrations only implement their declared
+send/receive seams.
 """
 
 from __future__ import annotations
