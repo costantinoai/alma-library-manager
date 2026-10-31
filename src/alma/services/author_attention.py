@@ -220,25 +220,41 @@ AUTO_FIX_CODES = frozenset(
 )
 
 
-def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
-    """Merge conflicts, affiliation conflicts, split profiles, then identity rows."""
-    if not _table_exists(db, "authors"):
-        return []
-    # Identity rows come from the canonical attention builders in
-    # alma.services.author_attention — the SAME module the Health popup's
-    # diagnostics snapshot composes from, so the two surfaces can never
-    # select or rank different buckets. (The severity CASE + WHERE inside
-    # it are the shared alma.services.health ladder assess_authors uses.)
-    ranked = identity_attention_rows(db, limit=limit)
+def _identity_action(status: str, has_openalex: bool) -> dict[str, str]:
+    """Map the row shape to a user-facing action."""
+    if status == "error":
+        return {"code": "retry_refresh", "label": "Retry refresh",
+                "hint": "The last refresh hit an exception. Try again."}
+    if status == "no_match":
+        return {"code": "manual_search", "label": "Search OpenAlex",
+                "hint": "Automatic search returned zero hits. Open the author card and paste an OpenAlex / ORCID manually."}
+    if status == "needs_manual_review":
+        return {"code": "review_candidates", "label": "Review candidates",
+                "hint": "Multiple OpenAlex candidates scored too close to each other. Pick the right one."}
+    if not has_openalex:
+        return {"code": "resolve_now", "label": "Resolve IDs",
+                "hint": "Followed author with no OpenAlex identifier. Run resolve to link one."}
+    return {"code": "refresh", "label": "Refresh",
+            "hint": "Re-run the full refresh pipeline."}
 
-    # ── Split-profile detection ─────────────────────────────────────
-    # Same human, multiple OpenAlex IDs followed/saved. Names are
-    # NFKD-folded + lowercased + punctuation-stripped (same canonical
-    # form the suggestion-rail dedup uses) so "Müller" / "MÜLLER" /
-    # "Muller" collapse, but "Müller" / "Mueller" stay distinct.
-    # We only flag clusters where the user has already followed ≥2
-    # of the profiles — surfacing every author table cluster would
-    # be too noisy on a fresh import.
+
+#: The identity statuses only a person can settle. Read from `_identity_action`,
+#: so the count cannot hold a second opinion about which rows are decisions.
+_IDENTITY_DECISION_STATUSES = tuple(
+    status
+    for status in health_service.AUTHOR_ATTENTION_STATUSES
+    if _identity_action(status, True)["code"] not in AUTO_FIX_CODES
+)
+
+
+def _split_profile_clusters(db: sqlite3.Connection) -> list[list[sqlite3.Row]]:
+    """Followed authors sharing a name across OpenAlex ids: one person, split.
+
+    Names are NFKD-folded, lowercased and stripped of punctuation (the form the
+    suggestion-rail dedup uses), so "Müller" / "MÜLLER" / "Muller" collapse but
+    "Müller" / "Mueller" stay distinct. Only clusters the user followed at least
+    twice count: every author-table cluster would be too noisy on a fresh import.
+    """
     from alma.application.authors import _normalize_author_display_name
 
     cluster_rows = db.execute(
@@ -256,10 +272,22 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
         if not name_key:
             continue
         clusters.setdefault(name_key, []).append(cr)
+    return [members for members in clusters.values() if len(members) >= 2]
+
+
+def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
+    """Merge conflicts, affiliation conflicts, split profiles, then identity rows."""
+    if not _table_exists(db, "authors"):
+        return []
+    # Identity rows come from the canonical attention builders in
+    # alma.services.author_attention — the SAME module the Health popup's
+    # diagnostics snapshot composes from, so the two surfaces can never
+    # select or rank different buckets. (The severity CASE + WHERE inside
+    # it are the shared alma.services.health ladder assess_authors uses.)
+    ranked = identity_attention_rows(db, limit=limit)
+
     split_profiles: list[dict] = []
-    for name_key, members in clusters.items():
-        if len(members) < 2:
-            continue
+    for members in _split_profile_clusters(db):
         # Pick a primary: most recent activity, then alphabetical id.
         members_sorted = sorted(
             members,
@@ -313,23 +341,6 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
             }
         )
 
-    def _action_for(status: str, has_openalex: bool) -> dict[str, str]:
-        """Map the row shape to a user-facing action."""
-        if status == "error":
-            return {"code": "retry_refresh", "label": "Retry refresh",
-                    "hint": "The last refresh hit an exception. Try again."}
-        if status == "no_match":
-            return {"code": "manual_search", "label": "Search OpenAlex",
-                    "hint": "Automatic search returned zero hits. Open the author card and paste an OpenAlex / ORCID manually."}
-        if status == "needs_manual_review":
-            return {"code": "review_candidates", "label": "Review candidates",
-                    "hint": "Multiple OpenAlex candidates scored too close to each other. Pick the right one."}
-        if not has_openalex:
-            return {"code": "resolve_now", "label": "Resolve IDs",
-                    "hint": "Followed author with no OpenAlex identifier. Run resolve to link one."}
-        return {"code": "refresh", "label": "Refresh",
-                "hint": "Re-run the full refresh pipeline."}
-
     def _reason_text(status: str, raw_reason: str) -> str:
         """Friendly user-facing summary."""
         if raw_reason:
@@ -378,7 +389,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
         has_oa = bool(openalex_id)
         method = str(row["method"] or "")
         confidence = float(row["confidence"] or 0.0)
-        action = _action_for(status, has_oa)
+        action = _identity_action(status, has_oa)
         out.append(
             {
                 "author_id": str(row["author_id"]),
@@ -574,8 +585,32 @@ _EVERY_ROW = 1_000_000
 
 
 def author_decision_count(db: sqlite3.Connection) -> int:
-    """Rows only a person can settle. Skips the monitor and corpus reads: Home is a hot path."""
-    return sum(not row["auto_fixable"] for row in _marked(_people_rows(db, limit=_EVERY_ROW)))
+    """Rows of `needs_attention_rows` only a person can settle, without building them.
+
+    Home reads this on every load. Each term counts one group of `_people_rows`
+    from the same source, and the monitor and corpus rows are never decisions.
+    """
+    if not _table_exists(db, "authors"):
+        return 0
+    from alma.application.author_affiliation import list_affiliation_conflicts
+    from alma.application.author_merge import list_unresolved_conflicts
+
+    where = health_service.author_attention_where_sql()
+    statuses = ", ".join(f"'{status}'" for status in _IDENTITY_DECISION_STATUSES)
+    identity = db.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM authors a
+        WHERE ({where})
+          AND COALESCE(a.id_resolution_status, '') IN ({statuses})
+        """
+    ).fetchone()["c"]
+    return (
+        int(identity)
+        + len(list_unresolved_conflicts(db))
+        + len(list_affiliation_conflicts(db, limit=None))
+        + len(_split_profile_clusters(db))
+    )
 
 
 def needs_attention_counts(db: sqlite3.Connection) -> dict[str, int]:

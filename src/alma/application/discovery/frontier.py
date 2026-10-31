@@ -413,7 +413,8 @@ def build_discovery_frontier(
         if topics.served_by(answered_queries):
             served.append(topics)
 
-    positive, negative = _s2_seed_windows(db)
+    seed_pools = _s2_seed_pools(db)
+    positive, negative = _s2_seed_windows(db, seed_pools)
     windows += [positive, negative]
     if positive.picked:
         recommended, answered = _provider_lookup(
@@ -435,7 +436,7 @@ def build_discovery_frontier(
             )
 
         related = take_window(
-            _s2_seed_pools(db)[0],
+            seed_pools[0],
             name="s2_paper_neighbours",
             budget=_S2_RELATED_SEEDS,
             cursor=load_cursor(db, "s2_paper_neighbours"),
@@ -1058,9 +1059,12 @@ def _s2_seed_pools(db: sqlite3.Connection) -> tuple[list[str], list[str]]:
     return positive, negative
 
 
-def _s2_seed_windows(db: sqlite3.Connection) -> tuple[RotationWindow, RotationWindow]:
+def _s2_seed_windows(
+    db: sqlite3.Connection,
+    pools: tuple[list[str], list[str]],
+) -> tuple[RotationWindow, RotationWindow]:
     """This pass's seeds, within Semantic Scholar's limit on each list."""
-    positive, negative = _s2_seed_pools(db)
+    positive, negative = pools
     return (
         take_window(
             positive,

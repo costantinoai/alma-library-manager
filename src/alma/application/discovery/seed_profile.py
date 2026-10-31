@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from typing import Any, NamedTuple
 
 from alma.core.scoring_math import clamp
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 
@@ -933,7 +933,6 @@ def _fetch_seed_embedding_vectors(
     if not seed_ids:
         return {}
     active_model = sim_module.get_active_embedding_model(db)
-    placeholders = ",".join("?" for _ in seed_ids)
     try:
         rows = db.execute(
             f"""
@@ -941,10 +940,10 @@ def _fetch_seed_embedding_vectors(
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
             WHERE pe.model = ?
-              AND pe.paper_id IN ({placeholders})
+              AND pe.paper_id {IN_ID_LIST}
               AND {standalone_paper_sql("p")}
             """,
-            [active_model, *seed_ids],
+            [active_model, id_list(seed_ids)],
         ).fetchall()
     except sqlite3.OperationalError:
         return {}

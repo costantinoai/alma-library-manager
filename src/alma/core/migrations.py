@@ -1796,6 +1796,90 @@ def _m_0049_discovery_branch_structure(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m_0050_legacy_branch_controls(conn: sqlite3.Connection) -> None:
+    """Give each pin, boost and mute from before schema 46 the branch it was set on.
+
+    A released branch id was a hash of its seeds and no table held its members,
+    so the first rebuild had nothing to map those ids from: every control stayed
+    on an id no branch would ever have again. Two records still name the papers
+    behind an id. The stored previews, which are what the Branch panel set the
+    control from, list the branch's strongest seeds. The recommendations made
+    under the id count once the user saved the paper, which makes it a seed.
+
+    One active row per controlled id is all the first rebuild needs, so
+    `plan_branch_lineage` carries each control by the one rule it already has. A
+    control no record can place keeps a row with no members, so that rebuild
+    reports it as dropped and Branch Studio shows it, instead of it vanishing.
+    """
+    if not _table_exists(conn, "discovery_lenses"):
+        return
+    previewed: dict[tuple[str, str], dict] = {}
+    if _table_exists(conn, "materialized_views"):
+        rows = conn.execute(
+            "SELECT payload FROM materialized_views WHERE view_key LIKE 'discovery:branches:%'"
+        ).fetchall()
+        for (payload,) in rows:
+            # A stored view is a cache: one unreadable row costs its evidence,
+            # never the upgrade.
+            try:
+                preview = json.loads(payload or "{}")
+            except ValueError:
+                continue
+            for branch in preview.get("branches") or []:
+                entry = previewed.setdefault(
+                    (preview.get("lens_id"), branch.get("id")),
+                    {"label": branch.get("label"), "seeds": set()},
+                )
+                entry["seeds"].update(
+                    str(seed["paper_id"])
+                    for seed in branch.get("seed_context") or []
+                    if seed.get("paper_id")
+                )
+
+    lenses = conn.execute(
+        """
+        SELECT id, branch_controls FROM discovery_lenses
+        WHERE branch_structure IS NULL AND branch_controls IS NOT NULL
+          AND id NOT IN (SELECT lens_id FROM discovery_branches)
+        """
+    ).fetchall()
+    now = utcnow().isoformat()
+    for lens_id, raw_controls in lenses:
+        controls = json.loads(raw_controls) or {}
+        branch_ids = {
+            branch_id
+            for key in ("pinned", "boosted", "muted")
+            for branch_id in controls.get(key) or []
+        }
+        for branch_id in sorted(branch_ids):
+            entry = previewed.get((lens_id, branch_id)) or {"label": None, "seeds": set()}
+            saved = conn.execute(
+                """
+                SELECT r.paper_id, r.branch_label
+                FROM recommendations r
+                JOIN papers p ON p.id = r.paper_id AND p.status = 'library'
+                WHERE r.lens_id = ? AND r.branch_id = ?
+                """,
+                (lens_id, branch_id),
+            ).fetchall()
+            label = entry["label"] or next((row[1] for row in saved if row[1]), "")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO discovery_branches (
+                    id, lens_id, seed_ids, label, state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    branch_id,
+                    lens_id,
+                    json.dumps(sorted(entry["seeds"] | {str(row[0]) for row in saved})),
+                    label,
+                    now,
+                    now,
+                ),
+            )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1846,6 +1930,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (47, "clear_legacy_dismiss_ratings", _m_0047_clear_legacy_dismiss_ratings),
     (48, "drop_lens_max_seeds", _m_0048_drop_lens_max_seeds),
     (49, "discovery_branch_structure", _m_0049_discovery_branch_structure),
+    (50, "legacy_branch_controls", _m_0050_legacy_branch_controls),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

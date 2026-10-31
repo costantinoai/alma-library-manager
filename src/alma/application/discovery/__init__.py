@@ -353,6 +353,16 @@ def _refresh_lens_recommendations(
     # One read-only branch plan serves preview semantics, vector centroids and
     # external queries. The refresh writes its identity snapshot only when the
     # completed deck is committed below.
+    #
+    # A rebuild clusters every seed here, ahead of the lanes and outside their
+    # deadline, and inside `_LENS_REFRESH_GATE` on purpose: 22 s at 5,000 seeds
+    # (2026-10-31), a cost paid only on the first build, a user rebuild, a new
+    # Cluster detail or full turnover. Outside the gate two rebuilds would
+    # compete for the cores, and the plan could read rows an earlier queued
+    # refresh is about to change. The time is reported instead of bounded,
+    # because no fallback exists for a first build and a thread cannot be stopped.
+    _log("branches", f"Lens '{lens_name}': resolving branches for {len(seeds)} seeds")
+    phase_started = perf_counter()
     branch_settings = read_settings(db)
     branch_plan = resolve_lens_branches(
         db,
@@ -361,6 +371,7 @@ def _refresh_lens_recommendations(
         max_branches=lens_branch_cap(branch_settings),
         rebuild=rebuild_branches,
     )
+    timings_ms["branch_plan"] = int(round((perf_counter() - phase_started) * 1000))
     resolved_branches = branch_plan.branches
     branch_structure = branch_structure_report(branch_plan)
     _log(

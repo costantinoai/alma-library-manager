@@ -12,9 +12,12 @@ import os
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from collections.abc import Iterator
 from datetime import datetime
+from itertools import count, product
 from pathlib import Path
+from string import ascii_lowercase
 from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -117,7 +120,8 @@ def _bibtex_value(value: object) -> str:
     A title holding `}` would close the field and could add its own, such as
     `file =`. Balanced braces are kept, because `{M}ozart` is how BibTeX titles
     protect capitals. Parsers disagree on whether `\\{` counts, so a value must
-    balance read either way; otherwise its braces go.
+    balance read either way; otherwise its braces go. A trailing backslash goes
+    in both cases, because it would turn the field's own closing brace into `\\}`.
     """
     text = str(value)
 
@@ -131,8 +135,46 @@ def _bibtex_value(value: object) -> str:
 
     unescaped = text.replace("\\{", "").replace("\\}", "")
     if balanced(text) and balanced(unescaped):
-        return text
-    return text.replace("{", "").replace("}", "")
+        return text.rstrip("\\")
+    return text.replace("{", "").replace("}", "").rstrip("\\")
+
+
+#: Latin letters with no decomposition, so NFKD leaves them alone.
+_LATIN_FOLDS = str.maketrans(
+    {"Ø": "O", "ø": "o", "Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ð": "D", "ð": "d",
+     "Æ": "Ae", "æ": "ae", "Œ": "Oe", "œ": "oe", "Þ": "Th", "þ": "th", "ß": "ss", "ı": "i"}
+)
+
+
+def _cite_key_text(text: str) -> str:
+    """Keep `text` as cite-key characters: Latin letters plain, other scripts as written.
+
+    Every Latin letter folds to ASCII (`Müller`, `Østby`), because pdflatex stops
+    on `\\cite` with a non-ASCII key. Cyrillic or CJK has no ASCII form without a
+    transliteration library, so it stays: BibTeX, Biber and XeLaTeX read it, and
+    deleting it would reduce those authors' keys to the bare year.
+    """
+    folded = ""
+    for ch in text.translate(_LATIN_FOLDS):
+        plain = "".join(
+            part for part in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(part)
+        )
+        folded += plain if plain.isascii() else ch
+    return re.sub(r"[^\w:-]", "", folded)
+
+
+def _unique_cite_key(key: str, used: set[str]) -> str:
+    """`key`, or `key` plus the first free suffix: a, b, ... z, aa, ab.
+
+    BibTeX reports `Li2020` and `LI2020` as a repeated entry, so `used` holds
+    case-folded keys. The export order is fixed, so an export is reproducible.
+    """
+    letters = ("".join(tail) for size in count(1) for tail in product(ascii_lowercase, repeat=size))
+    candidate = key
+    while candidate.casefold() in used:
+        candidate = f"{key}{next(letters)}"
+    used.add(candidate.casefold())
+    return candidate
 
 
 @router.get("/export/bibtex")
@@ -147,11 +189,12 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
                FROM papers
                WHERE status = 'library'
                  AND {standalone_paper_sql('papers')}
-               ORDER BY year DESC, title ASC"""
+               ORDER BY year DESC, title ASC, id ASC"""
         )
         papers = cursor.fetchall()
 
         bibtex_entries = []
+        used_keys: set[str] = set()
         for paper in papers:
             # Generate citation key (simple: first_author_year_title_word)
             authors_str = paper["authors"] or ""
@@ -160,7 +203,10 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
             year = paper["year"] or "0000"
             title_words = (paper["title"] or "").split()
             first_title_word = title_words[0].strip(".,;:!?()[]{}\"'") if title_words else "paper"
-            cite_key = re.sub(r"[^A-Za-z0-9_:-]", "", f"{first_author_lastname}{year}{first_title_word}")
+            cite_key = _unique_cite_key(
+                _cite_key_text(f"{first_author_lastname}{year}{first_title_word}"),
+                used_keys,
+            )
 
             # Build BibTeX entry
             entry = f"@article{{{cite_key},\n"

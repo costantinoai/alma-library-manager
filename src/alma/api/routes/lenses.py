@@ -352,14 +352,22 @@ def refresh_lens(
         raise HTTPException(status_code=404, detail="Lens not found")
     lens_label = f"'{lens_row['name']}'"
 
-    operation_key = f"discovery.lens.refresh:{lens_id}"
-    existing = find_active_job(operation_key)
+    # A rebuild has its own key: a plain refresh in flight cannot do its work, so
+    # it queues behind that one (`refresh_lens_recommendations` runs one at a
+    # time). A plain refresh does join a rebuild, which refreshes the lens anyway.
+    refresh_key = f"discovery.lens.refresh:{lens_id}"
+    rebuild_key = f"{refresh_key}:rebuild"
+    operation_key = rebuild_key if rebuild_branches else refresh_key
+    operation_label = "Branch rebuild" if rebuild_branches else "Lens refresh"
+    existing = find_active_job(rebuild_key) or (
+        None if rebuild_branches else find_active_job(refresh_key)
+    )
     if existing:
         return activity_envelope(
             str(existing.get("job_id") or ""),
             status="already_running",
             operation_key=operation_key,
-            message=f"Lens refresh ({lens_label}) already running",
+            message=f"{operation_label} ({lens_label}) already running",
             lens_id=lens_id,
         )
 
@@ -370,7 +378,7 @@ def refresh_lens(
         operation_key=operation_key,
         trigger_source="user",
         started_at=utcnow().isoformat(),
-        message=f"Lens refresh ({lens_label}): queued",
+        message=f"{operation_label} ({lens_label}): queued",
         processed=0,
         total=int(limit),
     )
@@ -475,7 +483,7 @@ def refresh_lens(
         job_id,
         status="queued",
         operation_key=operation_key,
-        message=f"Lens refresh ({lens_label}) queued",
+        message=f"{operation_label} ({lens_label}) queued",
         lens_id=lens_id,
         actor=actor,
     )

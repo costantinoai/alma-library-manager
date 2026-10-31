@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 
 from alma.application.signal_projection import load_paper_verdicts
 from alma.core.scoring_math import age_decay
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ def score_papers_batch(
     except ImportError:
         np = None  # type: ignore[assignment]
 
-    placeholders = ",".join("?" * len(paper_ids))
+    ids_param = id_list(paper_ids)
 
     # --- papers: rating + publication_date ---------------------------
     try:
@@ -332,10 +332,10 @@ def score_papers_batch(
             f"""
             SELECT id, rating, publication_date
             FROM papers
-            WHERE id IN ({placeholders})
+            WHERE id {IN_ID_LIST}
               AND {standalone_paper_sql('papers')}
             """,
-            paper_ids,
+            (ids_param,),
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
@@ -358,10 +358,10 @@ def score_papers_batch(
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
                 WHERE pe.model = ?
-                  AND pe.paper_id IN ({placeholders})
+                  AND pe.paper_id {IN_ID_LIST}
                   AND {standalone_paper_sql('p')}
                 """,
-                (state.model, *paper_ids),
+                (state.model, ids_param),
             ).fetchall()
         except sqlite3.OperationalError:
             emb_rows = []
@@ -386,9 +386,9 @@ def score_papers_batch(
                 f"""
                 SELECT paper_id, term, COALESCE(score, 0) AS score
                 FROM publication_topics
-                WHERE paper_id IN ({placeholders})
+                WHERE paper_id {IN_ID_LIST}
                 """,
-                paper_ids,
+                (ids_param,),
             ).fetchall()
         except sqlite3.OperationalError:
             topic_rows = []
@@ -424,10 +424,10 @@ def score_papers_batch(
                 f"""
                 SELECT paper_id, lower(trim(openalex_id)) AS oid
                 FROM publication_authors
-                WHERE paper_id IN ({placeholders})
+                WHERE paper_id {IN_ID_LIST}
                   AND COALESCE(TRIM(openalex_id), '') <> ''
                 """,
-                paper_ids,
+                (ids_param,),
             ).fetchall()
         except sqlite3.OperationalError:
             pa_rows = []

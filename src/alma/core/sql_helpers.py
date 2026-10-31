@@ -9,9 +9,24 @@ shipping everywhere.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Iterable
 
 from alma.core.components import not_component_sql
+
+#: Membership in a list of any length: `WHERE id {IN_ID_LIST}`, bound to `id_list(ids)`.
+IN_ID_LIST = "IN (SELECT value FROM json_each(?))"
+
+
+def id_list(ids: Iterable[str | int]) -> str:
+    """One bound parameter holding a whole list, for `IN_ID_LIST`.
+
+    A placeholder per id stops at SQLite's variable limit, which is 32,766 in a
+    default build. Chunking would avoid that only for a plain lookup: a query
+    that counts, excludes or orders across the list has to see all of it at once.
+    """
+    return json.dumps(list(ids))
 
 
 def paper_date_sort_expr(alias: str = "", *, added_at_fallback: bool = False) -> str:
