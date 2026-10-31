@@ -375,7 +375,10 @@ def startup(conn: sqlite3.Connection) -> None:
     # brought still chosen. Readers must not stay on a model nothing fills.
     from alma.ai.providers import reconcile_embedding_model
 
-    reconcile_embedding_model(conn)
+    try:
+        reconcile_embedding_model(conn)
+    except Exception:
+        logger.exception("Could not correct embedding_model at startup")
 
 
 # ---------------------------------------------------------------------------
