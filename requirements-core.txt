@@ -20,6 +20,9 @@ python-multipart>=0.0.6
 # --- Scheduling / HTTP / numerics ---
 apscheduler>=3.10.4
 requests>=2.31.0
+# Floors above the transitive ones: streamed downloads and TLS roots.
+urllib3>=2.8.0
+certifi>=2026.10.18
 numpy>=1.24.0
 tqdm>=4.65.0
 
@@ -35,7 +38,7 @@ scholarly
 slack-sdk>=3.20.0
 
 # --- Paper PDFs (verify a stored file is the paper it claims to be) ---
-pypdf>=6.0
+pypdf>=6.21.4
 # AES-encrypted PDFs (common in publisher files): read and clean them
 cryptography>=42
 # Shadow-libraries PDF plugin only (opt-in): browser-TLS transport for mirrors

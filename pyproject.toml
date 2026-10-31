@@ -30,6 +30,9 @@ dependencies = [
     "apscheduler>=3.10.4",
     # HTTP client
     "requests>=2.31.0",
+    # Floors above the transitive ones: streamed downloads and TLS roots.
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.18",
     # Numerical (used in discovery, similarity, clustering, embeddings)
     "numpy>=1.24.0",
     # Progress bars
@@ -42,7 +45,7 @@ dependencies = [
     "slack-sdk>=3.20.0",
     # Paper PDFs: open, count pages and read pages 1-2 to verify a file is the
     # paper it claims to be (pure Python; 6.x carries the FlateDecode-bomb fix)
-    "pypdf>=6.0",
+    "pypdf>=6.21.4",
     # AES-encrypted PDFs (owner-password publisher files): pypdf needs it to
     # read their text and to rewrite them without active content
     "cryptography>=42",
