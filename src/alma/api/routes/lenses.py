@@ -62,7 +62,11 @@ def create_lens(
         )
         return OperationOutcome(
             status="completed",
-            message=f"Created discovery lens '{body.name}'",
+            message=(
+                f"Discovery lens '{lens['name']}' already exists"
+                if lens.get("already_existed")
+                else f"Created discovery lens '{body.name}'"
+            ),
             result={"lens_id": lens["id"], "already_existed": bool(lens.get("already_existed"))},
         )
 

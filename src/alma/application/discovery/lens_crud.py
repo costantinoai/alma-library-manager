@@ -854,7 +854,7 @@ def create_lens(
         raise ValueError(f"Invalid context_type: {context_type}")
     if context_type == "collection":
         collection_id = str((context_config or {}).get("collection_id") or "").strip()
-        for lens in list_lenses(db, is_active=True):
+        for lens in list_lenses(db, is_active=True) if collection_id else []:
             linked = str((lens.get("context_config") or {}).get("collection_id") or "").strip()
             if lens.get("context_type") == "collection" and linked == collection_id:
                 return {**lens, "already_existed": True}
