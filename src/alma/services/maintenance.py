@@ -2641,7 +2641,7 @@ def run_task_now(
     availability_blocker = _task_availability_blocker(conn, task)
     if availability_blocker:
         return MaintenanceLaunch(
-            status="blocked_external",
+            status="blocked_unavailable",
             job_id=None,
             plan=plan,
             message=str(availability_blocker["message"]),
