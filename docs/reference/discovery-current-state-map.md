@@ -230,7 +230,7 @@ Other routes that act on Discovery state:
 | `discovery_ranking_candidates` | `api/deps.py:826` | `application/discovery/observations.py` only |
 | `discovery_impressions` | `api/deps.py:858` | `application/discovery/observations.py` only |
 | `discovery_frontier` | `api/deps.py:879` | `application/discovery/frontier.py`, `core/migrations.py` |
-| `discovery_frontier_edges` | `api/deps.py:909` | `application/discovery/frontier.py` only |
+| `discovery_frontier_edges` | `api/deps.py:909` | None: writer removed. Table and rows stay until a migrator drops them. |
 | `lens_signals` | `api/deps.py:927` | None: writers and readers removed. Table and rows stay until a migrator drops them. |
 | `feedback_events` | `api/deps.py:1318` | `services/feedback_substrate.py` (insert), `api/routes/feedback.py` (insert), `application/library.py` (undo deletes), `core/paper_groups.py` (merge), `api/routes/extension.py`, `core/migrations.py` |
 | `preference_profiles` | `api/deps.py:1336` | `services/feedback_substrate.py`, `core/paper_groups.py` |

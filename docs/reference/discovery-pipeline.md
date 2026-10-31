@@ -323,7 +323,7 @@ The frontier separates universe construction from ranking:
 
 - **Offline** (background job) — walk the citation graph outward from the
   Library, resolve metadata and SPECTER2 vectors, persist to
-  `discovery_frontier` / `discovery_frontier_edges`.
+  `discovery_frontier`.
 - **Online** (refresh) — a numpy matmul against a preloaded matrix.
 
 Sources: bibliographic coupling, co-citation and citers, S2 new recommendations,
