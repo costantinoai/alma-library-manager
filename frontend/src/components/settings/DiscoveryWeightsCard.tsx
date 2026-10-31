@@ -10,7 +10,6 @@ import {
   type DiscoveryBranchSettings,
   type DiscoveryMonitorDefaults,
   type DiscoverySettings,
-  type DiscoveryStrategies,
   type DiscoveryWeights,
 } from '@/api/client'
 import {
@@ -59,20 +58,6 @@ const WEIGHT_LABELS: {
   { key: 'journal_affinity', label: 'Venue', families: ['venue'], description: 'Journals and conferences you read.' },
 ]
 
-const STRATEGY_LABELS: { key: keyof DiscoveryStrategies; label: string; description: string }[] = [
-  { key: 'related_works', label: 'Related Works', description: 'Use graph-style related-paper retrieval.' },
-  { key: 'topic_search', label: 'Topic Search', description: 'Search explicit topic queries from the lens context.' },
-  { key: 'followed_authors', label: 'Followed Authors', description: 'Pull direct continuity candidates from monitored authors.' },
-  { key: 'coauthor_network', label: 'Co-author Network', description: 'Expand through collaborator neighborhoods.' },
-  { key: 'citation_chain', label: 'Citation Chain', description: 'Walk references, citations, and related works.' },
-  { key: 'semantic_scholar', label: 'Semantic Scholar', description: 'Include Semantic Scholar in external search.' },
-  { key: 'branch_explorer', label: 'Branch Explorer', description: 'Use branch-aware retrieval budgets and controls.' },
-  { key: 'taste_topics', label: 'Favorite Topic Lanes', description: 'Retrieve from preferred topics, not just rank them.' },
-  { key: 'taste_authors', label: 'Favorite Author Lanes', description: 'Retrieve from preferred authors.' },
-  { key: 'taste_venues', label: 'Favorite Venue Lanes', description: 'Retrieve from preferred venues and journals.' },
-  { key: 'recent_wins', label: 'Recent Win Lanes', description: 'Reuse recent strong interactions as query seeds.' },
-]
-
 const SOURCE_LABELS: Array<{ key: keyof DiscoverySettings['sources']; label: string; description: string }> = [
   { key: 'openalex', label: 'OpenAlex', description: 'Primary scholarly metadata and graph source.' },
   { key: 'semantic_scholar', label: 'Semantic Scholar', description: 'Alternative discovery index and metadata enrichment.' },
@@ -106,27 +91,10 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
     feedback_adj: 0.09,
     preference_affinity: 0.09,
   },
-  strategies: {
-    related_works: true,
-    topic_search: true,
-    followed_authors: true,
-    coauthor_network: true,
-    citation_chain: true,
-    semantic_scholar: true,
-    branch_explorer: true,
-    taste_topics: true,
-    taste_authors: true,
-    taste_venues: true,
-    recent_wins: true,
-    adaptive_channels: true,
-  },
   limits: {
-    max_results: 50,
     min_score: 0,
     max_candidates_per_strategy: 20,
     recency_window_years: 10,
-    feedback_decay_days_full: 90,
-    feedback_decay_days_half: 180,
   },
   schedule: {
     refresh_enabled: false,
@@ -168,10 +136,6 @@ function mergeDiscoverySettings(input?: Partial<DiscoverySettings> | null): Disc
     ...DEFAULT_DISCOVERY,
     ...(input ?? {}),
     weights: { ...DEFAULT_DISCOVERY.weights, ...((input?.weights ?? {}) as Partial<DiscoveryWeights>) },
-    strategies: {
-      ...DEFAULT_DISCOVERY.strategies,
-      ...((input?.strategies ?? {}) as Partial<DiscoveryStrategies>),
-    },
     limits: { ...DEFAULT_DISCOVERY.limits, ...((input?.limits ?? {}) as Partial<DiscoverySettings['limits']>) },
     schedule: {
       ...DEFAULT_DISCOVERY.schedule,
@@ -223,27 +187,10 @@ const discoverySchema = z.object({
     feedback_adj: weightShape,
     preference_affinity: weightShape,
   }),
-  strategies: z.object({
-    related_works: z.boolean(),
-    topic_search: z.boolean(),
-    followed_authors: z.boolean(),
-    coauthor_network: z.boolean(),
-    citation_chain: z.boolean(),
-    semantic_scholar: z.boolean(),
-    branch_explorer: z.boolean(),
-    taste_topics: z.boolean(),
-    taste_authors: z.boolean(),
-    taste_venues: z.boolean(),
-    recent_wins: z.boolean(),
-    adaptive_channels: z.boolean(),
-  }),
   limits: z.object({
-    max_results: z.number().int().min(10).max(200),
     min_score: z.number().min(0).max(100),
     max_candidates_per_strategy: z.number().int().min(5).max(50),
     recency_window_years: z.number().int().min(1).max(20),
-    feedback_decay_days_full: z.number().int().min(1).max(3650),
-    feedback_decay_days_half: z.number().int().min(1).max(3650),
   }),
   schedule: z.object({
     refresh_enabled: z.boolean(),
@@ -446,25 +393,6 @@ export function DiscoveryWeightsCard() {
               </p>
             </SettingsSection>
 
-            {/* Retrieval strategies — 12 toggles, all-on is the expected
-                default. Collapsed so the weights view stays the first thing
-                users see. */}
-            <SettingsSection title="Retrieval Strategies" defaultOpen={false}>
-              <div className="grid gap-3 lg:grid-cols-2">
-                {STRATEGY_LABELS.map((item) => (
-                  <ToggleRow
-                    key={item.key}
-                    title={item.label}
-                    description={item.description}
-                    checked={!!values.strategies[item.key]}
-                    onCheckedChange={(value) =>
-                      form.setValue(`strategies.${item.key}` as const, value, { shouldDirty: true })
-                    }
-                  />
-                ))}
-              </div>
-            </SettingsSection>
-
             {/* Source control */}
             <SettingsSection title="Source Control">
               <div className="grid gap-3">
@@ -623,13 +551,6 @@ export function DiscoveryWeightsCard() {
                     Limits
                   </h5>
                   <SettingsNumberField
-                    label="Max Results"
-                    value={values.limits.max_results}
-                    min={10}
-                    max={200}
-                    onChange={(v) => form.setValue('limits.max_results', v, { shouldDirty: true })}
-                  />
-                  <SettingsNumberField
                     label="Min Relevance Score"
                     description="Drop recommendations scoring below this (0-100). 0 keeps everything; raise it to hide weak, off-topic matches at the tail of the feed."
                     value={values.limits.min_score}
@@ -654,24 +575,6 @@ export function DiscoveryWeightsCard() {
                     max={20}
                     onChange={(v) =>
                       form.setValue('limits.recency_window_years', v, { shouldDirty: true })
-                    }
-                  />
-                  <SettingsNumberField
-                    label="Full Feedback Decay (Days)"
-                    value={values.limits.feedback_decay_days_full}
-                    min={1}
-                    max={3650}
-                    onChange={(v) =>
-                      form.setValue('limits.feedback_decay_days_full', v, { shouldDirty: true })
-                    }
-                  />
-                  <SettingsNumberField
-                    label="Half Feedback Decay (Days)"
-                    value={values.limits.feedback_decay_days_half}
-                    min={1}
-                    max={3650}
-                    onChange={(v) =>
-                      form.setValue('limits.feedback_decay_days_half', v, { shouldDirty: true })
                     }
                   />
                 </div>

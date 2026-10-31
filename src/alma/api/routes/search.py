@@ -2,7 +2,6 @@
 
 import logging
 import sqlite3
-from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
@@ -15,17 +14,6 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
     responses={401: {"description": "Unauthorized"}},
 )
-
-
-class SearchResult:
-    """A single search result."""
-
-    def __init__(self, id: str, name: str, type: str, url: str, extra: dict[str, Any] = None):
-        self.id = id
-        self.name = name
-        self.type = type
-        self.url = url
-        self.extra = extra or {}
 
 
 @router.get("/search")

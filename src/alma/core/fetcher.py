@@ -9,7 +9,6 @@ Do not add hardcoded paths here.
 
 import logging
 import os
-import platform
 import sqlite3
 import threading
 import time
@@ -21,9 +20,7 @@ from tqdm import tqdm
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.database import (
     clean_pubs,
-    convert_json_to_tuple,
     ensure_output_folder,
-    get_authors_json,
 )
 from alma.core.paper_groups import (
     promote_matching_preprints,
@@ -129,52 +126,6 @@ def _init_db(db_path: str) -> sqlite3.Connection:
             )"""
     )
     return conn
-
-
-def fetch_from_json(args, idx=None):
-    """Fetch author and publication details based on a specified index.
-
-    Author information is now stored in a SQLite database. This helper reads the
-    database located at ``args.authors_path``, converts the records into tuples,
-    and fetches publication details for a subset of these authors from Google
-    Scholar. The subset size is determined by ``idx``.
-
-    Args:
-        args: Namespace containing the path to the authors database and other
-            relevant options.
-        idx: Optional limit on the number of authors to process. ``None`` means
-            all authors are fetched.
-
-    Returns:
-        tuple: A pair consisting of the selected authors and their publications.
-    """
-
-    authors_json = get_authors_json(args.authors_path)
-    logger.debug(f"Fetched authors' details from {args.authors_path}.")
-
-    authors = convert_json_to_tuple(authors_json)
-    logger.debug("Converted authors' records into tuple representation.")
-
-    # Determine the number of authors to process.
-    if idx is not None:
-        if idx > len(authors):
-            logger.debug(
-                f"Requested {idx} authors but only {len(authors)} available. Using all available authors."
-            )
-            idx = len(authors)
-    else:
-        idx = len(authors)
-
-    if idx == 0:
-        logger.error("No authors listed in the authors database.")
-        return
-
-    # Fetch publication details for the determined number of authors from the scholarly database.
-    articles = fetch_pubs_dictionary(authors[:idx], args)
-    logger.info(f"Fetched {len(articles)} articles for the provided authors.")
-    logger.info("Publications fetched correctly")
-
-    return authors[:idx], articles
 
 
 def fetch_publication_details(pub):
@@ -640,61 +591,6 @@ def fetch_publications_by_id(
     return clean_pubs(fetched_pubs, from_year, exclude_not_cited_papers)
 
 
-def fetch_pubs_dictionary(authors, args, output_dir=DEFAULT_DB_DIR):
-    """
-    Fetch publications for a list of authors for the current year,
-    and store them in a cache. Only non-duplicate publications compared
-    to the cache are returned.
-
-    :param authors: List of tuples containing author name and author ID.
-    :param output_dir: Directory where the cache database will be stored.
-    :return: A dictionary containing non-duplicate publications.
-    """
-
-    current_year = time.strftime("%Y")  # Get the current year
-    test_fetching = getattr(args, "test_fetching", False)
-    params = {
-        "authors": authors if not test_fetching else authors[:2],
-        "from_year": current_year,
-        "output_root": output_dir,
-    }
-
-    # Determine database directory. If no path is provided, fall back to the
-    # user's desktop for visibility during ad-hoc runs.
-    if params["output_root"] is None:
-        if platform.system() == "Windows":
-            output_folder = os.path.join(os.environ["USERPROFILE"], "Desktop")
-        else:
-            output_folder = os.path.join(os.path.expanduser("~"), "Desktop")
-    else:
-        output_folder = params["output_root"]
-
-    # Ensure the output directory exists.
-    if not os.path.exists(output_folder):
-        logger.info(f"Creating output folder at {output_folder}.")
-        os.makedirs(output_folder)
-
-    # Fetch the publications of the current year.
-    authors_publications = []
-    total_authors = len(params["authors"])
-
-    for i, (author, author_id) in enumerate(params["authors"]):
-        logger.info(f"Progress: {i+1}/{total_authors} - {author}")
-        author_publications = fetch_publications_by_id(
-            author_id, output_folder, args, from_year=params["from_year"]
-        )
-        authors_publications = authors_publications + author_publications
-
-    return authors_publications
 def _in_pytest() -> bool:
     # Heuristic: pytest sets PYTEST_CURRENT_TEST
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
-
-def _is_mock(obj) -> bool:
-    try:
-        import unittest.mock as um  # type: ignore
-        return isinstance(obj, (um.Mock, um.MagicMock))
-    except Exception:
-        mod = getattr(obj, "__module__", "")
-        name = getattr(obj, "__class__", type(obj)).__name__
-        return mod.startswith("unittest.mock") or "Mock" in name

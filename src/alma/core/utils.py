@@ -307,25 +307,6 @@ def resolve_existing_paper_id(
     return None
 
 
-def derive_source_id(pub_dict: dict) -> str:
-    """Derive a unique source identifier from paper metadata.
-
-    Priority: DOI > URL > title
-    """
-    doi = (pub_dict.get("doi") or "").strip()
-    url = (pub_dict.get("pub_url") or pub_dict.get("url") or "").strip()
-    title = (pub_dict.get("title") or "").strip()
-
-    if doi:
-        doi_lower = doi.lower()
-        if doi_lower.startswith("https://doi.org/"):
-            doi = doi[len("https://doi.org/"):]
-        elif doi_lower.startswith("http://doi.org/"):
-            doi = doi[len("http://doi.org/"):]
-
-    return doi or url or title
-
-
 def normalize_doi(doi_val: str | None) -> str | None:
     """Normalize DOI to bare format (strip URL prefixes).
 

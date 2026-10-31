@@ -44,7 +44,6 @@ from alma.core.paper_groups import (
     absorb_paper_group,
     build_preprint_title_index,
     classify_preprint_source,
-    resolve_paper_root_id,
 )
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 
@@ -172,20 +171,6 @@ def merge_preprint_into_canonical(
 
 
 # -- lookup helper ------------------------------------------------------------
-
-
-def resolve_canonical_paper_id(
-    conn: sqlite3.Connection,
-    paper_id: str,
-) -> str:
-    """Return the canonical paper_id, following the preprint pointer if set.
-
-    Callers that receive a ``paper_id`` from URL params, feedback
-    payloads, or recommendation rows should run their write-path lookups
-    through this helper so a user's save on the preprint card resolves
-    to the journal row transparently.
-    """
-    return resolve_paper_root_id(conn, paper_id, strict=False)
 
 
 def count_preprint_twins(conn: sqlite3.Connection, scope: str = "library") -> int:

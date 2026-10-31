@@ -8,7 +8,6 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.api.deps import get_current_user, get_db
@@ -25,7 +24,6 @@ from alma.application.recommendation_outcomes import (
     count_outcomes,
     recommendation_engagement,
 )
-from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
@@ -828,11 +826,6 @@ def _build_cold_start_topic_validation(
     }
 
 
-class BranchTuningActionRequest(BaseModel):
-    branch_id: str
-    action: str
-
-
 def _build_authors_snapshot(
     db: sqlite3.Connection, monitors: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -952,12 +945,9 @@ def _build_feedback_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
     summary = {
         "total_interactions": 0,
         "week_interactions": 0,
-        "streak_days": 0,
         "topic_coverage": 0,
         "source_diversity_7d": 0,
         "recommendation_engagement_rate": 0.0,
-        "xp": 0,
-        "level": 1,
     }
     top_topics: list[dict[str, Any]] = []
     top_authors: list[dict[str, Any]] = []
@@ -977,14 +967,11 @@ def _build_feedback_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
             {
                 "total_interactions": int(stats.get("total_interactions") or 0),
                 "week_interactions": int(stats.get("week_interactions") or 0),
-                "streak_days": int(stats.get("streak_days") or 0),
                 "topic_coverage": int(stats.get("topic_coverage") or 0),
                 "source_diversity_7d": int(behavioral.get("source_diversity_7d") or 0),
                 "recommendation_engagement_rate": round(
                     float(outcomes.get("engagement_rate") or 0.0), 3
                 ),
-                "xp": int(stats.get("xp") or 0),
-                "level": int(stats.get("level") or 1),
                 "background_corpus_papers": int(stats.get("background_corpus_papers") or 0),
                 "background_corpus_authors": int(stats.get("background_corpus_authors") or 0),
             }
@@ -2643,35 +2630,6 @@ def get_insights_diagnostics(
         return compose_legacy_diagnostics_payload(db)
     except Exception as exc:  # noqa: BLE001 — surface a 5xx with context
         raise_internal("Failed to compute insights diagnostics", exc)
-
-
-@router.post(
-    "/discovery/branch-action",
-    summary="Apply a branch control action from Insights",
-)
-def apply_branch_action(
-    body: BranchTuningActionRequest,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    try:
-        from alma.application import discovery as discovery_app
-
-        # Foreground write → gate the caller-owns engine call in one unit.
-        result = run_write_unit(
-            db,
-            lambda: discovery_app.apply_branch_control_action(
-                db,
-                branch_id=body.branch_id,
-                action=body.action,
-            ),
-            label="apply_branch_action",
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise_internal("Failed to apply branch action", e)
 
 
 # Side-effect import: registers the per-section diagnostics

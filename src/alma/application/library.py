@@ -215,20 +215,6 @@ def get_paper(db: sqlite3.Connection, paper_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def get_paper_by_openalex_id(db: sqlite3.Connection, openalex_id: str) -> dict | None:
-    """Get a paper by OpenAlex ID."""
-    row = db.execute(
-        "SELECT * FROM papers WHERE openalex_id = ?", (openalex_id,)
-    ).fetchone()
-    return dict(row) if row else None
-
-
-def get_paper_by_doi(db: sqlite3.Connection, doi: str) -> dict | None:
-    """Get a paper by DOI."""
-    row = db.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
-    return dict(row) if row else None
-
-
 def get_paper_by_semantic_scholar_id(db: sqlite3.Connection, semantic_scholar_id: str) -> dict | None:
     """Get a paper by Semantic Scholar paperId."""
     try:
@@ -806,13 +792,6 @@ def reading_preview(db: sqlite3.Connection, *, limit: int = 3) -> dict:
     )
 
 
-def delete_paper(db: sqlite3.Connection, paper_id: str) -> bool:
-    """Soft-remove a paper by ID. Returns True if found."""
-    if get_paper(db, paper_id) is None:
-        return False
-    return soft_remove_from_library(db, paper_id)
-
-
 def _should_invalidate_embedding(existing: dict, updates: dict) -> bool:
     text_fields = ("title", "abstract")
     for field in text_fields:
@@ -829,13 +808,6 @@ def _invalidate_embedding_artifacts(db: sqlite3.Connection, paper_id: str) -> No
     """Clear embedding-derived artifacts when source text changes."""
     try:
         db.execute("DELETE FROM publication_embeddings WHERE paper_id = ?", (paper_id,))
-    except sqlite3.OperationalError:
-        pass
-    # The semantic membership was derived from the same vector. The partition
-    # left main with the Signal Lab (D25) and nothing reads the table any more,
-    # but its rows still describe THIS paper, so they go with it.
-    try:
-        db.execute("DELETE FROM semantic_partition_members WHERE paper_id = ?", (paper_id,))
     except sqlite3.OperationalError:
         pass
 
@@ -989,19 +961,6 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def rate_paper(db: sqlite3.Connection, paper_id: str, rating: int) -> bool:
-    """Set rating on a paper."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        return False
-    now = utcnow().isoformat()
-    cursor = db.execute(
-        "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-        (rating, now, paper_id),
-    )
-    return cursor.rowcount > 0
-
-
 def rating_signal_value(rating: int | None) -> int:
     """Map star rating to ranking signal."""
     value = int(rating or 0)
@@ -1141,31 +1100,6 @@ def sync_surface_resolution(
                 (recommendation_action, now, paper_id),
             )
 
-            signal_value = 1
-            if action == "love":
-                signal_value = 2
-            # Dismiss is a visibility stamp only. Likes/saves may still teach
-            # each affected lens; Discovery itself records its signal locally.
-            if action != "dismiss" and source_surface != "discovery":
-                try:
-                    from alma.application.discovery import record_lens_signal
-
-                    seen_lenses: set[str] = set()
-                    for row in rec_rows:
-                        lens_id = str(row["lens_id"] or "").strip()
-                        if not lens_id or lens_id in seen_lenses:
-                            continue
-                        seen_lenses.add(lens_id)
-                        record_lens_signal(
-                            db,
-                            lens_id=lens_id,
-                            paper_id=paper_id,
-                            signal_value=signal_value,
-                            source=f"{source_surface}_handoff",
-                        )
-                except Exception:
-                    pass
-
 
 # Which feedback actions belong to which toggle dimension. Used so an undo
 # deletes only the signal events for the aspect being toggled off.
@@ -1236,32 +1170,6 @@ def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
     return int(events[saves[0]]["previous_rating"])
 
 
-def _restore_lens_verdicts(db: sqlite3.Connection, paper_id: str, rating: int) -> None:
-    """Give each lens back the verdict a Save overwrote with a zero signal.
-
-    A lens keeps one signal per paper, so a Save at 3 stars replaces that lens's
-    Dislike. When the Save is undone and the rating returns, so does the signal,
-    but only in a lens whose own rating event still stands: the event names it,
-    and a Save elsewhere says nothing about this lens.
-    """
-    signal_value = rating_signal_value(rating)
-    if signal_value == 0:
-        return
-    placeholders = ", ".join("?" for _ in _RATING_ACTIONS)
-    db.execute(
-        f"""
-        UPDATE lens_signals SET signal_value = ?
-        WHERE paper_id = ? AND signal_value = 0 AND lens_id IN (
-            SELECT json_extract(context_json, '$.lens_id')
-            FROM feedback_events
-            WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
-              AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
-        )
-        """,
-        (signal_value, paper_id, paper_id, *_RATING_ACTIONS),
-    )
-
-
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1320,13 +1228,6 @@ def undo_paper_feedback(
                 f"WHERE paper_id = ? {scope}",
                 (paper_id,),
             )
-        if _table_exists(db, "lens_signals"):
-            if rating_before_save is not None:
-                _restore_lens_verdicts(db, paper_id, rating_before_save)
-            db.execute(
-                "DELETE FROM lens_signals WHERE paper_id = ? AND signal_value = 0",
-                (paper_id,),
-            )
 
     if aspect in ("rating", "all"):
         db.execute(
@@ -1334,25 +1235,17 @@ def undo_paper_feedback(
             (now, paper_id),
         )
         _delete_feedback_actions(db, paper_id, _RATING_ACTIONS)
-        # The lens signal mirrors the verdict just withdrawn.
-        if _table_exists(db, "lens_signals"):
-            db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
 
     if aspect in ("reading", "all"):
         paper_actions.set_reading_status(db, paper_id, None)
 
     if aspect == "all":
-        # Full clear: nuke any remaining events + lens signals.
+        # Full clear: nuke any remaining events.
         if _table_exists(db, "feedback_events"):
             db.execute(
                 "DELETE FROM feedback_events WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
                 (paper_id,),
             )
-        if _table_exists(db, "lens_signals"):
-            try:
-                db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
-            except sqlite3.OperationalError:
-                pass
 
     row = db.execute(
         "SELECT status, rating, reading_status FROM papers WHERE id = ?", (paper_id,)
@@ -1522,17 +1415,6 @@ def get_library_papers(db: sqlite3.Connection, **kwargs) -> list[dict]:
     return list_papers(db, status="library", **kwargs)
 
 
-def get_favorites(db: sqlite3.Connection, limit: int = 100) -> list[dict]:
-    """Get favorite papers (rating >= 4)."""
-    rows = db.execute(
-        f"SELECT * FROM papers WHERE status = 'library' AND rating >= 4 "
-        f"AND {standalone_paper_sql('papers')} "
-        "ORDER BY rating DESC, added_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
 # ============================================================================
 # Collections
 # ============================================================================
@@ -1627,8 +1509,7 @@ def insert_collection_item(
 
     Returns True when a new row was actually inserted. This deliberately does
     NOT validate paper status — the importer adds staged (``tracked``) rows for
-    deferred membership, and callers that require a saved Library paper use
-    :func:`add_to_collection` instead. With ``ignore_existing=False`` a duplicate
+    deferred membership. With ``ignore_existing=False`` a duplicate
     raises ``sqlite3.IntegrityError`` (used by the single-add route to return a
     409). Every other collection_items insert in the codebase routes here so the
     column list lives in exactly one place.
@@ -1683,19 +1564,6 @@ def save_paper_to_collections(
     return ids
 
 
-def add_to_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
-    """Add a saved Library paper to a collection. Returns True if newly added."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        raise ValueError("Paper is subordinate and has no actionable root")
-    paper = get_paper(db, paper_id)
-    if paper is None:
-        raise ValueError("Paper not found")
-    if str(paper.get("status") or "") != LIBRARY_STATUS:
-        raise ValueError("Only saved Library papers can be added to collections")
-    return insert_collection_item(db, collection_id, paper_id)
-
-
 def add_papers_to_collection(
     db: sqlite3.Connection, collection_id: str, paper_ids: list[str]
 ) -> int:
@@ -1730,38 +1598,6 @@ def add_papers_to_collection(
     return added
 
 
-def remove_from_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
-    """Remove a paper from a collection."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        return False
-    cursor = db.execute(
-        "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
-        (collection_id, paper_id),
-    )
-    return cursor.rowcount > 0
-
-
-def get_collection_papers(db: sqlite3.Connection, collection_id: str) -> list[dict]:
-    """Get saved Library papers in a collection."""
-    rows = db.execute(
-        """SELECT p.* FROM papers p
-           JOIN collection_items ci ON ci.paper_id = p.id
-           WHERE ci.collection_id = ?
-             AND p.status = 'library'
-             AND """ + standalone_paper_sql("p") + """
-           ORDER BY ci.added_at DESC""",
-        (collection_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def delete_collection(db: sqlite3.Connection, collection_id: str) -> bool:
-    """Delete a collection."""
-    cursor = db.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
-    return cursor.rowcount > 0
-
-
 # ============================================================================
 # Tags
 # ============================================================================
@@ -1772,71 +1608,3 @@ def create_tag(db: sqlite3.Connection, name: str, color: str = "#6B7280") -> str
     db.execute("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)", (tag_id, name, color))
     return tag_id
 
-
-def list_tags(db: sqlite3.Connection) -> list[dict]:
-    """List all tags."""
-    rows = db.execute("SELECT * FROM tags ORDER BY name").fetchall()
-    return [dict(r) for r in rows]
-
-
-def tag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> None:
-    """Tag a saved Library paper."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        raise ValueError("Paper is subordinate and has no actionable root")
-    paper = get_paper(db, paper_id)
-    if paper is None:
-        raise ValueError("Paper not found")
-    if str(paper.get("status") or "") != LIBRARY_STATUS:
-        raise ValueError("Only saved Library papers can be tagged")
-    db.execute(
-        "INSERT OR IGNORE INTO publication_tags (paper_id, tag_id) VALUES (?, ?)",
-        (paper_id, tag_id),
-    )
-
-
-def untag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> bool:
-    """Remove a tag from a paper."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        return False
-    cursor = db.execute(
-        "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
-        (paper_id, tag_id),
-    )
-    return cursor.rowcount > 0
-
-
-def get_paper_tags(db: sqlite3.Connection, paper_id: str) -> list[dict]:
-    """Get all tags for a paper."""
-    paper_id = _action_root(db, paper_id) or ""
-    if not paper_id:
-        return []
-    rows = db.execute(
-        """SELECT t.* FROM tags t
-           JOIN publication_tags pt ON pt.tag_id = t.id
-           WHERE pt.paper_id = ?
-           ORDER BY t.name""",
-        (paper_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_papers_by_tag(db: sqlite3.Connection, tag_id: str) -> list[dict]:
-    """Get saved Library papers with a specific tag."""
-    rows = db.execute(
-        """SELECT p.* FROM papers p
-           JOIN publication_tags pt ON pt.paper_id = p.id
-           WHERE pt.tag_id = ?
-             AND p.status = 'library'
-             AND """ + standalone_paper_sql("p") + """
-           ORDER BY p.added_at DESC""",
-        (tag_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def delete_tag(db: sqlite3.Connection, tag_id: str) -> bool:
-    """Delete a tag."""
-    cursor = db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
-    return cursor.rowcount > 0

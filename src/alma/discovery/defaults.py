@@ -42,35 +42,6 @@ TEXT_SIMILARITY_SEMANTIC_SHARE = 0.87
 
 DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     **{f"weights.{key}": str(value) for key, value in DEFAULT_SIGNAL_WEIGHTS.items()},
-    # Citation-fabric bonuses (task 47 §7): bounded ADDITIVE nudges (not weights)
-    # for candidates that share citation structure with the loved/saved set —
-    # coupling (shared references) + co-citation (shared citers). Each scales its
-    # ceiling by the precomputed [0,1] strength, so citation-less candidates are
-    # unaffected and proven signals are never diluted.
-    "citation_fabric.coupling_bonus_max": "2.5",
-    "citation_fabric.cocitation_bonus_max": "2.5",
-    "strategies.related_works": "true",
-    "strategies.topic_search": "true",
-    "strategies.followed_authors": "true",
-    "strategies.coauthor_network": "true",
-    "strategies.citation_chain": "true",
-    "strategies.semantic_scholar": "true",
-    # S2 list-mode recommendations — calls
-    # `POST /recommendations/v1/papers` with the user's top-rated
-    # Library papers as positive seeds and their removed/dismissed/
-    # disliked papers as negative seeds. Complementary to the
-    # free-text-query `semantic_scholar` lane: this one uses S2's
-    # learned model directly on paper IDs.
-    "strategies.s2_recommend": "true",
-    "strategies.branch_explorer": "true",
-    "strategies.taste_topics": "true",
-    "strategies.taste_authors": "true",
-    "strategies.taste_venues": "true",
-    "strategies.recent_wins": "true",
-    # Scale each lens channel by how often what it surfaced was kept
-    # (`application/discovery/channel_yield.py`).
-    "strategies.adaptive_channels": "true",
-    "limits.max_results": "50",
     # Minimum recommendation score (0-100 scale, matching the emitted
     # `score`). Recommendations scoring below this are dropped at staging time
     # so the feed doesn't pad itself with weak, off-topic matches once the
@@ -79,8 +50,6 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "limits.min_score": "0",
     "limits.max_candidates_per_strategy": "20",
     "limits.recency_window_years": "10",
-    "limits.feedback_decay_days_full": "90",
-    "limits.feedback_decay_days_half": "180",
     # Seconds a single retrieval lane may take before the refresh gives up on
     # it and builds the deck without it. Every lane is a LOCAL read (network
     # collection belongs to scheduled maintenance), so this is a backstop
@@ -93,10 +62,6 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # is now a prerequisite completed before lane clocks begin. 60 s leaves
     # cold-start headroom while remaining a finite pathological-work backstop.
     "limits.lane_deadline_seconds": "60",
-    "limits.taste_topic_queries": "3",
-    "limits.taste_author_queries": "3",
-    "limits.taste_venue_queries": "2",
-    "limits.recent_win_queries": "2",
     "branches.temperature": "0.28",
     "branches.max_clusters": "6",
     "branches.max_active_for_retrieval": "4",

@@ -111,16 +111,6 @@ def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
     return int((row["c"] if row else 0) or 0)
 
 
-def get_lens_last_seen(db: sqlite3.Connection, lens_id: str) -> str | None:
-    """When the user last rendered this lens's recommendation deck."""
-    row = db.execute(
-        "SELECT value FROM discovery_settings WHERE key = ?",
-        (f"{DISCOVERY_LENS_SEEN_PREFIX}{lens_id}",),
-    ).fetchone()
-    value = str((row["value"] if row else "") or "").strip()
-    return value or None
-
-
 def mark_lens_seen(
     db: sqlite3.Connection,
     lens_id: str,
@@ -330,79 +320,6 @@ def reset_settings_to_defaults(db: sqlite3.Connection) -> None:
         upsert_setting(db, key, value)
 
 
-def list_recommendations(
-    db: sqlite3.Connection,
-    *,
-    limit: int = 50,
-    offset: int = 0,
-    search: str | None = None,
-    semantic: bool = False,
-) -> list[dict]:
-    """List recommendations with optional lexical search, enriched with paper data."""
-    query = [
-        "SELECT r.*,"
-        " p.title AS paper_title,"
-        " p.authors AS paper_authors,"
-        " p.abstract AS paper_abstract,"
-        " p.year AS paper_year,"
-        " p.journal AS paper_journal,"
-        " p.url AS paper_url,"
-        " p.doi AS paper_doi,"
-        " p.publication_date AS paper_publication_date,"
-        " p.cited_by_count AS paper_cited_by_count,"
-        " p.status AS paper_status,"
-        " p.rating AS paper_rating,"
-        " p.openalex_id AS paper_openalex_id,"
-        " p.tldr AS paper_tldr,"
-        " p.influential_citation_count AS paper_influential_citation_count",
-        "FROM recommendations r",
-        "LEFT JOIN papers p ON p.id = r.paper_id",
-        "WHERE 1=1",
-    ]
-    params: list[object] = []
-    if search and search.strip():
-        pattern = f"%{search.strip()}%"
-        query.append("AND (p.title LIKE ? OR p.authors LIKE ? OR r.paper_id LIKE ?)")
-        params.extend([pattern, pattern, pattern])
-    if semantic:
-        # Semantic filtering is not implemented in phase-6 application layer.
-        # Keep deterministic lexical behavior.
-        pass
-    query.append(
-        "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
-        "AND COALESCE(TRIM(p.reading_status), '') = '' "
-        f"AND {standalone_paper_sql('p')} "
-        "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
-    )
-    params.extend([limit, offset])
-    rows = db.execute(" ".join(query), params).fetchall()
-    # Read-time logical-duplicate safety net (mirrors the Feed inbox). Rows are
-    # ranked score DESC, so keep the FIRST occurrence of each (year + normalized
-    # title) and drop lower-ranked twins — the v0.19.0 duplicate-identity
-    # regression surfaced the same paper under two paper_ids. canonical_paper_filter
-    # already hides rows the background collapse merged; this covers the window
-    # before it runs. Strong-id conflicts (distinct DOIs / openalex_ids) never fold.
-    from alma.core.utils import logical_dup_signature, strong_identifiers_conflict
-
-    deduped: list[sqlite3.Row] = []
-    seen: dict[str, dict] = {}
-    for r in rows:
-        sig = logical_dup_signature(r["paper_title"], r["paper_year"])
-        keeper = seen.get(sig) if sig is not None else None
-        if keeper is not None and not strong_identifiers_conflict(
-            incoming_doi=r["paper_doi"],
-            incoming_openalex_id=r["paper_openalex_id"],
-            candidate_doi=keeper["doi"],
-            candidate_openalex_id=keeper["openalex_id"],
-        ):
-            continue
-        if sig is not None:
-            seen[sig] = {"doi": r["paper_doi"], "openalex_id": r["paper_openalex_id"]}
-        deduped.append(r)
-    refresh_window = latest_discovery_refresh_window(db)
-    return [_normalize_recommendation(dict(r), refresh_window) for r in deduped]
-
-
 def mark_recommendation_action(
     db: sqlite3.Connection,
     rec_id: str,
@@ -446,11 +363,11 @@ def mark_recommendation_action(
     def _persist() -> None:
         # One atomic discovery-action unit (writer gate + BEGIN IMMEDIATE +
         # retry): paper membership/rating → recommendation stamp →
-        # cross-surface reconcile → signal event → per-lens signal, committed
-        # together. add_to_library defers enrichment scheduling past the gate;
-        # record_paper_feedback (now the shared engine adapter) and
-        # record_lens_signal do not commit. The engine keys on paper_id so it
-        # won't double the explicit recommendation/lens writes below.
+        # cross-surface reconcile → signal event, committed together.
+        # add_to_library defers enrichment scheduling past the gate;
+        # record_paper_feedback (now the shared engine adapter) does not commit.
+        # The engine keys on paper_id so it won't double the explicit
+        # recommendation write below.
         nonlocal effective_rating, feedback_action, event_id
         if action == "save":
             effective_rating = max(current_rating, int(rating or 3), 3)
@@ -486,8 +403,8 @@ def mark_recommendation_action(
         elif action == "dismiss":
             # RESOLUTION, not valence (D6 as amended 2026-07-26). Dismiss says
             # "not in this lens's suggestions for a while" and writes nothing
-            # else: no rating, no feedback event, no lens signal. Leaving
-            # `feedback_action` unset is what suppresses those three writes
+            # else: no rating, no feedback event. Leaving
+            # `feedback_action` unset is what suppresses those writes
             # below. `effective_rating` keeps the paper's CURRENT rating so the
             # response reports the truth rather than stamping a phantom 1.
             #
@@ -560,16 +477,6 @@ def mark_recommendation_action(
                     "ranking_candidate_id": str(snapshot["id"]) if snapshot else "",
                 },
                 previous_rating=current_rating if feedback_action == "save" else None,
-            )
-        lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
-        if lens_id and paper_id and feedback_action:
-            signal_value = library_app.rating_signal_value(effective_rating)
-            record_lens_signal(
-                db,
-                lens_id=str(lens_id),
-                paper_id=paper_id,
-                signal_value=signal_value,
-                source="recommendation_action",
             )
 
     # Shared write helper: reachable standalone (its own route) AND nested inside
@@ -651,59 +558,6 @@ def _paper_dismissal_scores(rows: list[sqlite3.Row]) -> dict[str, float]:
     return scores
 
 
-def clear_recommendations(db: sqlite3.Connection) -> int:
-    """Delete all recommendations and return deleted count."""
-    count_row = db.execute("SELECT COUNT(*) AS c FROM recommendations").fetchone()
-    total = int((count_row["c"] if count_row else 0) or 0)
-    db.execute("DELETE FROM recommendations")
-    return total
-
-
-def recommendation_stats(db: sqlite3.Connection) -> dict:
-    """Aggregate recommendation stats.
-
-    The ``actioned`` count is ``SUM(user_action IS NOT NULL)`` — the number
-    of recommendations where the user has taken an explicit action (save,
-    like, love, dismiss). It was previously named ``seen``, which wrongly
-    implied "viewed / impression count"; those are not recorded here.
-    """
-    row = db.execute(
-        f"""
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN r.user_action IS NOT NULL THEN 1 ELSE 0 END) AS actioned,
-            SUM(CASE WHEN r.user_action = 'save' THEN 1 ELSE 0 END) AS saved,
-            SUM(CASE WHEN r.user_action = 'like' THEN 1 ELSE 0 END) AS liked,
-            SUM(CASE WHEN r.user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed
-        FROM recommendations r
-        JOIN papers p ON p.id = r.paper_id
-        WHERE {standalone_paper_sql('p')}
-        """
-    ).fetchone()
-    return {
-        "total": int((row["total"] if row else 0) or 0),
-        "actioned": int((row["actioned"] if row else 0) or 0),
-        "saved": int((row["saved"] if row else 0) or 0),
-        "liked": int((row["liked"] if row else 0) or 0),
-        "dismissed": int((row["dismissed"] if row else 0) or 0),
-    }
-
-
-def get_recommendation(db: sqlite3.Connection, rec_id: str) -> dict | None:
-    """Get one recommendation row."""
-    row = db.execute(
-        f"""
-        SELECT r.*
-        FROM recommendations r
-        JOIN papers p ON p.id = r.paper_id
-        WHERE r.id = ?
-          AND {standalone_paper_sql('p')}
-        """,
-        (rec_id,),
-    ).fetchone()
-    return _normalize_recommendation(dict(row)) if row else None
-
-
 def list_lenses(
     db: sqlite3.Connection,
     *,
@@ -722,7 +576,6 @@ def list_lenses(
         f"""
         SELECT
             l.*,
-            COALESCE(ls.signal_count, 0) AS signal_count,
             COALESCE(r.recommendation_count, 0) AS recommendation_count,
             (
                 SELECT ss.id
@@ -746,11 +599,6 @@ def list_lenses(
                 LIMIT 1
             ) AS last_retrieval_summary
         FROM discovery_lenses l
-        LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS signal_count
-            FROM lens_signals
-            GROUP BY lens_id
-        ) ls ON ls.lens_id = l.id
         LEFT JOIN (
             SELECT r.lens_id, COUNT(*) AS recommendation_count
             FROM recommendations r
@@ -791,7 +639,6 @@ def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
         f"""
         SELECT
             l.*,
-            COALESCE(ls.signal_count, 0) AS signal_count,
             COALESCE(r.recommendation_count, 0) AS recommendation_count,
             (
                 SELECT ss.id
@@ -815,11 +662,6 @@ def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
                 LIMIT 1
             ) AS last_retrieval_summary
         FROM discovery_lenses l
-        LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS signal_count
-            FROM lens_signals
-            GROUP BY lens_id
-        ) ls ON ls.lens_id = l.id
         LEFT JOIN (
             SELECT r.lens_id, COUNT(*) AS recommendation_count
             FROM recommendations r
@@ -1327,45 +1169,6 @@ def delete_lens(db: sqlite3.Connection, lens_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def list_lens_signals(
-    db: sqlite3.Connection,
-    lens_id: str,
-    *,
-    limit: int = 100,
-) -> list[dict]:
-    """List captured lens-specific user signals."""
-    rows = db.execute(
-        """
-        SELECT
-            ls.id,
-            ls.lens_id,
-            ls.paper_id,
-            ls.signal_value,
-            ls.source,
-            ls.created_at,
-            p.title AS paper_title
-        FROM lens_signals ls
-        LEFT JOIN papers p ON p.id = ls.paper_id
-        WHERE ls.lens_id = ?
-        ORDER BY ls.created_at DESC
-        LIMIT ?
-        """,
-        (lens_id, limit),
-    ).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "lens_id": r["lens_id"],
-            "paper_id": r["paper_id"],
-            "paper_title": r["paper_title"],
-            "signal_value": int(r["signal_value"] or 0),
-            "source": r["source"] or "user",
-            "created_at": r["created_at"],
-        }
-        for r in rows
-    ]
-
-
 def list_lens_recommendations(
     db: sqlite3.Connection,
     lens_id: str,
@@ -1503,31 +1306,6 @@ def default_channel_weights(context_type: str) -> dict[str, float]:
     return {k: float(v) / total for k, v in weights.items()}
 
 
-def record_lens_signal(
-    db: sqlite3.Connection,
-    *,
-    lens_id: str,
-    paper_id: str,
-    signal_value: int,
-    source: str = "user",
-) -> bool:
-    """Insert or update a lens-specific feedback signal."""
-    row = db.execute("SELECT id FROM discovery_lenses WHERE id = ?", (lens_id,)).fetchone()
-    if not row:
-        return False
-    db.execute(
-        """
-        INSERT INTO lens_signals (lens_id, paper_id, signal_value, source)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(lens_id, paper_id, source) DO UPDATE SET
-            signal_value = excluded.signal_value,
-            created_at = datetime('now')
-        """,
-        (lens_id, paper_id, int(signal_value), source),
-    )
-    return True
-
-
 def _normalize_channel_weights(raw: dict) -> dict[str, float]:
     keys = ("lexical", "vector", "graph", "external")
     parsed = {k: float(raw.get(k, 0.0) or 0.0) for k in keys}
@@ -1550,7 +1328,6 @@ def _map_lens_row(row: sqlite3.Row) -> dict:
         "last_refreshed_at": row["last_refreshed_at"],
         "is_active": bool(row["is_active"]),
         "position": int(row["position"] or 0),
-        "signal_count": int(row["signal_count"] or 0),
         "recommendation_count": int(row["recommendation_count"] or 0),
         "last_suggestion_set_id": row["last_suggestion_set_id"],
         "last_ranker_version": row["last_ranker_version"],

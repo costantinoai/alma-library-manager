@@ -101,15 +101,6 @@ PROFILES: dict[str, RateProfile] = {
 }
 
 
-def batch_bounds(key: str) -> tuple[int, int] | None:
-    """``(default_batch, max_batch)`` if op ``key`` exposes a batch-size override,
-    else ``None`` (fixed batch). Lets the registry/UI offer a bounded control."""
-    p = PROFILES.get(key)
-    if p is None or not p.max_batch_size or p.max_batch_size <= p.batch_size:
-        return None
-    return p.batch_size, p.max_batch_size
-
-
 def effective_batch_size(key: str, override: int | None) -> int:
     """The batch size op ``key`` will actually use: the override (clamped to the
     endpoint's [1, max]) when the op is overridable, else the profile default.

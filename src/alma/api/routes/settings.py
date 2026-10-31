@@ -521,23 +521,6 @@ def update_settings(payload: SettingsModel):
         )
 
 
-@router.get("/test/openalex")
-def test_openalex_connectivity():
-    """Test connectivity to the OpenAlex API via shared client."""
-    try:
-        client = get_openalex_client()
-        resp = client.get("/authors", params={"search": "test", "per-page": 1}, timeout=10)
-        ok = resp.status_code == 200
-        return {
-            "success": ok,
-            "status": resp.status_code,
-            "credits": client.credits_summary(),
-        }
-    except Exception as e:
-        logger.error("OpenAlex connectivity test failed: %s", e)
-        return {"success": False, "error": "OpenAlex connectivity test failed"}
-
-
 @router.get("/openalex/usage")
 def get_openalex_usage():
     """Return current OpenAlex credit/rate usage from the shared client."""
@@ -712,15 +695,3 @@ def get_semantic_scholar_status():
         "detail": f"Unexpected Semantic Scholar response ({resp.status_code}).",
     }
 
-
-@router.get("/test/scholar")
-def test_scholar_connectivity():
-    """Best-effort test for scholarly availability (no real scrape)."""
-    try:
-        import scholarly  # noqa: F401
-
-        # We avoid real requests to Scholar here to be respectful.
-        return {"success": True, "message": "scholarly library available"}
-    except Exception as e:
-        logger.error("Scholar connectivity test failed: %s", e)
-        return {"success": False, "error": "Scholar connectivity test failed"}

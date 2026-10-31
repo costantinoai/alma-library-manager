@@ -431,16 +431,8 @@ Each prior feedback event contributes:
 * **Positive** (rating ≥ 4) → small boost.
 * **Negative** (rating ≤ 2) → small penalty.
 
-Two configurable windows exist as defaults:
-
-| Window | Default | Weight |
-|---|---|---|
-| `feedback_decay_days_full` | 90 | 1.0 |
-| `feedback_decay_days_half` | 180 | 0.5 |
-
-Note: the projection path that actually drives author-suggestion and
-paper feedback (`application/signal_projection.py`) does **not** read
-these settings — it hardcodes a tanh decay with a **180-day half-life**
+The projection path that drives author-suggestion and paper feedback
+(`application/signal_projection.py`) uses a tanh decay with a **180-day half-life**
 and a **730-day max age**, beyond which weight tapers to 0.
 
 Range before normalization: -1…+1. The weighted scorer stores it as a
@@ -476,54 +468,6 @@ Range: 0…1. Requires `preference_profiles` to have entries; no embeddings need
 `discovery_settings.weights` also carries per-channel multipliers used by the
 retrieval phase, before ranking. They shape which candidates exist, not what
 they score.
-
-## Channel yield: outcomes scale retrieval, never the score
-
-How a paper reached you is *exposure*, and exposure stays out of the reward
-model. So outcomes feed back into **what is retrieved**, not into a score
-multiplier (the per-source `source_calibration_multiplier` left the scoring
-path on 2026-07-27 and its code was removed on 2026-09-19; old stored
-breakdowns may still carry the key).
-
-`application/discovery/channel_yield.py`, stored view `discovery:channel_yield`:
-
-* **Data.** Every refresh records, for each candidate it *surfaced*
-  (`discovery_ranking_candidates.selected = 1`), which retrieval families found
-  it (`retrieval_hits`). Joined to the outcome owner
-  (`recommendation_outcomes.build_paper_outcome_map`), each channel gets
-  `kept / surfaced`. A paper found by several channels counts for each.
-  Surfaced-and-ignored is the denominator: explicit rejections are too rare to
-  estimate anything from.
-* **Estimator.** Rates are shrunk toward the pooled rate by a strength *derived
-  from the data* — the beta-binomial method-of-moments estimate of how much the
-  channels vary beyond their sample sizes
-  (`core/scoring_math.empirical_bayes_rates`). When they do not, every
-  multiplier is exactly 1.0. No tuned constant.
-* **Effect.** `multiplier = shrunk rate / pooled rate`, clamped to
-  `outcome_calibration.MULTIPLIER_BAND` (`[0.5, 1.5]`). At refresh the lens's
-  channel weights (the prior: the user's sliders or the context-type defaults)
-  are multiplied and renormalised, and the Activity log states base → effective.
-* **Family → channel** has one owner, `retrieval/_common.CHANNEL_BY_FAMILY`
-  (semantic → `vector`, citation → `graph`, taste → `external`), read by the
-  fusion and by the yield.
-* **Surface.** Diagnostic only since task 92: a lens refresh uses its declared
-  channel weights, because yield pools outcomes across lenses and would let one
-  branch tilt another (D26). `GET /discovery/channel-yield` is a row read.
-
-Measured 2026-09-19 — prod snapshot: lexical 3/36 → ×0.85, vector 15/68 →
-×1.13, graph 10/62 → ×0.98 (external: nothing surfaced, ×1.00). Dev: lexical
-0/35 → ×0.68, vector 4/62 → ×1.50 (the band's ceiling), graph 2/55 → ×1.08,
-external 0/44 → ×0.62. Both installs order the channels the same way. The band's
-floor keeps every channel in play, and the slate's randomized exploration
-slots (`exploration.py`) are filled after fusion, so a down-weighted channel
-keeps producing the outcomes that could lift it again.
-
-Branch-level outcome weighting is separate and unchanged: a branch's
-`auto_weight` (`lens_crud._compute_branch_auto_weight`) shapes its retrieval
-budget from its own save / dismiss history.
-The full snapshot — quality, multipliers, raw counts, impressions —
-also lives on `retrieval_summary.calibration.{source_api, branch_mode,
-branch_id}`.
 
 ### Author rail bucket calibration
 
@@ -771,7 +715,7 @@ for candidates with more than one embedded paper.
 ### `openalex_related` / `s2_related`
 
 Pure cache reads from `author_suggestion_cache`, populated
-asynchronously by `POST /authors/suggestions/refresh-network`.
+asynchronously by the periodic author-suggestion refresh job.
 Each cached row carries a `composite_score` ∈ [0, 1] computed
 externally; the bucket simply rescales:
 

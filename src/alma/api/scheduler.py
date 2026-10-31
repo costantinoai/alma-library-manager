@@ -522,27 +522,6 @@ def _touch_active_status(conn: sqlite3.Connection, job_id: str, stamp: str) -> N
     )
 
 
-def heartbeat_job(job_id: str) -> None:
-    """Prove a long-running job is alive without rewriting its status.
-
-    For work that is legitimately silent for minutes (a UMAP fit in the graph
-    worker), the supervisor calls this on a timer. Cheap: one UPDATE, no status
-    merge, no log row, no Activity churn the user has to read.
-    """
-    if not job_id:
-        return
-    stamp = utcnow().isoformat()
-    with _job_lock:
-        cached = _job_status.get(job_id)
-        if cached is not None and str(cached.get("status") or "") in _ACTIVE_STATUSES:
-            cached["updated_at"] = stamp
-
-    def _write(conn: sqlite3.Connection) -> None:
-        _touch_active_status(conn, job_id, stamp)
-
-    _run_activity_write(_write, label=f"heartbeat {job_id}")
-
-
 def _row_to_status(row: sqlite3.Row) -> dict:
     out = {
         "job_id": row["job_id"],
@@ -2536,25 +2515,6 @@ _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
 
-# Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set
-# drift (double the serve-while-stale variant tolerance) or a weekly age floor —
-# incremental placement keeps the substrate current in between.
-_LAYOUT_REBUILD_DRIFT = 0.20
-_LAYOUT_REBUILD_MAX_AGE_DAYS = 7
-_LAYOUT_SIG_KEY_PREFIX = "graph.layout_sig:"
-
-
-def _iso_age_days(stamp: str) -> float | None:
-    """Age in days of an ISO timestamp, or None when unparseable."""
-    if not stamp:
-        return None
-    try:
-        then = datetime.fromisoformat(stamp.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
-    return max(0.0, (utcnow() - then).total_seconds() / 86400.0)
-
-
 def _operation_log_retention_days() -> int:
     """Days of `operation_logs` history to keep before pruning. Default 30."""
     raw = os.getenv("ALMA_OPERATION_LOG_RETENTION_DAYS", "").strip()
@@ -2839,25 +2799,6 @@ def _is_due(
 # ===================================================================
 
 
-def add_cron_job(
-    job_id: str,
-    cron_expr: str,
-    func: Callable,
-    args: tuple = (),
-    meta: dict | None = None,
-) -> str:
-    """Add a cron job to the scheduler."""
-    sched = get_scheduler()
-    trigger = CronTrigger.from_crontab(cron_expr)
-    sched.add_job(func, trigger=trigger, id=job_id, replace_existing=True, args=args)
-    logger.info("Scheduled job %s with cron '%s'", job_id, cron_expr)
-    if meta is None:
-        meta = {}
-    with _job_lock:
-        _job_meta[job_id] = {"cron": cron_expr, **meta}
-    return job_id
-
-
 def list_jobs() -> list[dict]:
     """List all scheduled jobs with metadata."""
     sched = get_scheduler()
@@ -3031,12 +2972,6 @@ def add_job_log(
         logger.debug(line)
     else:
         logger.info(line)
-
-
-def get_job_logs(job_id: str, limit: int = 100) -> list[dict]:
-    """Return structured logs for a single job."""
-    entries, _, _ = get_job_logs_page(job_id, limit=limit, cursor=None)
-    return entries
 
 
 def get_job_logs_page(
@@ -3415,72 +3350,6 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
     return True
 
 
-def schedule_alert(
-    alert_id: str,
-    schedule: str,
-    schedule_config: dict | None,
-    evaluate_func: Callable,
-) -> str | None:
-    """Register or update a scheduled job for an alert.
-
-    Args:
-        alert_id: Alert ID to use as job ID prefix.
-        schedule: Schedule type -- 'daily', 'weekly', 'manual', or 'immediate'.
-        schedule_config: Optional configuration dict, e.g.
-            {"day": "monday", "time": "09:00"} for weekly, or
-            {"time": "09:00"} for daily.
-        evaluate_func: Callable to evaluate the alert (called with alert_id).
-
-    Returns:
-        The job ID if a scheduled job was created, or None if no job is needed.
-    """
-    job_id = f"alert_{alert_id}"
-    sched = get_scheduler()
-
-    # Remove existing job if any
-    try:
-        sched.remove_job(job_id)
-        with _job_lock:
-            _job_meta.pop(job_id, None)
-    except Exception:
-        pass
-
-    if schedule in ("manual", "immediate"):
-        return None
-
-    if schedule == "daily":
-        time_str = (schedule_config or {}).get("time", "09:00")
-        hour, minute = time_str.split(":")
-        cron_expr = f"{minute} {hour} * * *"
-    elif schedule == "weekly":
-        day = (schedule_config or {}).get("day", "monday")[:3].lower()
-        time_str = (schedule_config or {}).get("time", "09:00")
-        hour, minute = time_str.split(":")
-        day_map = {
-            "mon": "MON",
-            "tue": "TUE",
-            "wed": "WED",
-            "thu": "THU",
-            "fri": "FRI",
-            "sat": "SAT",
-            "sun": "SUN",
-        }
-        day_abbr = day_map.get(day, "MON")
-        cron_expr = f"{minute} {hour} * * {day_abbr}"
-    else:
-        return None
-
-    add_cron_job(
-        job_id,
-        cron_expr,
-        evaluate_func,
-        args=(alert_id,),
-        meta={"action": "alert_evaluate", "name": f"Alert {alert_id}"},
-    )
-    logger.info("Scheduled alert %s with schedule=%s, cron=%s", alert_id, schedule, cron_expr)
-    return job_id
-
-
 def reschedule_discovery_refresh(enabled: bool, interval_hours: int) -> None:
     """Update or remove the periodic recommendation refresh job.
 
@@ -3560,15 +3429,3 @@ def reschedule_citation_graph_maintenance(interval_hours: int) -> None:
     else:
         logger.info("Citation graph maintenance disabled")
 
-
-def schedule_embedding_computation(job_id: str) -> None:
-    """Run embedding computation via the shared worker."""
-    from alma.services.embeddings import run_embedding_computation
-
-    logger.info("Starting embedding computation job %s", job_id)
-    run_embedding_computation(
-        job_id,
-        set_job_status=set_job_status,
-        add_job_log=add_job_log,
-        is_cancellation_requested=is_cancellation_requested,
-    )

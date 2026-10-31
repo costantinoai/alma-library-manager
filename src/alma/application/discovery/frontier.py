@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import as_completed
 from dataclasses import dataclass, field
@@ -48,7 +47,6 @@ class FrontierBuildResult:
     candidates_considered: int
     rows_written: int
     vectors_written: int
-    edges_written: int
     terminal_ids: int
     retryable_ids: int
     rotation: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -58,7 +56,6 @@ class FrontierBuildResult:
             "candidates_considered": self.candidates_considered,
             "rows_written": self.rows_written,
             "vectors_written": self.vectors_written,
-            "edges_written": self.edges_written,
             "terminal_ids": self.terminal_ids,
             "retryable_ids": self.retryable_ids,
             **({"rotation": self.rotation} if self.rotation else {}),
@@ -146,8 +143,7 @@ def run_frontier_maintenance(
     commit_unless_gated(db, label="discovery frontier build")
     phases["frontier"] = coupling.as_dict()
     _log(
-        f"Bibliographic coupling: {coupling.rows_written} leads, "
-        f"{coupling.edges_written} edges",
+        f"Bibliographic coupling: {coupling.rows_written} leads",
         "frontier",
         phases["frontier"],
     )
@@ -294,12 +290,10 @@ def build_frontier(
             gathered.append(
                 {
                     **candidate,
-                    "_frontier_source_key": f"paper:{row['paper_id']}",
-                    "_frontier_relation": "reference",
                 }
             )
 
-    rows_written, edges_written = upsert_frontier_candidates(db, gathered)
+    rows_written = upsert_frontier_candidates(db, gathered)
     # Advances even when nothing resolved: that is the case rotation exists for.
     save_cursors(db, [window])
 
@@ -307,7 +301,6 @@ def build_frontier(
         candidates_considered=len(window.picked),
         rows_written=rows_written,
         vectors_written=0,
-        edges_written=edges_written,
         terminal_ids=0,
         retryable_ids=0,
         rotation={window.name: window.record()},
@@ -404,8 +397,6 @@ def build_discovery_frontier(
                     gathered.append(
                         {
                             **candidate,
-                            "_frontier_source_key": f"query:{query}",
-                            "_frontier_relation": "search",
                         }
                     )
         finally:
@@ -430,8 +421,6 @@ def build_discovery_frontier(
             gathered.append(
                 {
                     **candidate,
-                    "_frontier_source_key": "s2:taste_recommend",
-                    "_frontier_relation": "recommendation",
                 }
             )
 
@@ -457,8 +446,6 @@ def build_discovery_frontier(
                 gathered.append(
                     {
                         **candidate,
-                        "_frontier_source_key": f"s2:all_time:{seed_id}",
-                        "_frontier_relation": "related",
                     }
                 )
         if related.served_by(answered_seeds):
@@ -484,14 +471,12 @@ def build_discovery_frontier(
             gathered.append(
                 {
                     **candidate,
-                    "_frontier_source_key": f"openalex:cites:{seed_id}",
-                    "_frontier_relation": "citation",
                 }
             )
     if citing.served_by(answered_works):
         served.append(citing)
 
-    rows_written, edges_written = upsert_frontier_candidates(db, gathered)
+    rows_written = upsert_frontier_candidates(db, gathered)
     # Only a source that answered moves on: a failed call keeps its window, in
     # the same transaction as the leads it produced.
     save_cursors(db, served)
@@ -499,7 +484,6 @@ def build_discovery_frontier(
         candidates_considered=len(gathered),
         rows_written=rows_written,
         vectors_written=0,
-        edges_written=edges_written,
         terminal_ids=0,
         retryable_ids=0,
         rotation={
@@ -512,11 +496,10 @@ def build_discovery_frontier(
 def upsert_frontier_candidates(
     db: sqlite3.Connection,
     candidates: Iterable[dict],
-) -> tuple[int, int]:
+) -> int:
     """Canonical persistence route for heterogeneous frontier candidates."""
 
     prepared: dict[str, dict] = {}
-    edge_specs: list[tuple[str, str, str, str]] = []
     for raw in candidates:
         if not isinstance(raw, dict):
             continue
@@ -526,8 +509,6 @@ def upsert_frontier_candidates(
             if key
             not in {
                 "retrieval_hits",
-                "_frontier_source_key",
-                "_frontier_relation",
             }
         }
         title = str(candidate.get("title") or "").strip()
@@ -576,16 +557,8 @@ def upsert_frontier_candidates(
             if existing is not None
             else candidate
         )
-        edge_specs.append(
-            (
-                str(raw.get("_frontier_source_key") or f"api:{source_api}"),
-                frontier_key,
-                str(raw.get("_frontier_relation") or "discovery"),
-                source_api,
-            )
-        )
     if not prepared:
-        return 0, 0
+        return 0
 
     keys = list(prepared)
     for offset in range(0, len(keys), 400):
@@ -700,30 +673,7 @@ def upsert_frontier_candidates(
         """,
         frontier_rows,
     )
-    edge_rows = [
-        (
-            str(uuid.uuid4()),
-            source_key,
-            destination_key,
-            relation,
-            source_api,
-            observed_at,
-            "{}",
-        )
-        for source_key, destination_key, relation, source_api in edge_specs
-    ]
-    db.executemany(
-        """
-        INSERT INTO discovery_frontier_edges (
-            id, source_key, destination_key, relation, source_api,
-            observed_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_key, destination_key, relation, source_api)
-        DO UPDATE SET observed_at = excluded.observed_at
-        """,
-        edge_rows,
-    )
-    return len(frontier_rows), len(edge_rows)
+    return len(frontier_rows)
 
 
 def pending_vector_identifiers(
@@ -824,7 +774,6 @@ def fill_frontier_vectors(
         candidates_considered=len(identifiers),
         rows_written=0,
         vectors_written=len(vector_updates),
-        edges_written=0,
         terminal_ids=len(outcome.terminal_ids),
         retryable_ids=len(outcome.retryable_ids),
     )

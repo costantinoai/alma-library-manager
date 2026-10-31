@@ -93,14 +93,10 @@ measurement model:
 |---|---|---|
 | `POST /discovery/similar` | `routes/discovery.py` → `discovery/engine.py::discover_similar_with_meta`; OpenAlex related/citing and S2 per-paper recommendations, then a local dense fallback if network yields nothing; cached by selected seed IDs. | Used from Discovery and Library. It can fetch live external papers, but has no lens/branch context, deck snapshot or exposed branch-local outcome. Treat as a distinct similarity tool or route its leads into the shared acquisition/evidence contract. |
 | `POST /discovery/manual-search` and `/manual-search/add` | Background `openalex_manual.search_online_sources` with cross-source query fusion; selected result is added to Library. | Explicit user search, not automatic branch discovery. Frontend API functions exist but no current frontend caller was found. Reuse canonical identity, metadata and action boundaries; do not quietly train a branch from an unscoped manual addition. |
-| `GET /discovery/recommendations`, `/stats`, `/recommendations/{id}/explain`, `/{id}/seen`, and `DELETE /recommendations` | Generic recommendation read/management beside `/lenses/{id}/recommendations`. | Audit which consumer still needs the generic list/clear/seen semantics; the lens route is the Discovery page's deck read. One deck policy and one explanation source should serve both, avoiding divergent visibility or score rules. |
-| `discovery/engine.py::generate_recommendations` and `refresh_recommendations` | Legacy global generator; the legacy refresh deletes neutral recommendations and writes through its own connection. No production caller under `src/alma` was found by reference search. | Candidate for removal after caller/compatibility review. It is a separate writer/scorer path and conflicts with the intended single orchestration owner. Confirm external/scripts references before deleting. |
-| `GET/PUT /discovery/settings`, branch preview, frontier rebuild, calibration/outcome and channel-yield diagnostics | Settings write through one route; preview and diagnostic reads have their own cached/background jobs. | Maintain a control-to-effect registry. A slider should identify the stage it changes and show the measured result; a diagnostic fit must never silently become an online branch weight. |
+| `GET /discovery/recommendations/{id}/explain` | Generic recommendation read/management beside `/lenses/{id}/recommendations`. | Audit which consumer still needs the generic list/clear/seen semantics; the lens route is the Discovery page's deck read. One deck policy and one explanation source should serve both, avoiding divergent visibility or score rules. |
+| `GET/PUT /discovery/settings`, branch preview, frontier rebuild, calibration and outcome diagnostics | Settings write through one route; preview and diagnostic reads have their own cached/background jobs. | Maintain a control-to-effect registry. A slider should identify the stage it changes and show the measured result; a diagnostic fit must never silently become an online branch weight. |
 
-The currently exposed API still declares a global channel-yield adaptation
-setting, while lens refresh deliberately leaves its multiplier empty to avoid
-cross-branch learning. That is a truthful-UI/unused-setting cleanup candidate.
-Likewise, manual search, generic recommendations and similarity need an
+Manual search, generic recommendations and similarity need an
 explicit product decision: a separate tool may remain separate, but any
 candidate or verdict later promoted into Discovery must pass through its
 canonical identity, provenance and scope contracts.
@@ -120,7 +116,7 @@ canonical identity, provenance and scope contracts.
 | Selection | `__init__._refresh_lens_recommendations`, `exploration.py` | Full merged pool is scored, then the top `max(200, 4 × limit)` staged, which holds all four channels. Library/action/reading/min-score exclusions follow. MMR applies author/topic/venue caps, each active branch keeps two cards (a floor card may pass a cap) and one of them in the first 20 places, and up to four uniformly sampled tail cards are reserved in the requested deck, normally 50. `branch_coverage` in the summary states how far each branch got and why one has no card. | Eligibility before staging; per-branch paginated streams plus overview; qualified reach, novelty and propensity by branch. The 50-card deck must not define discoverable breadth. |
 | Persist and hydrate | `__init__._materialize_slate/_persist_refresh`; `papers`, `suggestion_sets`, `recommendations`, candidate snapshots | Selected papers are promoted to tracked corpus and hydration queued; unacted old recs are swapped for a new deck; actioned rows remain. Branch identities are persisted with the deck. | Pre-serialize ranking rows outside the writer gate; bounded batches; atomic version/revision check so a stale job cannot publish over newer lens state. |
 | Exposure and action | `DiscoveryPage.tsx`, `useDiscoveryImpressions`, `routes/publications.py`, `paper_actions.py`; `discovery_impressions`, `feedback_events` | A visible card records an impression. Canonical action updates paper/lens state; Save/Like/Love/Dislike give preference; Dismiss only hides; Read queues. Recommendation/action and event linkage is still uneven. | Freeze displayed branch/context and aspect options; return event ID; one idempotent action trail; distinguish viewed, skipped, saved and explicitly disliked. |
-| Learning and audit | `observations.py`, `feedback_substrate.py`, `outcome_eval.py`, `channel_yield.py` | Outcome loader requires a selected v3 snapshot, visible impression, linked later event and known propensity; randomized-only by default. Other profile/projection paths are global. | Branch-local fit from attributable exposed events; honest negative construction, chronological replay, component ablations, and unsupported-value neutral fallback. |
+| Learning and audit | `observations.py`, `feedback_substrate.py`, `outcome_eval.py` | Outcome loader requires a selected v3 snapshot, visible impression, linked later event and known propensity; randomized-only by default. Other profile/projection paths are global. | Branch-local fit from attributable exposed events; honest negative construction, chronological replay, component ablations, and unsupported-value neutral fallback. |
 
 ### The measures and their actual role
 
@@ -130,7 +126,7 @@ canonical identity, provenance and scope contracts.
 | Cluster membership, centroid, core/explore topics, branch score, outcome share | Seed vectors/text and 60-day branch action aggregation | Preview, vector search, frontier query strings and automatic controls. Structure and preference-driven allocation are partly mixed; small outcome samples can auto-mute. |
 | Source/query/graph hits, rank, RRF, channel weights | Four retrieval lanes | Candidate inclusion and fused retrieval score. Multiple hits may be correlated; a hit is evidence of reach/relevance, not user taste. |
 | Semantic/lexical similarity, topic, author, venue, recency, citation, feedback, preference | Candidate scorer and profile | Ten-family score. The current global learned profile is not branch-independent. Exact-value availability does not imply a learned coefficient. |
-| Prior score, shadow score, reward/exposure features, propensity | Candidate snapshot and slate policy | Explanation and retrospective evaluation. Only recorded, exposed decisions can supply a causal outcome. |
+| Prior score, reward/exposure features, propensity | Candidate snapshot and slate policy | Explanation and retrospective evaluation. Only recorded, exposed decisions can supply a causal outcome. |
 | Impression, action, optional reason | Visible card and canonical action | Presently only impression + action exists. A paper verdict alone confounds all its authors/topics/phrases; optional aspect selection is proposed. |
 | Qualified unseen yield, coverage, latency, source cost | **Not consistently recorded end-to-end** | These are required measures for deciding whether Discovery actually finds valuable external papers. |
 
@@ -186,7 +182,6 @@ Prefix `/api/v1/discovery`, file `api/routes/discovery.py`:
 | 212 | GET `/status` | `get_discovery_status` | Read. |
 | 233 | GET `/settings` | `get_discovery_settings` | Read. |
 | 248 | GET `/outcome-evaluation` | `get_outcome_evaluation` | Read of a stored view. |
-| 262 | GET `/channel-yield` | `get_channel_yield` | Diagnostic; no frontend caller of `getChannelYield`. |
 | 281 | POST `/outcome-evaluation/refresh` | `refresh_outcome_evaluation` | Queues the view. |
 | 298 | PUT `/settings` | `update_discovery_settings` | One writer of the KV settings. |
 | 415 | POST `/settings/reset` | `reset_discovery_settings` | Writer. |
@@ -195,12 +190,8 @@ Prefix `/api/v1/discovery`, file `api/routes/discovery.py`:
 | 721 | POST `/manual-search` | `manual_discovery_search` | Background network job. No frontend caller of `manualDiscoverySearch`. |
 | 806 | POST `/manual-search/add` | `manual_discovery_add` | Writer. No frontend caller of `manualDiscoveryAdd`. |
 | 863 | POST `/impressions` | `record_discovery_impressions` | Visible cards; all or nothing per batch. |
-| 890 | GET `/recommendations` | `list_recommendations` | Generic list beside the lens route. |
-| 916 | POST `/recommendations/{rec_id}/seen` | `mark_seen` | Stamps `seen`; never preference. |
 | 951 | GET `/recommendations/{rec_id}/explain` | `explain_recommendation` | Read. |
-| 998 | DELETE `/recommendations` | `clear_recommendations` | Deletes every row (`application/discovery/lens_crud.py:657`). |
 | 1031 | POST `/frontier/rebuild` | `rebuild_frontier` | The manual acquisition trigger. |
-| 1095 | GET `/stats` | `discovery_stats` | Read. |
 
 Prefix `/api/v1/lenses`, file `api/routes/lenses.py`:
 
@@ -209,11 +200,9 @@ Prefix `/api/v1/lenses`, file `api/routes/lenses.py`:
 | 34 | GET `` | `list_lenses` |
 | 47 | POST `` | `create_lens` |
 | 90 | PUT `/order` | `reorder_lenses` |
-| 104 | GET `/{lens_id}` | `get_lens` |
 | 120 | POST `/{lens_id}/seen` | `mark_lens_seen` |
 | 146 | PUT `/{lens_id}` | `update_lens` |
 | 189 | DELETE `/{lens_id}` | `delete_lens` |
-| 220 | GET `/{lens_id}/signals` | `list_lens_signals` |
 | 238 | GET `/{lens_id}/recommendations` | `list_lens_recommendations` |
 | 263 | GET `/{lens_id}/branches` | `preview_lens_branches` |
 | 289 | POST `/{lens_id}/branches/refresh` | `refresh_lens_branches` |
@@ -227,7 +216,6 @@ Other routes that act on Discovery state:
 | `api/routes/publications.py:798` | PUT `/api/v1/papers/{paper_id}/rate` | Library papers; event has no recommendation context. |
 | `api/routes/publications.py:840` | POST `/api/v1/papers/{paper_id}/undo-feedback` | Per-aspect undo; deletes events. |
 | `api/routes/insights.py:1792` | GET `/api/v1/insights/recommendations` | Engagement read. |
-| `api/routes/insights.py:2648` | POST `/api/v1/insights/discovery/branch-action` | No frontend caller found. |
 | `api/routes/feedback.py:52` | POST `/api/v1/feedback/track` | Direct `feedback_events` writer. |
 | `api/routes/feedback.py:104` | POST `/api/v1/feedback/reset` | Clears learning tables and `user_action`. |
 
@@ -242,8 +230,8 @@ Other routes that act on Discovery state:
 | `discovery_ranking_candidates` | `api/deps.py:826` | `application/discovery/observations.py` only |
 | `discovery_impressions` | `api/deps.py:858` | `application/discovery/observations.py` only |
 | `discovery_frontier` | `api/deps.py:879` | `application/discovery/frontier.py`, `core/migrations.py` |
-| `discovery_frontier_edges` | `api/deps.py:909` | `application/discovery/frontier.py` only |
-| `lens_signals` | `api/deps.py:927` | `application/discovery/lens_crud.py`, `services/feedback_substrate.py`, `application/library.py` (undo). Read only for a count and a list; no scorer reads it. |
+| `discovery_frontier_edges` | `api/deps.py:909` | None: writer removed. Table and rows stay until a migrator drops them. |
+| `lens_signals` | `api/deps.py:927` | None: writers and readers removed. Table and rows stay until a migrator drops them. |
 | `feedback_events` | `api/deps.py:1318` | `services/feedback_substrate.py` (insert), `api/routes/feedback.py` (insert), `application/library.py` (undo deletes), `core/paper_groups.py` (merge), `api/routes/extension.py`, `core/migrations.py` |
 | `preference_profiles` | `api/deps.py:1336` | `services/feedback_substrate.py`, `core/paper_groups.py` |
 | `discovery_settings` | `api/deps.py:1389` | `application/discovery/lens_crud.py`, plus unrelated keys from `application/feed.py`, `application/walkthroughs.py`, `services/maintenance.py`, `core/secrets.py`, `api/routes/ai.py`, `core/migrations.py`, `api/deps.py` |
@@ -262,7 +250,6 @@ Other routes that act on Discovery state:
 | Similar search, manual search | `api/routes/discovery.py:660`, `api/routes/discovery.py:797` | User. |
 | `materialize.scoring.calibration` | `application/discovery/calibration.py:326` | View refresh. |
 | `materialize.scoring.outcome_eval` | `application/discovery/outcome_eval.py:471` | View refresh. |
-| `materialize.discovery.channel_yield` | `application/discovery/channel_yield.py:118` | View refresh; diagnostic. |
 | `materialize.variant:discovery:branches:...` | `application/discovery/branch_preview.py:62` | Branch preview. |
 
 ### Cache keys
@@ -271,7 +258,6 @@ Other routes that act on Discovery state:
 |---|---|---|
 | `scoring:calibration` | `application/discovery/calibration.py:53` | View fingerprint. |
 | `scoring:outcome_eval` | `application/discovery/outcome_eval.py:446` | View fingerprint. |
-| `discovery:channel_yield` | `application/discovery/channel_yield.py:39` | View fingerprint. |
 | `discovery:branches:<lens>:v=<digest>` | `application/discovery/branch_preview.py:29` | Digest of version, options, controls, context and last set id, reused for 60 s. Seed and action revisions are absent (D92-05). |
 | `positive_centroid`, `negative_centroid`, `positive_exemplars`, `negative_exemplars` in `scoring_cache` | `application/discovery/__init__.py:750` to `application/discovery/__init__.py:813` | Library fingerprint. |
 | `similarity_cache` by seed ids | `api/routes/discovery.py:556` | `cache.similarity_ttl_hours`, manual clear, group merge. |
@@ -297,11 +283,6 @@ refresh" means the key changes the active pipeline.
 | `limits.recency_window_years` | `discovery/scoring.py:605` | Yes |
 | `schedule.refresh_enabled`, `refresh_interval_hours`, `graph_maintenance_interval_hours` | `api/scheduler.py:1680`, `api/scheduler.py:1687`, `api/scheduler.py:1740` | Scheduling only |
 | `cache.similarity_ttl_hours` | `api/routes/discovery.py:502` | Similar search only |
-| `strategies.related_works`, `topic_search`, `followed_authors`, `coauthor_network`, `citation_chain`, `semantic_scholar`; `limits.max_results`, `limits.max_candidates_per_strategy` | `discovery/engine.py:654` to `discovery/engine.py:659`, `discovery/engine.py:649`, `discovery/engine.py:652` | **None.** Read only by the legacy generator |
-| `strategies.branch_explorer`, `taste_topics`, `taste_authors`, `taste_venues`, `recent_wins` | Settings route only | **None** |
-| `strategies.adaptive_channels` | `application/discovery/channel_yield.py:42` | **None**; `channel_multipliers` has no caller in the refresh |
-| `limits.feedback_decay_days_full`, `limits.feedback_decay_days_half` | Settings route only | **None** |
-| `strategies.s2_recommend`, `citation_fabric.*`, `limits.taste_*_queries`, `limits.recent_win_queries` | `discovery/defaults.py` only | **None**; defaults with no reader |
 
 ### Entry points outside the lens pipeline
 

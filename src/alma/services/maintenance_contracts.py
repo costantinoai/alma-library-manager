@@ -234,36 +234,6 @@ class SharedBudget:
             return amount
 
 
-@dataclass(slots=True)
-class MaintenanceRunResult:
-    selected: int = 0
-    attempted: int = 0
-    changed: int = 0
-    unchanged: int = 0
-    terminal: int = 0
-    retryable: int = 0
-    failed: int = 0
-    remaining: int = 0
-    actual_requests: dict[str, int] = field(default_factory=dict)
-    stage_results: list[dict[str, Any]] = field(default_factory=list)
-    message: str = ""
-
-    def to_wire(self) -> dict[str, Any]:
-        return {
-            "selected": self.selected,
-            "attempted": self.attempted,
-            "changed": self.changed,
-            "unchanged": self.unchanged,
-            "terminal": self.terminal,
-            "retryable": self.retryable,
-            "failed": self.failed,
-            "remaining": self.remaining,
-            "actual_requests": dict(self.actual_requests),
-            "stage_results": list(self.stage_results),
-            "message": self.message,
-        }
-
-
 MaintenanceRunner = Callable[..., dict[str, Any] | None]
 CountFn = Callable[..., int]
 

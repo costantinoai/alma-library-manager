@@ -1453,50 +1453,6 @@ def schedule_pending_author_hydration_sweep(
     )
 
 
-def build_author_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
-    try:
-        rows = conn.execute(
-            """
-            SELECT source, purpose, status, COUNT(*) AS count
-            FROM author_enrichment_status
-            GROUP BY source, purpose, status
-            ORDER BY source, purpose, status
-            """
-        ).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    return {
-        "summary": [dict(row) for row in rows],
-        "total": sum(int(row["count"] or 0) for row in rows),
-    }
-
-
-def list_author_enrichment_status_items(
-    conn: sqlite3.Connection,
-    *,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    try:
-        rows = conn.execute(
-            """
-            SELECT
-                es.*,
-                a.name AS author_name,
-                a.openalex_id,
-                a.orcid,
-                a.semantic_scholar_id
-            FROM author_enrichment_status es
-            JOIN authors a ON a.id = es.author_id
-            ORDER BY es.updated_at DESC
-            LIMIT ?
-            """,
-            (max(1, min(int(limit or 100), 500)),),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    return [dict(row) for row in rows]
-
-
 def list_author_affiliations(conn: sqlite3.Connection, author_id: str) -> dict[str, Any]:
     row = _author_row(conn, author_id)
     if row is None:

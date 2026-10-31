@@ -339,7 +339,7 @@ def import_bibtex(
 
                 # Add to collection. Staged (low-confidence) rows are included:
                 # collection_items holds the membership as a deferred link and
-                # get_collection_papers hides it until the row is confirmed into
+                # the collection view hides it until the row is confirmed into
                 # the Library, so the collection target survives staging.
                 if collection_id and outcome != "component":
                     _add_to_collection(
@@ -798,15 +798,6 @@ def _rdf_child_text(node: ET.Element, local_name: str) -> str:
         if _strip_ns(child.tag).lower() == local_name.lower():
             return (child.text or "").strip()
     return ""
-
-
-def _rdf_child_texts(node: ET.Element, local_names: set[str]) -> list[str]:
-    names = {n.lower() for n in local_names}
-    values: list[str] = []
-    for child in list(node):
-        if _strip_ns(child.tag).lower() in names and (child.text or "").strip():
-            values.append((child.text or "").strip())
-    return values
 
 
 def _rdf_descendant_texts(node: ET.Element, local_names: set[str]) -> list[str]:
@@ -2114,10 +2105,9 @@ def _add_to_collection(
     """Add a publication to a collection (ignore if already present).
 
     Routes through the single collection_items writer in the application layer.
-    Unlike ``library_app.add_to_collection`` this does NOT require the paper to
-    be a saved Library row — the importer adds staged (``tracked``) papers here
-    for deferred membership, and ``get_collection_papers`` hides them until they
-    are confirmed into the Library.
+    The paper need not be a saved Library row: the importer adds staged
+    (``tracked``) papers here for deferred membership, and the collection view
+    hides them until they are confirmed into the Library.
     """
     from alma.application import library as library_app
 

@@ -24,8 +24,7 @@ FAMILY_TASTE = "taste"
 
 #: Retrieval family -> the lens channel weight that scales it in the fusion
 #: (and that the lens weights panel shows). One owner: the fusion reads it to
-#: weight families, the channel yield reads it to say which slider a finding is
-#: about.
+#: weight families.
 CHANNEL_BY_FAMILY: dict[str, str] = {
     FAMILY_LEXICAL: "lexical",
     FAMILY_SEMANTIC: "vector",

@@ -1781,7 +1781,3 @@ def get_current_user(authenticated: bool = Depends(verify_api_key)) -> dict:
 # Optional Dependencies for Testing
 # ============================================================================
 
-
-def get_test_mode() -> bool:
-    """Check if running in test mode."""
-    return os.getenv("TEST_MODE", "false").lower() == "true"

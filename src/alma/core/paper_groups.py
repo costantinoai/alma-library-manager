@@ -525,7 +525,7 @@ def _discard_group_derived_views(conn: sqlite3.Connection) -> int:
             int(
                 conn.execute(
                     "DELETE FROM materialized_views WHERE view_key IN "
-                    "('scoring:calibration', 'scoring:outcome_eval', 'discovery:channel_yield')"
+                    "('scoring:calibration', 'scoring:outcome_eval')"
                 ).rowcount
                 or 0
             ),

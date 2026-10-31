@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
@@ -24,17 +24,14 @@ from alma.api.models import (
     DiscoverySettingsUpdate,
     DiscoverySourcePolicy,
     DiscoverySources,
-    DiscoveryStrategies,
     DiscoveryWeights,
     PaperResponse,
     RecommendationExplainResponse,
-    RecommendationResponse,
     SimilarityRequest,
     SimilarityResponse,
     SimilarityResultItem,
 )
 from alma.application import discovery as discovery_app
-from alma.application.discovery.channel_yield import adaptive_channels_enabled, load_channel_yield
 from alma.application.discovery.outcome_eval import (
     load_outcome_summary,
     request_outcome_eval_refresh,
@@ -78,27 +75,10 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
         # `read_settings` merges the defaults table, so every weight key is
         # present: read them off the one owner instead of a second fallback map.
         weights=DiscoveryWeights(**{name: float(kv[f"weights.{name}"]) for name in DEFAULT_SIGNAL_WEIGHTS}),
-        strategies=DiscoveryStrategies(
-            related_works=kv.get("strategies.related_works", "true").lower() == "true",
-            topic_search=kv.get("strategies.topic_search", "true").lower() == "true",
-            followed_authors=kv.get("strategies.followed_authors", "true").lower() == "true",
-            coauthor_network=kv.get("strategies.coauthor_network", "true").lower() == "true",
-            citation_chain=kv.get("strategies.citation_chain", "true").lower() == "true",
-            semantic_scholar=kv.get("strategies.semantic_scholar", "true").lower() == "true",
-            branch_explorer=kv.get("strategies.branch_explorer", "true").lower() == "true",
-            taste_topics=kv.get("strategies.taste_topics", "true").lower() == "true",
-            taste_authors=kv.get("strategies.taste_authors", "true").lower() == "true",
-            taste_venues=kv.get("strategies.taste_venues", "true").lower() == "true",
-            recent_wins=kv.get("strategies.recent_wins", "true").lower() == "true",
-            adaptive_channels=kv.get("strategies.adaptive_channels", "true").lower() == "true",
-        ),
         limits=DiscoveryLimits(
-            max_results=int(kv.get("limits.max_results", "50")),
             min_score=float(kv.get("limits.min_score", "0")),
             max_candidates_per_strategy=int(kv.get("limits.max_candidates_per_strategy", "20")),
             recency_window_years=int(kv.get("limits.recency_window_years", "10")),
-            feedback_decay_days_full=int(kv.get("limits.feedback_decay_days_full", "90")),
-            feedback_decay_days_half=int(kv.get("limits.feedback_decay_days_half", "180")),
         ),
         schedule=DiscoverySchedule(
             refresh_enabled=kv.get("schedule.refresh_enabled", "false").lower() == "true",
@@ -172,14 +152,6 @@ class ManualAddRequest(BaseModel):
     link: str | None = None
     title: str | None = None
     query: str | None = None
-
-
-class RecommendationLibraryActionRequest(BaseModel):
-    rating: int | None = Field(default=None, ge=0, le=5)
-    collection_ids: list[str] | None = Field(
-        default=None,
-        description="On save: also file the paper into these local collections (create-then-add is done client-side; ids only here).",
-    )
 
 
 def _parse_breakdown(raw: str | None) -> dict | None:
@@ -259,25 +231,6 @@ def get_outcome_evaluation(
         raise_internal("Failed to read the ranker outcome evaluation", e)
 
 
-@router.get(
-    "/channel-yield",
-    summary="Which retrieval channels surface papers you keep (stored result)",
-)
-def get_channel_yield(
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Pure read: per channel surfaced / kept / shrunk rate / weight multiplier,
-    and whether the adaptation is switched on. ``channels`` is null until a
-    lens refresh has built it."""
-    try:
-        return {
-            "enabled": adaptive_channels_enabled(discovery_app.read_settings(db)),
-            **(load_channel_yield(db) or {"channels": None}),
-        }
-    except Exception as e:
-        raise_internal("Failed to read the channel yield", e)
-
-
 @router.post(
     "/outcome-evaluation/refresh",
     status_code=202,
@@ -313,28 +266,11 @@ def update_discovery_settings(
             w = body.weights
             for name in DEFAULT_SIGNAL_WEIGHTS:
                 _upsert_setting(db, f"weights.{name}", str(getattr(w, name)))
-        if body.strategies is not None:
-            s = body.strategies
-            _upsert_setting(db, "strategies.related_works", str(s.related_works).lower())
-            _upsert_setting(db, "strategies.topic_search", str(s.topic_search).lower())
-            _upsert_setting(db, "strategies.followed_authors", str(s.followed_authors).lower())
-            _upsert_setting(db, "strategies.coauthor_network", str(s.coauthor_network).lower())
-            _upsert_setting(db, "strategies.citation_chain", str(s.citation_chain).lower())
-            _upsert_setting(db, "strategies.semantic_scholar", str(s.semantic_scholar).lower())
-            _upsert_setting(db, "strategies.branch_explorer", str(s.branch_explorer).lower())
-            _upsert_setting(db, "strategies.taste_topics", str(s.taste_topics).lower())
-            _upsert_setting(db, "strategies.taste_authors", str(s.taste_authors).lower())
-            _upsert_setting(db, "strategies.taste_venues", str(s.taste_venues).lower())
-            _upsert_setting(db, "strategies.recent_wins", str(s.recent_wins).lower())
-            _upsert_setting(db, "strategies.adaptive_channels", str(s.adaptive_channels).lower())
         if body.limits is not None:
             lim = body.limits
-            _upsert_setting(db, "limits.max_results", str(lim.max_results))
             _upsert_setting(db, "limits.min_score", str(lim.min_score))
             _upsert_setting(db, "limits.max_candidates_per_strategy", str(lim.max_candidates_per_strategy))
             _upsert_setting(db, "limits.recency_window_years", str(lim.recency_window_years))
-            _upsert_setting(db, "limits.feedback_decay_days_full", str(lim.feedback_decay_days_full))
-            _upsert_setting(db, "limits.feedback_decay_days_half", str(lim.feedback_decay_days_half))
         if body.schedule is not None:
             _upsert_setting(db, "schedule.refresh_enabled", str(body.schedule.refresh_enabled).lower())
             _upsert_setting(db, "schedule.refresh_interval_hours", str(body.schedule.refresh_interval_hours))
@@ -888,67 +824,6 @@ def record_discovery_impressions(
 
 
 @router.get(
-    "/recommendations",
-    response_model=list[RecommendationResponse],
-    summary="List recommendations",
-)
-def list_recommendations(
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    search: str | None = Query(None, description="Filter by title/authors/source key"),
-    semantic: bool = Query(False, description="Reserved semantic filter toggle"),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Return recommendations that have not been dismissed, with pagination."""
-    try:
-        rows = discovery_app.list_recommendations(
-            db,
-            limit=limit,
-            offset=offset,
-            search=search,
-            semantic=semantic,
-        )
-        return [RecommendationResponse(**r) for r in rows]
-    except Exception as e:
-        raise_internal("Failed to list recommendations", e)
-
-
-@router.post(
-    "/recommendations/{rec_id}/seen",
-    summary="Mark recommendation as seen",
-)
-def mark_seen(
-    rec_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Mark a recommendation as seen."""
-    runner = OperationRunner(db)
-
-    def _handler(_ctx):
-        # The adapter is a shared helper now (also reached nested from the
-        # canonical paper-action route), so the caller owns the write unit.
-        out = run_write_unit(
-            db,
-            lambda: discovery_app.mark_recommendation_action(db, rec_id, "seen"),
-            label="discovery_rec_seen",
-        )
-        if out is None:
-            return OperationOutcome(status="noop", message="Recommendation not found", result={"id": rec_id})
-        return OperationOutcome(status="completed", message="Recommendation marked seen", result=out)
-
-    op = runner.run(
-        operation_key=f"discovery.recommendation.seen:{rec_id}",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
-    )
-    if op["status"] == "noop":
-        raise HTTPException(status_code=404, detail="Recommendation not found")
-    return op.get("result") or {"id": rec_id, "seen": True}
-
-
-@router.get(
     "/recommendations/{rec_id}/explain",
     response_model=RecommendationExplainResponse,
     summary="Explain a recommendation's score",
@@ -992,39 +867,6 @@ def explain_recommendation(
         source_key=str(row_data.get("source_key") or row_data.get("lens_id") or ""),
         breakdown=breakdown_response,
         explanation=None,
-    )
-
-
-@router.delete(
-    "/recommendations",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Clear all recommendations",
-)
-def clear_recommendations(
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Delete all recommendations."""
-    runner = OperationRunner(db)
-
-    def _handler(_ctx):
-        # Gated, atomic clear of the recommendation surface.
-        deleted = run_write_unit(
-            db,
-            lambda: discovery_app.clear_recommendations(db),
-            label="discovery_clear_recommendations",
-        )
-        return OperationOutcome(
-            status="completed" if deleted > 0 else "noop",
-            message=f"Cleared {deleted} recommendations" if deleted > 0 else "No recommendations to clear",
-            result={"deleted": deleted},
-        )
-
-    runner.run(
-        operation_key="discovery.recommendations.clear",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
     )
 
 
@@ -1091,16 +933,3 @@ def rebuild_frontier(
         message="Frontier rebuild queued",
     )
 
-
-@router.get(
-    "/stats",
-    summary="Get discovery stats",
-)
-def discovery_stats(
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Return aggregate discovery statistics: total, seen, liked, dismissed."""
-    try:
-        return discovery_app.recommendation_stats(db)
-    except Exception as e:
-        raise_internal("Failed to load discovery stats", e)

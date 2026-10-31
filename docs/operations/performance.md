@@ -127,8 +127,7 @@ Source: `frontend/src/pages/DiscoveryPage.tsx`,
 Insights and graph aggregates are stored in the `materialized_views`
 table (see `src/alma/application/materialized_views.py`). Insights
 views use fingerprint-keyed stale-while-revalidate reads. Stored-only
-surfaces (Health, the semantic regions, the ranker outcome evaluation, the
-channel yield) read the completed row and never compute on a GET; their
+surfaces (Health, the semantic regions, the ranker outcome evaluation) read the completed row and never compute on a GET; their
 refresh is requested by a mutation or a periodic tick and runs as one
 deduplicated background job. `useOperationToasts` invalidates the matching
 React Query roots when the Activity job completes.

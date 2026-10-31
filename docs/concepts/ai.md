@@ -154,7 +154,6 @@ The current setup makes that impossible:
 ## API
 
 ```
-GET  /api/v1/ai/dependencies         # what's installed
 POST /api/v1/ai/configure            # set default providers
 POST /api/v1/ai/compute-embeddings   # local SPECTER2 over missing
 POST /api/v1/ai/backfill-s2-vectors  # fetch from S2 in bulk

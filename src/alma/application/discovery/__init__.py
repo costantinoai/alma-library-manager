@@ -33,7 +33,6 @@ from alma.discovery.scoring import (
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
-from . import channel_yield as _channel_yield  # registers diagnostic view
 from .branch_attribution import attribute_candidate, branch_coverage
 from .branch_identity import branch_structure_report, persist_branch_identities
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
@@ -80,25 +79,18 @@ from .lens_crud import (
     _safe_div,
     _table_exists,
     apply_branch_control_action,
-    clear_recommendations,
     count_new_discovery_recommendations,
     create_lens,
     default_channel_weights,
     delete_lens,
     get_lens,
-    get_lens_last_seen,
-    get_recommendation,
     home_discovery_snapshot,
     latest_discovery_refresh_window,
     list_lens_recommendations,
-    list_lens_signals,
     list_lenses,
-    list_recommendations,
     mark_lens_seen,
     mark_recommendation_action,
     read_settings,
-    recommendation_stats,
-    record_lens_signal,
     reorder_lenses,
     reset_settings_to_defaults,
     update_lens,
@@ -106,12 +98,11 @@ from .lens_crud import (
 )
 from .observations import (
     insert_ranking_candidates,
-    load_ltr_observations,
     ranking_candidate_rows,
     record_impressions,
 )
 from .outcome_eval import request_outcome_eval_refresh_after_job  # registers scoring:outcome_eval
-from .ranker import RANKER_VERSION, apply_repaired_prior, fit_shadow_ranker
+from .ranker import RANKER_VERSION, apply_repaired_prior
 
 # --- D-9: re-exported from .retrieval (moved out of this god-module) ---
 from .retrieval import (
@@ -152,7 +143,6 @@ from .seed_profile import (
     _seed_strength,
     _seed_token_set,
     _tokenize_for_keywords,
-    _top_negative_terms,
     _top_preferred_authors,
     _top_profile_terms,
     load_library_preference_inputs,
@@ -384,11 +374,6 @@ def _refresh_lens_recommendations(
     base_channel_weights = _normalize_channel_weights(weights)
 
     scoring_settings = load_scoring_settings(db)
-    # Channel-yield diagnostics pool outcomes across all lenses. Applying that
-    # global learner here would let one branch's behavior tilt another (D26).
-    # Until branch-linked exposed verdicts support local channel estimates,
-    # use the declared channel weights unchanged.
-    yield_multipliers: dict[str, float] = {}
     channel_weights = base_channel_weights
     # Every lens computes its taste (preference profile + the scoring
     # positive/negative documents) from its OWN context papers — exactly the way
@@ -1198,16 +1183,10 @@ def _refresh_lens_recommendations(
         ),
     )
     feature_timestamp = utcnow().isoformat()
-    shadow_model, shadow_training_size = fit_shadow_ranker(
-        load_ltr_observations(db),
-        scoring_settings=scoring_settings,
-    )
     apply_repaired_prior(
         merged,
         timestamp=feature_timestamp,
         scoring_settings=scoring_settings,
-        shadow_model=shadow_model,
-        shadow_training_size=shadow_training_size,
         calibration=calibration,
     )
     # MMR consumes the same verified, same-model vectors as semantic scoring.
@@ -1353,7 +1332,6 @@ def _refresh_lens_recommendations(
         "external_lanes": external_lane_counts,
         "weights": channel_weights,
         "base_weights": base_channel_weights,
-        "channel_yield_multipliers": yield_multipliers,
         "taste_profile": external_summary.get("taste_profile") or {},
         "negative_profile": external_summary.get("negative_profile") or {},
         "budgets": external_summary.get("budgets") or {},

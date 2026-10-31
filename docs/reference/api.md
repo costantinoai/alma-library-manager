@@ -168,7 +168,6 @@ the PDF's state is the `pdf` block of `GET /papers/{id}/details`
 |---|---|---|
 | `GET` | `/library-mgmt/info` | DB size, paper count, backup list |
 | `POST` `DELETE` | `/library-mgmt/backup[/…]` | Create / delete a backup (list is in `/library-mgmt/info`) |
-| `POST` | `/library-mgmt/restore/{name}` | Always `409`: restoring needs ALMa stopped. See [Backups](../operations/backups.md#restore) |
 | `POST` | `/library-mgmt/deduplicate` | Run preprint↔journal dedup |
 | `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
 | `POST` | `/library-mgmt/reset` | Wipe DB (dangerous; confirms) |
@@ -181,7 +180,6 @@ timer; these exist so the loop is observable and forceable. See
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/inbox/status` | Is a channel configured, what is waiting, what failed (pure read) |
 | `POST` | `/inbox/sweep` | Poll the capture channels now. Idempotent — messages are keyed `(channel, external_id)`, so pressing twice cannot duplicate a paper. 400 when no channel is configured. |
 
 Triage uses the canonical paper-action route: `POST /papers/{id}/action` with
@@ -205,21 +203,16 @@ rest.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/discovery/recommendations` | List recommendations |
-| `DELETE` | `/discovery/recommendations` | Clear all |
 | `POST` | `/discovery/refresh` | Refresh recs (Activity) |
 | `GET` | `/discovery/status` | Refresh status |
-| `GET` | `/discovery/stats` | Engagement counters |
 | `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config; `GET` also serves `effective_weights` (what the ranker uses after rescaling + mode) and `reference_score` (the all-average paper's score) |
 | `GET` | `/discovery/outcome-evaluation` | Stored answer to "does the ranker's order predict what you kept?": `state` (`not_built` / `not_ready` / `ready`), AUC + 95% interval + verdict for kept-vs-rejected and kept-vs-random-corpus, `current` (false when weights / Library / calibration moved since), and `rebuilding`. Pure read; never computes |
 | `POST` | `/discovery/outcome-evaluation/refresh[?force=true]` | 202 + `job_id`; queues the background evaluation when its inputs moved (always with `force`). Also requested by a weights save / reset and by the periodic scoring tick |
-| `GET` | `/discovery/channel-yield` | Stored per-channel yield: `enabled`, and per channel `surfaced`, `kept`, `rate`, `shrunk_rate`, `multiplier` (what the lens weight is scaled by at refresh). `channels` is null until a lens refresh has built it. Pure read |
 | `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
 | `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
 | `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |
 | `POST` | `/discovery/recommendations/{id}/dislike` | Rate 1 + negative signal; stays visible |
 | `POST` | `/discovery/recommendations/{id}/dismiss` | Hide this lens suggestion; no preference signal |
-| `POST` | `/discovery/recommendations/{id}/seen` | Mark seen |
 | `GET` | `/discovery/recommendations/{id}/explain` | Score breakdown |
 | `POST` | `/discovery/similar` | "Find papers like these" |
 | `POST` | `/discovery/manual-search` | Cross-source paper search |
@@ -230,36 +223,28 @@ rest.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` `POST` | `/lenses` | List / create |
-| `GET` `PUT` `DELETE` | `/lenses/{id}` | Get / update / delete |
+| `PUT` `DELETE` | `/lenses/{id}` | Update / delete |
 | `POST` | `/lenses/{id}/refresh` | Refresh this lens |
 | `GET` | `/lenses/{id}/recommendations` | Cached recs for this lens |
 | `GET` | `/lenses/{id}/branches` | Branch map preview |
-| `GET` | `/lenses/{id}/signals` | Lens-scoped signal counters |
 
 ### Authors
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` `POST` | `/authors[/…]` | List / add |
-| `GET` `DELETE` | `/authors/{id}` | Detail / remove |
+| `DELETE` | `/authors/{id}` | Remove |
 | `GET` | `/authors/{id}/detail` | Light-weight popup data |
-| `GET` | `/authors/{id}/dossier` | Full dossier (works, topics, co-authors) |
 | `GET` | `/authors/{id}/publications` | Author's papers in our corpus |
 | `GET` | `/authors/{id}/openalex-works` | Page through OpenAlex bibliography |
-| `POST` | `/authors/{id}/refresh-cache` | Incremental refresh |
 | `POST` | `/authors/{id}/deep-refresh` | Full re-fetch |
 | `POST` | `/authors/deep-refresh-all` | Bulk deep refresh; `scope=needs_metadata` targets identity/profile gaps for Settings maintenance |
-| `GET` | `/authors/enrichment-status` | Pure-read author hydration ledger summary (OpenAlex / ORCID / Semantic Scholar / Crossref) + per-author rows |
-| `POST` | `/authors/rehydrate-metadata` | Queue author profile/affiliation/alias hydration through the Activity envelope. Omit `limit` to process all eligible authors; explicit `limit` accepts up to 100,000 authors for bounded probes. |
 | `GET` | `/authors/{id}/affiliations` | Read affiliation evidence and the current display-affiliation decision |
 | `POST` | `/authors/{id}/history-backfill` | Historical corpus backfill |
-| `POST` | `/authors/{id}/empty-cache` | Clear cached works |
 | `POST` | `/authors/{id}/repair` | Repair identifiers |
 | `GET` | `/authors/{id}/id-candidates` | Identifier candidates |
 | `POST` | `/authors/resolve-identifiers` | Resolve OpenAlex / Scholar IDs |
 | `POST` | `/authors/{id}/confirm-identifiers` | Manually confirm IDs |
-| `POST` | `/authors/{id}/confirm-openalex` | Confirm OpenAlex on Scholar author |
-| `POST` | `/authors/resolve-openalex` | Resolve from Scholar ID |
 | `POST` | `/authors/{id}/search-scholar` | Manual Google Scholar search |
 | `POST` | `/authors/follow-from-paper` | Follow author seen on a paper card |
 | `GET` | `/authors/needs-attention` | Authors needing manual triage |
@@ -268,12 +253,8 @@ rest.
 | `POST` | `/authors/conflicts/{id}/resolve` | Resolve a hard-identifier conflict recorded during merge |
 | `GET` | `/authors/lookup` | Look up by display name |
 | `GET` | `/authors/suggestions` | Multi-source author suggestions |
-| `POST` | `/authors/suggestions/refresh-network` | Refresh OA / S2 caches |
 | `POST` | `/authors/suggestions/reject` | Reject a suggestion (optional `suggestion_bucket` for bucket-quality calibration) |
 | `POST` | `/authors/suggestions/track-follow` | Log a rail-originated follow with `suggestion_bucket` for bucket-quality calibration |
-| `POST` | `/authors/{id}/fetch-preview` | Fetch preview (Activity) |
-| `POST` | `/authors/{id}/preview/save` | Save previewed publications |
-| `PATCH` | `/authors/{id}/type` | Set author_type |
 
 ### Feedback learning
 
@@ -289,7 +270,6 @@ rest.
 | `GET` | `/insights` | Overview (charts + summary). Served from a fingerprint-keyed cache; response carries `stale` / `rebuilding` / `computed_at` flags. |
 | `GET` | `/insights/diagnostics` | Composed payload — assembles all eight diagnostic sections from cache. Backwards-compatible with pre-split clients. |
 | `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
-| `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
 | `GET` | `/reports/topic-drift` | Topic drift report |
@@ -300,7 +280,7 @@ rest.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` `POST` | `/alerts` | List / create |
-| `GET` `PUT` `DELETE` | `/alerts/{id}` | Get / update / delete |
+| `PUT` `DELETE` | `/alerts/{id}` | Update / delete |
 | `POST` | `/alerts/{id}/evaluate` | Evaluate + send |
 | `POST` | `/alerts/{id}/dry-run` | Evaluate without sending |
 | `GET` `POST` `PUT` `DELETE` | `/alerts/rules[/…]` | Rule CRUD |
@@ -324,7 +304,6 @@ Delivery dedup (`alerted_publications`) is keyed per
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/ai/status` | Selected providers + runtime state |
-| `GET` | `/ai/dependencies` | Installed package matrix |
 | `POST` | `/ai/configure` | Choose providers / models |
 | `POST` | `/ai/recheck-environment` | Re-introspect runtime |
 | `POST` | `/ai/backfill-s2-vectors` | Bulk fetch SPECTER2 from S2 |
@@ -397,8 +376,6 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
-| `GET` | `/papers/enrichment-status` | Pure-read corpus metadata rehydration ledger summary (per-source counts: OpenAlex / Semantic Scholar / Crossref) + per-paper rows |
-| `POST` | `/papers/rehydrate-metadata` | Queue a 3-phase metadata repair job (Activity envelope): Phase 1 OpenAlex batched, Phase 1.5 Semantic Scholar batched (fills `tldr` + `influential_citation_count` + abstract fallback), Phase 2 Crossref per-paper for residual abstract misses. Omit `limit` to process all eligible papers; explicit `limit` accepts up to 100,000 papers per call for bounded probes. |
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |

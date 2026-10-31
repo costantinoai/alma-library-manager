@@ -49,17 +49,6 @@ SOURCE_BUCKET_WEIGHTS: dict[str, float] = {
 }
 SOURCE_BUCKETS = tuple(SOURCE_BUCKET_WEIGHTS.keys())
 
-# Simple gamification tuning for the feedback streak counters.
-_CHALLENGE_CONFIG: dict[str, dict[str, Any]] = {
-    "interactions": {"goal": 12, "xp_reward": 20, "label": "12 interactions"},
-    "tier": {"goal": 8, "xp_reward": 22, "label": "sort 8 cards into tiers"},
-    "swipes": {"goal": 10, "xp_reward": 20, "label": "10 swipes"},
-    "topic_tunes": {"goal": 4, "xp_reward": 16, "label": "4 topic tunes"},
-    "superlikes": {"goal": 2, "xp_reward": 12, "label": "2 superlikes"},
-}
-
-_SWIPE_XP: dict[str, int] = {"pass": 3, "like": 8, "superlike": 12}
-
 
 # ---------------------------------------------------------------------------
 # Feedback recording
@@ -179,12 +168,9 @@ def record_feedback(
             _update_preference_profile(conn, entity_type, paper_target_id, delta)
             _propagate_to_topics_and_authors(conn, paper_target_id, delta)
 
-    if entity_type == "publication" and paper_target_id:
-        _record_publication_lens_signal(conn, rec_target, event_type, value or {}, delta)
-
     # Caller owns the transaction: this is the single feedback-recording
     # engine, always invoked inside a `run_write_unit` (foreground routes) so
-    # the event + recommendation/profile/propagation/lens writes commit
+    # the event + recommendation/profile/propagation writes commit
     # atomically together. No commit here (SQLite write discipline).
     return event_id
 
@@ -375,55 +361,6 @@ def _apply_recommendation_feedback(
             "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
             (action, utcnow().isoformat(), recommendation_id),
         )
-
-
-def _record_publication_lens_signal(
-    conn: sqlite3.Connection,
-    recommendation_row: sqlite3.Row | None,
-    event_type: str,
-    value: dict[str, Any],
-    delta: float,
-) -> None:
-    """Write per-lens publication feedback to lens_signals."""
-    if recommendation_row is None:
-        return
-
-    lens_id = str(recommendation_row["lens_id"] or "").strip()
-    paper_id = str(recommendation_row["paper_id"] or "").strip()
-    if not lens_id or not paper_id:
-        return
-
-    signal_value = 0
-    if event_type == "swipe":
-        choice = str(value.get("choice") or "").strip().lower()
-        if choice in {"like", "superlike"}:
-            signal_value = 1
-        elif choice == "pass":
-            signal_value = -1
-    elif event_type == "tier_sort":
-        tier = str(value.get("tier") or "").strip().upper()
-        if tier in {"S", "A"}:
-            signal_value = 1
-        elif tier == "C":
-            signal_value = -1
-    elif delta > 0:
-        signal_value = 1
-    elif delta < 0:
-        signal_value = -1
-
-    conn.execute(
-        """
-        INSERT INTO lens_signals (lens_id, paper_id, signal_value, source)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(lens_id, paper_id, source) DO UPDATE SET
-            signal_value = excluded.signal_value,
-            created_at = datetime('now')
-        """,
-        # NOTE: the literal source label is a stored value in `lens_signals`
-        # (part of its ON CONFLICT key), so it outlives the feature it was
-        # named after. Renaming it needs a data migration, not an edit here.
-        (lens_id, paper_id, int(signal_value), "signal_lab"),
-    )
 
 
 def _reaction_multiplier(reaction_ms_raw: Any) -> float:
@@ -618,7 +555,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
 
     Returns:
         Dict with total_interactions, event_breakdown, topic_coverage,
-        streak_days, top_topics, top_authors.
+        top_topics, top_authors, behavioral_metrics.
     """
     stats: dict[str, Any] = {
         "total_interactions": 0,
@@ -626,27 +563,10 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
         "week_interactions": 0,
         "event_breakdown": {},
         "topic_coverage": 0,
-        "streak_days": 0,
         "top_topics": [],
         "top_authors": [],
-        "xp": 0,
-        "level": 1,
-        "current_level_xp": 0,
-        "next_level_xp": _xp_for_level(2),
-        "xp_to_next_level": _xp_for_level(2),
-        "level_progress_pct": 0.0,
         "background_corpus_papers": 0,
         "background_corpus_authors": 0,
-        "daily_challenges": {
-            key: {
-                "label": cfg["label"],
-                "goal": cfg["goal"],
-                "progress": 0,
-                "completed": False,
-                "xp_reward": cfg["xp_reward"],
-            }
-            for key, cfg in _CHALLENGE_CONFIG.items()
-        },
         "behavioral_metrics": {
             "avg_reaction_ms": None,
             "median_reaction_ms": None,
@@ -659,10 +579,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
 
     try:
         # SQL-backed aggregates: do the counting / breakdowns in SQLite rather
-        # than loading every feedback event into Python on each call. The only
-        # full-table Python pass that remains is the XP calculation below,
-        # because `_event_xp` depends on per-event confidence + reaction
-        # multipliers that don't express cleanly in SQL.
+        # than loading every feedback event into Python on each call.
         stats["total_interactions"] = int(
             conn.execute("SELECT COUNT(*) AS c FROM feedback_events").fetchone()["c"] or 0
         )
@@ -750,9 +667,6 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
             for r in top_authors
         ]
 
-        streak_days = _compute_streak(conn)
-        stats["streak_days"] = streak_days
-
         try:
             bg_row = conn.execute(
                 f"""
@@ -772,71 +686,6 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
                 stats["background_corpus_authors"] = int(bg_row["authors"] or 0)
         except sqlite3.OperationalError:
             pass
-
-        # XP is a full-table Python pass — `_event_xp` depends on bounded
-        # confidence + reaction multipliers that don't express cleanly in SQL.
-        # Acceptable at current scale (~330 events → <1 ms).
-        all_events = _iter_feedback_events(conn)
-        base_xp = sum(_event_xp(ev) for ev in all_events)
-        streak_bonus = min(40, streak_days * 4)
-        total_xp = base_xp + streak_bonus
-        level, level_floor_xp, next_level_xp = _level_from_xp(total_xp)
-        stats["xp"] = total_xp
-        stats["level"] = level
-        stats["current_level_xp"] = level_floor_xp
-        stats["next_level_xp"] = next_level_xp
-        stats["xp_to_next_level"] = max(0, next_level_xp - total_xp)
-        span = max(1, next_level_xp - level_floor_xp)
-        stats["level_progress_pct"] = round(
-            max(0.0, min(100.0, ((total_xp - level_floor_xp) * 100.0) / span)), 1
-        )
-
-        # Daily challenge counts — small (today-only) SQL aggregate.
-        challenge_rows = conn.execute(
-            """
-            SELECT
-                event_type,
-                COUNT(*) AS total,
-                SUM(CASE WHEN json_extract(value, '$.choice') = 'superlike' THEN 1 ELSE 0 END) AS superlikes
-            FROM feedback_events
-            WHERE date(created_at) = date('now')
-            GROUP BY event_type
-            """
-        ).fetchall()
-        today_total = 0
-        tier_today = 0
-        swipes_today = 0
-        topic_tunes_today = 0
-        superlikes_today = 0
-        for r in challenge_rows:
-            ev_type = str(r["event_type"] or "")
-            n = int(r["total"] or 0)
-            today_total += n
-            if ev_type == "tier_sort":
-                tier_today += n
-            elif ev_type == "swipe":
-                swipes_today += n
-                superlikes_today += int(r["superlikes"] or 0)
-            elif ev_type == "topic_pref":
-                topic_tunes_today += n
-        challenge_counts = {
-            "interactions": today_total,
-            "tier": tier_today,
-            "swipes": swipes_today,
-            "topic_tunes": topic_tunes_today,
-            "superlikes": superlikes_today,
-        }
-        completed_challenges = 0
-        for key, cfg in _CHALLENGE_CONFIG.items():
-            progress = int(challenge_counts.get(key, 0))
-            goal = int(cfg["goal"])
-            completed = progress >= goal
-            if completed:
-                completed_challenges += 1
-            stats["daily_challenges"][key]["progress"] = min(progress, goal)
-            stats["daily_challenges"][key]["completed"] = completed
-        stats["daily_challenges"]["completed_count"] = completed_challenges
-        stats["daily_challenges"]["total_count"] = len(_CHALLENGE_CONFIG)
 
         avg_reaction = (sum(reaction_samples) / len(reaction_samples)) if reaction_samples else None
         median_reaction = _median(reaction_samples)
@@ -1010,34 +859,6 @@ def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict
     return summary
 
 
-def _compute_streak(conn: sqlite3.Connection) -> int:
-    """Compute the current consecutive-day streak of feedback."""
-    try:
-        rows = conn.execute(
-            "SELECT DISTINCT DATE(created_at) as day FROM feedback_events ORDER BY day DESC"
-        ).fetchall()
-    except Exception:
-        return 0
-
-    if not rows:
-        return 0
-
-    today = utcnow().date()
-    streak = 0
-    for r in rows:
-        try:
-            day = datetime.strptime(r["day"], "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            break
-        expected = today - timedelta(days=streak)
-        if day == expected:
-            streak += 1
-        else:
-            break
-
-    return streak
-
-
 def _parse_event_datetime(raw: Any) -> datetime | None:
     """Parse feedback event timestamp from SQLite string formats."""
     if raw is None:
@@ -1100,81 +921,6 @@ def _iter_feedback_events(conn: sqlite3.Connection) -> list[dict]:
     return events
 
 
-def _event_xp(event: dict) -> int:
-    """Return gamified XP for one feedback event.
-
-    Single source of truth for XP per event_type (S-AUDIT-9 contract,
-    2026-04-24). Active types each get an explicit branch; anything
-    else — including legacy types (``triage_pick`` / ``method_match``
-    / ``abstract_highlight``) and passive types (``external_link_click``
-    / ``abstract_engagement`` / ``search_query``) — earns 0 XP so
-    replays and passive signal don't inflate the level counter.
-    """
-    event_type = str(event.get("event_type") or "")
-    value = event.get("value") or {}
-    context = event.get("context") or {}
-
-    if event_type == "swipe":
-        base = _SWIPE_XP.get(str(value.get("choice") or ""), 0)
-    elif event_type == "tier_sort":
-        # Per-card XP scales with tier — S/A are higher-signal drops
-        # than B/C but every drop still emits useful ordinal data, so
-        # even the bottom tier earns baseline XP.
-        tier = str(value.get("tier") or "").strip().upper()
-        base = {"S": 14, "A": 10, "B": 6, "C": 8}.get(tier, 6)
-    elif event_type == "rating":
-        rating_val = value.get("rating")
-        try:
-            rating = float(rating_val)
-            base = max(4, min(12, int(round(4 + rating * 1.6))))
-        except (TypeError, ValueError):
-            base = 8
-    elif event_type == "topic_pref":
-        base = 5
-    elif event_type == "author_pref":
-        base = 6
-    elif event_type == "source_pref":
-        base = 6
-    elif event_type == "feed_action":
-        # Small reward — passive-ish; scales with the action type.
-        action = str(value.get("action") or "").strip().lower()
-        base = {"add": 3, "like": 5, "love": 7, "dislike": 3}.get(action, 3)
-    else:
-        # Legacy / passive / unknown — zero XP to keep the ladder honest.
-        return 0
-
-    confidence_mult = 1.0
-    try:
-        confidence = float(value.get("confidence")) if value.get("confidence") is not None else None
-        if confidence is not None:
-            confidence_mult = max(0.8, min(1.35, 0.75 + 0.2 * confidence))
-    except (TypeError, ValueError):
-        confidence_mult = 1.0
-
-    reaction_mult = _reaction_multiplier(context.get("reaction_ms"))
-    xp = int(round(base * confidence_mult * reaction_mult))
-    # Active-type floor of 1 prevents a borderline confidence/reaction
-    # combination from leaving an active event with 0 XP.
-    return max(1, xp)
-
-
-def _xp_for_level(level: int) -> int:
-    """Cumulative XP threshold required to reach ``level`` (1-indexed)."""
-    if level <= 1:
-        return 0
-    n = level - 1
-    return int((n * 120) + (n * n * 30))
-
-
-def _level_from_xp(total_xp: int) -> tuple[int, int, int]:
-    """Return (level, current_level_floor_xp, next_level_xp)."""
-    xp = max(0, int(total_xp))
-    level = 1
-    while xp >= _xp_for_level(level + 1):
-        level += 1
-    return level, _xp_for_level(level), _xp_for_level(level + 1)
-
-
 def _median(values: list[float]) -> float | None:
     if not values:
         return None
@@ -1188,92 +934,6 @@ def _median(values: list[float]) -> float | None:
 # ---------------------------------------------------------------------------
 # Topic preferences
 # ---------------------------------------------------------------------------
-
-def get_topic_preferences(conn: sqlite3.Connection) -> list[dict]:
-    """Get all topics with their preference state.
-
-    Returns topic prefs from preference_profiles enriched with
-    publication_topics data.
-    """
-    topics: dict[str, dict] = {}
-
-    # Seed from publication_topics (all known topics)
-    try:
-        rows = conn.execute(
-            """SELECT term, COUNT(*) as paper_count
-               FROM publication_topics
-               GROUP BY term
-               ORDER BY paper_count DESC
-               LIMIT 50"""
-        ).fetchall()
-        for r in rows:
-            term = (r["term"] or "").strip().lower()
-            if term:
-                topics[term] = {
-                    "topic": term,
-                    "paper_count": r["paper_count"],
-                    "pref": "neutral",
-                    "weight": 0.0,
-                }
-    except sqlite3.OperationalError:
-        pass
-
-    # Overlay preference_profiles
-    try:
-        pref_rows = conn.execute(
-            """SELECT entity_id, affinity_weight
-               FROM preference_profiles
-               WHERE entity_type = 'topic'"""
-        ).fetchall()
-        for pr in pref_rows:
-            eid = pr["entity_id"]
-            w = pr["affinity_weight"]
-            if eid in topics:
-                topics[eid]["weight"] = round(w, 3)
-                topics[eid]["pref"] = _weight_to_pref(w)
-            else:
-                topics[eid] = {
-                    "topic": eid,
-                    "paper_count": 0,
-                    "pref": _weight_to_pref(w),
-                    "weight": round(w, 3),
-                }
-    except sqlite3.OperationalError:
-        pass
-
-    return sorted(topics.values(), key=lambda t: -t["weight"])
-
-
-def _weight_to_pref(w: float) -> str:
-    """Map a numeric weight to a human pref label."""
-    if w <= -2.0:
-        return "mute"
-    if w < -0.3:
-        return "less"
-    if w > 0.3:
-        return "more"
-    return "neutral"
-
-
-def update_topic_preference(
-    conn: sqlite3.Connection,
-    topic: str,
-    pref: str,
-    context: dict[str, Any] | None = None,
-) -> None:
-    """Record a topic preference change (more/less/mute/neutral).
-
-    Also creates a feedback event for the audit trail.
-    """
-    record_feedback(
-        conn,
-        event_type="topic_pref",
-        entity_type="topic",
-        entity_id=topic.strip().lower(),
-        value={"pref": pref},
-        context=context,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Preference-based scoring signal for discovery engine

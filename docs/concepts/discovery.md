@@ -227,14 +227,6 @@ Each candidate's `score_breakdown` carries `explanation` — the closed
 decomposition of the score, family by family and atom by atom — which is what
 the card's **Why** panel renders.
 
-Outcomes feed back into **retrieval**, not into the score. Each lens
-channel (lexical / vector / graph / external) is scaled at refresh by its
-*yield* — of the papers it helped surface, the share you kept — shrunk toward
-the pooled rate by a strength derived from the data, and bounded to
-`[0.5, 1.5]`. Until your history shows the channels differing, every multiplier
-is 1.0. The lens's **Lens Weights** panel states the counts and the weight
-actually used. See `docs/reference/scoring.md` → "Channel yield".
-
 ### Refresh size and the staged page
 
 `POST /lenses/{id}/refresh?limit=50` is the user-visible target —

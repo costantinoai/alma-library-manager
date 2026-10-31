@@ -1880,6 +1880,53 @@ def _m_0050_legacy_branch_controls(conn: sqlite3.Connection) -> None:
             )
 
 
+def _m_0051_drop_noop_discovery_settings(conn: sqlite3.Connection) -> None:
+    """Delete stored discovery settings nothing reads any more.
+
+    The strategy toggles and the listed limits fed only the legacy generator or
+    no code at all; the ``graph.*`` and ``maintenance.*`` rows belong to the map
+    and the cluster-label task that left this line. The stored
+    ``discovery:channel_yield`` view goes with its module.
+    """
+    if _table_exists(conn, "discovery_settings"):
+        keys = (
+            "citation_fabric.coupling_bonus_max",
+            "citation_fabric.cocitation_bonus_max",
+            "strategies.related_works",
+            "strategies.topic_search",
+            "strategies.followed_authors",
+            "strategies.coauthor_network",
+            "strategies.citation_chain",
+            "strategies.semantic_scholar",
+            "strategies.s2_recommend",
+            "strategies.branch_explorer",
+            "strategies.taste_topics",
+            "strategies.taste_authors",
+            "strategies.taste_venues",
+            "strategies.recent_wins",
+            "strategies.adaptive_channels",
+            "limits.max_results",
+            "limits.feedback_decay_days_full",
+            "limits.feedback_decay_days_half",
+            "limits.taste_topic_queries",
+            "limits.taste_author_queries",
+            "limits.taste_venue_queries",
+            "limits.recent_win_queries",
+        )
+        placeholders = ",".join("?" for _ in keys)
+        conn.execute(f"DELETE FROM discovery_settings WHERE key IN ({placeholders})", keys)
+        conn.execute(
+            """
+            DELETE FROM discovery_settings
+            WHERE key LIKE 'graph.layout_sig:%'
+               OR key LIKE 'maintenance.graph_layouts.%'
+               OR key LIKE 'maintenance.cluster_labels.%'
+            """
+        )
+    if _table_exists(conn, "materialized_views"):
+        conn.execute("DELETE FROM materialized_views WHERE view_key = 'discovery:channel_yield'")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1931,6 +1978,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (48, "drop_lens_max_seeds", _m_0048_drop_lens_max_seeds),
     (49, "discovery_branch_structure", _m_0049_discovery_branch_structure),
     (50, "legacy_branch_controls", _m_0050_legacy_branch_controls),
+    (51, "drop_noop_discovery_settings", _m_0051_drop_noop_discovery_settings),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

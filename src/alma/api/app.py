@@ -20,7 +20,6 @@ from fastapi.staticfiles import StaticFiles
 
 from alma.api.compression import MediaAwareGZipMiddleware
 from alma.api.deps import get_plugin_registry, open_db_connection
-from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.origin_guard import (
     OriginGuardMiddleware,
@@ -52,7 +51,6 @@ from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
 from alma.api.routes.settings import router as settings_router
 from alma.api.routes.tags import router as tags_router
-from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import (
     record_scheduler_start_failure,
     scheduler_readiness,
@@ -267,12 +265,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Graph JSON is the application's largest repeated response. The inner cache
-# middleware hashes the uncompressed representation and handles conditional
-# GETs; gzip wraps it so ready payloads travel compactly. Building envelopes
-# are tiny and marked no-store. Served files (PDFs) and 206 range answers pass
-# through uncompressed — see `alma.api.compression`.
-app.add_middleware(GraphHttpCacheMiddleware)
+# gzip keeps large JSON payloads compact. Served files (PDFs) and 206 range
+# answers pass through uncompressed — see `alma.api.compression`.
 app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
@@ -661,7 +655,6 @@ app.include_router(logs_router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])
 app.include_router(ai_router, prefix="/api/v1/ai", tags=["ai"])
 app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
-app.include_router(topics_router, prefix="/api/v1/topics", tags=["topics"])
 app.include_router(feedback_router, prefix="/api/v1/feedback", tags=["feedback"])
 app.include_router(search_router, prefix="/api/v1", tags=["search"])
 app.include_router(backup_router, prefix="/api/v1", tags=["backup"])

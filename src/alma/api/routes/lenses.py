@@ -105,22 +105,6 @@ def reorder_lenses(
         raise_internal("Failed to reorder discovery lenses", exc)
 
 
-@router.get("/{lens_id}", response_model=LensResponse, summary="Get discovery lens")
-def get_lens(
-    lens_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-):
-    try:
-        lens = discovery_app.get_lens(db, lens_id)
-        if lens is None:
-            raise HTTPException(status_code=404, detail="Lens not found")
-        return lens
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_internal("Failed to load discovery lens", exc)
-
-
 @router.post(
     "/{lens_id}/seen",
     summary="Mark one Discovery lens as reviewed",
@@ -219,24 +203,6 @@ def delete_lens(
         raise
     except Exception as exc:
         raise_internal("Failed to delete discovery lens", exc)
-
-
-@router.get("/{lens_id}/signals", summary="List lens signals")
-def list_lens_signals(
-    lens_id: str,
-    limit: int = Query(default=100, ge=1, le=500),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    try:
-        lens = discovery_app.get_lens(db, lens_id)
-        if lens is None:
-            raise HTTPException(status_code=404, detail="Lens not found")
-        signals = discovery_app.list_lens_signals(db, lens_id, limit=limit)
-        return {"lens_id": lens_id, "signals": signals}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_internal("Failed to list lens signals", exc)
 
 
 @router.get("/{lens_id}/recommendations", response_model=list[RecommendationResponse], summary="List recommendations for a lens")

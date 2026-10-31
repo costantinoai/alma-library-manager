@@ -14,12 +14,11 @@ from .value_keys import candidate_value_keys
 # was the "no overlap" constant 0.5 because the resolver looked up the wrong
 # identity key and scored title word-tokens instead of the paper's topics.
 # MUST bump: a v4 row and a v5 row measure different things under the same
-# names, so replay, evaluation and the shadow ranker's training pool must not
+# names, so replay and evaluation must not
 # mix them. Nothing about the snapshot's SHAPE changed — its meaning did.
 # v6: the two signed Signal Lab head inputs and the `lab_generation` stamp are
 # gone — the feature left main with D25. A v5 row carries two reward keys a v6
-# row does not, so the two must not be mixed in replay, evaluation or the
-# shadow ranker's training pool.
+# row does not, so the two must not be mixed in replay or evaluation.
 # Bump only when a reward key or its meaning changes: observations.py reads the
 # current version alone, so a bump retires every earlier row from learning and
 # evaluation. The exposure-only `branch_attribution`, `branch_evidence` and

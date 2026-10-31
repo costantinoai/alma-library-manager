@@ -69,53 +69,6 @@ class AuthorResponse(BaseModel):
     background_corpus_coverage_ratio: float | None = None
 
 
-class RelatedWork(BaseModel):
-    """One row in a Prior/Derivative Works panel (T6).
-
-    Distinct from `PaperResponse` — we intentionally surface a
-    trimmed-down projection so the paper detail dialog renders
-    fast. `paper_id` is the local UUID when the referenced work is
-    already in our corpus; null when it only lives in S2. `source`
-    tags where the row came from so the UI can show a "from
-    Semantic Scholar" hint on network-origin rows.
-    """
-
-    paper_id: str | None = None
-    title: str
-    authors: str | None = None
-    year: int | None = None
-    doi: str | None = None
-    url: str | None = None
-    journal: str | None = None
-    abstract: str | None = None
-    tldr: str | None = None
-    cited_by_count: int = 0
-    influential_citation_count: int = 0
-    openalex_id: str | None = None
-    semantic_scholar_id: str | None = None
-    status: str | None = None
-    rating: int | None = None
-    # Whether this edge (reference or citation) was classified as
-    # influential by S2. Meaningful only on citation rows; always
-    # False on reference rows for now.
-    is_influential: bool = False
-    source: str = "local"  # "local" | "s2_remote"
-
-
-class RelatedWorksResponse(BaseModel):
-    """Response envelope for prior/derivative works.
-
-    `direction` = `"prior"` (papers this paper references) or
-    `"derivative"` (papers citing this paper).
-    """
-
-    direction: str
-    source_paper_id: str
-    works: list[RelatedWork] = Field(default_factory=list)
-    local_count: int = 0
-    remote_count: int = 0
-
-
 class AuthorSuggestionSignal(BaseModel):
     """One piece of evidence backing an author suggestion.
 
@@ -275,50 +228,8 @@ class PaperActionRequest(BaseModel):
     rating: int | None = Field(None, ge=0, le=5)
 
 
-class PaperRateRequest(BaseModel):
-    """Request model for rating a paper."""
-
-    paper_id: str = Field(..., description="Paper UUID")
-    rating: int = Field(..., ge=0, le=5)
-
-
-class PaperCreateRequest(BaseModel):
-    """Request model for manually adding a paper."""
-
-    title: str = Field(..., min_length=1)
-    authors: str | None = None
-    year: int | None = None
-    journal: str | None = None
-    abstract: str | None = None
-    url: str | None = None
-    doi: str | None = None
-    status: str = Field("library", description="Initial status: tracked | library")
-    added_from: str = Field("manual", description="Source: manual | import | feed | discovery")
-
-
 # Legacy compatibility aliases
 PublicationResponse = PaperResponse
-
-
-class PublicationSendItem(BaseModel):
-    """Item to send via a plugin from a preview."""
-
-    paper_id: str | None = Field(None, description="Paper UUID (preferred)")
-    # Legacy fields for backward compatibility
-    author_id: str | None = None
-    title: str = ""
-    authors: str = ""
-    year: int | None = None
-    abstract: str | None = None
-    url: str | None = None
-    citations: int | None = 0
-    journal: str | None = None
-
-
-class SavePublicationsRequest(BaseModel):
-    """Request to save previewed publications to the database."""
-
-    items: list[PublicationSendItem]
 
 
 # ============================================================================
@@ -456,7 +367,6 @@ class LensResponse(BaseModel):
     last_refreshed_at: str | None = None
     is_active: bool = True
     position: int = 0
-    signal_count: int = 0
     recommendation_count: int = 0
     last_suggestion_set_id: str | None = None
     last_ranker_version: str | None = None
@@ -541,18 +451,6 @@ class LensBranchPreviewResponse(BaseModel):
     structure: BranchStructureSummary | None = None
     retired_branches: list[RetiredBranchItem] = Field(default_factory=list)
     branches: list[BranchPreviewItem] = Field(default_factory=list)
-
-
-class SuggestionSetResponse(BaseModel):
-    """Response model for a suggestion set."""
-
-    id: str
-    lens_id: str
-    context_type: str
-    trigger_source: str
-    retrieval_summary: dict | None = None
-    ranker_version: str | None = None
-    created_at: str
 
 
 class DiscoveryImpressionItem(BaseModel):
@@ -650,32 +548,12 @@ class DiscoveryWeights(BaseModel):
     preference_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["preference_affinity"], ge=0.0, le=1.0)
 
 
-class DiscoveryStrategies(BaseModel):
-    """Toggle switches for each retrieval strategy."""
-
-    related_works: bool = True
-    topic_search: bool = True
-    followed_authors: bool = True
-    coauthor_network: bool = True
-    citation_chain: bool = True
-    semantic_scholar: bool = True
-    branch_explorer: bool = True
-    taste_topics: bool = True
-    taste_authors: bool = True
-    taste_venues: bool = True
-    recent_wins: bool = True
-    adaptive_channels: bool = True
-
-
 class DiscoveryLimits(BaseModel):
     """Numeric limits for the discovery engine."""
 
-    max_results: int = Field(50, ge=10, le=200)
     min_score: float = Field(0.0, ge=0.0, le=100.0)
     max_candidates_per_strategy: int = Field(20, ge=5, le=50)
     recency_window_years: int = Field(10, ge=1, le=20)
-    feedback_decay_days_full: int = Field(90, ge=1)
-    feedback_decay_days_half: int = Field(180, ge=1)
 
 
 class DiscoverySchedule(BaseModel):
@@ -750,7 +628,6 @@ class DiscoverySettingsResponse(BaseModel):
     """Full discovery settings response."""
 
     weights: DiscoveryWeights = Field(default_factory=DiscoveryWeights)
-    strategies: DiscoveryStrategies = Field(default_factory=DiscoveryStrategies)
     limits: DiscoveryLimits = Field(default_factory=DiscoveryLimits)
     schedule: DiscoverySchedule = Field(default_factory=DiscoverySchedule)
     cache: DiscoveryCache = Field(default_factory=DiscoveryCache)
@@ -774,7 +651,6 @@ class DiscoverySettingsUpdate(BaseModel):
     """Partial update for discovery settings."""
 
     weights: DiscoveryWeights | None = None
-    strategies: DiscoveryStrategies | None = None
     limits: DiscoveryLimits | None = None
     schedule: DiscoverySchedule | None = None
     cache: DiscoveryCache | None = None
@@ -834,24 +710,6 @@ class SimilarityResponse(BaseModel):
     dense_fallback_used: bool = False
 
 
-class MapSelectionLensCreate(BaseModel):
-    """Create a collection-backed lens from the current map selection."""
-
-    name: str = Field(..., min_length=1, max_length=120)
-    selection_kind: Literal["papers", "authors"]
-    ids: list[str] = Field(..., min_length=1)
-    scope: Literal["library", "corpus"]
-
-
-class MapSelectionLensResponse(BaseModel):
-    """Atomic collection + lens result for a lassoed map region."""
-
-    collection_id: str
-    lens_id: str
-    name: str
-    paper_count: int
-
-
 # ============================================================================
 # Library Models
 # ============================================================================
@@ -880,12 +738,6 @@ class CollectionResponse(BaseModel):
     activity_status: str | None = None
 
 
-class CollectionAddPaperRequest(BaseModel):
-    """Request to add a paper to a collection."""
-
-    paper_id: str
-
-
 class TagCreate(BaseModel):
     """Request model for creating a tag."""
 
@@ -899,13 +751,6 @@ class TagResponse(BaseModel):
     id: str
     name: str
     color: str
-
-
-class PaperTagRequest(BaseModel):
-    """Request to tag a paper."""
-
-    paper_id: str
-    tag_id: str
 
 
 class FollowAuthorRequest(BaseModel):
@@ -1221,10 +1066,3 @@ class ErrorResponse(BaseModel):
 # Graph Models
 # ============================================================================
 
-
-class GraphData(BaseModel):
-    """Response model for graph visualization data."""
-
-    nodes: list[dict]
-    edges: list[dict]
-    metadata: dict | None = None

@@ -173,9 +173,3 @@ def fetch_record_by_orcid(orcid: str) -> ORCIDRecord | None:
         return None
     return parse_orcid_record(normalized, payload)
 
-
-def fetch_employments(orcid: str) -> list[ORCIDAffiliation]:
-    """Return employment/education affiliations for one ORCID iD."""
-    record = fetch_record_by_orcid(orcid)
-    return list(record.affiliations) if record else []
-

@@ -65,11 +65,7 @@ def ranking_candidate_rows(
                 candidate.get("paper_id"),
                 fused_rank,
                 float(candidate.get("prior_score") or candidate.get("score") or 0.0),
-                (
-                    float(candidate["shadow_score"])
-                    if candidate.get("shadow_score") is not None
-                    else None
-                ),
+                None,  # shadow_score: the nullable column stays until a migrator drops it
                 json.dumps(candidate.get("reward_features") or {}, separators=(",", ":")),
                 json.dumps(exposure, separators=(",", ":")),
                 json.dumps(candidate.get("retrieval_hits") or [], separators=(",", ":")),
