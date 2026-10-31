@@ -58,6 +58,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { ConfirmDialog } from '@/components/library'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -300,6 +301,7 @@ export function AuthorDetailPanel({
   const queryClient = useQueryClient()
   const undoMutation = usePaperUndo()
   const { toast } = useToast()
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   // If this dialog was opened from a Suggested card, the `author` object is
   // synthesized from the suggestion and has no row in the local DB — the
@@ -433,6 +435,7 @@ export function AuthorDetailPanel({
           ? `${resolved.name} was removed${suggestion ? ' and the suggestion dismissed' : ''}.`
           : `Dismissed ${resolved.name} — it won't resurface.`,
       })
+      setConfirmingDelete(false)
       onDeleted?.(resolved)
       onOpenChange(false)
     },
@@ -875,7 +878,7 @@ export function AuthorDetailPanel({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => deleteMutation.mutate()}
+              onClick={() => setConfirmingDelete(true)}
               disabled={deleteMutation.isPending}
               className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             >
@@ -890,6 +893,18 @@ export function AuthorDetailPanel({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={confirmingDelete}
+      onOpenChange={setConfirmingDelete}
+      title={hasAuthorRow ? `Remove ${resolved.name}?` : `Dismiss ${resolved.name}?`}
+      description={
+        hasAuthorRow
+          ? 'This removes the author from your authors. Their papers stay in the corpus.'
+          : 'This suggestion will not come back.'
+      }
+      isPending={deleteMutation.isPending}
+      onConfirm={() => deleteMutation.mutate()}
+    />
     <AuthorMergeDialog
       open={mergeOpen}
       onOpenChange={setMergeOpen}

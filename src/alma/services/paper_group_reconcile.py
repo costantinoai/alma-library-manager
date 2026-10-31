@@ -112,7 +112,7 @@ def preview_paper_group_repairs(
         "ambiguous_defect_rows": ambiguous_defects,
         "limit": limit,
         "message": (
-            f"Would repair {repairable} finding(s): "
+            f"Would repair {repairable} {'finding' if repairable == 1 else 'findings'}: "
             f"{_integrity_defect_total(integrity)} relationship(s), "
             f"{components} component(s), {selected} preprint merge(s)"
             + (f" ({len(safe) - selected} deferred by the limit)" if len(safe) > selected else "")

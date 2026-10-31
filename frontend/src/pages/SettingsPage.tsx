@@ -337,7 +337,7 @@ export function SettingsPage() {
           </SettingsSection>
 
           {/* -- Intelligence -- */}
-          <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. These cards self-save.">
+          <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. Each card has its own Save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
             <Anchor id="feed-monitors"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
             <Anchor id="feed-auto-refresh"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Set the Feed refresh schedule</Button></Anchor>
@@ -355,11 +355,11 @@ export function SettingsPage() {
               description="Degraded monitors / sources / jobs, data-health gaps, and the corpus & author maintenance jobs (rehydrate, refresh authors, dedup, garbage-collect) all live on the Health page now — each repair showing an ETA."
               action={
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'status' })}>
-                    Open Status
+                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'repairs' })}>
+                    Open Repairs
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'maintenance' })}>
-                    Open Maintenance
+                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'activity' })}>
+                    Open Activity
                   </Button>
                 </div>
               }

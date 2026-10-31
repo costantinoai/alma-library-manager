@@ -23,6 +23,9 @@ EXPLORATION_SLOTS = 4
 #: learning (D26). More would hand the ranked deck to branches the ranker doubts:
 #: at ten branches two slots already reserve at most 20 of 46 ranked places.
 BRANCH_FLOOR_SLOTS = 2
+#: Cards the Discovery page shows before Show all: `DEFAULT_VISIBLE_RECS` in
+#: `DiscoveryPage.tsx`, and a contract test pins the two together.
+FIRST_SCREEN_CARDS = 20
 
 
 def _tokens(candidate: dict) -> set[str]:
@@ -243,6 +246,57 @@ def _exploit_with_floor(
         floor.extend(missing)
 
 
+def _lift_to_first_screen(
+    exploit: list[dict],
+    branch_ids: Sequence[str],
+    *,
+    places: int,
+) -> tuple[list[dict], list[dict], list[str]]:
+    """Give each named branch one card in the first `places` ranked cards.
+
+    A branch missing from those places moves its best ranked card to their end,
+    and the last card of a branch that has another one there steps down just
+    past them. It moves no score and changes no card in the deck, only the order,
+    and it reads no random draw: exploration keeps its reserved positions, and
+    the same cards get the same places whichever tail was sampled, so every
+    moved card's position probability stays 1.0.
+
+    Returns the new order, the moved cards, and the branches that found no room,
+    best branch first as `branch_ids` runs.
+    """
+    head = list(exploit[:places])
+    rest = list(exploit[places:])
+    named = set(branch_ids)
+    held = Counter(str(card.get("branch_id") or "") for card in head)
+    lifted: list[dict] = []
+    stepped_down: list[dict] = []
+    short: list[str] = []
+    for branch_id in branch_ids:
+        waiting = [card for card in rest if str(card.get("branch_id") or "") == branch_id]
+        if held[branch_id] or not waiting:
+            continue
+        spare = next(
+            (
+                card
+                for card in reversed(head)
+                if str(card.get("branch_id") or "") not in named
+                or held[str(card.get("branch_id") or "")] > 1
+            ),
+            None,
+        )
+        if spare is None:
+            short.append(branch_id)
+            continue
+        best = max(waiting, key=lambda card: float(card.get("score") or 0.0))
+        head = [card for card in head if card is not spare]
+        rest = [card for card in rest if card is not best]
+        held[str(spare.get("branch_id") or "")] -= 1
+        held[branch_id] += 1
+        lifted.append(best)
+        stepped_down.insert(0, spare)
+    return [*head, *lifted, *stepped_down, *rest], lifted, short
+
+
 def build_slate(
     candidates: list[dict],
     *,
@@ -257,6 +311,9 @@ def build_slate(
     are 1.0 and it is never `exploration`: the randomized evidence stays the
     uniform tail, and the tail's E/N stays exact because it is declared after
     the floor is settled.
+
+    Each of them also keeps one card in the first `FIRST_SCREEN_CARDS` positions,
+    because a card behind Show all is a branch the page does not show.
     """
 
     pool = list(candidates)
@@ -336,6 +393,12 @@ def build_slate(
         reserved = sorted(reserved[:explore_count])
     else:
         reserved = []
+    exploit, lifted, first_screen_short = _lift_to_first_screen(
+        exploit,
+        floor_branch_ids,
+        places=FIRST_SCREEN_CARDS - sum(position <= FIRST_SCREEN_CARDS for position in reserved),
+    )
+    lifted_ids = {id(item) for item in lifted}
     explore_by_position = dict(zip(reserved, explored))
     exploit_iter = iter(exploit)
     slate: list[dict] = []
@@ -348,6 +411,7 @@ def build_slate(
                 "inclusion_probability": 1.0,
                 "position_probability": 1.0,
                 "branch_floor": id(item) in floor_ids,
+                "first_screen_lift": id(item) in lifted_ids,
             }
         else:
             item["_selection"] = {
@@ -386,6 +450,8 @@ def build_slate(
         "requested_slate_size": target,
         "exploit_count": len(exploit),
         "branch_floor_count": len(floor),
+        "first_screen_lifted": len(lifted),
+        "first_screen_short": first_screen_short,
         "exploration_count": explore_count,
         "exploration_pool_size": len(eligible_tail),
         "reserved_positions": reserved,

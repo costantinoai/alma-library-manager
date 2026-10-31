@@ -277,8 +277,8 @@ function PaperSection({
  */
 function MonitorMix({ mix }: { mix: HomeBrief['activity']['feed']['by_monitor_type'] }) {
   const entries = [
-    { key: 'authors' as const, label: 'authors', value: mix.authors },
-    { key: 'journals' as const, label: 'journals', value: mix.journals },
+    { key: 'authors' as const, label: mix.authors === 1 ? 'author' : 'authors', value: mix.authors },
+    { key: 'journals' as const, label: mix.journals === 1 ? 'journal' : 'journals', value: mix.journals },
     { key: 'other' as const, label: 'other', value: mix.other },
   ].filter((entry) => entry.value > 0)
   if (entries.length === 0) return null
@@ -732,7 +732,9 @@ export function HomePage() {
         title="Picked for you"
         icon={Sparkles}
         categoryTheme={HOME_SECTION_THEMES.picked}
-        count={brief.highlights.length}
+        // A one-row shortlist: the grid shows what fits, so a total would name
+        // cards no one can reach. Only the empty case needs a count.
+        count={brief.highlights.length === 0 ? 0 : undefined}
         description="New research from your monitored sources and Discovery, with the reason it surfaced."
         emptyState={
           <p className="text-sm text-slate-500">

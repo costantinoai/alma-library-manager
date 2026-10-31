@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import { ActionCardHeader, MetricTile } from '@/components/shared'
-import { truncate } from '@/lib/utils'
+import { formatDate, truncate } from '@/lib/utils'
 import { formatPercent } from '@/lib/format'
 
 interface Palette {
@@ -186,7 +186,7 @@ export function InsightsReportsTab({
         {weeklyBrief && (
           <CardContent className="space-y-4">
             <div className="mb-2 text-xs text-slate-400">
-              {weeklyBrief.period.from} &mdash; {weeklyBrief.period.to}
+              {formatDate(weeklyBrief.period.from)} &mdash; {formatDate(weeklyBrief.period.to)}
             </div>
             <div className="grid grid-cols-3 gap-3">
               <MetricTile label="New Papers" value={weeklyBrief.new_papers} />

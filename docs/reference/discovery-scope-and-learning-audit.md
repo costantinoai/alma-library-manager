@@ -584,7 +584,7 @@ rating and hid only that card.
 
 **The page shows less than the deck.** It sorts by score and renders 20 cards until
 Show all, so the three chess cards sit at places 29, 47 and 49, and the top 20 hold
-three branches. The sort is deliberate, so it is open as D92-35.
+three branches. D92-35 records the fix.
 
 ### Open items from this audit
 
@@ -597,7 +597,7 @@ three branches. The sort is deliberate, so it is open as D92-35.
 | D92-32 | fixed | `application/discovery/retrieval/external.py`, `application/discovery/frontier.py`, `application/discovery/exploration.py`, `application/discovery/branch_attribution.py` | The channel cut is shared round-robin, title ties go to the newest year, each active branch keeps two cards, and `branch_coverage` names the stage that lost a branch. A floor card is never `exploration` and counts for no channel's yield. Table above. `test_discovery_deck_coverage.py`, red then green. |
 | D92-33 | fixed | `application/discovery/__init__.py`, `frontend/src/pages/DiscoveryPage.tsx` | The Temp chip read 0.00 because nothing wrote `retrieval_summary.temperature`. A refresh now records the effective value; an older summary shows a dash. `test_discovery_deck_coverage.py`, red then green. |
 | D92-34 | fixed | `application/author_network.py` | `_s2_recommendations` and `_openalex_works_by_dois` no longer swallow failures. A failed seed counts, and a run where every seed failed keeps its window. S2's 400 and 404 stay answers. `test_author_suggestion_accumulation.py`, red then green. |
-| D92-35 | open, needs a decision | `frontend/src/pages/DiscoveryPage.tsx:678` | Relevance order sorts by score and ignores `rank`, so MMR order, the exploration positions and floor places do not reach the page, and a logged `final_position` differs from the shown position. |
+| D92-35 | fixed | `frontend/src/pages/DiscoveryPage.tsx`, `application/discovery/exploration.py` | The page sorts relevance by `rank`, so MMR order, exploration places and floor places reach it, and each active branch keeps its best ranked card in the first 20 (`FIRST_SCREEN_CARDS`, no score moved, exploration places and probabilities unchanged). On a prod copy, Library lens through the refresh route: the first 20 reach 6 of 6 branches with the chess card at 19, one card lifted, and for all 50 cards the place shown, `rank` and logged `final_position` agree. `test_discovery_deck_coverage.py`, red then green. |
 | D92-36 | open | `application/discovery/__init__.py` | `recommendation_mode`, `taste_profile`, `negative_profile` and `budgets` in the summary have no writer, so Mode always reads balanced and the Taste Retrieval Profile is empty. |
 
 To refresh the aggregate evidence counts on a consistent SQLite copy, run

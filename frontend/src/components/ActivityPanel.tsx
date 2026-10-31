@@ -26,6 +26,7 @@ import { SIDEBAR_DOCK_INSET, sidebarInset } from '@/components/layout/sidebarMet
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
+import { formatDayTime } from '@/lib/format'
 import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { api } from '@/api/client'
@@ -140,13 +141,7 @@ function formatTime(dateStr: string): string {
 function formatTimestamp(dateStr: string): string {
   try {
     const d = parseAlmaTimestamp(dateStr)
-    return d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    })
+    return formatDayTime(d)
   } catch {
     return dateStr
   }

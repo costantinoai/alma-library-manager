@@ -163,6 +163,7 @@ function patchRecommendationPaper(
 // How many recs are visible by default in the Discovery card list
 // before the user clicks "Show all". Keeps the initial scroll
 // economical while letting the curious dig into the full 50.
+// `exploration.FIRST_SCREEN_CARDS`: the backend keeps every active branch in these.
 const DEFAULT_VISIBLE_RECS = 20
 
 export function DiscoveryPage() {
@@ -580,7 +581,7 @@ export function DiscoveryPage() {
       ),
     onSuccess: () => {
       // Card stays visible (flips to a checked "Saved" state); only Dismiss removes.
-      toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
+      toast({ title: 'Added', description: 'Paper saved and filed.' })
       void Promise.all([
         invalidateAfterPaperMutation(queryClient, selectedLensId),
         invalidateQueries(
@@ -880,6 +881,7 @@ export function DiscoveryPage() {
           sharedAuthorsSample: readString(provenance?.shared_authors_sample),
           negativeHit: readNumber(provenance?.negative_hit),
           branchFloor: provenance?.branch_floor === true,
+          firstScreenLift: provenance?.first_screen_lift === true,
           consensusCount: readNumber(breakdown?.consensus_count),
           projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
           couplingCount: readNumber(breakdown?.coupling_count),
@@ -1269,7 +1271,7 @@ export function DiscoveryPage() {
                         pullGroups
                       ) : (
                         <p className="text-[11px] text-slate-500">
-                          Nothing learned yet — save or rate a few papers and refresh.
+                          No taste summary is recorded for this refresh.
                         </p>
                       )}
                     </SubPanel>
@@ -1283,7 +1285,7 @@ export function DiscoveryPage() {
                         pushGroups
                       ) : (
                         <p className="text-[11px] text-slate-500">
-                          Nothing suppressed yet. Disliking a paper teaches this side.
+                          No taste summary is recorded for this refresh.
                         </p>
                       )}
                     </SubPanel>

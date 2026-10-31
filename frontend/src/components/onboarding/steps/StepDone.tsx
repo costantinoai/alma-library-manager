@@ -69,7 +69,7 @@ export function StepDone({ state, back, finish, finishing }: StepContext) {
               <li className="flex items-start gap-3">
                 <BarChart3 className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                 <span>
-                  <span className="font-medium text-alma-800">Library → Analytics</span> — source mix,
+                  <span className="font-medium text-alma-800">Analytics at the foot of Library</span> — source mix,
                   topics, venues and reading progress across everything you've collected.
                 </span>
               </li>

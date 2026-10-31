@@ -285,6 +285,17 @@ Two mechanisms, both required:
   `exploration`, and it never enters the randomised cohort. It is logged as
   `selection.branch_floor` and named on the card. Probing and muted branches
   have no floor.
+- **First screen.** The page shows 20 cards before Show all, so each active
+  branch also keeps its best ranked card in the first 20 positions
+  (`exploration.FIRST_SCREEN_CARDS`, the page's `DEFAULT_VISIBLE_RECS`). The move
+  runs after exploration has reserved its positions and reads no random draw, so
+  exploration keeps its places and a moved card's probabilities stay 1.0. It moves
+  no score and swaps no card out of the deck. The moved card goes to the end of
+  the ranked places on the first screen and the card it displaces steps just past
+  them. `final_position` and `recommendations.rank` hold the place after the move,
+  which is the place the page shows. It is logged as
+  `selection.first_screen_lift`, and the deck summary records
+  `first_screen_lifted` and `first_screen_short`, the branches that found no room.
 - **Actual impressions.** The frontend logs which recommendation ids were
   really visible, with position and timestamp. A lens-level "seen" stamp is not
   an item impression, and an unviewed item is **never** a negative.

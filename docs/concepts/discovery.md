@@ -249,7 +249,9 @@ The Discovery page itself opens to the **first 20** of the 50 by
 default with a *Show all 50 recommendations* button below — keeps
 initial scroll economical, no second network round-trip on click
 because the full 50 are already in memory. Switch lenses → resets
-to the curated 20.
+to the curated 20. The deck shows in slate order, and every active
+branch has one card in those 20, its best, moved up without changing
+its score.
 
 ### Activity transparency: per-lane subtasks
 

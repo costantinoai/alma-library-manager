@@ -18,6 +18,7 @@ import { MetricTile, PaperCard, type PaperCardPaper } from '@/components/shared'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateAfterPaperMutation } from '@/lib/queryHelpers'
+import { formatPaperSource } from '@/lib/format'
 import { formatDate } from '@/lib/utils'
 
 type ReadingStatusValue = 'clear' | 'reading' | 'done' | 'excluded'
@@ -229,7 +230,7 @@ export function ReadingListTab() {
                         <Badge variant={paper.status === 'library' ? 'default' : 'secondary'}>
                           {readingListStatusLabel(paper)}
                         </Badge>
-                        {paper.added_from && <Badge variant="outline">{paper.added_from}</Badge>}
+                        {paper.added_from && <Badge variant="outline">{formatPaperSource(paper.added_from)}</Badge>}
                         {paper.added_at && <Badge variant="outline">Added {formatDate(paper.added_at)}</Badge>}
                         <Select
                           value={(paper.reading_status as ReadingStatusValue | null) ?? 'clear'}

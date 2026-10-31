@@ -1,6 +1,8 @@
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
+import { formatDay, formatDayTime } from '@/lib/format'
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
@@ -43,17 +45,13 @@ export function parseAlmaTimestamp(value: string | number | Date | null | undefi
 export function formatDate(dateStr: string): string {
   const date = parseAlmaTimestamp(dateStr)
   if (Number.isNaN(date.getTime())) return dateStr
-  // dd/mm/yyyy — date-only, no time. Publication dates don't have a
-  // meaningful hour component, so surfacing one is just noise.
-  const dd = String(date.getDate()).padStart(2, '0')
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const yyyy = date.getFullYear()
-  return `${dd}/${mm}/${yyyy}`
+  // Date only: a publication date has no meaningful hour.
+  return formatDay(date)
 }
 
 /**
  * Best-effort published-date label for a paper row. Prefers the full
- * publication_date (dd/mm/yyyy), falls back to year, then empty.
+ * publication_date, falls back to year, then empty.
  * Lets per-surface table columns and detail panels share one rule
  * instead of redoing the ternary inline.
  */
@@ -114,7 +112,7 @@ export function formatTimestamp(value?: string | null): string {
   if (!value) return 'Never'
   const parsed = parseAlmaTimestamp(value)
   if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString()
+  return formatDayTime(parsed)
 }
 
 export function formatRelativeTime(dateStr: string): string {

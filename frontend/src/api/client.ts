@@ -1979,6 +1979,8 @@ export interface Recommendation {
 export interface Lens {
   id: string
   name: string
+  /** Set on create when this collection already had its lens. */
+  already_existed?: boolean
   context_type: 'library_global' | 'collection' | 'topic_keyword' | 'tag'
   context_config?: Record<string, unknown> | null
   weights?: Record<string, number> | null
@@ -3357,6 +3359,8 @@ export interface AuthorNeedsAttentionRow {
   /** For `reason_code='degraded_monitor'`: the feed monitor to refresh. */
   monitor_id?: string | null
   suggested_action: { code: string; label: string; hint: string }
+  /** ALMa can run this row's action unattended; the rest wait for a person. */
+  auto_fixable: boolean
   updated_at?: string | null
 }
 

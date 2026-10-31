@@ -243,7 +243,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 <StatusBadge tone="accent" size="sm">Foreground Control Surface</StatusBadge>
                 <JargonHint
                   title="Foreground Control Surface"
-                  description="Settings here apply to this lens's next refresh run, not past runs. Click Apply Controls to persist; the next Discovery refresh will use them. Think of it as a live dashboard, not a permanent config."
+                  description="Settings here apply to this lens's next refresh run, not past runs. Click Apply Controls to save them, and the next Discovery refresh will use them."
                 />
               </div>
               {coldStart?.state ? (
@@ -473,8 +473,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                       <>
                         How finely the lens's own papers are split into branches. <strong>Higher</strong>{' '}
                         (&gt;1) splits into more, tighter branches; <strong>lower</strong> (&lt;1) merges into
-                        fewer, broader ones. Drives the SAME clustering engine as the Insights graph's
-                        cluster-detail knob. Tune live to preview it; Apply Controls and the next refresh
+                        fewer, broader ones. Tune live to preview it; Apply Controls and the next refresh
                         rebuilds the branches at this detail. (Distinct from Temperature, which steers
                         topic spread, not branch count.)
                       </>

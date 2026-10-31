@@ -101,7 +101,7 @@ export function AuthorsNeedsAttentionSection({
   return (
     <section className="space-y-2">
       <SectionHeader
-        total={rows.length}
+        total={new Set(rows.map((row) => row.author_id)).size}
         action={
           autoFixable > 0 ? (
             <Button
@@ -128,6 +128,7 @@ export function AuthorsNeedsAttentionSection({
             // attention dimensions (identity + monitor + corpus).
             key={`${row.author_id}-${row.reason_code}-${row.conflict_id ?? ''}`}
             row={row}
+            onOpenAuthor={() => router.openAuthor(row)}
             onAction={() => router.openForRow(row)}
             isRefreshing={router.isRefreshingFor(row.author_id)}
           />
@@ -155,10 +156,12 @@ function SectionHeader({ total, action }: { total: number | null; action?: React
 
 function NeedsAttentionRow({
   row,
+  onOpenAuthor,
   onAction,
   isRefreshing,
 }: {
   row: AuthorNeedsAttentionRow
+  onOpenAuthor: () => void
   onAction: () => void
   isRefreshing: boolean
 }) {
@@ -200,8 +203,7 @@ function NeedsAttentionRow({
             <button
               type="button"
               className="truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
-              onClick={onAction}
-              disabled={isRefreshing}
+              onClick={onOpenAuthor}
             >
               {row.author_name}
             </button>

@@ -105,7 +105,7 @@ export const LIBRARY_TOUR: TourStep[] = [
   {
     target: '[data-tour="library-analytics"]',
     title: 'How your library is shaped',
-    body: 'Source mix, topics, venues, reading progress and structure diagnostics — the charts that used to live on their own Insights page.',
+    body: 'Source mix, topics, venues and reading progress — the charts that used to live on their own Insights page.',
     side: 'top',
   },
 ]
@@ -122,7 +122,7 @@ export const DISCOVERY_TOUR: TourStep[] = [
   {
     target: '[data-tour="discovery-performance"]',
     title: 'Is it working?',
-    body: 'Lens performance reads your reactions back: how much of what you save came from the lens core versus its exploratory push.',
+    body: 'Lens performance reads your reactions back: what you saved, liked and dismissed from this lens.',
   },
   {
     target: '[data-tour="discovery-branches"]',

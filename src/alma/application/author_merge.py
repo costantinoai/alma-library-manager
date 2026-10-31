@@ -386,9 +386,9 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
     """All conflicts that haven't been resolved or dismissed yet.
 
     Joined to `authors` so the needs-attention surface can render the
-    primary's display name without a second round-trip.
+    primary's display name without a second round-trip. A pure read: Home and
+    a GET call this, and a database with no merge yet simply has no conflict.
     """
-    ensure_alt_identifiers_table(db)
     try:
         rows = db.execute(
             """

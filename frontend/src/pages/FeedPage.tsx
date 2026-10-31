@@ -1013,7 +1013,7 @@ export function FeedPage() {
                 ? 'Follow a journal from any paper’s venue, or add one under Settings → Feed Monitor Controls. New papers from that journal will collect here, out of your main inbox.'
                 : filter === 'new'
                   ? 'No journal papers were fetched in the latest refresh or during the last 24 hours. Switch to Show all for the full 60-day window, or run Refresh Inbox.'
-                  : 'No papers from your followed journals in the last 60 days. Add a keyword filter to a busy journal in Settings, or run Refresh Inbox.'
+                  : 'No papers from your followed journals in the last 60 days. Add a keyword filter to a busy journal here, or run Refresh Inbox.'
             }
           />
         ) : (
@@ -1023,7 +1023,7 @@ export function FeedPage() {
             description={
               filter === 'new'
                 ? 'No papers were fetched in either New window. Switch to Show all for your full 60-day inbox, or run Refresh Inbox.'
-                : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
+                : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors and add monitors on this page.'
             }
           />
         )

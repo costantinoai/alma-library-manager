@@ -43,6 +43,7 @@ from alma.core.utils import find_dois_in_text, normalize_openalex_id
 logger = logging.getLogger(__name__)
 
 # Bare URLs in free text, for the no-DOI fallback.
+_LINK_MARKUP = re.compile(r"<(https?://[^|>\s]+)(?:\|([^>]*))?>", re.IGNORECASE)
 _URL_IN_TEXT = re.compile(r"https?://[^\s<>\"'\]]+", re.IGNORECASE)
 
 # `W123456789` in an OpenAlex URL or on its own.
@@ -51,6 +52,24 @@ _OPENALEX_IN_TEXT = re.compile(r"\b(W\d{6,})\b")
 # Trailing punctuation a DOI never really ends with — a DOI at the end of a
 # sentence otherwise resolves with the period attached and misses.
 _DOI_TRAILING_JUNK = ".,;:"
+
+
+def readable_capture_text(text: str | None) -> str:
+    """A message as its sender read it: the ledger keeps the transport's own markup.
+
+    Slack sends `<url|label>`, `<url>` and `&amp;`. A label that only repeats or
+    shortens the address gives way to the address.
+    """
+
+    def link(match: re.Match[str]) -> str:
+        url, label = match.group(1), (match.group(2) or "").strip()
+        bare = url.split("://", 1)[-1]
+        if not label or label.endswith("…") or label == url or label == bare:
+            return url
+        return label
+
+    linked = _LINK_MARKUP.sub(link, text or "")
+    return linked.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
 def extract_identifiers(message: InboundMessage) -> ExtractedIdentifiers:
@@ -228,7 +247,7 @@ def list_attention_messages(
                 "channel": row["channel"],
                 "external_id": row["external_id"],
                 "received_at": row["received_at"],
-                "raw_text": row["raw_text"] or "",
+                "raw_text": readable_capture_text(row["raw_text"]),
                 "extracted": extracted if isinstance(extracted, dict) else {},
                 "outcome": row["outcome"],
                 "error": row["error"],

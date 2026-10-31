@@ -374,7 +374,7 @@ def is_doi_shaped(value: str | None) -> bool:
 
 # A DOI inside free text (a message, a PDF page). Stops at whitespace, quotes,
 # brackets and angle brackets — the characters that end a DOI in running text.
-_DOI_IN_TEXT_RE = re.compile(r"\b(10\.\d{4,9}/[^\s<>\"'()\[\]]+)", re.IGNORECASE)
+_DOI_IN_TEXT_RE = re.compile(r"\b(10\.\d{4,9}/[^\s<>\"'()\[\]|]+)", re.IGNORECASE)
 # Trailing punctuation a DOI never really ends with — a DOI at the end of a
 # sentence otherwise resolves with the period attached and misses.
 _DOI_TRAILING_JUNK = ".,;:"

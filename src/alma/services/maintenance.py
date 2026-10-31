@@ -1104,7 +1104,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             label="Garbage-collect orphan authors",
             description=(
                 "Soft-remove authors who aren't followed and have no live paper "
-                "attachment (mirrors the paper lifecycle, D3). Preview first, then sweep."
+                "attachment. Preview first, then sweep."
             ),
             health_dimensions=(),
             candidate_path="",

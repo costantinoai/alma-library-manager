@@ -19,6 +19,8 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 
 export interface AuthorAttentionRouter {
   openForRow: (row: AuthorNeedsAttentionRow) => void
+  /** Open the author's panel. Runs no action: that is the row's button. */
+  openAuthor: (row: AuthorNeedsAttentionRow) => void
   isRefreshingFor: (authorId: string) => boolean
   /** Queue the automatic fix for every row that has one (see AUTO_FIX_CODES). */
   fixAll: (rows: AuthorNeedsAttentionRow[]) => void
@@ -27,27 +29,6 @@ export interface AuthorAttentionRouter {
   countAutoFixable: (rows: AuthorNeedsAttentionRow[]) => number
   dialogs: ReactNode
 }
-
-/**
- * Suggested-action codes whose fix needs no human judgement, so "Fix all" may
- * fire them unattended:
- *   - `refresh` / `retry_refresh` / `resolve_now` → re-run the identity+profile
- *     resolver for that author;
- *   - `refresh_monitor` → re-run the author's feed monitor;
- *   - `backfill_author` → queue the historical works backfill.
- *
- * Everything else is deliberately excluded: `manual_search` means the automatic
- * search already returned zero hits (re-running it just fails again), and
- * `review_candidates` / `review_profiles` / `resolve_conflict` /
- * `pick_affiliation` are decisions only the user can make.
- */
-const AUTO_FIX_CODES = new Set([
-  'refresh',
-  'retry_refresh',
-  'resolve_now',
-  'refresh_monitor',
-  'backfill_author',
-])
 
 interface UseAuthorAttentionRouterOptions {
   authorsById?: Map<string, Author>
@@ -157,7 +138,8 @@ export function useAuthorAttentionRouter(
    */
   const fixAll = async (rows: AuthorNeedsAttentionRow[]) => {
     if (fixingAll) return
-    const autoRows = rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code))
+    // `auto_fixable` comes from `author_attention.AUTO_FIX_CODES`.
+    const autoRows = rows.filter((r) => r.auto_fixable)
     const manualCount = rows.length - autoRows.length
     if (autoRows.length === 0) {
       toast({
@@ -228,15 +210,25 @@ export function useAuthorAttentionRouter(
     </>
   )
 
+  const openAuthor = (row: AuthorNeedsAttentionRow) => {
+    // A row can name an author outside the followed list; the panel loads the
+    // rest of the record from the id.
+    const author =
+      options.authorsById?.get(row.author_id) ??
+      ({ id: row.author_id, name: row.author_name, author_type: 'background' } as Author)
+    options.onOpenDetail?.(author)
+  }
+
   return {
     openForRow,
+    openAuthor,
     isRefreshingFor: (authorId) =>
       (refreshMutation.isPending && refreshMutation.variables === authorId) ||
       (backfillMutation.isPending && backfillMutation.variables === authorId),
     fixAll: (rows) => void fixAll(rows),
     isFixingAll: fixingAll,
     countAutoFixable: (rows) =>
-      rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code)).length,
+      rows.filter((r) => r.auto_fixable).length,
     dialogs,
   }
 }

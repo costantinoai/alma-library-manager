@@ -69,6 +69,7 @@ import {
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { formatPaperSource, plural } from '@/lib/format'
 import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -160,18 +161,6 @@ function readStoredValueVersioned<T extends string>(
   return readStoredValue(key, validValues, fallback)
 }
 
-
-const SOURCE_LABELS: Record<string, string> = {
-  import: 'Import',
-  feed: 'Feed',
-  discovery: 'Discovery',
-  discovery_save: 'Discovery',
-  discovery_like: 'Discovery',
-  discovery_manual: 'Discovery',
-  manual: 'Manual',
-  library_similarity: 'Similar',
-  online_search: 'Search',
-}
 
 interface SavedTabProps {
   onOpenDetails?: (paper: Publication) => void
@@ -364,7 +353,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
         invalidateQueries(queryClient, ['library-saved']),
       ])
       clearSelection()
-      toast({ title: 'Rating cleared', description: `${data.affected} paper(s) set to no rating.` })
+      toast({ title: 'Rating cleared', description: `${plural(data.affected, 'paper')} set to no rating.` })
     },
     onError: () => errorToast('Error', 'Bulk clear rating failed.'),
   })
@@ -375,7 +364,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       void invalidateAfterPaperMutation(queryClient)
       clearSelection()
       setBulkDeleteOpen(false)
-      toast({ title: 'Removed', description: `${data.affected} paper(s) removed from library.` })
+      toast({ title: 'Removed', description: `${plural(data.affected, 'paper')} removed from library.` })
     },
     onError: () => errorToast('Error', 'Bulk remove failed.'),
   })
@@ -387,7 +376,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       void invalidateQueries(queryClient, ['library-collections'])
       setBulkCollectionOpen(false)
       clearSelection()
-      toast({ title: 'Added', description: `${data.affected} paper(s) added to collection.` })
+      toast({ title: 'Added', description: `${plural(data.affected, 'paper')} added to collection.` })
     },
     onError: () => errorToast('Error', 'Bulk add to collection failed.'),
   })
@@ -866,7 +855,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
         open={bulkDeleteOpen}
         onOpenChange={setBulkDeleteOpen}
         title={`Remove ${selectedKeys.size} Papers`}
-        description={`Remove ${selectedKeys.size} paper(s) from your library? They will transition to removed status and leave saved Library views.`}
+        description={`Remove ${plural(selectedKeys.size, 'paper')} from your library? They will transition to removed status and leave saved Library views.`}
         onConfirm={() => bulkRemoveMutation.mutate(Array.from(selectedKeys))}
         isPending={bulkRemoveMutation.isPending}
       />
@@ -1055,7 +1044,7 @@ function SavedCompactTable({
             chipClassName={SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR}
             title="Where this paper came from"
           >
-            {SOURCE_LABELS[src] ?? src}
+            {formatPaperSource(src)}
           </IdentityChip>
         )
       },

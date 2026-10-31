@@ -7,6 +7,45 @@
  * just waiting to happen.
  */
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** The one date format: "15 Sep 2026". Spelled here so no browser locale picks it. */
+export function formatDay(date: Date): string {
+  return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`
+}
+
+/** The one date-and-time format: "15 Sep 2026, 20:08". */
+export function formatDayTime(date: Date): string {
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${formatDay(date)}, ${hours}:${minutes}`
+}
+
+function formatMonth(date: Date): string {
+  return `${MONTHS[date.getMonth()]} ${date.getFullYear()}`
+}
+
+/** "1 collection", "2 collections". `many` is for a word that adds more than an s. */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`
+}
+
+const PAPER_SOURCES: Record<string, string> = {
+  discovery_save: 'Discovery',
+  discovery_like: 'Discovery',
+  discovery_manual: 'Discovery',
+  library_similarity: 'Similar',
+  online_search: 'Search',
+}
+
+/** A paper's `added_from` in words. An unmapped key still reads as text. */
+export function formatPaperSource(source: string): string {
+  const named = PAPER_SOURCES[source]
+  if (named) return named
+  const words = source.replace(/_/g, ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 /** A byte count as B / KB / MB (one decimal above bytes). */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -41,7 +80,7 @@ export function formatYearMonth(value: string | null | undefined): string {
   if (!value) return ''
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+  return formatMonth(parsed)
 }
 
 /**
@@ -61,16 +100,14 @@ export function formatPaperDate(value: string | null | undefined): string {
   if (/^\d{4}$/.test(s)) return s
   const ym = s.match(/^(\d{4})-(\d{2})$/)
   if (ym) {
-    return new Date(Number(ym[1]), Number(ym[2]) - 1, 1)
-      .toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+    return formatMonth(new Date(Number(ym[1]), Number(ym[2]) - 1, 1))
   }
   const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (ymd) {
-    return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]))
-      .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    return formatDay(new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])))
   }
   // Unknown shape: parse but don't assume day precision.
   const parsed = new Date(s)
   if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+  return formatMonth(parsed)
 }

@@ -62,8 +62,12 @@ def create_lens(
         )
         return OperationOutcome(
             status="completed",
-            message=f"Created discovery lens '{body.name}'",
-            result={"lens_id": lens["id"]},
+            message=(
+                f"Discovery lens '{lens['name']}' already exists"
+                if lens.get("already_existed")
+                else f"Created discovery lens '{body.name}'"
+            ),
+            result={"lens_id": lens["id"], "already_existed": bool(lens.get("already_existed"))},
         )
 
     try:
@@ -78,7 +82,7 @@ def create_lens(
         lens = discovery_app.get_lens(db, lens_id)
         if lens is None:
             raise HTTPException(status_code=500, detail="Lens created but could not be reloaded")
-        return lens
+        return {**lens, "already_existed": bool((op.get("result") or {}).get("already_existed"))}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:

@@ -13,6 +13,9 @@ import type { HealthOperationsResponse } from '@/api/client'
 import { MetricTile } from '@/components/shared/MetricTile'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Switch } from '@/components/ui/switch'
+import { formatTimestamp, parseAlmaTimestamp } from '@/lib/utils'
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
 type Tone = 'neutral' | 'info' | 'warning' | 'critical'
 
@@ -30,7 +33,12 @@ export function ApiBudgetCard({
   if (!budget) return null
   const remaining = budget.openalex_credits_remaining
   const reserve = budget.reserved_user_calls
-  const abort = budget.last_credit_abort
+  // The quota resets daily, so an older stop is history, not a state to report.
+  const lastAbort = budget.last_credit_abort
+  const abort =
+    lastAbort?.finished_at && Date.now() - parseAlmaTimestamp(lastAbort.finished_at).getTime() < ONE_DAY_MS
+      ? lastAbort
+      : null
   const pause = budget.last_pause
   const policy = budget.network_policy
 
@@ -94,7 +102,7 @@ export function ApiBudgetCard({
             {abort.openalex_credits_remaining != null
               ? ` (${abort.openalex_credits_remaining.toLocaleString()} credits left)`
               : ''}
-            {abort.finished_at ? ` · ${new Date(abort.finished_at).toLocaleString()}` : ''}. It
+            {abort.finished_at ? ` · ${formatTimestamp(abort.finished_at)}` : ''}. It
             will resume automatically once the quota recovers.
           </AlertDescription>
         </Alert>
@@ -113,7 +121,7 @@ export function ApiBudgetCard({
       {pause ? (
         <p className="text-xs text-slate-500">
           Background enrichment paused for your activity
-          {pause.finished_at ? ` at ${new Date(pause.finished_at).toLocaleTimeString()}` : ''} — it
+          {pause.finished_at ? ` on ${formatTimestamp(pause.finished_at)}` : ''} — it
           resumes automatically when the app is idle.
         </p>
       ) : null}
