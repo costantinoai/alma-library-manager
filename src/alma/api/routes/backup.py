@@ -117,7 +117,8 @@ def _bibtex_value(value: object) -> str:
     A title holding `}` would close the field and could add its own, such as
     `file =`. Balanced braces are kept, because `{M}ozart` is how BibTeX titles
     protect capitals. Parsers disagree on whether `\\{` counts, so a value must
-    balance read either way; otherwise its braces go.
+    balance read either way; otherwise its braces go. A trailing backslash goes
+    in both cases, because it would turn the field's own closing brace into `\\}`.
     """
     text = str(value)
 
@@ -131,8 +132,8 @@ def _bibtex_value(value: object) -> str:
 
     unescaped = text.replace("\\{", "").replace("\\}", "")
     if balanced(text) and balanced(unescaped):
-        return text
-    return text.replace("{", "").replace("}", "")
+        return text.rstrip("\\")
+    return text.replace("{", "").replace("}", "").rstrip("\\")
 
 
 @router.get("/export/bibtex")
