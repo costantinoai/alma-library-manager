@@ -6,9 +6,7 @@ fresh DB returns a neutral 1.0 — no behaviour change until events exist.
 
 The paper side lives elsewhere since 2026-07-27: how a paper reached the user
 is exposure and stays out of the score, so the per-source score multiplier
-that used to be computed here is gone. Its successor scales *retrieval*
-channel weights instead — ``application/discovery/channel_yield.py`` — and
-shares this module's band.
+that used to be computed here is gone.
 """
 
 from __future__ import annotations
@@ -31,9 +29,6 @@ _DEFAULT_WINDOW_DAYS = 180.0
 _DEFAULT_HALF_LIFE_DAYS = 60.0
 _DEFAULT_MULTIPLIER_LO = 0.5
 _DEFAULT_MULTIPLIER_HI = 1.5
-#: The band every outcome-derived multiplier stays in: a bad week cannot kill a
-#: source and a hot week cannot make one dominate.
-MULTIPLIER_BAND = (_DEFAULT_MULTIPLIER_LO, _DEFAULT_MULTIPLIER_HI)
 
 
 @dataclass

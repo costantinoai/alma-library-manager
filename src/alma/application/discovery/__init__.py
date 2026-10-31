@@ -33,7 +33,6 @@ from alma.discovery.scoring import (
 from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
-from . import channel_yield as _channel_yield  # registers diagnostic view
 from .branch_attribution import attribute_candidate, branch_coverage
 from .branch_identity import branch_structure_report, persist_branch_identities
 from .calibration import ensure_calibration  # also registers the scoring:calibration view
@@ -377,11 +376,6 @@ def _refresh_lens_recommendations(
     base_channel_weights = _normalize_channel_weights(weights)
 
     scoring_settings = load_scoring_settings(db)
-    # Channel-yield diagnostics pool outcomes across all lenses. Applying that
-    # global learner here would let one branch's behavior tilt another (D26).
-    # Until branch-linked exposed verdicts support local channel estimates,
-    # use the declared channel weights unchanged.
-    yield_multipliers: dict[str, float] = {}
     channel_weights = base_channel_weights
     # Every lens computes its taste (preference profile + the scoring
     # positive/negative documents) from its OWN context papers — exactly the way
@@ -1346,7 +1340,6 @@ def _refresh_lens_recommendations(
         "external_lanes": external_lane_counts,
         "weights": channel_weights,
         "base_weights": base_channel_weights,
-        "channel_yield_multipliers": yield_multipliers,
         "taste_profile": external_summary.get("taste_profile") or {},
         "negative_profile": external_summary.get("negative_profile") or {},
         "budgets": external_summary.get("budgets") or {},

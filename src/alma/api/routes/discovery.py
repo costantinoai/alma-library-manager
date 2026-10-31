@@ -33,7 +33,6 @@ from alma.api.models import (
     SimilarityResultItem,
 )
 from alma.application import discovery as discovery_app
-from alma.application.discovery.channel_yield import adaptive_channels_enabled, load_channel_yield
 from alma.application.discovery.outcome_eval import (
     load_outcome_summary,
     request_outcome_eval_refresh,
@@ -248,25 +247,6 @@ def get_outcome_evaluation(
         return load_outcome_summary(db)
     except Exception as e:
         raise_internal("Failed to read the ranker outcome evaluation", e)
-
-
-@router.get(
-    "/channel-yield",
-    summary="Which retrieval channels surface papers you keep (stored result)",
-)
-def get_channel_yield(
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Pure read: per channel surfaced / kept / shrunk rate / weight multiplier,
-    and whether the adaptation is switched on. ``channels`` is null until a
-    lens refresh has built it."""
-    try:
-        return {
-            "enabled": adaptive_channels_enabled(discovery_app.read_settings(db)),
-            **(load_channel_yield(db) or {"channels": None}),
-        }
-    except Exception as e:
-        raise_internal("Failed to read the channel yield", e)
 
 
 @router.post(
