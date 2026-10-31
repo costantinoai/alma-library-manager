@@ -104,9 +104,6 @@ docs = [
     "pymdown-extensions>=10.0",
 ]
 
-[project.scripts]
-alma = "alma.cli.main:main"
-
 [project.urls]
 Homepage = "https://github.com/costantinoai/alma-library-manager"
 Documentation = "https://costantinoai.github.io/alma-library-manager/"

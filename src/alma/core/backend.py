@@ -17,7 +17,7 @@ from alma.config import (
     get_backend,
     get_fetch_year,
 )
-from alma.core.database import _init_authors_db, get_authors_json
+from alma.core.database import _init_authors_db
 from alma.core.resolution import resolve_author_identity, summarize_author_resolution
 from alma.core.time import utcnow
 from alma.openalex.client import fetch_works_for_author, upsert_papers
@@ -92,44 +92,6 @@ def _resolve_author_openalex_id(
         conn.close()
 
 
-def fetch_from_json(args, idx=None):  # noqa: ANN001
-    if _backend() == "scholar":
-        # Prefer an existing test stub if present; otherwise import normally
-        mod = sys.modules.get("alma.core.fetcher") or importlib.import_module("alma.core.fetcher")
-        try:
-            return mod.fetch_from_json(args, idx=idx)
-        finally:
-            # If a test stubbed the module (missing key attrs), remove it so later imports get the real module
-            if not hasattr(mod, "DB_NAME") or not hasattr(mod, "fetch_pubs_dictionary"):
-                try:
-                    del sys.modules["alma.core.fetcher"]
-                except Exception:
-                    pass
-
-    # OpenAlex path
-    authors_json = get_authors_json(args.authors_path)
-    authors = [(a["name"], a["id"]) for a in authors_json]
-    if idx is not None:
-        authors = authors[:idx]
-
-    from_year = get_fetch_year()
-    pubs: list[dict] = []
-    for name, author_id in authors:
-        openalex_id = _resolve_author_openalex_id(
-            args.authors_path,
-            author_id=author_id,
-            author_name=name,
-        )
-        if not openalex_id:
-            continue
-        works = fetch_works_for_author(openalex_id, from_year)
-        # Upsert into DB; even if 0 works return
-        # Note: author_id association is handled via publication_authors table (populated from authorships)
-        upsert_papers(works)
-        pubs.extend(works)
-    return authors, pubs
-
-
 def fetch_publications_by_id(
     author_id: str,
     output_folder: str | None = None,
@@ -155,7 +117,6 @@ def fetch_publications_by_id(
             )
         finally:
             # Keep potential test stub for subsequent calls within the same test
-            # (cleanup happens in fetch_from_json after both calls complete)
             pass
 
     # OpenAlex path
