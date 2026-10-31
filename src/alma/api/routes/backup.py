@@ -9,6 +9,7 @@ Provides data export capabilities:
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 from collections.abc import Iterator
@@ -110,6 +111,30 @@ def export_database():
     )
 
 
+def _bibtex_value(value: object) -> str:
+    """Return ``value`` safe inside ``field = {...}``.
+
+    A title holding `}` would close the field and could add its own, such as
+    `file =`. Balanced braces are kept, because `{M}ozart` is how BibTeX titles
+    protect capitals. Parsers disagree on whether `\\{` counts, so a value must
+    balance read either way; otherwise its braces go.
+    """
+    text = str(value)
+
+    def balanced(candidate: str) -> bool:
+        depth = 0
+        for ch in candidate:
+            depth += (ch == "{") - (ch == "}")
+            if depth < 0:
+                return False
+        return depth == 0
+
+    unescaped = text.replace("\\{", "").replace("\\}", "")
+    if balanced(text) and balanced(unescaped):
+        return text
+    return text.replace("{", "").replace("}", "")
+
+
 @router.get("/export/bibtex")
 def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
     """Export library papers as BibTeX.
@@ -135,34 +160,32 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
             year = paper["year"] or "0000"
             title_words = (paper["title"] or "").split()
             first_title_word = title_words[0].strip(".,;:!?()[]{}\"'") if title_words else "paper"
-            cite_key = f"{first_author_lastname}{year}{first_title_word}".replace(" ", "")
+            cite_key = re.sub(r"[^A-Za-z0-9_:-]", "", f"{first_author_lastname}{year}{first_title_word}")
 
             # Build BibTeX entry
             entry = f"@article{{{cite_key},\n"
-            entry += f'  title = {{{paper["title"] or "Untitled"}}},\n'
+            entry += f'  title = {{{_bibtex_value(paper["title"] or "Untitled")}}},\n'
             if authors_str:
-                entry += f'  author = {{{authors_str}}},\n'
+                entry += f'  author = {{{_bibtex_value(authors_str)}}},\n'
             if paper["year"]:
-                entry += f'  year = {{{paper["year"]}}},\n'
+                entry += f'  year = {{{_bibtex_value(paper["year"])}}},\n'
             if paper["journal"]:
-                entry += f'  journal = {{{paper["journal"]}}},\n'
+                entry += f'  journal = {{{_bibtex_value(paper["journal"])}}},\n'
             if paper["volume"]:
-                entry += f'  volume = {{{paper["volume"]}}},\n'
+                entry += f'  volume = {{{_bibtex_value(paper["volume"])}}},\n'
             if paper["issue"]:
-                entry += f'  number = {{{paper["issue"]}}},\n'
+                entry += f'  number = {{{_bibtex_value(paper["issue"])}}},\n'
             if paper["first_page"]:
                 pages = paper["first_page"]
                 if paper["last_page"]:
                     pages += f'--{paper["last_page"]}'
-                entry += f'  pages = {{{pages}}},\n'
+                entry += f'  pages = {{{_bibtex_value(pages)}}},\n'
             if paper["doi"]:
-                entry += f'  doi = {{{paper["doi"]}}},\n'
+                entry += f'  doi = {{{_bibtex_value(paper["doi"])}}},\n'
             if paper["url"]:
-                entry += f'  url = {{{paper["url"]}}},\n'
+                entry += f'  url = {{{_bibtex_value(paper["url"])}}},\n'
             if paper["abstract"]:
-                # Escape special BibTeX characters in abstract
-                abstract_clean = paper["abstract"].replace("{", "\\{").replace("}", "\\}")
-                entry += f'  abstract = {{{abstract_clean}}},\n'
+                entry += f'  abstract = {{{_bibtex_value(paper["abstract"])}}},\n'
             entry = entry.rstrip(",\n") + "\n}\n"
             bibtex_entries.append(entry)
 
