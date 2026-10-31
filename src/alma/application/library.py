@@ -1173,6 +1173,7 @@ _SAVE_ACTIONS = ("add", "save")
 _LEAVE_ACTIONS = ("remove", "dismiss")
 _MEMBERSHIP_ACTIONS = (*_SAVE_ACTIONS, *_LEAVE_ACTIONS)
 _RATING_ACTIONS = ("like", "love", "dislike", "rate")
+_RATING_VERDICTS = ("like", "love", "dislike")
 UNDO_ASPECTS = ("membership", "rating", "reading", "all")
 
 
@@ -1262,6 +1263,31 @@ def _restore_lens_verdicts(db: sqlite3.Connection, paper_id: str, rating: int) -
     )
 
 
+def _withdraw_surface_verdicts(db: sqlite3.Connection, paper_id: str) -> None:
+    """Take a withdrawn Like/Love/Dislike off the rows that show it.
+
+    Feed lights its buttons from `feed_items.status`, Discovery from
+    `recommendations.user_action`, so clearing `papers.rating` alone leaves the
+    button lit after a reload. A row settles to what is still true: saved when
+    the paper stayed in the Library, otherwise back to untriaged, the same
+    honest default `undo_feed_dismiss` uses.
+    """
+    status_row = db.execute("SELECT status FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    in_library = bool(status_row) and status_row["status"] == LIBRARY_STATUS
+    placeholders = ",".join("?" for _ in _RATING_VERDICTS)
+    if _table_exists(db, "feed_items"):
+        db.execute(
+            f"UPDATE feed_items SET status = ? WHERE paper_id = ? AND status IN ({placeholders})",
+            ("add" if in_library else "new", paper_id, *_RATING_VERDICTS),
+        )
+    if _table_exists(db, "recommendations"):
+        db.execute(
+            "UPDATE recommendations SET user_action = ?, action_at = CASE WHEN ? THEN action_at END "
+            f"WHERE paper_id = ? AND user_action IN ({placeholders})",
+            ("save" if in_library else None, in_library, paper_id, *_RATING_VERDICTS),
+        )
+
+
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1337,6 +1363,7 @@ def undo_paper_feedback(
         # The lens signal mirrors the verdict just withdrawn.
         if _table_exists(db, "lens_signals"):
             db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
+        _withdraw_surface_verdicts(db, paper_id)
 
     if aspect in ("reading", "all"):
         paper_actions.set_reading_status(db, paper_id, None)
