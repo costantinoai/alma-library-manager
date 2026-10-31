@@ -50,6 +50,7 @@ def ranking_candidate_rows(
             "selected": selection.get("final_position") is not None,
             "exploration": bool(selection.get("exploration")),
             "branch_floor": bool(selection.get("branch_floor")),
+            "first_screen_lift": bool(selection.get("first_screen_lift")),
             "inclusion_probability": selection.get("inclusion_probability"),
             "position_probability": selection.get("position_probability"),
             "final_position": selection.get("final_position"),

@@ -1531,6 +1531,8 @@ def _refresh_lens_recommendations(
     for candidate in slate:
         if candidate["_selection"].get("branch_floor"):
             candidate["score_breakdown"].setdefault("provenance", {})["branch_floor"] = True
+        if candidate["_selection"].get("first_screen_lift"):
+            candidate["score_breakdown"].setdefault("provenance", {})["first_screen_lift"] = True
     phase_started = perf_counter()
     # Candidate promotion + transported-vector persistence is DML too. It used
     # to rely on a bare helper-level commit after the loop, leaving this

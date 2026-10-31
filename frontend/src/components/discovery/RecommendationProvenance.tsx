@@ -13,6 +13,7 @@ export interface ProvenanceSignals {
   /** The ranked selection left this card out; the branch's reserved slot kept
    *  it. Stated on the card so its place is not read as merit. */
   branchFloor?: boolean
+  firstScreenLift?: boolean
   sourceType?: string | null
   sourceApi?: string | null
   matchedQuery?: string | null
@@ -83,6 +84,14 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
       kind: 'branch',
       title:
         'The ranked selection left this one out. Every active branch keeps its best cards, so it stayed. Its score is unchanged.',
+    })
+  } else if (signals.firstScreenLift) {
+    chips.push({
+      key: 'first-screen-lift',
+      label: 'Moved up for its branch',
+      kind: 'branch',
+      title:
+        'Every active branch shows one card before Show all, and this is the best of its branch. Its score is unchanged.',
     })
   }
 
