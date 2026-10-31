@@ -318,10 +318,9 @@ def set_operation_config(
 
 
 def _health_payload(db: sqlite3.Connection) -> dict:
-    from alma.services import health as health_service
-    from alma.services.health_snapshots import stored_payload
+    from alma.services.health_snapshots import stored_planning_payload
 
-    return stored_payload(db, health_service.HEALTH_CORPUS_VIEW_KEY)
+    return stored_planning_payload(db)
 
 
 @router.get(

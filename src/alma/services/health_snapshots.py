@@ -124,6 +124,17 @@ def stored_payload(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     return dict(stored_envelope(conn, view_key).get("payload") or {})
 
 
+def stored_planning_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    """`maintenance.planning_health_payload` for a request: stored rows only."""
+
+    from alma.services.maintenance import merge_health_payloads
+
+    return merge_health_payloads(
+        stored_payload(conn, health_service.HEALTH_CORPUS_VIEW_KEY),
+        stored_payload(conn, health_service.HEALTH_AUTHORS_VIEW_KEY),
+    )
+
+
 def stored_operations(conn: sqlite3.Connection) -> dict[str, Any]:
     """Stored operation plan with cheap live budget/policy overlay."""
 

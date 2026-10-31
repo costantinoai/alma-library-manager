@@ -1784,17 +1784,24 @@ def task_pending_count(
         ) from exc
 
 
-def planning_health_payload(conn: sqlite3.Connection) -> dict[str, Any]:
-    """One health input for planning, ordering, recommendation, and resume."""
+def merge_health_payloads(corpus: dict[str, Any], authors: dict[str, Any]) -> dict[str, Any]:
+    """The corpus health payload with the author dimensions added."""
 
-    corpus = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
-    authors = (mv.get(conn, health_service.HEALTH_AUTHORS_VIEW_KEY).get("payload")) or {}
     dimensions: dict[str, dict[str, Any]] = {}
     for row in [*(corpus.get("dimensions") or []), *(authors.get("dimensions") or [])]:
         key = str(row.get("key") or "")
         if key:
             dimensions[key] = row
     return {**corpus, "dimensions": list(dimensions.values())}
+
+
+def planning_health_payload(conn: sqlite3.Connection) -> dict[str, Any]:
+    """One health input for planning, ordering, recommendation, and resume."""
+
+    return merge_health_payloads(
+        mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload") or {},
+        mv.get(conn, health_service.HEALTH_AUTHORS_VIEW_KEY).get("payload") or {},
+    )
 
 
 def _validated_spec(task: MaintenanceTask, spec: MaintenanceRunSpec) -> MaintenanceRunSpec:
