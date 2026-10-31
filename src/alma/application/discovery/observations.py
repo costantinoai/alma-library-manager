@@ -65,6 +65,7 @@ def ranking_candidate_rows(
                 candidate.get("paper_id"),
                 fused_rank,
                 float(candidate.get("prior_score") or candidate.get("score") or 0.0),
+                None,  # shadow_score: the nullable column stays until a migrator drops it
                 json.dumps(candidate.get("reward_features") or {}, separators=(",", ":")),
                 json.dumps(exposure, separators=(",", ":")),
                 json.dumps(candidate.get("retrieval_hits") or [], separators=(",", ":")),
@@ -93,13 +94,13 @@ def insert_ranking_candidates(db: sqlite3.Connection, rows: list[tuple]) -> None
         """
         INSERT INTO discovery_ranking_candidates (
             id, suggestion_set_id, lens_id, candidate_key, paper_id,
-            fused_rank, prior_score, reward_features,
+            fused_rank, prior_score, shadow_score, reward_features,
             exposure_features, retrieval_hits, feature_schema_version,
             feature_timestamp, selected, exploration,
             inclusion_probability, position_probability, final_position,
             policy_version, ranker_version, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
