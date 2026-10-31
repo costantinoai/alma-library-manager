@@ -8,6 +8,7 @@ import sqlite3
 import uuid
 from typing import Any
 
+from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
 from .models import OperationContext
@@ -33,12 +34,13 @@ def persist_operation_status(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Upsert one lifecycle snapshot into operation_status."""
+    # Every foreground Activity row crosses here, and rows travel in backups.
     error_value: str | None = None
     if ctx.error is not None:
-        error_value = _json_dumps(ctx.error)
+        error_value = _json_dumps(redact_sensitive_data(ctx.error))
 
-    result_json = _json_dumps(ctx.result) if ctx.result is not None else None
-    metadata_json = _json_dumps(metadata) if metadata else None
+    result_json = _json_dumps(redact_sensitive_data(ctx.result)) if ctx.result is not None else None
+    metadata_json = _json_dumps(redact_sensitive_data(metadata)) if metadata else None
 
     db.execute(
         """
@@ -67,7 +69,7 @@ def persist_operation_status(
         (
             ctx.operation_id,
             ctx.status,
-            ctx.message,
+            redact_sensitive_text(ctx.message or "") or ctx.message,
             error_value,
             ctx.started_at,
             ctx.finished_at,
@@ -199,7 +201,7 @@ def persist_operation_log(
             utcnow().isoformat(),
             level,
             step,
-            message,
-            _json_dumps(data or {}),
+            redact_sensitive_text(message),
+            _json_dumps(redact_sensitive_data(data or {})),
         ),
     )

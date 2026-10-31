@@ -39,6 +39,7 @@ from time import perf_counter
 from typing import Any
 
 from alma.core.db_write import commit_unless_gated, gate_held_by_current_thread, run_write_unit
+from alma.core.redaction import redact_sensitive_text
 from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -265,7 +266,7 @@ def _write_row(
             utcnow().isoformat(),
             int(compute_ms),
             build_status,
-            build_error,
+            redact_sensitive_text(build_error or "") or None,
             rebuild_job_id,
         ),
     )

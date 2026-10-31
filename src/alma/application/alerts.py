@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from alma.core.redaction import redact_sensitive_text
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 
@@ -1037,7 +1038,7 @@ async def evaluate_digest(
                     """,
                     (uuid.uuid4().hex, digest_id, key, channel_name, now),
                 )
-        error_msg = ch_result.get("error")
+        error_msg = redact_sensitive_text(ch_result.get("error") or "") or None
         db.execute(
             """
             INSERT INTO alert_history (

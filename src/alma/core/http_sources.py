@@ -836,7 +836,7 @@ class SourceHttpClient:
                             path=path_label,
                             attempt=attempt,
                             duration_ms=elapsed_ms,
-                            error=str(exc),
+                            error=redact_sensitive_text(str(exc)),
                         )
                     if attempt >= retry_budget:
                         raise
