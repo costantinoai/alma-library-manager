@@ -36,6 +36,7 @@ from alma.application.inbox_schema import (
     ExtractedIdentifiers,
     InboundMessage,
 )
+from alma.core.redaction import redact_sensitive_text
 from alma.core.resolution import arxiv_doi, extract_arxiv_id, extract_biorxiv_doi
 from alma.core.time import utcnow
 from alma.core.utils import find_dois_in_text, normalize_openalex_id
@@ -207,7 +208,7 @@ def record_message(
             json.dumps(result.extracted.as_dict()),
             result.outcome,
             result.paper_id,
-            result.error,
+            redact_sensitive_text(result.error or "") or None,
             json.dumps(message.metadata or {}),
             utcnow().isoformat(),
             utcnow().isoformat(),
@@ -335,7 +336,7 @@ def persist_attention_retry(
             json.dumps(result.extracted.as_dict()),
             result.outcome,
             result.paper_id,
-            result.error,
+            redact_sensitive_text(result.error or "") or None,
             replacement_link,
             utcnow().isoformat(),
             message_id,
@@ -387,7 +388,7 @@ def resolve_message(message: InboundMessage) -> ResolvedCapture:
         logger.warning("Inbox capture upstream failure (%s): %s", message.channel, exc)
         return ResolvedCapture(
             extracted=extracted,
-            error=f"Could not reach the metadata service: {exc}",
+            error=redact_sensitive_text(f"Could not reach the metadata service: {exc}"),
         )
 
     return ResolvedCapture(

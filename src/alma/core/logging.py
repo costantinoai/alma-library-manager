@@ -3,6 +3,67 @@
 
 import logging
 import logging.config
+import numbers
+from typing import Any
+
+from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
+
+# Uvicorn keeps its own handlers and does not propagate, so a traceback from
+# "Exception in ASGI application" never reaches the root console handler.
+_SERVER_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def _safe_arg(arg: Any) -> Any:
+    """Redact one ``%`` argument. Numbers stay numbers, or ``%d`` would break."""
+    if arg is None or isinstance(arg, numbers.Number):
+        return arg
+    return redact_sensitive_text(str(arg))
+
+
+def _rendered(record: logging.LogRecord) -> str:
+    """The record's message with its args filled in, redacted.
+
+    Dict args go through key-based redaction first, because `%(password)s` renders
+    to a bare value that no text pattern can recognize. A malformed logger call
+    must not fall through unredacted, so it keeps its parts instead of raising.
+    """
+    args = redact_sensitive_data(record.args) if isinstance(record.args, dict) else record.args
+    template = str(record.msg)
+    try:
+        text = template % args if args else template
+    except (TypeError, ValueError, KeyError):
+        text = f"{template} {args}"
+    return redact_sensitive_text(text)
+
+
+class RedactSecretsFilter(logging.Filter):
+    """Remove credentials from a record before a handler prints it.
+
+    The belt under every logger call: there are hundreds of ``logger.x(..., exc)``
+    sites, and fixing them one by one leaves the next one armed. The message is
+    rendered before it is redacted: redacting the template alone turns `token=%s`
+    into `token=[REDACTED]`, which leaves the `%s` argument nothing to fill, so the
+    line is lost and logging prints the argument to stderr. Uvicorn's records keep
+    their args, because its formatters unpack them by position. A filter that
+    fails must not lose the log line.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.args, tuple) and record.args and record.name.startswith("uvicorn"):
+                record.args = tuple(_safe_arg(arg) for arg in record.args)
+            else:
+                record.msg = _rendered(record)
+                record.args = None
+            if record.exc_info and not record.exc_text:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            if record.exc_text:
+                record.exc_text = redact_sensitive_text(record.exc_text)
+            if record.stack_info:
+                record.stack_info = redact_sensitive_text(record.stack_info)
+        except Exception:  # noqa: BLE001 - a log line outranks a tidy one
+            return True
+        return True
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -22,14 +83,20 @@ def setup_logging(verbose: bool = False) -> None:
                 "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
             }
         },
+        "filters": {"redact_secrets": {"()": RedactSecretsFilter}},
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
                 "formatter": "default",
+                "filters": ["redact_secrets"],
                 "level": "DEBUG",
             }
         },
         "root": {"handlers": ["console"], "level": level},
     }
     logging.config.dictConfig(config)
+    for name in _SERVER_LOGGERS:
+        for handler in logging.getLogger(name).handlers:
+            if not any(isinstance(f, RedactSecretsFilter) for f in handler.filters):
+                handler.addFilter(RedactSecretsFilter())
 

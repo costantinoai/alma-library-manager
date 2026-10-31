@@ -17,6 +17,7 @@ from typing import Any
 
 from alma.core.components import resolve_component
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
+from alma.core.network_policy import ExternalAccessError, require_network_access
 from alma.core.paper_groups import settle_new_paper_group
 from alma.core.resolution import arxiv_doi
 from alma.core.sql_helpers import standalone_paper_sql
@@ -449,6 +450,18 @@ def _build_zotero_collection_paths(
     return {key: _build(key, frozenset()) for key in name_by_key}
 
 
+def zotero_client(library_id: str, library_type: str, api_key: str):
+    """Build the one Zotero client, after the network switch has its say.
+
+    `pyzotero` opens its own connections, so it passes no ALMa transport that
+    would ask `require_network_access` for it.
+    """
+    from pyzotero import zotero  # lazy import
+
+    require_network_access("zotero")
+    return zotero.Zotero(library_id, library_type, api_key)
+
+
 def _normalize_zotero_item(item: dict) -> dict:
     """Normalize a Zotero API item to our internal format.
 
@@ -552,12 +565,12 @@ def import_zotero(
     Returns:
         ImportResult.
     """
-    from pyzotero import zotero  # lazy import
-
     result = ImportResult()
 
     try:
-        zot = zotero.Zotero(library_id, library_type, api_key)
+        zot = zotero_client(library_id, library_type, api_key)
+    except ExternalAccessError:
+        raise
     except Exception as exc:
         result.errors.append(f"Zotero connection error: {exc}")
         return result
@@ -728,9 +741,7 @@ def list_zotero_collections(
     Returns:
         List of dicts with keys: key, name, num_items.
     """
-    from pyzotero import zotero  # lazy import
-
-    zot = zotero.Zotero(library_id, library_type, api_key)
+    zot = zotero_client(library_id, library_type, api_key)
     raw = zot.collections()
     out: list[dict] = []
     for coll in raw:

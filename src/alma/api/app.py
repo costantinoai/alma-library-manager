@@ -23,7 +23,6 @@ from alma.api.deps import get_plugin_registry, open_db_connection
 from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.origin_guard import (
-    EXTENSION_ORIGIN_REGEX,
     OriginGuardMiddleware,
     allowed_origins,
 )
@@ -257,11 +256,12 @@ ALLOWED_ORIGINS = allowed_origins()
 
 app.add_middleware(
     CORSMiddleware,
+    # Listed origins only. Extensions are deliberately absent: the connector
+    # fetches from its popup and background pages, and host_permissions exempt
+    # those from CORS. An origin regex here added one thing only: any extension
+    # with NO permissions could read the whole library. Their writes stay allowed
+    # in the origin guard.
     allow_origins=ALLOWED_ORIGINS,
-    # Browser-connector origins (see extension/). The connector fetches from a
-    # context with host_permissions for the API, which already bypasses CORS, so
-    # this is a belt-and-braces allowance for a direct popup fetch.
-    allow_origin_regex=EXTENSION_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -274,6 +274,17 @@ app.add_middleware(
 # through uncompressed — see `alma.api.compression`.
 app.add_middleware(GraphHttpCacheMiddleware)
 app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1024, compresslevel=5)
+
+
+# No page may frame ALMa: with no login, a framed Reset button is one lured click
+# from firing, and the origin guard cannot help because the frame is same-origin.
+# The CSP names this directive only, so nothing else about the app or Swagger
+# changes. Stored PDFs open as a top-level page (new tab), never in a frame.
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 # Request logging middleware
@@ -329,6 +340,8 @@ async def log_requests(request: Request, call_next):
     # Add custom header
     response.headers["X-Process-Time"] = str(process_time)
     response.headers["X-Request-ID"] = request_id
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
 
     return response
 

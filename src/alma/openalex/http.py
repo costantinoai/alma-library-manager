@@ -43,7 +43,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import requests
 from requests.structures import CaseInsensitiveDict
@@ -115,6 +115,20 @@ _SINGLETON_PATH_RE = re.compile(
 )
 # A content-host file: `/works/W123.pdf` or `/works/W123.grobid-xml`.
 _CONTENT_PATH_RE = re.compile(r"^/works/W\d+\.(pdf|grobid-xml)$", re.IGNORECASE)
+
+
+def _sanitized_exception(exc: requests.RequestException) -> requests.RequestException:
+    """Return an exception of the same type whose text holds no credential.
+
+    The key no longer rides the URL, so this is the belt: callers log and store
+    `str(exc)` at hundreds of sites, and this is the one place all of them pass
+    through. Raise it `from None`, or the original prints along with any traceback.
+    """
+    clean = redact_sensitive_text(str(exc))
+    try:
+        return type(exc)(clean, response=exc.response)
+    except TypeError:  # a subclass with its own signature
+        return requests.RequestException(clean, response=exc.response)
 
 
 def classify_request(path: str, params: dict[str, Any] | None = None) -> str:
@@ -327,7 +341,7 @@ class OpenAlexClient:
             content = bytes(content_raw)
         else:
             content = b""
-        url = self._sanitize_url_for_storage(str(getattr(resp, "url", "") or fallback_url))
+        url = str(getattr(resp, "url", "") or fallback_url)
         reason = str(getattr(resp, "reason", "") or "")
         encoding = getattr(resp, "encoding", None)
         self._op_cache[key] = (status_code, headers, content, url, reason, encoding)
@@ -349,7 +363,7 @@ class OpenAlexClient:
         exponential backoff + jitter.
         """
         url = f"{BASE_URL}{path}" if path.startswith("/") else f"{BASE_URL}/{path}"
-        merged = self._inject_auth(params)
+        merged = dict(params) if params else {}
         # Central per-page clamp: the API maximum dropped 200 → 100 with the
         # Feb-2026 pricing release; enforcing here fixes every caller at once.
         for key in ("per-page", "per_page"):
@@ -408,9 +422,7 @@ class OpenAlexClient:
             raise ValueError(f"Not an OpenAlex work id: {work_id!r}")
         ext = {"pdf": "pdf", "grobid_xml": "grobid-xml"}[fmt]
         url = f"{CONTENT_BASE_URL}/works/{wid.upper()}.{ext}"
-        return self._request_with_retry(
-            url, self._inject_auth(None), timeout, stream=True, cache=False
-        )
+        return self._request_with_retry(url, {}, timeout, stream=True, cache=False)
 
     def seed_cache(
         self,
@@ -428,7 +440,7 @@ class OpenAlexClient:
         cacheable-status rules.
         """
         url = f"{BASE_URL}{path}" if path.startswith("/") else f"{BASE_URL}/{path}"
-        key = self._cache_key(url, self._inject_auth(params))
+        key = self._cache_key(url, params)
         self._store_cached_response(key, resp, fallback_url=url)
         self._op_cache_put(key, resp, fallback_url=url)
 
@@ -443,8 +455,7 @@ class OpenAlexClient:
         try:
             # Direct request — bypass cache so we always get live values.
             url = f"{BASE_URL}/rate-limit"
-            merged = self._inject_auth(None)
-            resp = self._session().get(url, params=merged, timeout=timeout)
+            resp = self._session().get(url, headers=self._auth_headers(), timeout=timeout)
             self._update_rate_limits(resp)
             if resp.status_code != 200:
                 return None
@@ -478,8 +489,7 @@ class OpenAlexClient:
             return {"configured": False, "valid": None, "detail": "No API key set."}
         try:
             url = f"{BASE_URL}/rate-limit"
-            merged = self._inject_auth(None)
-            resp = self._session().get(url, params=merged, timeout=timeout)
+            resp = self._session().get(url, headers=self._auth_headers(), timeout=timeout)
             self._update_rate_limits(resp)
         except Exception as exc:
             return {
@@ -511,20 +521,24 @@ class OpenAlexClient:
     # Auth helpers
     # ------------------------------------------------------------------
 
-    def _inject_auth(
-        self, params: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        """Return a copy of *params* with the ``api_key`` added.
+    def _auth_headers(self) -> dict[str, str]:
+        """Return the headers that carry the API key, on every OpenAlex host.
+
+        Header, never query string: `requests` quotes the full URL in every
+        exception and in `raise_for_status()`, so a key in the URL reaches logs,
+        Activity, the Inbox table and backups on the first DNS outage. OpenAlex
+        documents both forms as identical; on 2026-10-31 a fake key sent this way
+        got "Invalid or missing API key" from api.openalex.org (including
+        /rate-limit) and content.openalex.org, the reply a fake `api_key=` gets,
+        while no key at all got a different one. `requests` drops this header if
+        a redirect leaves the host.
 
         The ``mailto``/polite-pool parameter was discontinued by OpenAlex on
         2026-02-13 and is now ignored server-side — we no longer send it (the
         configured contact email still feeds the Crossref polite pool + the
         User-Agent elsewhere). The API key is the sole identity mechanism.
         """
-        merged = dict(params) if params else {}
-        if self._api_key:
-            merged["api_key"] = self._api_key
-        return merged
+        return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
     # ------------------------------------------------------------------
     # Retry logic
@@ -585,7 +599,13 @@ class OpenAlexClient:
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                resp = self._session().get(url, params=params, timeout=timeout, stream=stream)
+                resp = self._session().get(
+                    url,
+                    params=params,
+                    headers=self._auth_headers(),
+                    timeout=timeout,
+                    stream=stream,
+                )
                 self._update_rate_limits(resp)
                 last_resp = resp
 
@@ -667,7 +687,7 @@ class OpenAlexClient:
 
         # Exhausted retries
         if last_exc is not None:
-            raise last_exc
+            raise _sanitized_exception(last_exc) from None
         if last_resp is not None:
             raise requests.exceptions.HTTPError(
                 f"OpenAlex returned {last_resp.status_code} after {_MAX_RETRIES + 1} attempts: {url}",
@@ -681,37 +701,12 @@ class OpenAlexClient:
     @staticmethod
     def _cache_key(url: str, params: dict[str, Any]) -> str:
         """Build a stable cache key from URL and query params."""
-        safe_params = {k: v for k, v in (params or {}).items() if str(k).lower() != "api_key"}
+        items = params or {}
         try:
-            serialized = json.dumps(safe_params, sort_keys=True, separators=(",", ":"), default=str)
+            serialized = json.dumps(items, sort_keys=True, separators=(",", ":"), default=str)
         except Exception:
-            serialized = str(sorted(safe_params.items()))
+            serialized = str(sorted(items.items()))
         return f"{url}?{serialized}"
-
-    @staticmethod
-    def _sanitize_url_for_storage(url: str) -> str:
-        """Return URL with sensitive query keys removed."""
-        raw = (url or "").strip()
-        if not raw:
-            return raw
-        try:
-            parts = urlsplit(raw)
-            safe_query = [
-                (k, v)
-                for k, v in parse_qsl(parts.query, keep_blank_values=True)
-                if str(k).lower() not in {"api_key"}
-            ]
-            return urlunsplit(
-                (
-                    parts.scheme,
-                    parts.netloc,
-                    parts.path,
-                    urlencode(safe_query, doseq=True),
-                    parts.fragment,
-                )
-            )
-        except Exception:
-            return raw
 
     def _get_cached_response(self, key: str) -> requests.Response | None:
         """Return a cached response if present and unexpired."""
@@ -749,7 +744,7 @@ class OpenAlexClient:
             content = bytes(content_raw)
         else:
             content = b""
-        url = self._sanitize_url_for_storage(str(getattr(resp, "url", "") or fallback_url))
+        url = str(getattr(resp, "url", "") or fallback_url)
         reason = str(getattr(resp, "reason", "") or "")
         encoding = getattr(resp, "encoding", None)
         expires_at = time.time() + float(_CACHE_TTL_SECONDS)

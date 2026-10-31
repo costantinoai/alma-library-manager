@@ -197,6 +197,22 @@ def vet_url(raw: str, *, base: str = "", resolve: bool = True) -> VettedUrl:
     return VettedUrl(url=url, host=host, port=effective_port, addresses=addresses)
 
 
+def web_link(raw: object) -> str:
+    """Return ``raw`` if it is an http(s) link fit to put in an output, else ``""``.
+
+    For links ALMa writes into email and Slack, where no framework blocks
+    `javascript:`. It checks the scheme only and does no DNS: the reader's own
+    client opens the link, so the SSRF rules of :func:`vet_url` do not apply.
+    Control characters are removed first, as browsers do, so `java\\tscript:`
+    cannot pass as a relative address.
+    """
+    value = "".join(ch for ch in str(raw or "") if ord(ch) > 0x20 or ch == " ").strip()
+    try:
+        return value if urlsplit(value).scheme.lower() in ("http", "https") else ""
+    except ValueError:
+        return ""
+
+
 def clean_remote_text(value: object, limit: int = 200, *, keep_semicolons: bool = False) -> str:
     """A string a remote server chose, made safe to store, log and display.
 

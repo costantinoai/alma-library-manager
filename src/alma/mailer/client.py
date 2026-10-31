@@ -20,6 +20,8 @@ from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
 
+from alma.core.url_safety import web_link
+
 logger = logging.getLogger(__name__)
 
 # Mirror Slack's chunking ceiling so a huge fire stays readable. Email has no
@@ -166,7 +168,7 @@ class EmailNotifier:
         url = str(paper.get("url") or paper.get("pub_url") or paper.get("doi") or "").strip()
         if url.startswith("10."):
             url = f"https://doi.org/{url}"
-        return url
+        return web_link(url)
 
     @staticmethod
     def _authors_text(paper: dict) -> str:
