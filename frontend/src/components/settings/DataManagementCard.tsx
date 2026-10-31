@@ -75,7 +75,7 @@ export function DataManagementCard() {
     <SettingsCard
       icon={Database}
       title="Data Management"
-      description="Manage your data: deep refresh, backup, and export."
+      description="Manage your data: imports, backup, and export."
     >
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-slate-700">Operations</h4>
@@ -97,10 +97,6 @@ export function DataManagementCard() {
             Resolve Unresolved Imports (OpenAlex)
           </AsyncButton>
         </div>
-        <p className="text-[11px] leading-snug text-slate-500">
-          Author refresh has moved to <span className="font-medium">Corpus maintenance</span> below —
-          it exposes Library / Followed / Whole-corpus scopes on the same pipeline.
-        </p>
       </div>
 
       <div className="space-y-2">

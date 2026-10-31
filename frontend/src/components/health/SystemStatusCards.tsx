@@ -373,7 +373,7 @@ function componentOfState(s: OperationalState): string {
 const HEALTHY_NOTE: Record<string, string> = {
   monitors: 'All feed monitors are refreshing cleanly — new papers are arriving on schedule.',
   sources: 'Recent feed and discovery refreshes completed without upstream HTTP errors (Semantic Scholar, Crossref, arXiv and the other enrichment APIs).',
-  ai: 'An embedding provider is configured and operational — Discovery similarity and the paper map are powered.',
+  ai: 'An embedding provider is configured and operational — Discovery similarity is powered.',
   authors: 'Every tracked author has a clean identity bridge and an up-to-date historical corpus.',
   alerts: 'Scheduled digests are configured and delivering.',
   plugins: 'All configured integrations passed their last connection test.',
@@ -730,10 +730,10 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
           icon: Cpu,
           // Coverage backlog is data-health — it lives in the ribbon caption and
           // the repair cards below; this card is the provider's OPERATIONAL state.
-          description: 'The embedding provider behind Discovery similarity and the paper map.',
+          description: 'The embedding provider behind Discovery similarity.',
           healthyNote:
             aiProvider === 'none'
-              ? 'No embedding provider is configured — Discovery similarity and the paper map are off. AI is opt-in: enable a provider under Settings → AI.'
+              ? 'No embedding provider is configured — Discovery similarity is off. AI is opt-in: enable a provider under Settings → AI.'
               : undefined,
           states: at('ai'),
           reviewItems: [],
@@ -790,7 +790,9 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
           ownerParams: { focus: 'needs-attention' },
         },
         {
-          count: degradedAuthorsTotal + identityTotal,
+          count:
+            (authorsSummary as { needs_attention?: { authors?: number } } | undefined)
+              ?.needs_attention?.authors ?? 0,
           countLabel: 'need attention',
           healthyLabel: 'all healthy',
           // "maintenance due" said nothing about WHY — name the backlog.

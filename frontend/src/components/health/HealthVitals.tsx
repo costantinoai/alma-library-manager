@@ -83,7 +83,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
           embedding coverage
           <JargonHint
             title="Embedding coverage"
-            description="Share of papers that have a vector for the active embedding model. Discovery similarity and the paper map need high coverage; readiness flips on at 80%."
+            description="Share of papers that have a vector for the active embedding model. Discovery similarity need high coverage; readiness flips on at 80%."
           />
         </span>
         <span

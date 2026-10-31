@@ -1077,7 +1077,8 @@ def _compute_branch_auto_weight(
 
     raw_share = weighted_positive / weighted_total if weighted_total > 0 else 0.0
     if raw_total < 3:
-        reason = f"thin signal ({raw_total} verdicts) — staying near neutral"
+        noun = "verdict" if raw_total == 1 else "verdicts"
+        reason = f"thin signal ({raw_total} {noun}) — staying near neutral"
     elif weight >= 1.15:
         reason = f"{raw_share * 100:.0f}% positive across {raw_total} verdicts — boosting"
     elif weight <= 0.85:

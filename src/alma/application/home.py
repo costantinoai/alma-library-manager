@@ -291,7 +291,7 @@ def _attention(db: sqlite3.Connection) -> dict[str, int | None]:
     return {
         "imports_pending": imports_pending,
         "monitors_need_resolution": monitors_need_resolution,
-        "author_decisions": author_attention.identity_attention_count(db),
+        "author_decisions": author_attention.author_decision_count(db),
         "critical_health": _critical_health_count(db),
         "inbox_unresolved": inbox_unresolved,
     }

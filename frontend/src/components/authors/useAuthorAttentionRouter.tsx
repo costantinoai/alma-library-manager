@@ -30,27 +30,6 @@ export interface AuthorAttentionRouter {
   dialogs: ReactNode
 }
 
-/**
- * Suggested-action codes whose fix needs no human judgement, so "Fix all" may
- * fire them unattended:
- *   - `refresh` / `retry_refresh` / `resolve_now` → re-run the identity+profile
- *     resolver for that author;
- *   - `refresh_monitor` → re-run the author's feed monitor;
- *   - `backfill_author` → queue the historical works backfill.
- *
- * Everything else is deliberately excluded: `manual_search` means the automatic
- * search already returned zero hits (re-running it just fails again), and
- * `review_candidates` / `review_profiles` / `resolve_conflict` /
- * `pick_affiliation` are decisions only the user can make.
- */
-const AUTO_FIX_CODES = new Set([
-  'refresh',
-  'retry_refresh',
-  'resolve_now',
-  'refresh_monitor',
-  'backfill_author',
-])
-
 interface UseAuthorAttentionRouterOptions {
   authorsById?: Map<string, Author>
   onOpenDetail?: (author: Author) => void
@@ -159,7 +138,8 @@ export function useAuthorAttentionRouter(
    */
   const fixAll = async (rows: AuthorNeedsAttentionRow[]) => {
     if (fixingAll) return
-    const autoRows = rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code))
+    // `auto_fixable` comes from `author_attention.AUTO_FIX_CODES`.
+    const autoRows = rows.filter((r) => r.auto_fixable)
     const manualCount = rows.length - autoRows.length
     if (autoRows.length === 0) {
       toast({
@@ -248,7 +228,7 @@ export function useAuthorAttentionRouter(
     fixAll: (rows) => void fixAll(rows),
     isFixingAll: fixingAll,
     countAutoFixable: (rows) =>
-      rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code)).length,
+      rows.filter((r) => r.auto_fixable).length,
     dialogs,
   }
 }

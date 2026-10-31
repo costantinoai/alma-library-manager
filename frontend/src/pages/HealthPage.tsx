@@ -439,7 +439,7 @@ export function HealthPage() {
                 monitors, sources, plugins, background jobs. After it, <strong>Repairs</strong> is
                 what you can fix, and <strong>Activity</strong> is what already ran: failed background
                 operations with their step logs, quality scorecards, and the latest Feed / Discovery
-                refreshes. Corpus <em>analytics</em> live under <strong>Library → Analytics</strong>.
+                refreshes. Corpus <em>analytics</em> live in the <strong>Analytics</strong> fold on Library.
               </p>
             </>
           ),

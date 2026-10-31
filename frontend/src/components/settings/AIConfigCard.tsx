@@ -72,6 +72,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
@@ -502,7 +503,7 @@ export function AIConfigCard() {
       status: { tone, label },
       note:
         missingDependencies.length > 0
-          ? `${missingDependencies.length} package(s) cannot be imported here.`
+          ? `${plural(missingDependencies.length, 'package')} cannot be imported here.`
           : `${readyPackageCount} of ${totalPackageCount} packages importable.`,
     }
   }, [dependencyEnv, missingDependencies.length, readyPackageCount, totalPackageCount])
@@ -744,10 +745,10 @@ export function AIConfigCard() {
                     from{' '}
                     <button
                       type="button"
-                      onClick={() => navigateTo('health', { tab: 'maintenance' })}
+                      onClick={() => navigateTo('health', { tab: 'repairs' })}
                       className="font-medium text-alma-700 underline-offset-2 hover:underline"
                     >
-                      Health → Maintenance
+                      Health → Repairs
                     </button>
                     , where each repair shows an ETA and a daily cap. This card only configures the
                     provider and shows read-only coverage.
@@ -825,7 +826,7 @@ export function AIConfigCard() {
                         <AlertDialogTitle>Delete vectors for inactive models?</AlertDialogTitle>
                         <AlertDialogDescription>
                           Removes stored embeddings for every model except the currently active
-                          provider. You can recompute them later from Health → Maintenance.
+                          provider. You can recompute them later from Health → Repairs.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
@@ -1096,7 +1097,7 @@ export function AIConfigCard() {
                         {(dependencyEnv.active_site_packages?.length ?? 0) > 0 && (
                           <KeyValueRow
                             label="Active site-packages"
-                            value={`${dependencyEnv.active_site_packages?.length} path(s)`}
+                            value={plural(dependencyEnv.active_site_packages?.length ?? 0, 'path')}
                           />
                         )}
                       </div>

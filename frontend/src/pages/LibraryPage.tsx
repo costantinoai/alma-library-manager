@@ -246,7 +246,7 @@ export function LibraryPage() {
                 <strong className="font-medium text-alma-800 tabular-nums">
                   {totalLibrary ?? '—'}
                 </strong>{' '}
-                papers
+                {totalLibrary === 1 ? 'paper' : 'papers'}
               </span>,
               <span>
                 <strong
@@ -257,13 +257,13 @@ export function LibraryPage() {
                 >
                   {readingCount ?? '—'}
                 </strong>{' '}
-                reading
+                on the reading list
               </span>,
               <span>
                 <strong className="font-medium text-alma-800 tabular-nums">
                   {collectionsTotal ?? '—'}
                 </strong>{' '}
-                collections
+                {collectionsTotal === 1 ? 'collection' : 'collections'}
                 {uncollected > 0 && (
                   <span className="text-slate-400"> · {uncollected} uncategorised</span>
                 )}

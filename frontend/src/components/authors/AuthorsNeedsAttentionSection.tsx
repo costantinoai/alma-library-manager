@@ -101,7 +101,7 @@ export function AuthorsNeedsAttentionSection({
   return (
     <section className="space-y-2">
       <SectionHeader
-        total={rows.length}
+        total={new Set(rows.map((row) => row.author_id)).size}
         action={
           autoFixable > 0 ? (
             <Button

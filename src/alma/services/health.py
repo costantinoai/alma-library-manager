@@ -1159,7 +1159,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 if cov_measured
                 else cov_reason
             ),
-            impact="Discovery similarity and the paper map depend on embedding coverage.",
+            impact="Discovery similarity depends on embedding coverage.",
             # Coverage itself isn't a single runner; it improves by fetching S2
             # vectors and computing local ones, so it carries both as actions.
             repair_task=None,

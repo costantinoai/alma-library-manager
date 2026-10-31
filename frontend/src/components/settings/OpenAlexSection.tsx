@@ -179,7 +179,7 @@ export function OpenAlexSection({
                   <Input type="password" placeholder="openalex-..." {...field} />
                 </FormControl>
                 <FormDescription>
-                  Required for API access. Free tier: 100k credits/day. Get your key at{' '}
+                  Required for API access. A free key gives 10,000 credits a day, and no key gives 100. Get your key at{' '}
                   <a
                     href="https://openalex.org"
                     target="_blank"

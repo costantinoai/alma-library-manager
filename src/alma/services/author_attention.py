@@ -210,3 +210,378 @@ def corpus_backfill_rows(
                 }
             )
     return counts, rows
+
+
+#: Suggested actions ALMa can run unattended. Spelled once: "Fix all" takes them,
+#: and every count of what needs a person is what is left.
+#: `manual_search` is not one: the automatic search already found nothing.
+AUTO_FIX_CODES = frozenset(
+    {"refresh", "retry_refresh", "resolve_now", "refresh_monitor", "backfill_author"}
+)
+
+
+def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
+    """Merge conflicts, affiliation conflicts, split profiles, then identity rows."""
+    # Identity rows come from the canonical attention builders in
+    # alma.services.author_attention — the SAME module the Health popup's
+    # diagnostics snapshot composes from, so the two surfaces can never
+    # select or rank different buckets. (The severity CASE + WHERE inside
+    # it are the shared alma.services.health ladder assess_authors uses.)
+    ranked = identity_attention_rows(db, limit=limit)
+
+    # ── Split-profile detection ─────────────────────────────────────
+    # Same human, multiple OpenAlex IDs followed/saved. Names are
+    # NFKD-folded + lowercased + punctuation-stripped (same canonical
+    # form the suggestion-rail dedup uses) so "Müller" / "MÜLLER" /
+    # "Muller" collapse, but "Müller" / "Mueller" stay distinct.
+    # We only flag clusters where the user has already followed ≥2
+    # of the profiles — surfacing every author table cluster would
+    # be too noisy on a fresh import.
+    from alma.application.authors import _normalize_author_display_name
+
+    cluster_rows = db.execute(
+        """
+        SELECT a.id, a.name, a.openalex_id, a.id_resolution_updated_at, a.last_fetched_at
+        FROM authors a
+        JOIN followed_authors fa ON fa.author_id = a.id
+        WHERE COALESCE(a.openalex_id, '') <> ''
+        """
+    ).fetchall()
+
+    clusters: dict[str, list[sqlite3.Row]] = {}
+    for cr in cluster_rows:
+        name_key = _normalize_author_display_name(str(cr["name"] or ""))
+        if not name_key:
+            continue
+        clusters.setdefault(name_key, []).append(cr)
+    split_profiles: list[dict] = []
+    for name_key, members in clusters.items():
+        if len(members) < 2:
+            continue
+        # Pick a primary: most recent activity, then alphabetical id.
+        members_sorted = sorted(
+            members,
+            key=lambda r: (
+                str(r["id_resolution_updated_at"] or r["last_fetched_at"] or ""),
+                str(r["id"]),
+            ),
+            reverse=True,
+        )
+        primary = members_sorted[0]
+        alts = [
+            {
+                "author_id": str(r["id"]),
+                "openalex_id": str(r["openalex_id"]),
+                "display_name": str(r["name"] or ""),
+            }
+            for r in members_sorted[1:]
+        ]
+        primary_name = str(primary["name"] or "").strip() or str(primary["id"])
+        primary_oid = str(primary["openalex_id"] or "")
+        split_profiles.append(
+            {
+                "author_id": str(primary["id"]),
+                "author_name": primary_name,
+                "openalex_id": primary_oid or None,
+                "status": "split_profiles",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "split_profiles",
+                "reason": f"Multiple OpenAlex profiles for the same name ({len(members)} found)",
+                "reason_detail": (
+                    f"Primary: {primary_oid}; alternates: "
+                    + ", ".join(a["openalex_id"] for a in alts)
+                ),
+                "alt_profiles": alts,
+                "suggested_action": {
+                    "code": "review_profiles",
+                    "label": "Review profiles",
+                    "hint": (
+                        "Same person split across multiple OpenAlex IDs. "
+                        "Mark them as duplicates to merge follow + corpus, "
+                        "or confirm they're different humans to dismiss."
+                    ),
+                },
+                "updated_at": str(
+                    primary["id_resolution_updated_at"]
+                    or primary["last_fetched_at"]
+                    or ""
+                )
+                or None,
+            }
+        )
+
+    def _action_for(status: str, has_openalex: bool) -> dict[str, str]:
+        """Map the row shape to a user-facing action."""
+        if status == "error":
+            return {"code": "retry_refresh", "label": "Retry refresh",
+                    "hint": "The last refresh hit an exception. Try again."}
+        if status == "no_match":
+            return {"code": "manual_search", "label": "Search OpenAlex",
+                    "hint": "Automatic search returned zero hits. Open the author card and paste an OpenAlex / ORCID manually."}
+        if status == "needs_manual_review":
+            return {"code": "review_candidates", "label": "Review candidates",
+                    "hint": "Multiple OpenAlex candidates scored too close to each other. Pick the right one."}
+        if not has_openalex:
+            return {"code": "resolve_now", "label": "Resolve IDs",
+                    "hint": "Followed author with no OpenAlex identifier. Run resolve to link one."}
+        return {"code": "refresh", "label": "Refresh",
+                "hint": "Re-run the full refresh pipeline."}
+
+    def _reason_text(status: str, raw_reason: str) -> str:
+        """Friendly user-facing summary."""
+        if raw_reason:
+            return raw_reason
+        if status == "error":
+            return "Last refresh raised an exception."
+        if status == "no_match":
+            return "OpenAlex found no author matching this name."
+        if status == "needs_manual_review":
+            return "Automatic candidates were too close to decide."
+        return "Identifier not yet resolved."
+
+    def _detail_text(
+        status: str,
+        method: str,
+        confidence: float,
+        has_oa: bool,
+    ) -> str | None:
+        """Concrete second-line context: which resolver step ran, how
+        confidently, whether an ID at least exists. The frontend renders
+        this under the main reason so the user can see *what failed
+        and how* before clicking the action button.
+
+        Examples:
+        - "Last attempted: openalex_search · confidence 0.42 — too low to auto-pick"
+        - "ORCID resolved (A5012345678) but OpenAlex still missing"
+        - "No resolver step has run yet"
+        """
+        bits: list[str] = []
+        if method:
+            bits.append(f"Last step: {method}")
+        if confidence > 0.0:
+            bits.append(f"confidence {confidence:.2f}")
+        if status == "needs_manual_review" and confidence > 0.0:
+            bits.append("too low to auto-pick")
+        if has_oa and status in ("error", "no_match"):
+            bits.append("OpenAlex ID is set; refresh failed against it")
+        if not bits:
+            return "No resolver step has run yet" if status == "unresolved" else None
+        return " · ".join(bits)
+
+    out: list[dict] = []
+    for row in ranked:
+        status = str(row["status"] or "")
+        openalex_id = str(row["openalex_id"] or "").strip()
+        has_oa = bool(openalex_id)
+        method = str(row["method"] or "")
+        confidence = float(row["confidence"] or 0.0)
+        action = _action_for(status, has_oa)
+        out.append(
+            {
+                "author_id": str(row["author_id"]),
+                "author_name": str(row["author_name"] or row["author_id"]),
+                "openalex_id": openalex_id or None,
+                "status": status or "unresolved",
+                "method": method or None,
+                "confidence": confidence,
+                "reason_code": action["code"],
+                "reason": _reason_text(status, str(row["reason"] or "")),
+                "reason_detail": _detail_text(status, method, confidence, has_oa),
+                "suggested_action": action,
+                "updated_at": str(row["updated_at"] or "") or None,
+            }
+        )
+
+    # Merge conflicts — emitted when a previous merge_author_profiles
+    # call had a hard-identifier conflict (orcid / scholar_id /
+    # semantic_scholar_id) where both rows held a different non-null
+    # value. The merge proceeded (primary's value won), but the alt's
+    # value is preserved here so the user can review and decide which
+    # is correct. Surfaces ABOVE split_profiles because conflicts
+    # carry concrete evidence of a likely data-integrity issue.
+    from alma.application.author_merge import list_unresolved_conflicts
+
+    merge_conflicts: list[dict] = []
+    for c in list_unresolved_conflicts(db):
+        primary_name = str(c.get("primary_name") or c.get("primary_author_id") or "")
+        field = str(c.get("field") or "")
+        primary_val = str(c.get("primary_value") or "")
+        alt_val = str(c.get("alt_value") or "")
+        merge_conflicts.append(
+            {
+                "author_id": str(c.get("primary_author_id") or ""),
+                "author_name": primary_name,
+                "openalex_id": c.get("primary_openalex_id"),
+                "status": "merge_conflict",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "merge_conflict",
+                "reason": f"Merge kept conflicting {field}",
+                "reason_detail": (
+                    f"Primary: {primary_val} · merged-in alt "
+                    f"({c.get('alt_openalex_id')}) had {alt_val}. "
+                    "Pick which value to keep."
+                ),
+                "conflict_id": str(c.get("id") or ""),
+                "conflict_field": field,
+                "conflict_primary_value": primary_val,
+                "conflict_alt_value": alt_val,
+                "alt_openalex_id": c.get("alt_openalex_id"),
+                "suggested_action": {
+                    "code": "resolve_conflict",
+                    "label": "Resolve",
+                    "hint": (
+                        "Two profiles got merged but disagreed on a "
+                        "hard identifier. Confirm which value should "
+                        "stick — or dismiss if both are wrong."
+                    ),
+                },
+                "updated_at": str(c.get("created_at") or "") or None,
+            }
+        )
+
+    # Split-profile clusters surface above the existing rows (severity
+    # bucket "split" sits above the unresolved bucket but below true
+    # errors/no_match — they are actionable but not blocking like a
+    # missing identifier on a followed author).
+    from alma.application.author_affiliation import list_affiliation_conflicts
+
+    affiliation_conflicts: list[dict] = []
+    for c in list_affiliation_conflicts(db, limit=limit):
+        first = c.get("first") or {}
+        second = c.get("second") or {}
+        first_name = str(first.get("institution_name") or "")
+        second_name = str(second.get("institution_name") or "")
+        affiliation_conflicts.append(
+            {
+                "author_id": str(c.get("author_id") or ""),
+                "author_name": str(c.get("author_name") or ""),
+                "openalex_id": c.get("openalex_id"),
+                "status": "affiliation_conflict",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "affiliation_conflict",
+                "reason": "Affiliation evidence disagrees across sources",
+                "reason_detail": (
+                    f"Top evidence points to {first_name}; "
+                    f"near-tie evidence points to {second_name}."
+                ),
+                "selected_affiliation": c.get("selected_affiliation"),
+                "suggested_action": {
+                    "code": "pick_affiliation",
+                    "label": "Review affiliation",
+                    "hint": (
+                        "Open the evidence list and choose which "
+                        "institution should be displayed for this author."
+                    ),
+                },
+                "updated_at": str(first.get("observed_at") or second.get("observed_at") or "") or None,
+            }
+        )
+
+    return merge_conflicts + affiliation_conflicts + split_profiles + out
+
+
+def _operational_rows(db: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Degraded author monitors and corpus backfills, none of them a decision."""
+    # ── Operational attention: degraded monitors + corpus backfills ──────
+    # The Health popup has always shown these; the page must show the SAME
+    # rows or the two surfaces disagree (the bug this composition fixes).
+    # Sourced from the same canonical builders as the diagnostics snapshot.
+    from alma.application.feed_monitors import list_feed_monitors
+
+    operational: list[dict] = []
+    for m in monitor_attention_rows(list_feed_monitors(db)):
+        if not m.get("author_id"):
+            continue
+        reason = str(m.get("health_reason") or "").strip()
+        operational.append(
+            {
+                "author_id": str(m["author_id"]),
+                "author_name": m["author_name"],
+                "openalex_id": None,
+                "status": "degraded_monitor",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "degraded_monitor",
+                "reason": "Feed monitor is degraded — refreshes are not landing",
+                "reason_detail": (
+                    (f"Reason: {reason}. " if reason else "")
+                    + (f"Last error: {m['last_error']}. " if m.get("last_error") else "")
+                    or None
+                ),
+                "monitor_id": m.get("monitor_id"),
+                "suggested_action": {
+                    "code": "refresh_monitor",
+                    "label": "Refresh monitor",
+                    "hint": "Queue a refresh for this author's feed monitor now.",
+                },
+                "updated_at": str(m.get("last_checked_at") or "") or None,
+            }
+        )
+
+    _corpus_state_reason = {
+        "stale": "Historical backfill is stale — new papers since the last successful run",
+        "thin": "Historical backfill looks thin — fewer papers than this author has published",
+        "failed": "Last historical backfill failed",
+        "unverified": "Historical backfill never verified — coverage unknown",
+    }
+    _counts, corpus_rows = corpus_backfill_rows(db)
+    for c in corpus_rows:
+        state = str(c.get("state") or "")
+        if state not in CORPUS_ACTIONABLE_STATES:
+            continue  # pending/running inform in Health; they are not fixable rows
+        operational.append(
+            {
+                "author_id": str(c["author_id"]),
+                "author_name": c["author_name"],
+                "openalex_id": None,
+                "status": f"corpus_{state}",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "corpus_backfill",
+                "reason": _corpus_state_reason.get(state, f"Historical backfill {state}"),
+                "reason_detail": str(c.get("detail") or "") or None,
+                "suggested_action": {
+                    "code": "backfill_author",
+                    "label": "Backfill corpus",
+                    "hint": "Queue a historical-corpus backfill for this author.",
+                },
+                "updated_at": str(c.get("last_success_at") or "") or None,
+            }
+        )
+
+    return operational
+
+
+def _marked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**row, "auto_fixable": row["suggested_action"]["code"] in AUTO_FIX_CODES}
+        for row in rows
+    ]
+
+
+def needs_attention_rows(db: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, Any]]:
+    """The one list of authors that need attention: the Authors page shows it."""
+    return _marked(_people_rows(db, limit=limit) + _operational_rows(db))
+
+
+#: No cap for a count: `limit` bounds what one page renders.
+_EVERY_ROW = 1_000_000
+
+
+def author_decision_count(db: sqlite3.Connection) -> int:
+    """Rows only a person can settle. Skips the monitor and corpus reads: Home is a hot path."""
+    return sum(not row["auto_fixable"] for row in _marked(_people_rows(db, limit=_EVERY_ROW)))
+
+
+def needs_attention_counts(db: sqlite3.Connection) -> dict[str, int]:
+    """What Health and the Authors page say about the same rows."""
+    rows = needs_attention_rows(db, limit=_EVERY_ROW)
+    automatic = sum(row["auto_fixable"] for row in rows)
+    return {
+        "authors": len({row["author_id"] for row in rows}),
+        "automatic": automatic,
+        "decisions": len(rows) - automatic,
+    }

@@ -581,7 +581,7 @@ export function DiscoveryPage() {
       ),
     onSuccess: () => {
       // Card stays visible (flips to a checked "Saved" state); only Dismiss removes.
-      toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
+      toast({ title: 'Added', description: 'Paper saved and filed.' })
       void Promise.all([
         invalidateAfterPaperMutation(queryClient, selectedLensId),
         invalidateQueries(
@@ -1271,7 +1271,7 @@ export function DiscoveryPage() {
                         pullGroups
                       ) : (
                         <p className="text-[11px] text-slate-500">
-                          Nothing learned yet — save or rate a few papers and refresh.
+                          No taste summary is recorded for this refresh.
                         </p>
                       )}
                     </SubPanel>
@@ -1285,7 +1285,7 @@ export function DiscoveryPage() {
                         pushGroups
                       ) : (
                         <p className="text-[11px] text-slate-500">
-                          Nothing suppressed yet. Disliking a paper teaches this side.
+                          No taste summary is recorded for this refresh.
                         </p>
                       )}
                     </SubPanel>

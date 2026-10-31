@@ -905,6 +905,7 @@ def _build_authors_snapshot(
         except sqlite3.OperationalError:
             summary["background_corpus_papers"] = 0
     degraded = author_attention.monitor_attention_rows(author_monitors)[:12]
+    summary["needs_attention"] = author_attention.needs_attention_counts(db)
     summary["identity_attention_count"] = author_attention.identity_attention_count(db)
     identity_attention = author_attention.identity_attention_rows(db, limit=12)
 

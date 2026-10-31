@@ -140,7 +140,7 @@ export function AddToCollectionMenu({
         onClick={(e) => e.stopPropagation()}
       >
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Add to collection(s)
+          Add to collections
         </p>
         <p className="mb-2 text-xs text-slate-500">
           Adding to a collection also saves this paper to Library.

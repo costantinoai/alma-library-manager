@@ -302,12 +302,12 @@ def _build_ai_feature_registry(
         ),
         _feature(
             feature_id="graph_projection",
-            group="insights",
-            label="Graph projection and clustering",
+            group="discovery",
+            label="Clustering",
             status="ready" if graph_ready else "fallback",
             dependency="embeddings",
             detail=(
-                "Enough vectors exist for embedding-backed maps."
+                "Enough vectors exist for clustering."
                 if graph_ready
                 else "Graph views fall back or need at least 5 active-model vectors."
             ),
@@ -339,7 +339,6 @@ def _build_ai_feature_registry(
         "embeddings": "Embeddings",
         "discovery": "Discovery",
         "library": "Library",
-        "insights": "Insights",
         "metadata": "Metadata",
         "feedback": "Feedback Learning",
     }

@@ -119,7 +119,7 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
                 }
               />
             </span>
-            . Monitors live in Settings → Feed Monitor Controls, where you can edit or remove them anytime.
+            . Monitors live on the Feed page, where you can edit or remove them anytime.
           </p>
         </ConceptCallout>
 
