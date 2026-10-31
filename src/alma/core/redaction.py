@@ -54,9 +54,12 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"(?i)([?&]key=)([^&\s#]+)"),
         r"\1" + _REDACTED,
     ),
-    # Any scheme, and a short value the generic Bearer rule below would pass.
+    # Any scheme, quoted or not, and a short value the generic Bearer rule below
+    # would pass.
     (
-        re.compile(r"(?i)\b(authorization\s*[:=]\s*(?:[a-z]+\s+)?)[^\s&,;]+"),
+        re.compile(
+            r"""(?i)\b(authorization["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:[a-z]+\s+)?[^\s&,;]+)"""
+        ),
         r"\1" + _REDACTED,
     ),
     (
