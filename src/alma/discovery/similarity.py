@@ -410,10 +410,25 @@ def _get_or_build_user_topic_matrix(
 # forwards, ~96 s/refresh). ~16k × 768 float32 ≈ 50 MB worst case.
 _topic_embedding_cache: dict[str, numpy.ndarray | None] = {}
 _TOPIC_CACHE_MAX_SIZE = 16384
+_topic_cache_model: str | None = None
+
+
+def _bind_topic_cache(provider) -> None:
+    """One cache, one model. A provider change in a live process empties it.
+
+    Vectors of two models differ in size and meaning, so a term cached under
+    the previous provider must never reach a matrix built under the next one.
+    """
+    global _topic_cache_model
+    model = getattr(provider, "model_name", None)
+    if model != _topic_cache_model:
+        _topic_embedding_cache.clear()
+        _topic_cache_model = model
 
 
 def _get_topic_embedding(provider, term: str) -> numpy.ndarray | None:
     """Get or compute embedding for a topic term, using module-level cache."""
+    _bind_topic_cache(provider)
     if term in _topic_embedding_cache:
         return _topic_embedding_cache[term]
     # Evict oldest entries when cache is full
@@ -452,6 +467,7 @@ def _batch_warm_topic_embeddings(provider, terms: list[str]) -> None:
     """
     if provider is None:
         return
+    _bind_topic_cache(provider)
     seen: set[str] = set()
     pending: list[str] = []
     for term in terms:

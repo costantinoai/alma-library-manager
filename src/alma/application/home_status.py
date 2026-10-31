@@ -416,8 +416,20 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
     label = "SPECTER2" if local_ready else ("OpenAI embeddings" if hosted_ready else "Embeddings")
 
     papers = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
-    embedded = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
-                           "AND EXISTS (SELECT 1 FROM publication_embeddings pe WHERE pe.paper_id = p.id)") or 0)
+    # Only vectors of the active model count: another model's cannot be compared
+    # with them, so they cover nothing Discovery can read.
+    from alma.discovery.similarity import get_active_embedding_model
+
+    embedded = int(
+        scalar(
+            db,
+            f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
+            "AND EXISTS (SELECT 1 FROM publication_embeddings pe "
+            "WHERE pe.paper_id = p.id AND pe.model = ?)",
+            (get_active_embedding_model(db),),
+        )
+        or 0
+    )
     coverage = round((embedded / papers) * 100, 1) if papers else 0.0
 
     if not local_ready and not hosted_ready:

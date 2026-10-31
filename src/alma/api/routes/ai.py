@@ -643,6 +643,7 @@ def ai_status(
     """
     from alma.ai.providers import DEFAULT_LOCAL_MODEL, get_active_provider, list_available_providers
     from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+    from alma.discovery.similarity import get_active_embedding_model, storage_model_key
 
     dependency_env = activate_dependency_environment(db)
     dependencies, dependency_check_warning = check_packages_in_environment(
@@ -668,10 +669,12 @@ def ai_status(
     except sqlite3.OperationalError:
         pub_count = 0
 
-    configured_embedding_model = _read_setting(db, "embedding_model", S2_SPECTER2_MODEL)
+    # Storage keys: a remote provider's vectors live under a versioned key, so the
+    # raw model id would match none of them.
+    configured_embedding_model = get_active_embedding_model(db)
     expected_embedding_model = configured_embedding_model
     if active_provider is not None:
-        expected_embedding_model = active_provider.model_name
+        expected_embedding_model = storage_model_key(active_provider.model_name)
 
     # Headline coverage comes from the canonical definition shared with the
     # Health snapshot (assess_corpus), so the two surfaces can never report a
@@ -1213,12 +1216,13 @@ def delete_inactive_embeddings(
 ) -> DeleteInactiveEmbeddingsResponse:
     """Delete vectors for models other than the active embedding model."""
     from alma.ai.providers import get_active_provider
-    from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+    from alma.discovery.similarity import get_active_embedding_model, storage_model_key
 
-    active_model = _read_setting(db, "embedding_model", S2_SPECTER2_MODEL).strip() or S2_SPECTER2_MODEL
+    # The storage key, or a remote provider would delete its own vectors here.
+    active_model = get_active_embedding_model(db)
     active_provider = get_active_provider(db)
     if active_provider is not None:
-        active_model = active_provider.model_name
+        active_model = storage_model_key(active_provider.model_name)
 
     try:
         def _delete_inactive() -> int:
