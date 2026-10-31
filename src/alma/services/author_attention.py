@@ -222,6 +222,8 @@ AUTO_FIX_CODES = frozenset(
 
 def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
     """Merge conflicts, affiliation conflicts, split profiles, then identity rows."""
+    if not _table_exists(db, "authors"):
+        return []
     # Identity rows come from the canonical attention builders in
     # alma.services.author_attention — the SAME module the Health popup's
     # diagnostics snapshot composes from, so the two surfaces can never
