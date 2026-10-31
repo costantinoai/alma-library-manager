@@ -111,6 +111,12 @@ def normalize_feedback_event_value(event_type: str, raw_value: Any = None) -> fl
     return 0.0
 
 
+def _is_rating_event(raw_value: Any) -> bool:
+    """True for a stars-only event, the one kind that can state "no opinion"."""
+    value = _coerce_value(raw_value)
+    return isinstance(value, dict) and str(value.get("action") or "").strip().lower() == "rate"
+
+
 def load_paper_verdicts(
     db: sqlite3.Connection,
     *,
@@ -124,9 +130,12 @@ def load_paper_verdicts(
     Like is one label and a changed mind replaces the old opinion; summing them
     counted one paper's repeats as independent evidence (D92-17, D92-21). An
     event with no valence (Dismiss, a link click) is skipped, so it neither
-    counts nor hides an earlier verdict. A verdict past ``max_age_days`` still
-    stands as the newest, it has simply expired, so an older event cannot
-    replace it.
+    counts nor hides an earlier verdict. So is a Save at 3 stars: saving is a
+    membership decision (D6), and Feed records 3 even when the paper keeps its 5.
+    An explicit rating of 3 or 0 stars is different: the user said this paper
+    has no opinion now, so it is the newest statement and gives no verdict. A
+    verdict past ``max_age_days`` still stands as the newest, it has simply
+    expired, so an older event cannot replace it.
 
     ``paper_ids`` scopes the read to a batch; without it the read covers every
     event, so an old verdict outlives a busy log.
@@ -157,9 +166,11 @@ def load_paper_verdicts(
         if not paper_id or paper_id in judged:
             continue
         signal = normalize_feedback_event_value(row[1], row[2])
-        if signal == 0.0:
+        if signal == 0.0 and not _is_rating_event(row[2]):
             continue
         judged.add(paper_id)
+        if signal == 0.0:
+            continue
         age_days = _days_since(row[3], now)
         if age_days is not None and age_days > max_age_days:
             continue

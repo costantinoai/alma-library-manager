@@ -49,6 +49,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from alma.config import get_openalex_api_key, get_openalex_email
+from alma.core.http_sources import get_active_source_diagnostics, is_provider_answer
 from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,17 @@ class OperationStats:
         if self.batch_requests:
             parts.append(f"batches={self.batch_requests}({self.batch_items} items)")
         return ", ".join(parts)
+
+
+def _note_answer(resp: requests.Response) -> None:
+    """Tell the active diagnostics scope that OpenAlex answered, cached or not.
+
+    OpenAlex keeps its own request statistics, so it adds only this to the
+    scope, and nothing to the per-source summary Feed reports.
+    """
+    diagnostics = get_active_source_diagnostics()
+    if diagnostics is not None and is_provider_answer(resp.status_code):
+        diagnostics.mark_answered()
 
 
 class OpenAlexClient:
@@ -566,11 +578,13 @@ class OpenAlexClient:
             # 1) Check operation-scoped cache first (tighter scope, no TTL)
             op_cached = self._op_cache_get(cache_key)
             if op_cached is not None:
+                _note_answer(op_cached)
                 return op_cached
 
             # 2) Check persistent response cache
             cached = self._get_cached_response(cache_key)
             if cached is not None:
+                _note_answer(cached)
                 return cached
 
         from alma.core.network_policy import require_network_access
@@ -613,6 +627,7 @@ class OpenAlexClient:
                     if cache:
                         self._store_cached_response(cache_key, resp, fallback_url=url)
                         self._op_cache_put(cache_key, resp, fallback_url=url)
+                    _note_answer(resp)
                     return resp
                 if stream:
                     # Unread body: release the connection before any backoff.

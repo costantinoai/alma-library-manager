@@ -13,7 +13,8 @@ paper losing its turn.
 A window is a pure function of ``(ranked pool, budget, cursor)``. The caller
 records :meth:`RotationWindow.record` in the job's result, which is what makes
 a run reproducible, and saves the cursor with :func:`save_cursors` only after
-the run served. A failed call therefore retries the same window.
+the run served (:meth:`RotationWindow.served_by`). A completed lookup serves,
+empty or not; a failed call retries the same window.
 """
 
 from __future__ import annotations
@@ -53,6 +54,19 @@ class RotationWindow(Generic[T]):
         if not self.rotated:
             return 1
         return math.ceil((self.pool - self.kept) / self.rotated)
+
+    def served_by(self, completed: Iterable[T]) -> bool:
+        """Whether this run's completed lookups move the window on.
+
+        The cursor walks only the rotated share, and the kept items are asked
+        again on every run, so only the rotated share decides. One completed
+        lookup there is enough: an item that failed comes back within a lap,
+        while waiting for all of them would let one broken item hold the ring.
+        When no rotated item completed the turn is kept, so strong seeds that
+        answered before a rate limit hit cannot walk past items never asked.
+        """
+        done = set(completed)
+        return any(item in done for item in self.picked[self.kept :] or self.picked)
 
     def record(self) -> dict[str, int | str]:
         """What a job result stores so this exact pick can be reproduced."""

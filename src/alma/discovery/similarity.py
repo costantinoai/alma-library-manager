@@ -11,6 +11,7 @@ jobs, not from read/scoring helpers.
 
 from __future__ import annotations
 
+import heapq
 import logging
 import re
 import sqlite3
@@ -729,7 +730,7 @@ def _normalize_embedding_vector(vec: numpy.ndarray | None) -> numpy.ndarray | No
         norm = float(np.linalg.norm(vec))
     except Exception:
         return None
-    if norm <= 0.0:
+    if not np.isfinite(norm) or norm <= 0.0:
         return None
     return (vec / norm).astype(np.float32)
 
@@ -1058,6 +1059,20 @@ def compute_embedding_centroid(
     return np.mean(np.stack(aligned), axis=0)
 
 
+# Rows of N similarities held in memory at once by `select_representatives`.
+_COVERAGE_BLOCK_ROWS = 1024
+
+
+def _coverage_gains(matrix: numpy.ndarray, rows: list[int], cover: numpy.ndarray) -> list[float]:
+    """How much each of ``rows`` would raise the coverage, one block at a time."""
+    total = cover.sum(dtype=numpy.float64)
+    gains: list[float] = []
+    for start in range(0, len(rows), _COVERAGE_BLOCK_ROWS):
+        block = matrix[rows[start : start + _COVERAGE_BLOCK_ROWS]] @ matrix.T
+        gains.extend((numpy.maximum(block, cover).sum(axis=1, dtype=numpy.float64) - total).tolist())
+    return gains
+
+
 def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[numpy.ndarray]:
     """The ``limit`` vectors that best COVER the whole set — greedy facility location.
 
@@ -1066,20 +1081,35 @@ def select_representatives(vectors: list[numpy.ndarray], limit: int) -> list[num
     proportion to how much of the set it explains, and an isolated outlier
     (which covers only itself) comes last. Deterministic for a given order.
     Cosine on unit vectors; ``limit >= len(vectors)`` returns them all.
+
+    Every vector takes part, so the cost must stay linear in memory: a Library
+    of 25,000 papers would need 5 GB for one N x N similarity matrix. Lazy greedy
+    needs no such matrix. A candidate's gain can only shrink as coverage grows
+    (the objective is submodular), so its gain from an earlier pick bounds its
+    gain now, and only candidates that could still win are evaluated again.
+    Memory is the N x d matrix plus one block of at most 1,024 rows.
     """
     n = len(vectors)
     if n <= max(1, int(limit)):
         return list(vectors)
-    matrix = numpy.stack(vectors).astype(numpy.float32)
-    sims = matrix @ matrix.T
+    matrix = numpy.stack(vectors, dtype=numpy.float32)
     cover = numpy.zeros(n, dtype=numpy.float32)
+    bounds = [
+        (-gain, index)
+        for index, gain in enumerate(_coverage_gains(matrix, list(range(n)), cover))
+    ]
+    heapq.heapify(bounds)
     chosen: list[int] = []
     for _ in range(int(limit)):
-        gains = numpy.maximum(sims, cover[None, :]).sum(axis=1) - cover.sum()
-        gains[chosen] = -numpy.inf
-        pick = int(numpy.argmax(gains))
-        chosen.append(pick)
-        cover = numpy.maximum(cover, sims[pick])
+        while True:
+            _, index = heapq.heappop(bounds)
+            gain = _coverage_gains(matrix, [index], cover)[0]
+            # `not <`, so a NaN gain ends the search instead of re-entering the heap.
+            if not bounds or not gain < -bounds[0][0]:
+                break
+            heapq.heappush(bounds, (-gain, index))
+        chosen.append(index)
+        cover = numpy.maximum(cover, matrix[index] @ matrix.T)
     return [vectors[i] for i in chosen]
 
 
