@@ -20,7 +20,6 @@ from fastapi.staticfiles import StaticFiles
 
 from alma.api.compression import MediaAwareGZipMiddleware
 from alma.api.deps import get_plugin_registry, open_db_connection
-from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.origin_guard import (
     OriginGuardMiddleware,
@@ -266,12 +265,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Graph JSON is the application's largest repeated response. The inner cache
-# middleware hashes the uncompressed representation and handles conditional
-# GETs; gzip wraps it so ready payloads travel compactly. Building envelopes
-# are tiny and marked no-store. Served files (PDFs) and 206 range answers pass
-# through uncompressed — see `alma.api.compression`.
-app.add_middleware(GraphHttpCacheMiddleware)
+# gzip keeps large JSON payloads compact. Served files (PDFs) and 206 range
+# answers pass through uncompressed — see `alma.api.compression`.
 app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1024, compresslevel=5)
 
 

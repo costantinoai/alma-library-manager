@@ -733,24 +733,6 @@ class SimilarityResponse(BaseModel):
     dense_fallback_used: bool = False
 
 
-class MapSelectionLensCreate(BaseModel):
-    """Create a collection-backed lens from the current map selection."""
-
-    name: str = Field(..., min_length=1, max_length=120)
-    selection_kind: Literal["papers", "authors"]
-    ids: list[str] = Field(..., min_length=1)
-    scope: Literal["library", "corpus"]
-
-
-class MapSelectionLensResponse(BaseModel):
-    """Atomic collection + lens result for a lassoed map region."""
-
-    collection_id: str
-    lens_id: str
-    name: str
-    paper_count: int
-
-
 # ============================================================================
 # Library Models
 # ============================================================================
@@ -1107,10 +1089,3 @@ class ErrorResponse(BaseModel):
 # Graph Models
 # ============================================================================
 
-
-class GraphData(BaseModel):
-    """Response model for graph visualization data."""
-
-    nodes: list[dict]
-    edges: list[dict]
-    metadata: dict | None = None

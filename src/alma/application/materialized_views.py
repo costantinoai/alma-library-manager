@@ -1,6 +1,6 @@
 """Materialised-view layer for expensive derived artifacts.
 
-Endpoints like ``/insights`` and ``/graphs/*`` produce JSON payloads that
+Endpoints like ``/insights`` produce JSON payloads that
 are slow to compute (dozens of aggregate SQL queries, embedding scans,
 clustering / UMAP). Recomputing on every GET makes the UI feel locked
 during background activity. This module offers a single primitive — a

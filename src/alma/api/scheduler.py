@@ -2515,25 +2515,6 @@ _URGENT_STALE_REASONS = {"never_built", "age_overdue"}
 
 
 
-# Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set
-# drift (double the serve-while-stale variant tolerance) or a weekly age floor —
-# incremental placement keeps the substrate current in between.
-_LAYOUT_REBUILD_DRIFT = 0.20
-_LAYOUT_REBUILD_MAX_AGE_DAYS = 7
-_LAYOUT_SIG_KEY_PREFIX = "graph.layout_sig:"
-
-
-def _iso_age_days(stamp: str) -> float | None:
-    """Age in days of an ISO timestamp, or None when unparseable."""
-    if not stamp:
-        return None
-    try:
-        then = datetime.fromisoformat(stamp.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
-    return max(0.0, (utcnow() - then).total_seconds() / 86400.0)
-
-
 def _operation_log_retention_days() -> int:
     """Days of `operation_logs` history to keep before pruning. Default 30."""
     raw = os.getenv("ALMA_OPERATION_LOG_RETENTION_DAYS", "").strip()
