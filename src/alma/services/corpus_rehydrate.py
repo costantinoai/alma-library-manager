@@ -844,37 +844,15 @@ def _run_crossref_abstract_phase(
             "expected_http_calls": (len(unique_dois) + 49) // 50,
         },
     )
-    try:
-        candidates_by_doi = fetch_works_by_dois(
-            unique_dois, batch_size=50, raise_on_error=True
-        )
-    except Exception as exc:
-        logger.warning("Phase 2 batched Crossref fetch failed: %s", exc)
-        # Provider failure is not evidence that every DOI is absent. Stamp a
-        # shared transient backoff so the operation converges for now and tries
-        # again later instead of either lying terminal or hot-looping.
-        with write_section(conn, label="corpus_rehydrate crossref failure"):
-            for pid, doi in paper_to_doi.items():
-                _write_ledger(
-                    conn,
-                    paper_id=pid,
-                    source=CROSSREF_SOURCE,
-                    lookup_key=f"crossref:{doi.lower()}",
-                    status=RETRYABLE_STATUS,
-                    reason=f"crossref_batch_failed:{type(exc).__name__}: {exc}",
-                    fields_filled=[],
-                    fields_key="crossref_v1",
-                    retry_after=TRANSIENT_RETRY_AFTER,
-                )
-                fallback_summary["retryable_error"] += 1
+    batch = fetch_works_by_dois(unique_dois, batch_size=50)
+    if batch.failed:
         add_job_log(
             job_id,
-            f"Crossref unavailable; {len(paper_to_doi)} papers deferred for retry",
+            f"Crossref could not answer for {len(batch.failed)} DOI(s); those papers are deferred for retry",
             level="ERROR",
             step="fallback_error",
-            data={"cause": f"{type(exc).__name__}: {exc}"},
+            data={"causes": sorted(set(batch.failed.values()))[:5]},
         )
-        return fallback_summary
 
     applied = 0
     seen = 0
@@ -896,8 +874,26 @@ def _run_crossref_abstract_phase(
                 if not doi:
                     fallback_summary["skipped_no_doi"] += 1
                     continue
-                cand = candidates_by_doi.get(doi.lower())
+                cand = batch.works.get(doi.lower())
                 lookup_key = f"crossref:{doi.lower()}"
+                failure = batch.failed.get(doi.lower())
+                if failure:
+                    # Provider failure is not evidence that the DOI is absent:
+                    # back off and try again instead of lying terminal or
+                    # hot-looping.
+                    _write_ledger(
+                        conn,
+                        paper_id=pid,
+                        source=CROSSREF_SOURCE,
+                        lookup_key=lookup_key,
+                        status=RETRYABLE_STATUS,
+                        reason=f"crossref_batch_failed:{failure}",
+                        fields_filled=[],
+                        fields_key="crossref_v1",
+                        retry_after=TRANSIENT_RETRY_AFTER,
+                    )
+                    fallback_summary["retryable_error"] += 1
+                    continue
                 if cand is None:
                     _write_ledger(
                         conn,
