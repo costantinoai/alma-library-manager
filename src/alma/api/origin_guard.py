@@ -59,8 +59,8 @@ INTERNAL_HEALTH_PATH = "/api/v1/health"
 
 # Firefox sends `moz-extension://<uuid>` and Chromium `chrome-extension://<id>`.
 # The per-install id cannot be listed, so the scheme is what is matched. A web
-# page cannot claim one of these origins. Shared with the CORS configuration.
-EXTENSION_ORIGIN_REGEX = r"^(moz-extension|chrome-extension)://.*$"
+# page cannot claim one of these origins. This allows writes only: CORS grants
+# extensions no reads (see the note in app.py).
 _EXTENSION_SCHEMES = ("moz-extension", "chrome-extension")
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
