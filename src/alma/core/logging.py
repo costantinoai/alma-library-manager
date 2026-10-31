@@ -6,7 +6,7 @@ import logging.config
 import numbers
 from typing import Any
 
-from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
+from alma.core.redaction import redact_sensitive_text
 
 # Uvicorn keeps its own handlers and does not propagate, so a traceback from
 # "Exception in ASGI application" never reaches the root console handler.
@@ -24,18 +24,21 @@ class RedactSecretsFilter(logging.Filter):
     """Remove credentials from a record before a handler prints it.
 
     The belt under every logger call: there are hundreds of ``logger.x(..., exc)``
-    sites, and fixing them one by one leaves the next one armed. The record keeps
-    its shape, because uvicorn's access formatter unpacks ``record.args`` by
-    position. A filter that fails must not lose the log line.
+    sites, and fixing them one by one leaves the next one armed. The message is
+    rendered before it is redacted: redacting the template alone turns `token=%s`
+    into `token=[REDACTED]`, which leaves the `%s` argument nothing to fill, so the
+    line is lost and logging prints the argument to stderr. Uvicorn's records keep
+    their args, because its formatters unpack them by position. A filter that
+    fails must not lose the log line.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            record.msg = redact_sensitive_text(str(record.msg))
-            if isinstance(record.args, dict):
-                record.args = {k: _safe_arg(v) for k, v in redact_sensitive_data(record.args).items()}
-            elif record.args:
+            if record.args and record.name.startswith("uvicorn"):
                 record.args = tuple(_safe_arg(arg) for arg in record.args)
+            else:
+                record.msg = redact_sensitive_text(record.getMessage())
+                record.args = None
             if record.exc_info and not record.exc_text:
                 record.exc_text = logging.Formatter().formatException(record.exc_info)
             if record.exc_text:
