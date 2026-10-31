@@ -120,6 +120,13 @@ def _run_remove(job_id: str, addon_id: str) -> dict[str, Any]:
 
     phase = 0
 
+    def _require_switch_off() -> None:
+        # The switch may have moved since the route checked it.
+        if addons.switch_is_on(addon_id):
+            raise addons.AddonConflict(f"{addon_id} was switched on, Remove stopped")
+
+    _require_switch_off()
+
     def _progress(step: str, message: str, data: dict[str, Any]) -> None:
         nonlocal phase
         phase += 1
@@ -135,6 +142,7 @@ def _run_remove(job_id: str, addon_id: str) -> dict[str, Any]:
     conn = open_db_connection()
     try:
         with write_section(conn, label=f"addon remove {addon_id}"):
+            _require_switch_off()
             tables = addons.drop_tables(conn, addon_id)
     finally:
         conn.close()
@@ -179,7 +187,7 @@ def remove_addon(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Type {addon_id} to confirm",
         )
-    if addons.is_enabled(addon_id):
+    if addons.switch_is_on(addon_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Switch {addon.name} off before removing it",
@@ -191,7 +199,7 @@ def remove_addon(
             detail=f"{addon.name} still has work running: {', '.join(active)}",
         )
 
-    operation_key = f"addons.remove:{addon_id}"
+    operation_key = addons.remove_operation_key(addon_id)
     existing = find_active_job(operation_key)
     if existing:
         return activity_envelope(

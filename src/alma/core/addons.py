@@ -202,15 +202,24 @@ def get(addon_id: str) -> AddOn:
     raise AddonNotFound(addon_id)
 
 
-def is_enabled(addon_id: str) -> bool:
-    """Switched on, in this build, and not blocked. Read on every call."""
-    if not any(addon.id == addon_id for addon in present()) or addon_id in _blocked:
-        return False
+def switch_is_on(addon_id: str) -> bool:
+    """The stored switch alone, whatever a block says.
+
+    Remove reads this one: a blocked add-on answers False to :func:`is_enabled`
+    while its switch is still on, and that must not count as switched off.
+    """
     key = activation_setting_key(addon_id)
     value = get_setting(key, False)
     if not isinstance(value, bool):
         raise ValueError(f"{key} must be a boolean")
     return value
+
+
+def is_enabled(addon_id: str) -> bool:
+    """Switched on, in this build, and not blocked. Read on every call."""
+    if not any(addon.id == addon_id for addon in present()) or addon_id in _blocked:
+        return False
+    return switch_is_on(addon_id)
 
 
 def enabled() -> tuple[AddOn, ...]:
@@ -390,9 +399,20 @@ def set_enabled(conn: sqlite3.Connection, addon_id: str, value: bool) -> None:
         off = [needed for needed in addon.requires if not is_enabled(needed)]
         if off:
             raise AddonConflict(f"{addon.name} needs {', '.join(off)} switched on first")
-        _blocked.pop(addon_id, None)
-        if not ensure_schema(conn, addon_id):
+        from alma.api.scheduler import find_active_job
+
+        if find_active_job(remove_operation_key(addon_id)):
+            raise AddonConflict(f"{addon.name} is being removed")
+        # A block lifts only once the schema is known good.
+        try:
+            ready = ensure_schema(conn, addon_id)
+        except Exception as exc:
+            _blocked[addon_id] = f"its schema could not be applied: {type(exc).__name__}"
+            logger.exception("Add-on %s is off: schema failed", addon_id)
+            raise AddonConflict(f"{addon.name} cannot start: {_blocked[addon_id]}") from exc
+        if not ready:
             raise AddonConflict(f"{addon.name} cannot start: {_blocked[addon_id]}")
+        _blocked.pop(addon_id, None)
     else:
         dependents = [
             other.name
@@ -410,20 +430,28 @@ def set_enabled(conn: sqlite3.Connection, addon_id: str, value: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _file_root(path: Path) -> Path:
-    """Resolve a file root, refusing anything outside the data directories.
+def remove_operation_key(addon_id: str) -> str:
+    """The Activity key of this add-on's Remove job."""
+    return f"addons.remove:{addon_id}"
 
-    The roots are anchored to the data directory and the database directory,
-    the two places ALMa stores files. Either one itself is refused too: Remove
-    would then delete the whole profile.
+
+def _file_root(path: Path) -> Path:
+    """Resolve a file root, refusing anything Remove must never delete.
+
+    A root must sit strictly inside the data directory or the database
+    directory, the two places ALMa stores files. It may not be either of them,
+    an ancestor of either, or any folder holding the database file, even when
+    that folder is itself inside the data directory.
     """
     resolved = Path(os.path.realpath(path))
-    bases = {
-        Path(os.path.realpath(get_data_dir())),
-        Path(os.path.realpath(get_db_path().parent)),
-    }
-    if not any(base in resolved.parents for base in bases):
-        raise AddonConflict(f"Refusing a file root outside the data directory: {resolved}")
+    db_file = Path(os.path.realpath(get_db_path()))
+    bases = {Path(os.path.realpath(get_data_dir())), db_file.parent}
+    inside = any(base in resolved.parents for base in bases)
+    covers = resolved in db_file.parents or any(
+        resolved == base or resolved in base.parents for base in bases
+    )
+    if not inside or covers:
+        raise AddonConflict(f"Refusing a file root Remove must not delete: {resolved}")
     return resolved
 
 
