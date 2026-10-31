@@ -139,15 +139,23 @@ def _bibtex_value(value: object) -> str:
     return text.replace("{", "").replace("}", "").rstrip("\\")
 
 
+#: Latin letters with no decomposition, so NFKD leaves them alone.
+_LATIN_FOLDS = str.maketrans(
+    {"Ø": "O", "ø": "o", "Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ð": "D", "ð": "d",
+     "Æ": "Ae", "æ": "ae", "Œ": "Oe", "œ": "oe", "Þ": "Th", "þ": "th", "ß": "ss", "ı": "i"}
+)
+
+
 def _cite_key_text(text: str) -> str:
     """Keep `text` as cite-key characters: Latin letters plain, other scripts as written.
 
-    `Müller` folds to `Muller`, the ASCII key everyone types. A letter with no
-    ASCII form (`Ø`, `И`, `王`) stays, since Biber and modern BibTeX read UTF-8
-    keys, and deleting it would reduce a Chinese author's key to the bare year.
+    Every Latin letter folds to ASCII (`Müller`, `Østby`), because pdflatex stops
+    on `\\cite` with a non-ASCII key. Cyrillic or CJK has no ASCII form without a
+    transliteration library, so it stays: BibTeX, Biber and XeLaTeX read it, and
+    deleting it would reduce those authors' keys to the bare year.
     """
     folded = ""
-    for ch in text:
+    for ch in text.translate(_LATIN_FOLDS):
         plain = "".join(
             part for part in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(part)
         )
