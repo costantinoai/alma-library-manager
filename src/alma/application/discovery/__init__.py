@@ -13,10 +13,11 @@ from threading import Event, Lock
 from time import perf_counter
 from typing import Any
 
+from alma.core.components import classify_component
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
 from alma.core.db_write import write_section
-from alma.core.paper_groups import resolve_paper_root_id
+from alma.core.paper_groups import is_component_row, resolve_paper_root_id
 from alma.core.settings_helpers import setting_float
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
@@ -1452,6 +1453,7 @@ def _refresh_lens_recommendations(
     status_by_paper: dict[str, str] = {}
     reading_status_by_paper: dict[str, str] = {}
     actioned_paper_ids: set[str] = set()
+    component_paper_ids: set[str] = set()
     # For a collection lens: which candidates are already IN the linked
     # collection (the only Library papers that stay hidden for this lens).
     in_linked_collection: set[str] = set()
@@ -1465,12 +1467,15 @@ def _refresh_lens_recommendations(
     for chunk in _chunked(unique_paper_ids, 200):
         placeholders = ", ".join("?" for _ in chunk)
         status_rows = db.execute(
-            f"SELECT id, status, reading_status FROM papers WHERE id IN ({placeholders})",
+            "SELECT id, status, reading_status, doi, work_type, preprint_source, component_type "
+            f"FROM papers WHERE id IN ({placeholders})",
             chunk,
         ).fetchall()
         for row in status_rows:
             status_by_paper[str(row["id"])] = str(row["status"] or "tracked")
             reading_status_by_paper[str(row["id"])] = str(row["reading_status"] or "").strip()
+            if is_component_row(row):
+                component_paper_ids.add(str(row["id"]))
         if lens_collection_id:
             member_rows = db.execute(
                 f"""SELECT paper_id FROM collection_items
@@ -1511,6 +1516,7 @@ def _refresh_lens_recommendations(
     skipped_actioned = 0
     skipped_duplicate_paper = 0
     skipped_low_score = 0
+    skipped_component = 0
     for candidate in ranked:
         # Every frozen candidate gets an exact policy probability. Lifecycle,
         # score-floor, and identity exclusions are deterministically
@@ -1529,6 +1535,15 @@ def _refresh_lens_recommendations(
     except (TypeError, ValueError):
         min_score = 0.0
     for idx, candidate, paper_id in staged_candidates:
+        # A figure, SI file or peer review is hidden on every read, so a slot
+        # given to one is a card the deck never shows. A candidate not yet in
+        # the corpus is judged by its own DOI and type, the rule ingest applies.
+        if paper_id in component_paper_ids or (
+            not paper_id
+            and classify_component(candidate.get("doi"), candidate.get("work_type"))[0]
+        ):
+            skipped_component += 1
+            continue
         paper_status = status_by_paper.get(paper_id, "tracked")
         if lens_collection_id:
             # Collection lens: hide dismissed/removed and papers already IN this
@@ -1644,6 +1659,7 @@ def _refresh_lens_recommendations(
         "skipped_previously_actioned": skipped_actioned,
         "skipped_duplicate_paper": skipped_duplicate_paper,
         "skipped_low_score": skipped_low_score,
+        "skipped_component": skipped_component,
         "min_score": min_score,
         "insertable": len(rec_rows),
     }
