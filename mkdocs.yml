@@ -156,6 +156,7 @@ nav:
       - reference/index.md
       - REST API: reference/api.md
       - Configuration: reference/configuration.md
+      - Control inventory: reference/control-inventory.md
       - Database schema: reference/database.md
       - External APIs: reference/external-apis.md
       - Discovery pipeline: reference/discovery-pipeline.md
