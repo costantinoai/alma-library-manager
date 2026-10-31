@@ -410,8 +410,9 @@ export function AuthorDetailPanel({
     onError: () => errorToast('Error', 'Failed to start author refresh.'),
   })
 
-  // Delete = dismiss the suggestion (so it stops resurfacing) + soft-remove the
-  // author row (D3 — reversible, provenance kept). A suggestion-only candidate
+  // Remove = dismiss the suggestion (so it stops resurfacing) + soft-remove the
+  // author row (D3 — reversible, provenance kept). The word stays apart from the
+  // hard "Delete author" in needs-attention. A suggestion-only candidate
   // has no row, so the dismiss is the whole action.
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -887,7 +888,7 @@ export function AuthorDetailPanel({
               ) : (
                 <Trash2 className="h-4 w-4" />
               )}
-              Delete
+              {hasAuthorRow ? 'Remove' : 'Dismiss'}
             </Button>
           </div>
         </DialogFooter>

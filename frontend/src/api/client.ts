@@ -3506,9 +3506,10 @@ export function acceptAuthorUnidentified(
   return api.post(`/authors/${encodeURIComponent(authorId)}/accept-unidentified`)
 }
 
-/** Hard-delete an author: the author row, their authorship links, and any paper
- *  left with no other tracked author. Also records a durable "don't suggest this
- *  person again" signal, so the network rails stop re-discovering them. */
+/** Hard-delete an author: the author row, their follow, and any plain corpus
+ *  paper no other author covers. Library papers and papers the user touched stay.
+ *  Also records a durable "don't suggest this person again" signal, so the network
+ *  rails stop re-discovering them. */
 export function deleteAuthor(authorId: string): Promise<void> {
   return api.delete<void>(`/authors/${encodeURIComponent(authorId)}`)
 }

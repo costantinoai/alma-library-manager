@@ -3247,17 +3247,21 @@ def get_author(
     "/{author_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an author",
-    description="Remove an author and all their cached publications from the system.",
+    description=(
+        "Permanently delete an author, keeping every paper in the Library or "
+        "touched by the user. Only plain tracked papers no other author covers "
+        "go with them."
+    ),
 )
 def delete_author(
     author_id: str,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Delete an author and all their publications.
+    """Delete an author and the corpus papers nobody else has a claim on.
 
     Args:
-        author_id: Google Scholar ID of the author to delete
+        author_id: ID of the author to delete
 
     Raises:
         HTTPException: If author is not found
@@ -3284,6 +3288,7 @@ def delete_author(
             handler=_handler,
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
+            write_unit=True,
         )
         if op["status"] == "noop":
             raise HTTPException(

@@ -3702,15 +3702,54 @@ def _load_author_suggestion_weights(db: sqlite3.Connection) -> dict[str, float]:
     return out
 
 
-def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
-    """Delete one author and orphaned papers linked only to them.
+# A paper nothing depends on: a plain corpus row with no membership, no opinion,
+# no organisation and no group hanging off it. Deleting a row cascades to every
+# table below, so each one is a thing the user would lose (alias `p`).
+_PAPER_IS_DISPOSABLE_SQL = """
+    p.status = 'tracked'
+    AND COALESCE(p.rating, 0) = 0
+    AND COALESCE(TRIM(p.reading_status), '') = ''
+    AND COALESCE(TRIM(p.notes), '') = ''
+    AND NOT EXISTS (SELECT 1 FROM collection_items x WHERE x.paper_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM publication_tags x WHERE x.paper_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM paper_pdfs x WHERE x.paper_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM lens_signals x WHERE x.paper_id = p.id)
+    AND NOT EXISTS (SELECT 1 FROM inbox_messages x WHERE x.paper_id = p.id)
+    AND NOT EXISTS (
+        SELECT 1 FROM recommendations x
+        WHERE x.paper_id = p.id AND COALESCE(TRIM(x.user_action), '') <> ''
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM feed_items x
+        WHERE x.paper_id = p.id AND COALESCE(x.status, 'new') <> 'new'
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM feedback_events x
+        WHERE x.entity_type IN ('publication', 'paper') AND x.entity_id = p.id
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM papers child
+        WHERE child.canonical_paper_id = p.id OR child.parent_paper_id = p.id
+    )
+"""
 
-    Side effect: writes a hard `missing_author_feedback` remove signal
-    keyed by the author's OpenAlex ID so the network suggestion rails
-    (`/authors/suggestions`, OpenAlex/S2 cached buckets) suppress this
-    author for ~250+ days. Without that, the next OpenAlex co-author
-    expansion happily re-discovers the author and they re-appear in
-    the rail one refresh later.
+
+def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
+    """Delete one author, and only the papers nobody else has a claim on.
+
+    A paper goes only when it is a plain `tracked` corpus row that nothing
+    depends on: no other author in the corpus, and no trace of the user. Anything
+    the user touched survives with its authorship intact, because D3 forbids
+    hard-deleting those rows and a cascade from `papers` would take collections,
+    tags, PDFs and verdicts with them.
+
+    Side effects: drops the follow and the author monitor, which have no foreign
+    key and would otherwise outlive the author as a ghost Feed monitor, and
+    writes a hard `missing_author_feedback` remove signal keyed by the author's
+    OpenAlex ID so the network suggestion rails (`/authors/suggestions`,
+    OpenAlex/S2 cached buckets) suppress this author for ~250+ days. Without
+    that, the next OpenAlex co-author expansion happily re-discovers the author
+    and they re-appear in the rail one refresh later.
     """
     row = db.execute("SELECT id, name, openalex_id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
@@ -3718,22 +3757,23 @@ def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
     openalex_id = str((row["openalex_id"] if isinstance(row, sqlite3.Row) else "") or "").strip()
     if openalex_id:
         db.execute(
-            """
+            f"""
             DELETE FROM papers WHERE id IN (
-                SELECT pa.paper_id
+                SELECT p.id
                 FROM publication_authors pa
-                WHERE pa.openalex_id = ?
-                AND NOT EXISTS (
-                    SELECT 1
-                    FROM publication_authors pa2
-                    JOIN authors a2 ON a2.openalex_id = pa2.openalex_id
-                    WHERE pa2.paper_id = pa.paper_id AND a2.id != ?
-                )
+                JOIN papers p ON p.id = pa.paper_id
+                WHERE lower(pa.openalex_id) = lower(?)
+                  AND {_PAPER_IS_DISPOSABLE_SQL}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM publication_authors pa2
+                      JOIN authors a2 ON lower(a2.openalex_id) = lower(pa2.openalex_id)
+                      WHERE pa2.paper_id = pa.paper_id AND a2.id != ?
+                  )
             )
             """,
             (openalex_id, author_id),
         )
-        db.execute("DELETE FROM publication_authors WHERE openalex_id = ?", (openalex_id,))
 
         # Record the hard suppression BEFORE removing the author row —
         # `missing_author_feedback` is keyed only by openalex_id so it
@@ -3749,6 +3789,10 @@ def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
                 author_id,
                 exc_info=True,
             )
+    db.execute("DELETE FROM followed_authors WHERE author_id = ?", (author_id,))
+    db.execute(
+        "DELETE FROM feed_monitors WHERE author_id = ? AND monitor_type = 'author'", (author_id,)
+    )
     db.execute("DELETE FROM authors WHERE id = ?", (author_id,))
     return {"id": row["id"], "name": row["name"]}
 
