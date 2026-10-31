@@ -343,7 +343,7 @@ reconciliation: 8 fixed, 7 open.
 | D92-23 | open | `application/alerts.py:513`, `application/discovery/lens_crud.py:675`, `services/feedback_substrate.py:957` | These counters read `user_action='like'`, which no path stamps, so `liked` is always 0. |
 | D92-24 | open | `application/discovery/__init__.py:1713` | A refresh deletes Like and Dislike rows, so `build_recommendation_outcomes` and every report on it lose those cards. Events survive, and branch outcomes already read them. |
 | D92-25 | open | `application/discovery/observations.py:169` | One deleted or unlinked recommendation fails a whole impression batch, and the page swallows the error. |
-| D92-26 | open | [Public controls](discovery-current-state-map.md#public-controls) | Seven `strategies.*` keys and two `limits.feedback_decay_*` keys change nothing in a lens refresh, yet Settings offers the strategies. G4. |
+| D92-26 | fixed | `core/migrations.py` (`_m_0051_drop_noop_discovery_settings`) | The `strategies.*` keys, `limits.feedback_decay_*` and the other no-op keys left the defaults, the settings route and Settings; migration 51 deletes their stored rows. |
 | D92-27 | open, limit | `application/discovery/features.py:27` | Exact replay holds for the current ranker only; see below. |
 
 ### Snapshot replay, measured 2026-10-30

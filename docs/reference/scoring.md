@@ -431,16 +431,8 @@ Each prior feedback event contributes:
 * **Positive** (rating ≥ 4) → small boost.
 * **Negative** (rating ≤ 2) → small penalty.
 
-Two configurable windows exist as defaults:
-
-| Window | Default | Weight |
-|---|---|---|
-| `feedback_decay_days_full` | 90 | 1.0 |
-| `feedback_decay_days_half` | 180 | 0.5 |
-
-Note: the projection path that actually drives author-suggestion and
-paper feedback (`application/signal_projection.py`) does **not** read
-these settings — it hardcodes a tanh decay with a **180-day half-life**
+The projection path that drives author-suggestion and paper feedback
+(`application/signal_projection.py`) uses a tanh decay with a **180-day half-life**
 and a **730-day max age**, beyond which weight tapers to 0.
 
 Range before normalization: -1…+1. The weighted scorer stores it as a

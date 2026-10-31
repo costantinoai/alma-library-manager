@@ -211,7 +211,7 @@ Settings page.
 |---|---|
 | Settings → External APIs | `.env`, `settings.json` (`openalex_email`), and the secret store |
 | Settings → Intelligence → AI provider | `discovery_settings` keys (`ai.provider`, `ai.local_model`, `ai.python_env_path`, …) |
-| Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.strategies.*`, `discovery.limits.*`) |
+| Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.limits.*`) |
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
 | None, written by jobs | `discovery_settings` (`rotation.*`): the ring position of each rotating network budget, see `core/rotation.py` |

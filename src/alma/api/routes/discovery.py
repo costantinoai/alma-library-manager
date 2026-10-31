@@ -24,7 +24,6 @@ from alma.api.models import (
     DiscoverySettingsUpdate,
     DiscoverySourcePolicy,
     DiscoverySources,
-    DiscoveryStrategies,
     DiscoveryWeights,
     PaperResponse,
     RecommendationExplainResponse,
@@ -76,27 +75,10 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
         # `read_settings` merges the defaults table, so every weight key is
         # present: read them off the one owner instead of a second fallback map.
         weights=DiscoveryWeights(**{name: float(kv[f"weights.{name}"]) for name in DEFAULT_SIGNAL_WEIGHTS}),
-        strategies=DiscoveryStrategies(
-            related_works=kv.get("strategies.related_works", "true").lower() == "true",
-            topic_search=kv.get("strategies.topic_search", "true").lower() == "true",
-            followed_authors=kv.get("strategies.followed_authors", "true").lower() == "true",
-            coauthor_network=kv.get("strategies.coauthor_network", "true").lower() == "true",
-            citation_chain=kv.get("strategies.citation_chain", "true").lower() == "true",
-            semantic_scholar=kv.get("strategies.semantic_scholar", "true").lower() == "true",
-            branch_explorer=kv.get("strategies.branch_explorer", "true").lower() == "true",
-            taste_topics=kv.get("strategies.taste_topics", "true").lower() == "true",
-            taste_authors=kv.get("strategies.taste_authors", "true").lower() == "true",
-            taste_venues=kv.get("strategies.taste_venues", "true").lower() == "true",
-            recent_wins=kv.get("strategies.recent_wins", "true").lower() == "true",
-            adaptive_channels=kv.get("strategies.adaptive_channels", "true").lower() == "true",
-        ),
         limits=DiscoveryLimits(
-            max_results=int(kv.get("limits.max_results", "50")),
             min_score=float(kv.get("limits.min_score", "0")),
             max_candidates_per_strategy=int(kv.get("limits.max_candidates_per_strategy", "20")),
             recency_window_years=int(kv.get("limits.recency_window_years", "10")),
-            feedback_decay_days_full=int(kv.get("limits.feedback_decay_days_full", "90")),
-            feedback_decay_days_half=int(kv.get("limits.feedback_decay_days_half", "180")),
         ),
         schedule=DiscoverySchedule(
             refresh_enabled=kv.get("schedule.refresh_enabled", "false").lower() == "true",
@@ -284,28 +266,11 @@ def update_discovery_settings(
             w = body.weights
             for name in DEFAULT_SIGNAL_WEIGHTS:
                 _upsert_setting(db, f"weights.{name}", str(getattr(w, name)))
-        if body.strategies is not None:
-            s = body.strategies
-            _upsert_setting(db, "strategies.related_works", str(s.related_works).lower())
-            _upsert_setting(db, "strategies.topic_search", str(s.topic_search).lower())
-            _upsert_setting(db, "strategies.followed_authors", str(s.followed_authors).lower())
-            _upsert_setting(db, "strategies.coauthor_network", str(s.coauthor_network).lower())
-            _upsert_setting(db, "strategies.citation_chain", str(s.citation_chain).lower())
-            _upsert_setting(db, "strategies.semantic_scholar", str(s.semantic_scholar).lower())
-            _upsert_setting(db, "strategies.branch_explorer", str(s.branch_explorer).lower())
-            _upsert_setting(db, "strategies.taste_topics", str(s.taste_topics).lower())
-            _upsert_setting(db, "strategies.taste_authors", str(s.taste_authors).lower())
-            _upsert_setting(db, "strategies.taste_venues", str(s.taste_venues).lower())
-            _upsert_setting(db, "strategies.recent_wins", str(s.recent_wins).lower())
-            _upsert_setting(db, "strategies.adaptive_channels", str(s.adaptive_channels).lower())
         if body.limits is not None:
             lim = body.limits
-            _upsert_setting(db, "limits.max_results", str(lim.max_results))
             _upsert_setting(db, "limits.min_score", str(lim.min_score))
             _upsert_setting(db, "limits.max_candidates_per_strategy", str(lim.max_candidates_per_strategy))
             _upsert_setting(db, "limits.recency_window_years", str(lim.recency_window_years))
-            _upsert_setting(db, "limits.feedback_decay_days_full", str(lim.feedback_decay_days_full))
-            _upsert_setting(db, "limits.feedback_decay_days_half", str(lim.feedback_decay_days_half))
         if body.schedule is not None:
             _upsert_setting(db, "schedule.refresh_enabled", str(body.schedule.refresh_enabled).lower())
             _upsert_setting(db, "schedule.refresh_interval_hours", str(body.schedule.refresh_interval_hours))

@@ -283,11 +283,6 @@ refresh" means the key changes the active pipeline.
 | `limits.recency_window_years` | `discovery/scoring.py:605` | Yes |
 | `schedule.refresh_enabled`, `refresh_interval_hours`, `graph_maintenance_interval_hours` | `api/scheduler.py:1680`, `api/scheduler.py:1687`, `api/scheduler.py:1740` | Scheduling only |
 | `cache.similarity_ttl_hours` | `api/routes/discovery.py:502` | Similar search only |
-| `strategies.related_works`, `topic_search`, `followed_authors`, `coauthor_network`, `citation_chain`, `semantic_scholar`; `limits.max_results`, `limits.max_candidates_per_strategy` | `discovery/engine.py:654` to `discovery/engine.py:659`, `discovery/engine.py:649`, `discovery/engine.py:652` | **None.** Read only by the legacy generator |
-| `strategies.branch_explorer`, `taste_topics`, `taste_authors`, `taste_venues`, `recent_wins` | Settings route only | **None** |
-| `strategies.adaptive_channels` | `application/discovery/channel_yield.py:42` | **None**; `channel_multipliers` has no caller in the refresh |
-| `limits.feedback_decay_days_full`, `limits.feedback_decay_days_half` | Settings route only | **None** |
-| `strategies.s2_recommend`, `citation_fabric.*`, `limits.taste_*_queries`, `limits.recent_win_queries` | `discovery/defaults.py` only | **None**; defaults with no reader |
 
 ### Entry points outside the lens pipeline
 

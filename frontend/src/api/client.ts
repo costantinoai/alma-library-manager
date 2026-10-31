@@ -2016,29 +2016,10 @@ export interface DiscoveryWeights {
   preference_affinity: number
 }
 
-export interface DiscoveryStrategies {
-  related_works: boolean
-  topic_search: boolean
-  followed_authors: boolean
-  coauthor_network: boolean
-  citation_chain: boolean
-  semantic_scholar: boolean
-  branch_explorer: boolean
-  taste_topics: boolean
-  taste_authors: boolean
-  taste_venues: boolean
-  recent_wins: boolean
-  /** Scale lens channel weights by how often what each channel surfaced was kept. */
-  adaptive_channels: boolean
-}
-
 export interface DiscoveryLimits {
-  max_results: number
   min_score: number
   max_candidates_per_strategy: number
   recency_window_years: number
-  feedback_decay_days_full: number
-  feedback_decay_days_half: number
 }
 
 export interface DiscoverySchedule {
@@ -2083,7 +2064,6 @@ export interface DiscoveryMonitorDefaults {
 
 export interface DiscoverySettings {
   weights: DiscoveryWeights
-  strategies: DiscoveryStrategies
   limits: DiscoveryLimits
   schedule: DiscoverySchedule
   cache: DiscoveryCache

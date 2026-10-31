@@ -548,32 +548,12 @@ class DiscoveryWeights(BaseModel):
     preference_affinity: float = Field(DEFAULT_SIGNAL_WEIGHTS["preference_affinity"], ge=0.0, le=1.0)
 
 
-class DiscoveryStrategies(BaseModel):
-    """Toggle switches for each retrieval strategy."""
-
-    related_works: bool = True
-    topic_search: bool = True
-    followed_authors: bool = True
-    coauthor_network: bool = True
-    citation_chain: bool = True
-    semantic_scholar: bool = True
-    branch_explorer: bool = True
-    taste_topics: bool = True
-    taste_authors: bool = True
-    taste_venues: bool = True
-    recent_wins: bool = True
-    adaptive_channels: bool = True
-
-
 class DiscoveryLimits(BaseModel):
     """Numeric limits for the discovery engine."""
 
-    max_results: int = Field(50, ge=10, le=200)
     min_score: float = Field(0.0, ge=0.0, le=100.0)
     max_candidates_per_strategy: int = Field(20, ge=5, le=50)
     recency_window_years: int = Field(10, ge=1, le=20)
-    feedback_decay_days_full: int = Field(90, ge=1)
-    feedback_decay_days_half: int = Field(180, ge=1)
 
 
 class DiscoverySchedule(BaseModel):
@@ -648,7 +628,6 @@ class DiscoverySettingsResponse(BaseModel):
     """Full discovery settings response."""
 
     weights: DiscoveryWeights = Field(default_factory=DiscoveryWeights)
-    strategies: DiscoveryStrategies = Field(default_factory=DiscoveryStrategies)
     limits: DiscoveryLimits = Field(default_factory=DiscoveryLimits)
     schedule: DiscoverySchedule = Field(default_factory=DiscoverySchedule)
     cache: DiscoveryCache = Field(default_factory=DiscoveryCache)
@@ -672,7 +651,6 @@ class DiscoverySettingsUpdate(BaseModel):
     """Partial update for discovery settings."""
 
     weights: DiscoveryWeights | None = None
-    strategies: DiscoveryStrategies | None = None
     limits: DiscoveryLimits | None = None
     schedule: DiscoverySchedule | None = None
     cache: DiscoveryCache | None = None
