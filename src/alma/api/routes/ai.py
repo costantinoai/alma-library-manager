@@ -1005,13 +1005,6 @@ def ai_configure(
                 )
             _write_setting(db, "ai.local_model", body.local_model)
 
-        # `embedding_model` is the single string every read path filters
-        # publication_embeddings by, so any provider or model change re-derives
-        # it. With no provider it falls back to SPECTER2, the vectors Semantic
-        # Scholar keeps sending.
-        if body.provider is not None or body.local_model is not None:
-            sync_embedding_model(db)
-
         if body.provider_api_key is not None:
             provider_class = addon_providers().get(configured_provider_name(db))
             if provider_class is None:
@@ -1020,6 +1013,17 @@ def ai_configure(
                     detail="The selected embedding provider takes no API key.",
                 )
             provider_class.save_credential(body.provider_api_key.strip())
+
+        # `embedding_model` is the single string every read path filters
+        # publication_embeddings by, so any change that decides which provider
+        # can run re-derives it, a saved key included. With no provider running
+        # it is SPECTER2, the vectors Semantic Scholar keeps sending.
+        if (
+            body.provider is not None
+            or body.local_model is not None
+            or body.provider_api_key is not None
+        ):
+            sync_embedding_model(db)
 
         if env_type_updated or env_path_updated:
             next_path = (

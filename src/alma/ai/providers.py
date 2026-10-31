@@ -235,7 +235,7 @@ def hosted_provider_label() -> str | None:
 
 
 def expected_embedding_model(conn: sqlite3.Connection) -> str:
-    """The model the chosen provider writes, or SPECTER2 when none can run."""
+    """The model the chosen provider writes, or SPECTER2 when it cannot run."""
     from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
     name = configured_provider_name(conn)
@@ -243,7 +243,7 @@ def expected_embedding_model(conn: sqlite3.Connection) -> str:
         model_key = _read_setting(conn, "ai.local_model", DEFAULT_LOCAL_MODEL)
         return (LOCAL_MODELS.get(model_key) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]).hf_id
     provider_class = addon_providers().get(name)
-    if provider_class is not None:
+    if provider_class is not None and provider_class().is_available():
         return provider_class.MODEL_NAME
     return DISCOVERY_SETTINGS_DEFAULTS["embedding_model"]
 

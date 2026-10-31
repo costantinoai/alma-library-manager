@@ -669,7 +669,9 @@ export function AIConfigCard() {
                       key={p.name}
                       value={p.name}
                       selected={values.provider === p.name}
-                      disabled={!p.available}
+                      // A provider that asks for a key stays selectable: its key
+                      // field is what makes it available.
+                      disabled={!p.available && !p.credential}
                       icon={<ProviderIcon icon={p.icon} />}
                       title={p.display_name ?? p.name}
                       meta={
