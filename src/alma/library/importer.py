@@ -2323,7 +2323,7 @@ def _trigger_background_enrichment(
         job_id = f"import_postprocess_{uuid.uuid4().hex[:10]}"
         refs = imported_refs or []
         # Targeted plan: enrich → paper_groups → author_linking → resolve_ids →
-        # dedup (+ embeddings). Full plan drops author_linking.
+        # dedup. Full plan drops author_linking.
         pipeline_total = 5 if refs else 4
         set_job_status(
             job_id,
@@ -2710,7 +2710,6 @@ def _trigger_background_enrichment(
                     "resolved_author_ids": stage_results.get("resolve_ids", {}),
                     "paper_groups": stage_results.get("paper_groups", {}),
                     "dedup": stage_results.get("dedup", {}),
-                    "embeddings": stage_results.get("embeddings", {}),
                     "subtasks": subtask_jobs,
                 }
             finally:
