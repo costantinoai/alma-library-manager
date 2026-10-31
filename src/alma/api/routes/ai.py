@@ -20,11 +20,6 @@ from alma.ai.environment import (
 from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import table_exists
 from alma.core.db_write import run_write_unit
-from alma.core.secrets import (
-    SECRET_OPENAI_API_KEY,
-    delete_secret,
-    set_secret,
-)
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.services.health import embedding_coverage
@@ -44,9 +39,15 @@ class AIConfigureRequest(BaseModel):
     """Request body for POST /configure."""
 
     provider: str | None = Field(
-        None, description="Embedding provider name (none, local, openai)"
+        None, description="Embedding provider name: none, local, or one an add-on brings"
     )
-    openai_api_key: str | None = Field(None, description="OpenAI API key")
+    provider_api_key: str | None = Field(
+        None,
+        description=(
+            "API key for the provider named in `provider`, or for the stored one. "
+            "An empty value deletes it."
+        ),
+    )
     local_model: str | None = Field(
         None, description="Local embedding model key (specter2-base)"
     )
@@ -58,9 +59,6 @@ class AIConfigureRequest(BaseModel):
         None,
         description="Path to dependency environment folder or python executable",
     )
-
-
-_VALID_EMBEDDING_PROVIDERS = {"none", "local", "openai"}
 
 
 class ComputeEmbeddingsResponse(BaseModel):
@@ -147,7 +145,10 @@ def _build_dependency_setup_suggestions(
             "Fix the environment path/type first so checks stop falling back to the server environment."
         )
 
+    from alma.ai.providers import addon_providers
+
     provider = (provider_name or "none").strip().lower()
+    addon_provider = addon_providers().get(provider)
     # Provider-specific install guidance (more reliable than piecemeal installs).
     if provider == "local":
         provider_install_line = (
@@ -158,11 +159,8 @@ def _build_dependency_setup_suggestions(
         suggestions.append(
             "Selected provider is 'local': install the full SPECTER2 stack in ONE command to avoid binary mismatches."
         )
-    elif provider == "openai":
-        # `openai` package is no longer bundled — embeddings still work
-        # via the OpenAI HTTP API; the Python SDK was dropped as part of
-        # the LLM exit (tasks/01_LLM_PRODUCTION_EXIT.md).
-        provider_install_line = "pip install requests numpy"
+    elif addon_provider is not None:
+        provider_install_line = addon_provider.INSTALL_LINE
     else:
         missing_pkg_list = " ".join(sorted(missing))
         provider_install_line = f"pip install {missing_pkg_list}"
@@ -641,7 +639,14 @@ def ai_status(
     Includes embedding provider info, embedding coverage statistics, and
     dependency availability.
     """
-    from alma.ai.providers import DEFAULT_LOCAL_MODEL, get_active_provider, list_available_providers
+    from alma.ai.providers import (
+        DEFAULT_LOCAL_MODEL,
+        configured_provider_name,
+        get_active_provider,
+        list_available_providers,
+        selectable_providers,
+        switched_off_provider,
+    )
     from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
     from alma.discovery.similarity import get_active_embedding_model, storage_model_key
 
@@ -654,8 +659,9 @@ def ai_status(
 
     # Providers
     providers_info = list_available_providers(db)
-    configured_provider = _read_setting(db, "ai.provider", "none").strip().lower() or "none"
-    if configured_provider not in _VALID_EMBEDDING_PROVIDERS:
+    configured_provider = configured_provider_name(db)
+    provider_off = switched_off_provider(db)
+    if configured_provider not in selectable_providers():
         configured_provider = "none"
     active_provider = get_active_provider(db)
 
@@ -908,6 +914,7 @@ def ai_status(
 
     return {
         "providers": providers_info,
+        "provider_off": provider_off,
         "embeddings": embeddings_info,
         "capability_tiers": {
             "tier1_embeddings": {
@@ -969,20 +976,28 @@ def ai_configure(
     # uncommitted write. Validation HTTPExceptions raise inside the unit →
     # rollback + propagate (not a lock error, so no retry).
     def _persist_ai_settings() -> None:
+        from alma.ai.providers import (
+            LOCAL_MODELS,
+            addon_providers,
+            configured_provider_name,
+            selectable_providers,
+            sync_embedding_model,
+        )
+
         if body.provider is not None:
             provider = (body.provider or "").strip().lower()
-            if provider not in _VALID_EMBEDDING_PROVIDERS:
+            selectable = selectable_providers()
+            if provider not in selectable:
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         "Invalid embedding provider. "
-                        f"Expected one of: {', '.join(sorted(_VALID_EMBEDDING_PROVIDERS))}"
+                        f"Expected one of: {', '.join(sorted(selectable))}"
                     ),
                 )
             _write_setting(db, "ai.provider", provider)
 
         if body.local_model is not None:
-            from alma.ai.providers import LOCAL_MODELS
             if body.local_model not in LOCAL_MODELS:
                 raise HTTPException(
                     status_code=400,
@@ -990,30 +1005,21 @@ def ai_configure(
                 )
             _write_setting(db, "ai.local_model", body.local_model)
 
-        # After handling any provider/model-related fields above, re-derive
-        # the canonical embedding model identifier and persist it to
-        # `embedding_model`. This is the single string used by every read
-        # path to filter publication_embeddings by the active model, so it
-        # must always match what the active provider writes into the `model`
-        # column.
+        # `embedding_model` is the single string every read path filters
+        # publication_embeddings by, so any provider or model change re-derives
+        # it. With no provider it falls back to SPECTER2, the vectors Semantic
+        # Scholar keeps sending.
         if body.provider is not None or body.local_model is not None:
-            from alma.ai.providers import DEFAULT_LOCAL_MODEL, LOCAL_MODELS, OpenAIProvider
-            active_provider = _read_setting(db, "ai.provider", "none").strip().lower()
-            if active_provider == "local":
-                model_key = _read_setting(db, "ai.local_model", DEFAULT_LOCAL_MODEL)
-                config = LOCAL_MODELS.get(model_key) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]
-                _write_setting(db, "embedding_model", config.hf_id)
-            elif active_provider == "openai":
-                _write_setting(db, "embedding_model", OpenAIProvider.MODEL_NAME)
+            sync_embedding_model(db)
 
-        if body.openai_api_key is not None:
-            clean_key = (body.openai_api_key or "").strip()
-            if clean_key:
-                set_secret(SECRET_OPENAI_API_KEY, clean_key)
-            else:
-                delete_secret(SECRET_OPENAI_API_KEY)
-            # Keep legacy setting scrubbed.
-            _write_setting(db, "ai.openai_api_key", "")
+        if body.provider_api_key is not None:
+            provider_class = addon_providers().get(configured_provider_name(db))
+            if provider_class is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The selected embedding provider takes no API key.",
+                )
+            provider_class.save_credential(body.provider_api_key.strip())
 
         if env_type_updated or env_path_updated:
             next_path = (

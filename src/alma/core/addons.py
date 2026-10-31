@@ -139,6 +139,9 @@ class AddOn:
     #: inside the merge's write unit, on or off, so a kept row follows its tag. It
     #: must not open a unit, and a failure rolls the merge back.
     on_tag_merged: Callable[[sqlite3.Connection, Any, Any], None] | None = None
+    #: The provider class this add-on brings (see ``AddonEmbeddingProvider``),
+    #: imported lazily. It exists for core only while the add-on is on.
+    embedding_provider: Callable[[], Any] | None = None
 
     def __post_init__(self) -> None:
         for name in (self.id, *self.tables, *(table for table, _ in self.paper_tables)):
@@ -338,6 +341,11 @@ def startup(conn: sqlite3.Connection) -> None:
         except Exception as exc:
             _blocked[addon.id] = f"its schema could not be applied: {type(exc).__name__}"
             logger.exception("Add-on %s is off: schema failed", addon.id)
+    # A folder can vanish, or a switch change between runs, with the provider it
+    # brought still chosen. Readers must not stay on a model nothing fills.
+    from alma.ai.providers import reconcile_embedding_model
+
+    reconcile_embedding_model(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +442,10 @@ def set_enabled(conn: sqlite3.Connection, addon_id: str, value: bool) -> None:
             raise AddonConflict(f"{', '.join(dependents)} needs {addon.name} switched on")
     update_settings({activation_setting_key(addon_id): value})
     sync_jobs(addon_id)
+    if addon.embedding_provider is not None:
+        from alma.ai.providers import reconcile_embedding_model
+
+        reconcile_embedding_model(conn)
 
 
 # ---------------------------------------------------------------------------

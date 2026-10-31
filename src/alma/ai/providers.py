@@ -1,22 +1,26 @@
-"""Multi-provider embedding system.
+"""Embedding providers.
 
-Supports two embedding backends:
-- Local SPECTER2 (`local`, scientific paper embeddings) -- opt-in
-- OpenAI (API, text-embedding-3-small, 1536-dim) -- opt-in
+Local SPECTER2 (`local`) is the one provider core owns. Any other provider comes
+from an add-on through ``AddOn.embedding_provider``, and exists here only while
+that add-on is on, so a switched-off provider reads as not available everywhere.
 
-All providers implement the EmbeddingProvider protocol.
-Provider selection is stored in discovery_settings (key: ai.provider).
+All providers implement the EmbeddingProvider protocol. The choice is stored in
+discovery_settings (key: ai.provider), and ``embedding_model`` follows it: that
+row is the model every reader filters vectors by, so it must always name a model
+something can keep filling. Semantic Scholar's SPECTER2 vectors arrive whatever
+the provider, which makes SPECTER2 the model to read when no provider is running.
 """
 
 import logging
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from alma.ai.environment import activate_dependency_environment
 from alma.ai.import_state import module_available
 from alma.config import get_openai_api_key
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,11 @@ LOCAL_MODELS: dict[str, LocalModelConfig] = {
 }
 
 DEFAULT_LOCAL_MODEL = "specter2-base"
+
+#: The provider names core owns. Any other name belongs to an add-on.
+CORE_PROVIDERS: tuple[str, ...] = ("none", "local")
+
+
 def _import_openai_module():
     """Import and return the openai module."""
     import openai
@@ -93,6 +102,33 @@ class EmbeddingProvider(Protocol):
         Returns:
             List of embedding vectors, one per input text.
         """
+        ...
+
+
+class AddonEmbeddingProvider(EmbeddingProvider, Protocol):
+    """What an add-on's provider class offers on top of embedding."""
+
+    #: Canonical model id, without the storage version.
+    MODEL_NAME: str
+    #: Name for status lines, such as Home's embeddings pill.
+    DISPLAY_NAME: str
+    #: The pip line Settings shows when the environment lacks what it needs.
+    INSTALL_LINE: str
+
+    @classmethod
+    def from_settings(cls, conn: sqlite3.Connection) -> "AddonEmbeddingProvider":
+        """Build the provider from stored settings."""
+        ...
+
+    @classmethod
+    def describe(cls) -> dict[str, Any]:
+        """Its ``/ai/status`` entry. ``credential``, when set, asks Settings for
+        a key: ``{label, placeholder}``."""
+        ...
+
+    @classmethod
+    def save_credential(cls, value: str) -> None:
+        """Store this provider's key. An empty value deletes it."""
         ...
 
 
@@ -158,10 +194,55 @@ class OpenAIProvider:
     name: str = "openai"
     dimension: int = 1536
     MODEL_NAME: str = "text-embedding-3-small"
+    DISPLAY_NAME: str = "OpenAI embeddings"
+    INSTALL_LINE: str = "pip install openai numpy"
 
     def __init__(self, api_key: str = "", api_call_delay: float = 0.5) -> None:
         self._api_key = api_key
         self._api_call_delay = api_call_delay
+
+    @classmethod
+    def from_settings(cls, conn: sqlite3.Connection) -> "OpenAIProvider":
+        """Build the provider with the stored call delay."""
+        try:
+            delay = float(_read_setting(conn, "api_call_delay", "0.5"))
+        except (ValueError, TypeError):
+            delay = 0.5
+        return cls(api_call_delay=delay)
+
+    @classmethod
+    def describe(cls) -> dict[str, Any]:
+        """This provider's entry in ``/ai/status``."""
+        provider = cls()
+        if not module_available("openai"):
+            reason = "openai package is not installed"
+        elif not provider._resolve_api_key():
+            reason = "OpenAI API key is not configured"
+        else:
+            reason = None
+        return {
+            "name": provider.name,
+            "display_name": cls.DISPLAY_NAME,
+            "model_display_name": cls.MODEL_NAME,
+            "provider_type": "hosted_embedding",
+            "icon": "cloud",
+            "description": "Use the OpenAI embeddings API for new or missing vectors.",
+            "canonical_model": provider.model_name,
+            "dimension": provider.dimension,
+            "available": provider.is_available(),
+            "reason": reason,
+            "credential": {"label": "OpenAI API Key", "placeholder": "Paste OpenAI API key"},
+        }
+
+    @classmethod
+    def save_credential(cls, value: str) -> None:
+        """Store the API key. An empty value deletes it."""
+        from alma.core.secrets import SECRET_OPENAI_API_KEY, delete_secret, set_secret
+
+        if value:
+            set_secret(SECRET_OPENAI_API_KEY, value)
+        else:
+            delete_secret(SECRET_OPENAI_API_KEY)
 
     @property
     def model_name(self) -> str:
@@ -261,12 +342,96 @@ def _read_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     return default
 
 
+def _write_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO discovery_settings (key, value, updated_at) VALUES (?, ?, ?)",
+        (key, value, utcnow().isoformat()),
+    )
+
+
+def configured_provider_name(conn: sqlite3.Connection) -> str:
+    """The stored choice, whether or not that provider can run."""
+    return _read_setting(conn, "ai.provider", "none").strip().lower() or "none"
+
+
+def addon_providers() -> dict[str, type[AddonEmbeddingProvider]]:
+    """Provider classes of the add-ons that are on, by name."""
+    from alma.core import addons
+
+    classes = [
+        addon.embedding_provider()
+        for addon in addons.enabled()
+        if addon.embedding_provider is not None
+    ]
+    return {OpenAIProvider.name: OpenAIProvider, **{cls.name: cls for cls in classes}}
+
+
+def selectable_providers() -> set[str]:
+    """Every provider name that can be chosen right now."""
+    return {*CORE_PROVIDERS, *addon_providers()}
+
+
+def switched_off_provider(conn: sqlite3.Connection) -> str | None:
+    """The chosen provider's name when nothing can run it, else None.
+
+    Its add-on is off or gone. The choice is kept, so switching it back on
+    resumes where it was, and Health says plainly that no provider runs.
+    """
+    name = configured_provider_name(conn)
+    return None if name in selectable_providers() else name
+
+
+def hosted_provider_label() -> str | None:
+    """The display name of the first add-on provider ready to embed."""
+    for provider_class in addon_providers().values():
+        if provider_class().is_available():
+            return provider_class.DISPLAY_NAME
+    return None
+
+
+def expected_embedding_model(conn: sqlite3.Connection) -> str:
+    """The model the chosen provider writes, or SPECTER2 when none can run."""
+    from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+
+    name = configured_provider_name(conn)
+    if name == "local":
+        model_key = _read_setting(conn, "ai.local_model", DEFAULT_LOCAL_MODEL)
+        return (LOCAL_MODELS.get(model_key) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]).hf_id
+    provider_class = addon_providers().get(name)
+    if provider_class is not None:
+        return provider_class.MODEL_NAME
+    return DISCOVERY_SETTINGS_DEFAULTS["embedding_model"]
+
+
+def sync_embedding_model(conn: sqlite3.Connection) -> None:
+    """Make ``embedding_model`` follow the provider. The caller owns the unit.
+
+    Readers filter by this row, and a model nothing fills leaves Discovery
+    looking at a shrinking set while Semantic Scholar's vectors go unread.
+    """
+    _write_setting(conn, "embedding_model", expected_embedding_model(conn))
+
+
+def reconcile_embedding_model(conn: sqlite3.Connection) -> None:
+    """Correct ``embedding_model`` after an add-on provider came or went.
+
+    Only an add-on provider's choice is touched: with `none` or `local` the row
+    stays as set, so a value someone chose is never overwritten at startup.
+    Opens its own write unit, and only when there is something to change.
+    """
+    from alma.core.db_write import run_write_unit
+
+    if configured_provider_name(conn) in CORE_PROVIDERS:
+        return
+    if _read_setting(conn, "embedding_model", "") == expected_embedding_model(conn):
+        return
+    run_write_unit(conn, lambda: sync_embedding_model(conn), label="reconcile embedding model")
+
+
 def get_active_provider(conn: sqlite3.Connection) -> EmbeddingProvider | None:
     """Return the embedding provider selected in discovery_settings.
 
-    Reads ``ai.provider`` from the database and instantiates the matching
-    provider. For OpenAI, the API key and call delay are also read from
-    settings.
+    Reads ``ai.provider`` from the database and builds the matching provider.
 
     Returns:
         The active provider instance, or None if ``ai.provider`` is
@@ -283,16 +448,12 @@ def get_active_provider(conn: sqlite3.Connection) -> EmbeddingProvider | None:
     if provider_name == "local":
         model_key = _read_setting(conn, "ai.local_model", DEFAULT_LOCAL_MODEL)
         provider = LocalEmbeddingProvider(model_key=model_key)
-    elif provider_name == "openai":
-        delay_str = _read_setting(conn, "api_call_delay", "0.5")
-        try:
-            delay = float(delay_str)
-        except (ValueError, TypeError):
-            delay = 0.5
-        provider = OpenAIProvider(api_call_delay=delay)
     else:
-        logger.warning("Unknown embedding provider: %s", provider_name)
-        return None
+        provider_class = addon_providers().get(provider_name)
+        if provider_class is None:
+            logger.warning("Embedding provider '%s' is unknown or switched off", provider_name)
+            return None
+        provider = provider_class.from_settings(conn)
 
     if not provider.is_available():
         logger.warning(
@@ -369,27 +530,6 @@ def list_available_providers(
         "selected_model": current_model_key,
     })
 
-    # OpenAI
-    openai_provider = OpenAIProvider()
-    openai_available = openai_provider.is_available()
-    if not module_available("openai"):
-        reason = "openai package is not installed"
-    elif not openai_provider._resolve_api_key():
-        reason = "OpenAI API key is not configured"
-    else:
-        reason = None
-    providers_info.append({
-        "name": openai_provider.name,
-        "display_name": "OpenAI embeddings",
-        "model_display_name": openai_provider.MODEL_NAME,
-        "provider_type": "hosted_embedding",
-        "icon": "cloud",
-        "description": "Use the OpenAI embeddings API for new or missing vectors.",
-        "canonical_model": openai_provider.model_name,
-        "dimension": openai_provider.dimension,
-        "available": openai_available,
-        "reason": reason,
-    })
-
+    providers_info.extend(provider.describe() for provider in addon_providers().values())
 
     return providers_info

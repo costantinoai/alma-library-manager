@@ -2520,6 +2520,8 @@ export interface LocalModelInfo {
 }
 
 export interface AIProviderInfo {
+  /** Set when this provider needs a key; Settings then asks for one. */
+  credential?: { label: string; placeholder: string } | null
   name: string
   display_name?: string
   model_display_name?: string
@@ -3170,6 +3172,8 @@ export interface AIFeatureGroup {
 
 export interface AIStatus {
   providers: AIProviderInfo[]
+  /** The chosen provider's name while its add-on is off or gone. */
+  provider_off?: string | null
   embeddings: {
     total: number
     coverage_pct: number
@@ -3205,7 +3209,7 @@ export interface AIStatus {
       last_created_at?: string | null
       stale?: number
       active?: boolean
-      source?: 'semantic_scholar' | 'local' | 'openai' | 'unknown' | 'mixed' | string
+      source?: 'semantic_scholar' | 'local' | 'unknown' | 'mixed' | string
       sources?: Record<string, number>
     }>
     s2_backfill?: {
@@ -3250,7 +3254,7 @@ export interface AIStatus {
 export interface AIConfig {
   provider?: string
   local_model?: string
-  openai_api_key?: string
+  provider_api_key?: string
   python_env_type?: 'system' | 'venv' | 'uv' | 'conda' | 'miniconda' | 'miniforge' | string
   python_env_path?: string
 }

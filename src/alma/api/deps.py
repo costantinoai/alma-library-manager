@@ -108,7 +108,7 @@ def _detect_default_python_env() -> tuple[str, str]:
 _default_env_type, _default_env_path = _detect_default_python_env()
 
 
-def _default_ai_provider() -> str:
+def default_ai_provider() -> str:
     """Environment-aware default for ``ai.provider``.
 
     Returns ``"local"`` when the local SPECTER2 stack (torch / transformers /
@@ -118,13 +118,14 @@ def _default_ai_provider() -> str:
     torch-capable box, while torch-less deployments stay S2-only. See
     tasks/PRODUCT_DECISIONS.md D19 (task 47 Phase 9).
 
-    ``ALMA_DEFAULT_AI_PROVIDER`` (``none``/``local``/``openai``) forces the
-    default regardless of the environment — an ops escape hatch (e.g. pin
-    ``none`` on a torch-capable host) and what the test suite sets for
-    deterministic, host-independent runs.
+    ``ALMA_DEFAULT_AI_PROVIDER`` (``none``, ``local``, or a provider an add-on
+    brings) forces the default regardless of the environment — an ops escape
+    hatch (e.g. pin ``none`` on a torch-capable host) and what the test suite
+    sets for deterministic, host-independent runs. A name nothing provides
+    reads as a switched-off provider, which Health reports.
     """
     override = os.environ.get("ALMA_DEFAULT_AI_PROVIDER", "").strip().lower()
-    if override in ("none", "local", "openai"):
+    if override:
         return override
     from alma.ai.import_state import module_available
 
@@ -142,12 +143,12 @@ _DEFAULT_DISCOVERY_SETTINGS.update(
         # "local" additionally computes the residual locally within the same
         # SPECTER2 space (→ ~82%+). The default now FOLLOWS THE ENVIRONMENT:
         # "local" when the AI extras (torch/transformers/adapters) are
-        # importable, else "none" (see _default_ai_provider). This overrides the
+        # importable, else "none" (see default_ai_provider). This overrides the
         # historical opt-in "none" so corpus vector coverage converges without a
         # manual click on a torch-capable box — task 47 Phase 9,
         # tasks/PRODUCT_DECISIONS.md D19. Users can still set "none" in
         # Settings → AI & embeddings (a one-time migration won't re-flip it).
-        "ai.provider": _default_ai_provider(),
+        "ai.provider": default_ai_provider(),
         "ai.python_env_type": _default_env_type,
         "ai.python_env_path": _default_env_path,
     }
