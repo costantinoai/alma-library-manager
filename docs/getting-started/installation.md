@@ -63,8 +63,7 @@ add `[ai]` if you want the local SPECTER2 encoder for embeddings.
 Linux x86_64 the wheels install cleanly; on Windows expect to wait
 longer for `torch`. Without `[ai]`, embeddings still work — ALMa
 fetches Semantic Scholar's pre-computed SPECTER2 vectors, and you
-can configure OpenAI as an embedding provider from the Settings
-page. What you lose is the *local* encoder for papers Semantic
+can switch on the OpenAI add-on and use it as an embedding provider. What you lose is the *local* encoder for papers Semantic
 Scholar doesn't have a vector for.
 
 You can install AI extras later — ALMa will detect them and light up

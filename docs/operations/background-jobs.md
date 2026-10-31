@@ -233,7 +233,7 @@ construction, not by bookkeeping.
 | Compute embeddings (local SPECTER2) | Health → repair cards. |
 | Cluster Library | Insights → Graph → Re-cluster. |
 | Generate cluster labels | After clustering. |
-| Bulk tag suggestions | Library → Tags. |
+| Bulk tag suggestions | Library → Tags, with the Auto tagger add-on on. |
 | BibTeX / Zotero import | Import dialog. |
 | OpenAlex resolve | Library → Imports → Resolve. |
 | Enrich imports | Library → Imports → Enrich. |

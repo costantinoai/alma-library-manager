@@ -56,7 +56,7 @@ and Node environments.
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | Optional OpenAI embedding provider key. |
+| `OPENAI_API_KEY` | Optional OpenAI embedding provider key. Read while the OpenAI add-on is on, and keeps it on through an upgrade. |
 
 Local SPECTER2 is configured through **Settings → Intelligence → AI
 provider**, including the dependency environment path.
@@ -114,7 +114,7 @@ an existing install points it at a different (probably empty) profile.
 | `ALMA_ENV` | `prod` | Profile namespace. `dev` gives an isolated copy so development never touches your real library — `scripts/start-dev.sh` sets it. |
 | `ALMA_CONFIG_DIR` | OS config dir | Directory holding `.env` and `settings.json`. Docker sets it to `/app`. |
 | `ALMA_SETTINGS_PATH` | `<config dir>/settings.json` | Exact settings file. Docker pins it into the data volume so settings survive image upgrades. |
-| `ALMA_DEFAULT_AI_PROVIDER` | auto | Forces the embedding compute provider (`none` / `local` / `openai`) instead of auto-detecting. Defaults to `local` when torch is importable (D19). |
+| `ALMA_DEFAULT_AI_PROVIDER` | auto | Forces the embedding compute provider (`none`, `local`, or a provider an add-on brings) instead of auto-detecting. Defaults to `local` when torch is importable (D19). |
 
 ### Slack (legacy env aliases)
 
@@ -163,7 +163,7 @@ Settings cards (so they never land in `settings.json`):
 | `smtp.password` | Settings → Plugins → Email | SMTP auth password (overridable by `SMTP_PASSWORD`). |
 | `semantic_scholar.api_key` | Settings → External APIs | Semantic Scholar API key. |
 | `openalex.api_key` | Settings → External APIs | OpenAlex API key. |
-| `openai.api_key` | Settings → Intelligence → AI provider | OpenAI embedding key. |
+| `openai.api_key` | Settings → Intelligence → AI provider, while the OpenAI add-on is on | OpenAI embedding key. |
 | `zotero.api_key` | Settings → External APIs | Zotero API key. |
 
 ## `.env.example`

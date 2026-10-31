@@ -201,8 +201,9 @@ instead, and needs no settings migration.
 ## Add-ons
 
 An integration adapts one outside service. An add-on is a whole optional feature:
-its routes, jobs, tables, settings and page. Alerts is one; its Email integration
-lives inside it. The test for what belongs in core is mechanical (D27): delete the
+its routes, jobs, tables, settings and page. Alerts is one, and its Email integration
+lives inside it. The Auto tagger has no page, and OpenAI has no tables and no
+frontend at all. The test for what belongs in core is mechanical (D27): delete the
 folder and Feed, Discovery, Authors and Library still work.
 
 One add-on is one folder, `src/alma/addons/<id>/`, whose `__init__.py` declares
@@ -219,17 +220,26 @@ while still importing: routes, jobs and hooks sit behind lazy callables.
 | `jobs`, `job_policies` | Registered while on, removed while off. A tick already dispatched checks the switch first; a job already running finishes. |
 | `ddl`, `tables`, `schema_version`, `migrations` | Created on first enable by `ensure_schema`, never by core bootstrap. The version is the `discovery_settings` row `addon.<id>.schema_version`. A newer stored version blocks that add-on alone. |
 | `paper_tables` | Core's merge and purge passes follow these rows while the add-on is off too. |
+| `core_rows` | Rows it owns inside a core table, as `CoreRows(label, table, where, params)`. The Remove dialog names them, and Remove deletes exactly them. |
+| `on_remove`, `disable_warning` | Core state to correct inside Remove's write unit, and what switching off costs right now. A warning makes Settings confirm first. |
+| `on_tag_merged` | Runs inside a tag merge's write unit, on or off, while its tables exist. An error rolls the merge back. |
+| `embedding_provider` | A provider class (`AddonEmbeddingProvider` in `alma.ai.providers`). It exists for core only while the add-on is on. `embedding_model` follows it: when a provider goes, readers go to SPECTER2, which Semantic Scholar keeps filling. |
 | `settings_defaults`, `secret_keys`, `file_roots` | What Remove deletes. File roots must sit inside the data directory. |
 | `plugins` | Integrations that exist only while the add-on is on. |
 | `home_counts`, `home_pills`, `health_checks`, `nav_badge` | Read by Home, Health and the sidebar. A hook that raises costs its own entry, never the surface. |
 
 Frontend: a folder `frontend/src/addons/<id>/` with an `index.ts` manifest. A
 build-time glob finds it, so deleting the folder cannot break the build. Add-on
-pages lazy-load, and a disabled page's chunk is never fetched.
+pages lazy-load, and a disabled page's chunk is never fetched. An add-on with no
+page fills a slot in a core page instead: core renders `<AddonSlot name="…" />`,
+which names the place and never the add-on, and the manifest's `slots` map that
+name to a lazy part. A part suspends inside the slot. An add-on with nothing to
+show needs no folder; provider settings arrive as data in `/ai/status`.
 
 Disable keeps everything. Remove is separate: it needs the add-on off, refuses
 while one of its jobs is active, takes a database backup, then drops its tables
-and deletes its files, settings and credentials. Papers are never touched.
+and deletes its `core_rows`, files, settings and credentials. Papers are never
+touched.
 
 Three checks hold the boundary: `tests/test_addons_boundary.py` (no core import,
 no add-on table named in core, and the app driven with the import blocked), and

@@ -183,7 +183,7 @@ expected budget.
 
 ### 6. (Optional) Configure an AI provider
 
-For semantic similarity, cluster labels, and auto-tagging, configure
+For semantic similarity and cluster labels, configure
 at least one AI provider in **Settings → Intelligence → AI provider**:
 
 * **Semantic Scholar** — no setup required; ALMa fetches pre-computed
@@ -191,7 +191,7 @@ at least one AI provider in **Settings → Intelligence → AI provider**:
 * **Local SPECTER2** — runs `allenai/specter2_base` locally. Good for
   papers S2 doesn't have. Requires the `[ai]` extras.
 * **OpenAI** — optional cloud embedding provider if you already use
-  OpenAI.
+  OpenAI. Switch it on first in **Settings → Add-ons**.
 
 The settings page surfaces what's installed and what isn't, with
 "Recheck" buttons that re-introspect the chosen runtime.
