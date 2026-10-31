@@ -22,6 +22,29 @@ logger = logging.getLogger(__name__)
 
 # Maximum papers per Slack message (Block Kit has a 50-block limit)
 _MAX_PAPERS_PER_MESSAGE = 15
+_URL_DELIMITERS = str.maketrans({"|": "%7C", "<": "%3C", ">": "%3E", " ": "%20"})
+
+
+def _mrkdwn_text(value: object) -> str:
+    """Show ``value`` as literal text inside a ``mrkdwn`` block.
+
+    Everything in a paper comes from an external source. Slack reads ``<...>``
+    as markup, so without this a title holding ``<!channel>`` pings the channel
+    and one holding ``<https://evil|Open paper>`` shows a false link. These are
+    the three characters Slack's formatting reference says to escape.
+    """
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _mrkdwn_link(url: str, label: object) -> str:
+    """Our own ``<url|label>`` markup, with neither part able to break out of it.
+
+    The label is ordinary text. In the URL the delimiters and a space are
+    percent-encoded, which is what they mean in a URL anyway; ``&`` is escaped
+    for Slack, which turns it back before opening the link.
+    """
+    target = url.translate(_URL_DELIMITERS).replace("&", "&amp;")
+    return f"<{target}|{_mrkdwn_text(label)}>"
 
 
 class SlackResolveError(RuntimeError):
@@ -559,10 +582,7 @@ class SlackNotifier:
         alert_source = str(paper.get("alert_source") or "").strip()
 
         # Title as clickable link if URL is available
-        if url:
-            title_line = f"*<{url}|{title}>*"
-        else:
-            title_line = f"*{title}*"
+        title_line = f"*{_mrkdwn_link(url, title) if url else _mrkdwn_text(title)}*"
 
         # Build detail lines
         lines: list[str] = [title_line]
@@ -577,7 +597,7 @@ class SlackNotifier:
                 )
             else:
                 authors_text = ", ".join(author_list)
-            lines.append(f"Authors: {authors_text}")
+            lines.append(f"Authors: {_mrkdwn_text(authors_text)}")
 
         meta_parts: list[str] = []
         if pub_date:
@@ -587,10 +607,10 @@ class SlackNotifier:
         if journal:
             meta_parts.append(str(journal))
         if meta_parts:
-            lines.append(" | ".join(meta_parts))
+            lines.append(_mrkdwn_text(" | ".join(meta_parts)))
 
         if alert_source:
-            lines.append(f"Match: {alert_source}")
+            lines.append(f"Match: {_mrkdwn_text(alert_source)}")
 
         if abstract:
             # Slack section text caps at 3000 chars; keep abstracts tight so
@@ -599,7 +619,8 @@ class SlackNotifier:
             snippet = abstract.replace("\n", " ").strip()
             if len(snippet) > 280:
                 snippet = snippet[:280].rstrip() + "..."
-            lines.append(snippet)
+            # After the cut, so an entity is never split in half.
+            lines.append(_mrkdwn_text(snippet))
 
         return {
             "type": "section",
@@ -669,19 +690,16 @@ class SlackNotifier:
         score = rec.get("score")
         source_type = rec.get("source_type", "")
 
-        if url:
-            title_line = f"*<{url}|{title}>*"
-        else:
-            title_line = f"*{title}*"
+        title_line = f"*{_mrkdwn_link(url, title) if url else _mrkdwn_text(title)}*"
 
         lines = [title_line]
         if authors:
-            lines.append(f"Authors: {authors}")
+            lines.append(f"Authors: {_mrkdwn_text(authors)}")
         meta = []
         if score is not None:
             meta.append(f"Score: {score:.2f}")
         if source_type:
-            meta.append(f"Source: {source_type}")
+            meta.append(f"Source: {_mrkdwn_text(source_type)}")
         if meta:
             lines.append(" | ".join(meta))
 
