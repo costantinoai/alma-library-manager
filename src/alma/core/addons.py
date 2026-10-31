@@ -135,6 +135,10 @@ class AddOn:
     nav_badge: Callable[[sqlite3.Connection], int] | None = None
     #: Operation-key namespaces that block Remove while active.
     operation_prefixes: tuple[str, ...] = ()
+    #: ``on_tag_merged(conn, source, target)``: rows with ``id`` and ``name``. Runs
+    #: inside the merge's write unit, on or off, so a kept row follows its tag. It
+    #: must not open a unit, and a failure rolls the merge back.
+    on_tag_merged: Callable[[sqlite3.Connection, Any, Any], None] | None = None
 
     def __post_init__(self) -> None:
         for name in (self.id, *self.tables, *(table for table, _ in self.paper_tables)):
@@ -546,6 +550,19 @@ def _collect(
     except Exception:
         logger.exception("Add-on %s hook failed", addon.id)
         return []
+
+
+def tag_merged(conn: sqlite3.Connection, source: Any, target: Any) -> None:
+    """Tell every present add-on holding its tables that one tag became another.
+
+    The caller owns the write unit. Unlike the read hooks this one does not
+    swallow an error: half a merge is worse than none, so the unit rolls back.
+    """
+    for addon in present():
+        if addon.on_tag_merged is None:
+            continue
+        if len(_existing_tables(conn, addon.tables)) == len(addon.tables):
+            addon.on_tag_merged(conn, source, target)
 
 
 def plugins() -> tuple[Any, ...]:

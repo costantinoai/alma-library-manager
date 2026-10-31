@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
+from alma.core import addons
 from alma.core.db_write import run_write_unit
 from alma.core.time import utcnow
 
@@ -403,6 +404,7 @@ def merge_tags(
             (target["name"], target_tag_id, source_tag_id),
         )
         db.execute("DELETE FROM tag_suggestions WHERE tag_id = ?", (source_tag_id,))
+        addons.tag_merged(db, source, target)
         db.execute("DELETE FROM tags WHERE id = ?", (source_tag_id,))
 
     run_write_unit(db, _persist, label="tag_merge")
