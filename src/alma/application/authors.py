@@ -832,8 +832,7 @@ def get_author_detail(db: sqlite3.Connection, author_id: str) -> dict | None:
 
     Returns profile + signal + top_topics + followed-author backfill state in
     one round-trip. Excludes the heavier publications / history / collaborators
-    lists — those remain on ``/authors/{id}/dossier`` and ``/publications`` for
-    callers that need them.
+    lists — ``/authors/{id}/publications`` serves those to callers that need them.
     """
     author = get_author(db, author_id)
     if author is None:

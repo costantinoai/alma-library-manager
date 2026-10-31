@@ -80,12 +80,10 @@ new suggestion.
 
 ## Refreshing
 
-Three refresh paths:
+New works from the authors you follow arrive through their Feed monitors
+(refresh the Feed, or switch on Feed auto-refresh in Settings). Two manual
+refresh paths:
 
-* **Per-author refresh-cache** — incremental, pulls only new works
-  since the last refresh. Nothing runs it on a schedule: new works from the
-  authors you follow arrive through their Feed monitors (refresh the Feed, or
-  switch on Feed auto-refresh in Settings).
 * **Per-author deep refresh** — re-pulls the full bibliography.
   Use this after schema changes or if you suspect drift.
 * **Deep refresh all** — bulk equivalent of the above. Heavy; runs
@@ -209,7 +207,7 @@ curl -X POST http://localhost:8000/api/v1/authors \
   -d '{"name":"Andrew Ng","follow":true}'
 
 # refresh
-curl -X POST http://localhost:8000/api/v1/authors/A1234567890/refresh-cache
+curl -X POST http://localhost:8000/api/v1/authors/A1234567890/deep-refresh
 
 # resolve identifiers
 curl -X POST http://localhost:8000/api/v1/authors/A1234567890/resolve-identifiers

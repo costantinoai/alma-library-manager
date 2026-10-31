@@ -28,8 +28,8 @@ Triggers:
   - Eager: paper soft-remove / unfollow / paper hard-delete cascades
     call `gc_author_if_orphan` for each affected author_id.
   - Periodic: `garbage_collect_orphan_authors` walks every active
-    author and applies the rule. Exposed via the
-    `POST /authors/garbage-collect-orphans` endpoint.
+    author and applies the rule, run by the maintenance task in
+    `services/maintenance.py`.
 
 Audited:
   Every soft-removal writes an `operation_logs` entry with

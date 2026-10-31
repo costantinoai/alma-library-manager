@@ -816,11 +816,10 @@ def get_slack_notifier() -> SlackNotifier:
 def slack_status() -> dict:
     """The ONE answer to "is Slack set up, and for what?".
 
-    Three surfaces used to answer this three different ways: ``/plugins`` keyed
-    on whether a mirrored config FILE was non-empty, ``/settings/test/slack`` on
-    the notifier's token, and ``/inbox/status`` on token-plus-capture-channel.
-    They could disagree — and did, because the file and the secret store were
-    separate stores.
+    Surfaces used to answer this different ways: ``/plugins`` keyed on whether a
+    mirrored config FILE was non-empty, ``/settings/test/slack`` on the
+    notifier's token. They could disagree — and did, because the file and the
+    secret store were separate stores.
 
     Capability is per DIRECTION, because that is how Slack actually fails: a
     token with a posting channel and no capture channel can send and not

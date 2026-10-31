@@ -29,11 +29,10 @@ The list is checked against the code. `tests/test_core_control_inventory_contrac
 | Measure | Where to read it | What it says |
 |---|---|---|
 | Outcome evaluation | The line under Signal Weights in Settings, `GET /api/v1/discovery/outcome-evaluation`; full payload in the `materialized_views` row `scoring:outcome_eval` | AUC of kept papers against rejected papers and against random corpus papers, per family `alone` and `loss_when_removed`, plus `fit`, the weights that would have done best out of sample. Retrieval and the citation-graph atoms cannot be measured offline. `feedback` and `preference` are leak-prone. |
-| Signal impact report | `GET /api/v1/reports/signal-impact`, Insights | Marginal signal effect by outcome, and `tuning`: partial coefficients, their drift, and shadow against prior scoring. It states its own sample size. |
+| Signal impact report | `GET /api/v1/reports/signal-impact`, Insights | Marginal signal effect by outcome, and `tuning`: partial coefficients, their drift. It states its own sample size. |
 | Refresh summary | `retrieval_summary` in `suggestion_sets`, and `last_retrieval_summary` on a lens | Per-channel counts, `lane_runs`, timings, `candidate_pool`, and `diversity`: `exploit_count`, `exploration_count`, `branch_floor_count`, `first_screen_lifted`, `first_screen_short`, `safety_caps`, `safety_filtered_count`. |
 | Ranking snapshot | Table `discovery_ranking_candidates` | Every candidate of a refresh with its reward and exposure features, and why it was or was not shown. `scripts/discovery_evidence_audit.py` aggregates it from an offline copy without exposing records. |
 | Branch panel | Discovery page, branch panel, `GET /api/v1/lenses/{id}/branches` | Per-branch outcomes, `auto_weight`, `auto_weight_reason`, coverage, and the drift numbers `turnover` and `misfit_share`. |
-| Channel yield | `GET /api/v1/discovery/channel-yield` | Per retrieval channel: surfaced, kept, shrunk rate. |
 | Feed refresh result | Activity entry of a Feed refresh; `last_result_json` on a monitor | `raw_candidates`, `accepted_candidates`, `rejected_recency`, `rejected_match`, `drop_runs`. |
 | Suggestion rows | `GET /api/v1/authors/suggestions` | Bucket, score and `bucket_calibration_multiplier` per suggested author. |
 | Quota readout | `GET /api/v1/settings/openalex/usage`; `openalex_credits_remaining` in the Health operations payload | OpenAlex credits used, remaining, limit, retries and rate-limited events. |
@@ -63,46 +62,16 @@ Stored as text in the SQLite table `discovery_settings`, seeded from `DISCOVERY_
 | `weights.feedback_adj` | `src/alma/discovery/defaults.py` | `0.09` | `ranker.resolve_family_weights` | Weight of the Feedback family: your verdicts on similar papers. | Leak-prone in the outcome evaluation, compare the `content_only` score. Signal impact report. | Settings: Discovery Settings, Signal Weights | live |
 | `weights.preference_affinity` | `src/alma/discovery/defaults.py` | `0.09` | `ranker.resolve_family_weights` | Weight of the Preference family: the taste profile from ratings and history. | Leak-prone in the outcome evaluation. Signal impact report. | Settings: Discovery Settings, Signal Weights | live |
 | `recommendation_mode` | `src/alma/discovery/defaults.py` | `balanced` | `ranker.resolve_family_weights` through `_MODE_MULTIPLIERS` | Explore or Exploit multiplies some family weights. At the fitted defaults author and recency are 0, so Explore only halves citation and venue, and Exploit only raises venue and preference and halves nothing. It does not change branch temperature, whatever the card says: see `branches.temperature`. | Outcome evaluation after switching; compare both bars. | Settings: Discovery Settings, Recommendation Mode | live |
-| `citation_fabric.coupling_bonus_max` | `src/alma/discovery/defaults.py` | `2.5` | Nothing | Was the ceiling of an additive coupling bonus. Coupling now enters as a Citation atom. | no measure | nowhere | no-op |
-| `citation_fabric.cocitation_bonus_max` | `src/alma/discovery/defaults.py` | `2.5` | Nothing | Was the ceiling of an additive co-citation bonus. Co-citation now enters as a Citation atom. | no measure | nowhere | no-op |
-
-### Retrieval strategies
-
-The first six are read only by `engine._generate_with_conn`, the legacy global recommender, which no route or job calls any more. `strategies.s2_recommend` through `strategies.recent_wins` have no reader at all. Lens refreshes never look at any of them, so the Retrieval Strategies section of the Settings card changes nothing.
-
-<!-- inventory: discovery -->
-| Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
-|---|---|---|---|---|---|---|---|
-| `strategies.related_works` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.topic_search` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.followed_authors` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.coauthor_network` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.citation_chain` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.semantic_scholar` | `src/alma/discovery/defaults.py` | `true` | `engine._generate_with_conn` (unreachable) | Nothing on the live path. `sources.semantic_scholar.enabled` is the real switch. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.s2_recommend` | `src/alma/discovery/defaults.py` | `true` | Nothing | Was the switch for Semantic Scholar list recommendations. `build_discovery_frontier` always calls `recommend_from_seeds`. The API model has no field for it. | no measure | nowhere | no-op |
-| `strategies.branch_explorer` | `src/alma/discovery/defaults.py` | `true` | Nothing | Nothing. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.taste_topics` | `src/alma/discovery/defaults.py` | `true` | Nothing | Nothing. Taste-topic searches always run in `_retrieve_external_channel`. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.taste_authors` | `src/alma/discovery/defaults.py` | `true` | Nothing | Nothing. Taste-author matches always run. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.taste_venues` | `src/alma/discovery/defaults.py` | `true` | Nothing | Nothing. Taste-venue matches always run. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.recent_wins` | `src/alma/discovery/defaults.py` | `true` | Nothing | Nothing. Recent-win searches always run. | no measure | Settings: Discovery Settings, Retrieval Strategies | no-op |
-| `strategies.adaptive_channels` | `src/alma/discovery/defaults.py` | `true` | `channel_yield.adaptive_channels_enabled`, reported by `GET /discovery/channel-yield` only | Nothing. `channel_multipliers` has no caller: a lens refresh sets `yield_multipliers` to empty on purpose (D26). The card has no toggle for it. | no measure | API only | no-op |
 
 ### Limits
 
 <!-- inventory: discovery -->
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
-| `limits.max_results` | `src/alma/discovery/defaults.py` | `50` | `engine._generate_with_conn`, `engine._refresh_recommendations_for_db_path` (both unreachable) | Nothing on the live path. Deck size is the `limit` of a lens refresh, which the Discovery page fixes at `LENS_REFRESH_LIMIT`. | no measure | Settings: Discovery Settings, Limits | no-op |
 | `limits.min_score` | `src/alma/discovery/defaults.py` | `0` | `_refresh_lens_recommendations` | Drops candidates scoring below it before the slate is built, so a deck can come out shorter. | Refresh summary: raise if the tail of a deck is off-topic. 0 keeps everything. | Settings: Discovery Settings, Limits | live |
 | `limits.max_candidates_per_strategy` | `src/alma/discovery/defaults.py` | `20` | `engine._discover_similar_with_meta_and_conn` | Candidates pulled per channel per seed by Discover Similar only. Lens refreshes do not read it. | Job result: channel `fetched` counts; raise if Similar returns too few. | Settings: Discovery Settings, Limits | live |
 | `limits.recency_window_years` | `src/alma/discovery/defaults.py` | `10` | `scoring.measure_candidate` | Years over which the recency reading falls to zero. Reaches a score only when `weights.recency_boost` is above 0, which it is not by default. | Outcome evaluation once recency has weight. | Settings: Discovery Settings, Limits | live |
-| `limits.feedback_decay_days_full` | `src/alma/discovery/defaults.py` | `90` | Nothing | Nothing. Feedback decay is `_EVENT_HALF_LIFE_DAYS`. | no measure | Settings: Discovery Settings, Limits | no-op |
-| `limits.feedback_decay_days_half` | `src/alma/discovery/defaults.py` | `180` | Nothing | Nothing. Feedback decay is `_EVENT_HALF_LIFE_DAYS`. | no measure | Settings: Discovery Settings, Limits | no-op |
 | `limits.lane_deadline_seconds` | `src/alma/discovery/defaults.py` | `60` | `_refresh_lens_recommendations`, clamped to 5 to 300 | Seconds one retrieval lane may run before the refresh builds the deck without it. | Refresh summary: raise if lanes are logged as cut. It is a backstop, it should never fire. | nowhere | live |
-| `limits.taste_topic_queries` | `src/alma/discovery/defaults.py` | `3` | Nothing | Nothing. `_retrieve_external_channel` hard-codes 4. | no measure | nowhere | no-op |
-| `limits.taste_author_queries` | `src/alma/discovery/defaults.py` | `3` | Nothing | Nothing. `_retrieve_external_channel` hard-codes 4. | no measure | nowhere | no-op |
-| `limits.taste_venue_queries` | `src/alma/discovery/defaults.py` | `2` | Nothing | Nothing. `_retrieve_external_channel` hard-codes 3. | no measure | nowhere | no-op |
-| `limits.recent_win_queries` | `src/alma/discovery/defaults.py` | `2` | Nothing | Nothing. `_retrieve_external_channel` hard-codes 3. | no measure | nowhere | no-op |
 
 ### Branches
 
@@ -298,7 +267,7 @@ Stored in `settings.json`, through `alma.config`. `PUT /api/v1/settings` writes 
 | `id_resolution_semantic_scholar_enabled` | `src/alma/config.py` | `True` | `routes.authors` resolver options | Semantic Scholar in author identifier resolution. | Authors needing review on Health. | Settings: Identifier Resolution | live |
 | `id_resolution_orcid_enabled` | `src/alma/config.py` | `True` | `routes.authors` resolver options | ORCID in author identifier resolution. | Authors needing review on Health. | Settings: Identifier Resolution | live |
 | `id_resolution_scholar_scrape_auto_enabled` | `src/alma/config.py` | `False` | `routes.authors` resolver options | Google Scholar scraping inside pipelines. | Authors needing review on Health. | Settings: Identifier Resolution | live |
-| `id_resolution_scholar_scrape_manual_enabled` | `src/alma/config.py` | `False` | `routes.authors` resolver options | Google Scholar scraping from the Authors page. The reader's own fallback is `True` where the schema default is `False`, so a `settings.json` without the key behaves as on. | Authors needing review on Health. | Settings: Identifier Resolution | live |
+| `id_resolution_scholar_scrape_manual_enabled` | `src/alma/config.py` | `False` | `routes.authors` resolver options | Google Scholar scraping from the Authors page. | Authors needing review on Health. | Settings: Identifier Resolution | live |
 | `slack_channel` | `src/alma/config.py` | `None` | `get_slack_channel`, `plugins.slack` | Channel of Slack alerts. | Alert history. | Settings: Plugins, Slack | live |
 | `slack_inbox_channel` | `src/alma/config.py` | `None` | `SlackInboxChannel`, `plugins.slack` | Channel ALMa reads for Inbox capture. Empty means capture off. | Inbox ledger. | Settings: Plugins, Slack | live |
 | `smtp_host` | `src/alma/config.py` | `None` | `get_smtp_host`, `plugins.email` | Mail server for alert digests. | Alert history. | Settings: Plugins, Email | live |
@@ -438,10 +407,8 @@ Set by the platform or the test runner. Nobody tunes these.
 |---|---|---|---|---|---|---|---|
 | `PATH` | `src/alma/application/pdfs/sandbox.py` | platform | `_environment` | Passed to the PDF sandbox, which gets a minimal environment. | no measure | env | live |
 | `SYSTEMROOT` | `src/alma/application/pdfs/sandbox.py` | platform | `_environment` | The same on Windows. | no measure | env | live |
-| `USERPROFILE` | `src/alma/core/fetcher.py` | platform | legacy fetcher | Desktop output folder on Windows. | no measure | env | live |
 | `PYTEST_CURRENT_TEST` | `src/alma/api/scheduler.py` | set by pytest | `schedule_immediate`, `library`, `fetcher` | Runs immediate jobs inline under pytest. | no measure | test runner | live |
 | `ALMA_TEST_DEFER_JOBS` | `src/alma/api/scheduler.py` | unset | `schedule_immediate` | Leaves jobs queued under pytest. | no measure | test runner | live |
-| `TEST_MODE` | `src/alma/api/deps.py` | `false` | `get_test_mode` | Test-only switch. | no measure | env | live |
 
 ## Scheduled jobs
 
@@ -473,8 +440,6 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 | `TEXT_SIMILARITY_SEMANTIC_SHARE` | `src/alma/discovery/defaults.py` | `0.87` | `ranker.FAMILY_SPECS` | Split of the one similarity slider between Semantic and Lexical. | Outcome evaluation `fit`. | nowhere | live |
 | `_MODE_MULTIPLIERS` | `src/alma/application/discovery/ranker.py` | `{'explore': {'recency': 1.5, 'citation': 0.5, 'author': 0.5, 'venue': 0.5}, 'exploit': {'author': 1.5, 'venue': 1.5, 'preference': 1.5, 'recency': 0.5}, 'balanced': {}}` | `resolve_family_weights` | What Explore and Exploit do to family weights. | Outcome evaluation per mode. | nowhere | live |
 | `_RETRACTION_PENALTY` | `src/alma/application/discovery/ranker.py` | `0.45` | `repaired_prior_score` | Points taken off a retracted paper, as a share of 100. | no measure | nowhere | live |
-| `SHADOW_MIN_OBSERVATIONS` | `src/alma/application/discovery/ranker.py` | `80` | `fit_shadow_ranker` | Randomized observations before the shadow model is fitted. | Signal impact report `tuning`. | nowhere | live |
-| `SHADOW_MIN_PER_CLASS` | `src/alma/application/discovery/ranker.py` | `20` | `fit_shadow_ranker` | Same, per class. | Signal impact report `tuning`. | nowhere | live |
 | `_PROJECTED_FEEDBACK_CAP` | `src/alma/discovery/scoring.py` | `0.6` | `measure_candidate` | Bound on the structured feedback adjustment. | Signal impact report. | nowhere | live |
 | `_FEEDBACK_SEMANTIC_SHARE` | `src/alma/discovery/scoring.py` | `0.6` | `measure_candidate` | Split of Feedback between the semantic and structured estimates. | Signal impact report. | nowhere | live |
 | `TITLE_FALLBACK_TOPIC_SCORE` | `src/alma/discovery/scoring.py` | `0.3` | `resolve_candidate_topics` | Weight of title words when a paper has no topics. | no measure | nowhere | live |
@@ -491,7 +456,6 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 | `measure_candidate` projected axes | `src/alma/discovery/scoring.py` | paper 0.65, neighbours 0.55 and 0.45, venue 0.35, topic 0.45, keyword 0.30, tag 0.30, author 0.40, author name 0.30 | `measure_candidate` | How much each kind of past feedback counts toward a candidate. | Signal impact report. | nowhere | live |
 | `measure_candidate` text blend | `src/alma/discovery/scoring.py` | semantic 0.68 and lexical 0.32, adjusted within 0.56 to 0.80 | `measure_candidate` | Blend inside the recorded `text_similarity` signal. The score reads the atoms instead. | no measure | nowhere | live |
 | `compute_preference_profile` background priors | `src/alma/discovery/scoring.py` | topic 0.22, venue 0.18, collection 0.5 | `compute_preference_profile` | How much the monitored corpus and collections feed the taste profile. | no measure | nowhere | live |
-| `fit_shadow_ranker` clipping | `src/alma/application/discovery/ranker.py` | weight at most 10, propensity at least 0.02 | `fit_shadow_ranker` | Bounds on inverse-propensity weights. | Signal impact report `tuning`. | nowhere | live |
 
 ### Slate
 
@@ -515,8 +479,8 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
 | `DEFAULT_CHANNEL_WEIGHTS` | `src/alma/application/discovery/lens_crud.py` | see source | `default_channel_weights` | Starting lens channel weights by context. They move no score: see `weights` under per-lens controls. | no measure | nowhere | no-op |
-| `_MAX_TOPIC_QUERIES` | `src/alma/application/discovery/retrieval/lexical.py` | `8` | `_lexical_query_terms` | Lexical searches per refresh. | Channel yield. | nowhere | live |
-| `_PER_QUERY_LIMIT` | `src/alma/application/discovery/retrieval/lexical.py` | `25` | `_retrieve_lexical_channel` | Candidates per lexical search. | Channel yield. | nowhere | live |
+| `_MAX_TOPIC_QUERIES` | `src/alma/application/discovery/retrieval/lexical.py` | `8` | `_lexical_query_terms` | Lexical searches per refresh. | Refresh summary. | nowhere | live |
+| `_PER_QUERY_LIMIT` | `src/alma/application/discovery/retrieval/lexical.py` | `25` | `_retrieve_lexical_channel` | Candidates per lexical search. | Refresh summary. | nowhere | live |
 | `_DIRECTION_BLEND_WEIGHT` | `src/alma/application/discovery/retrieval/vector.py` | `{'pin': 0.5, 'boost': 0.3}` | `_direction_centroids` | Pull of an adopted direction. | no measure | nowhere | live |
 | `_PROBE_SHARE_DIVISOR` | `src/alma/application/discovery/retrieval/vector.py` | `4` | `_retrieve_vector_channel`, `_share_the_cut` | Share of a normal branch a probing branch gets. | Branch panel: whether auto-muted branches recover. | nowhere | live |
 | `DEFAULT_BUILD_LIMIT` | `src/alma/application/discovery/frontier.py` | `1500` | `build_frontier`, `fill_frontier_vectors` | Frontier rows gathered and vectorized per pass. | Refresh summary `frontier_size`. | nowhere | live |
@@ -534,7 +498,7 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 |---|---|---|---|---|---|---|---|
 | `_retrieve_external_channel` lane budgets | `src/alma/application/discovery/retrieval/external.py` | 4 topics, 3 recent wins, 4 authors, 3 venues, at least 8 hits each, venue weight at least 0.14 | `_retrieve_external_channel` | How many taste searches a refresh runs over the frontier. | Refresh summary `lane_runs`. | nowhere | live |
 | `_merge_channel_candidates` hits per retriever | `src/alma/application/discovery/retrieval/merge.py` | 4 | `_merge_channel_candidates` | How many hits of one retriever count, so a fan-out cannot win by asking more. | no measure | nowhere | live |
-| `_retrieve_graph_channel` pools | `src/alma/application/discovery/retrieval/graph.py` | `max(limit * 2, 50)`, PPR `max(limit * 3, 100)` | `_retrieve_graph_channel` | Candidates per citation lane. | Channel yield. | nowhere | live |
+| `_retrieve_graph_channel` pools | `src/alma/application/discovery/retrieval/graph.py` | `max(limit * 2, 50)`, PPR `max(limit * 3, 100)` | `_retrieve_graph_channel` | Candidates per citation lane. | Refresh summary. | nowhere | live |
 | `build_discovery_frontier` request | `src/alma/application/discovery/frontier.py` | last 6 years, temperature 0.28, deadline 20 s | `build_discovery_frontier` | Age and shape of frontier searches. | Job result. | nowhere | live |
 | `_refresh_lens_recommendations` exemplars | `src/alma/application/discovery/__init__.py` | 12 positive, 8 negative | `_refresh_lens_recommendations` | Representative papers compared to each candidate. | no measure | nowhere | live |
 | `search_across_sources` per-source limit | `src/alma/discovery/source_search.py` | `max(3, min(25, limit))` | `search_across_sources` | Results asked of each source. | Feed refresh result. | nowhere | live |
@@ -598,9 +562,6 @@ Registered in `setup_scheduler`. Network jobs also pass `scheduled_network_refus
 | `_DEFAULT_HALF_LIFE_DAYS` | `src/alma/application/outcome_calibration.py` | `60.0` | `compute_author_bucket_calibration` | Outcome half-life. | Suggestion rows. | nowhere | live |
 | `_DEFAULT_MULTIPLIER_LO` | `src/alma/application/outcome_calibration.py` | `0.5` | `compute_author_bucket_calibration` | Lowest bucket multiplier. | Suggestion rows. | nowhere | live |
 | `_DEFAULT_MULTIPLIER_HI` | `src/alma/application/outcome_calibration.py` | `1.5` | `compute_author_bucket_calibration` | Highest bucket multiplier. | Suggestion rows. | nowhere | live |
-| `VALENCE_REMOVED` | `src/alma/core/signal_valence.py` | `-0.8` | Nothing | Part of `core.signal_valence`, which no module imports: it served the map, which left with D24. | no measure | nowhere | no-op |
-| `VALENCE_LIBRARY` | `src/alma/core/signal_valence.py` | `0.35` | Nothing | Same module. | no measure | nowhere | no-op |
-| `ENGINE_AUTHORITY` | `src/alma/core/signal_valence.py` | `0.5` | Nothing | Same module. | no measure | nowhere | no-op |
 
 ### Calibration and evaluation
 
@@ -770,8 +731,6 @@ Constants nothing reads. They do nothing and can go.
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
 | `_GRAPH_WARMUP_DELAY_SECONDS` | `src/alma/api/scheduler.py` | `90` | Nothing | Delay of the removed map warm-up. | no measure | nowhere | no-op |
-| `_LAYOUT_REBUILD_DRIFT` | `src/alma/api/scheduler.py` | `0.2` | Nothing | Trigger of the removed map layout rebuild. | no measure | nowhere | no-op |
-| `_LAYOUT_REBUILD_MAX_AGE_DAYS` | `src/alma/api/scheduler.py` | `7` | Nothing | Trigger of the removed map layout rebuild. | no measure | nowhere | no-op |
 
 ## Frontend preferences
 
@@ -798,6 +757,6 @@ Kept per browser. Clearing site data resets them. None reaches the backend excep
 <!-- inventory: frontend -->
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
-| `LENS_REFRESH_LIMIT` | `frontend/src/pages/DiscoveryPage.tsx` | `50` | `refreshLensMutation` | Deck size of a refresh. This, not `limits.max_results`, sets it. The scheduler uses the function default, also 50. | Refresh summary `requested_slate_size`. | nowhere | live |
+| `LENS_REFRESH_LIMIT` | `frontend/src/pages/DiscoveryPage.tsx` | `50` | `refreshLensMutation` | Deck size of a refresh. The scheduler uses the function default, also 50. | Refresh summary `requested_slate_size`. | nowhere | live |
 | `DEFAULT_VISIBLE_RECS` | `frontend/src/pages/DiscoveryPage.tsx` | `20` | `DiscoveryPage` | Cards before Show all. Pinned to `FIRST_SCREEN_CARDS`. | no measure | nowhere | live |
 | `SAVED_PAGE_SIZE` | `frontend/src/components/library/SavedTab.tsx` | `50` | `SavedTab` | Library page size. | no measure | nowhere | live |

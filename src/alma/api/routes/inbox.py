@@ -1,12 +1,10 @@
-"""Inbox capture endpoints — status and a manual sweep.
+"""Inbox capture endpoint — a manual sweep.
 
 The Inbox (D13) normally fills itself: a scheduler job polls the configured
-delivery channels every few minutes. These endpoints exist so the loop is
-**observable and forceable** rather than a black box you have to trust:
+delivery channels every few minutes. This endpoint exists so the loop is
+**forceable** rather than a black box you have to trust:
 
-* ``GET  /inbox/status`` — is capture configured, what is waiting, what failed.
-  Pure read; drives Settings and the Health card.
-* ``POST /inbox/sweep``  — check the channels NOW instead of waiting for the
+* ``POST /inbox/sweep`` — check the channels NOW instead of waiting for the
   next tick. Activity-backed, so a manual capture shows up in the operations
   log exactly like the scheduled one.
 
