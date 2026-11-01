@@ -6,12 +6,15 @@ calls this at startup. Run it on a database at the current schema, after reading
 the counts:
 
     python -m alma.services.merge_repairs --db /path/scholar.db            # counts only
+    python -m alma.services.merge_repairs --db /path/scholar.db --list list.csv
     python -m alma.services.merge_repairs --db /path/scholar.db --apply
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import difflib
 import json
 import logging
 import re
@@ -24,8 +27,10 @@ from alma.application.feed_monitors import sync_author_monitors
 from alma.core.author_identity import merged_author_redirects
 from alma.core.components import classify_component
 from alma.core.sqlite_config import apply_busy_timeout
+from alma.core.paper_groups import not_component_ids, paper_group_defect_map, resolve_paper_root_id
 from alma.core.time import utcnow
-from alma.core.utils import bare_openalex_work_id, normalize_doi
+from alma.core.utils import bare_openalex_work_id, normalize_doi, normalize_title_key
+from alma.library.deduplication import _keeper_score, plan_same_work
 from alma.services.paper_group_reconcile import preview_paper_group_repairs, reconcile_paper_groups
 
 logger = logging.getLogger(__name__)
@@ -157,6 +162,117 @@ def plan(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+#: Loosest evidence first: what a person should read before anything else.
+_LOOSEST_FIRST = (
+    "title_and_authors", "deposit_or_abstract", "server_copy", "preprint_title",
+    "semantic_scholar", "relation", "version", "openalex", "doi",
+)
+LIST_COLUMNS = (
+    "repair", "reason", "title_similarity", "surviving_title", "merged_title", "surviving_year",
+    "merged_year", "surviving_doi", "merged_doi", "surviving_status", "merged_status",
+    "surviving_id", "merged_id",
+)
+
+
+def _paper_row(conn: sqlite3.Connection, paper_id: str) -> sqlite3.Row:
+    return conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+
+
+def _merge_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    from alma.core.paper_groups import choose_paper_group_root
+
+    plan_result = plan_same_work(conn)
+    rows: list[dict[str, Any]] = []
+    for group in plan_result["groups"]:
+        full = {str(row["id"]): _paper_row(conn, str(row["id"])) for row in group}
+        keeper = max(group, key=_keeper_score)["id"]
+        root_id = choose_paper_group_root(full, preferred_id=keeper)
+        root = full[root_id]
+        for paper_id, row in full.items():
+            if paper_id == root_id:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None, normalize_title_key(row["title"])[:200], normalize_title_key(root["title"])[:200]
+            ).ratio()
+            rows.append({
+                "repair": "same_work_merge",
+                "reason": plan_result["reasons"].get(paper_id, ""),
+                "title_similarity": round(ratio, 2),
+                "surviving_title": root["title"], "merged_title": row["title"],
+                "surviving_year": root["year"], "merged_year": row["year"],
+                "surviving_doi": root["doi"], "merged_doi": row["doi"],
+                "surviving_status": root["status"], "merged_status": row["status"],
+                "surviving_id": root_id, "merged_id": paper_id,
+            })
+    rank = {reason: index for index, reason in enumerate(_LOOSEST_FIRST)}
+    rows.sort(key=lambda row: (rank.get(row["reason"], 0), row["title_similarity"]))
+    return rows
+
+
+def _other_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Everything else `apply` changes, one row per change."""
+    rows: list[dict[str, Any]] = []
+    survivors = {
+        str(row["openalex_id"]).lower(): str(row["name"])
+        for row in conn.execute("SELECT name, openalex_id FROM authors WHERE openalex_id IS NOT NULL")
+    }
+    for alt, survivor in sorted(_redirects_after_owner_repair(conn).items()):
+        for row in conn.execute(
+            "SELECT pa.paper_id, pa.display_name, p.title, p.year, p.doi FROM publication_authors pa "
+            "JOIN papers p ON p.id = pa.paper_id WHERE lower(pa.openalex_id) = ?",
+            (alt,),
+        ):
+            rows.append({
+                "repair": "authorship_returned",
+                "reason": f"{row['display_name']} ({alt.upper()}) to "
+                          f"{survivors.get(survivor.lower(), survivor)} ({survivor})",
+                "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
+                "merged_id": row["paper_id"],
+            })
+    for paper_id in _other_orphans(conn):
+        row = _paper_row(conn, paper_id)
+        rows.append({
+            "repair": "other_type_shown", "reason": "typed other, hidden with no parent",
+            "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
+            "merged_status": row["status"], "merged_id": paper_id,
+        })
+    for paper_id, defects in paper_group_defect_map(conn).items():
+        kinds = sorted(set(defects) - {"orphan_components", "ambiguous_preprints"})
+        if kinds:
+            row = _paper_row(conn, paper_id)
+            root = _paper_row(conn, resolve_paper_root_id(conn, paper_id, strict=False))
+            rows.append({
+                "repair": "group_relationship", "reason": ", ".join(kinds),
+                "surviving_title": root["title"], "surviving_year": root["year"],
+                "surviving_doi": root["doi"], "surviving_status": root["status"], "surviving_id": root["id"],
+                "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
+                "merged_status": row["status"], "merged_id": paper_id,
+            })
+    kept = not_component_ids(conn)
+    for row in conn.execute("SELECT * FROM papers WHERE component_type IS NULL").fetchall():
+        component, _ = classify_component(row["doi"], row["work_type"], row["title"])
+        if component and row["id"] not in kept:
+            rows.append({
+                "repair": "component_classified", "reason": component,
+                "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
+                "merged_status": row["status"], "merged_id": row["id"],
+            })
+    return rows
+
+
+def write_list(conn: sqlite3.Connection, path: Path) -> dict[str, int]:
+    """The whole repair as one sheet, loosest merges first. Writes no database row."""
+    rows = [*_merge_rows(conn), *_other_rows(conn)]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LIST_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["repair"]] = counts.get(row["repair"], 0) + 1
+    return counts
+
+
 def _repair_owner(conn: sqlite3.Connection) -> None:
     """A5042972527 survives; the cycle goes; the follow it already has becomes the owner's."""
     if not _owner_needs_repair(conn):
@@ -229,6 +345,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Preview or apply the one-time merge repairs.")
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--list", type=Path, help="write the whole repair to this CSV, nothing else")
     args = parser.parse_args()
     if not args.db.is_file():
         parser.error(f"no database at {args.db}")
@@ -236,7 +353,10 @@ def main() -> int:
     conn = sqlite3.connect(uri, uri=True, isolation_level=None if args.apply else "", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     apply_busy_timeout(conn)
-    json.dump(apply(conn) if args.apply else plan(conn), sys.stdout, indent=2, default=str)
+    if args.list:
+        json.dump(write_list(conn, args.list), sys.stdout, indent=2)
+    else:
+        json.dump(apply(conn) if args.apply else plan(conn), sys.stdout, indent=2, default=str)
     print()
     return 0
 

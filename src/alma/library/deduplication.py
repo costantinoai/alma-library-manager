@@ -228,6 +228,8 @@ class _WorkGroups:
         self._members: dict[str, set[str]] = {}
         self._rejected = rejected
         self.levels: dict[str, int] = {}
+        #: The strongest evidence that tied each row in. The ladder runs strongest first.
+        self.reasons: dict[str, str] = {}
 
     def _find(self, paper_id: str) -> str:
         self._parent.setdefault(paper_id, paper_id)
@@ -249,6 +251,8 @@ class _WorkGroups:
         self._parent[two] = one
         self._members[one] |= self._members.pop(two)
         self.levels[level] = self.levels.get(level, 0) + 1
+        self.reasons.setdefault(first, level)
+        self.reasons.setdefault(second, level)
 
     def groups(self) -> list[set[str]]:
         return [members for members in self._members.values() if len(members) > 1]
@@ -353,6 +357,7 @@ def plan_same_work(conn: sqlite3.Connection) -> dict:
         "groups": planned,
         "merges": sum(len(group) - 1 for group in planned),
         "levels": groups.levels,
+        "reasons": groups.reasons,
         "ambiguous": [pair for pair in pairs if pair["ambiguous"]],
         "review": review,
     }
