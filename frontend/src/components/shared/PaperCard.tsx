@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, Loader2, Plus, Compass } from 'lucide-react'
+import { ChevronDown, ExternalLink, Loader2, Compass, UserPlus } from 'lucide-react'
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { SignalChip } from '@/components/shared/SignalChip'
@@ -8,6 +8,7 @@ import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { PaperHoverCard } from './PaperHoverCard'
 import { PaperActionBar, type PaperReaction } from '@/components/discovery/PaperActionBar'
@@ -195,6 +196,37 @@ function parseAuthorNames(value?: string | null): string[] {
   return unique
 }
 
+/** A list this short is shown whole: eliding it would save nothing. */
+const AUTHORS_SHOWN_WHOLE = 6
+const AUTHORS_KEPT_FIRST = 3
+const AUTHORS_KEPT_LAST = 2
+
+type AuthorRun =
+  | { kind: 'name'; name: string; index: number }
+  | { kind: 'hidden'; count: number; index: number }
+
+/**
+ * Collapses a long author list into names and `+N` gaps. A reader decides on
+ * the first authors, who did the work, and the last, whose lab it is; 24% of
+ * the corpus has more than 6 authors and the longest lists run past 100.
+ * A followed author in the middle is never hidden: that is the name you came for.
+ */
+function authorRunsFor(names: string[], isKept: (name: string) => boolean): AuthorRun[] {
+  if (names.length <= AUTHORS_SHOWN_WHOLE) {
+    return names.map((name, index) => ({ kind: 'name', name, index }))
+  }
+  const runs: AuthorRun[] = []
+  names.forEach((name, index) => {
+    const keep =
+      index < AUTHORS_KEPT_FIRST || index >= names.length - AUTHORS_KEPT_LAST || isKept(name)
+    const previous = runs[runs.length - 1]
+    if (keep) runs.push({ kind: 'name', name, index })
+    else if (previous?.kind === 'hidden') previous.count += 1
+    else runs.push({ kind: 'hidden', count: 1, index })
+  })
+  return runs
+}
+
 // ── Main card ──
 
 // Minimum dwell time (ms) before we consider abstract engagement intentional
@@ -262,6 +294,7 @@ export function PaperCard({
   const showAbstractByDefault = forceShowAbstract || isDetailed
   const [showBreakdown, setShowBreakdown] = useState(isDetailed)
   const [showAbstract, setShowAbstract] = useState(showAbstractByDefault)
+  const [authorsExpanded, setAuthorsExpanded] = useState(false)
 
   // When the caller flips forceShowAbstract or size between variants keep the
   // card in sync so already-mounted cards update with the surface choice.
@@ -317,7 +350,15 @@ export function PaperCard({
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
   const authorNames = parseAuthorNames(paper.authors)
+  const authorRuns: AuthorRun[] = authorNames.length > 0
+    ? (authorsExpanded
+        ? authorNames.map((name, index) => ({ kind: 'name' as const, name, index }))
+        : authorRunsFor(authorNames, (name) => followedAuthorNames?.has(normalizeAuthorName(name)) ?? false))
+    : (paper.authors ? [{ kind: 'name', name: truncate(paper.authors, 120), index: 0 }] : [])
   const canFollowAuthors = !!(paper.id && onFollowAuthor)
+  const unfollowedAuthorCount = authorNames.filter(
+    (name) => !(followedAuthorNames?.has(normalizeAuthorName(name)) ?? false),
+  ).length
   const canFollowVenue = !!(paper.journal && onFollowVenue)
 
   // Track abstract engagement duration on collapse or unmount
@@ -463,6 +504,48 @@ export function PaperCard({
                       <Compass className="h-3.5 w-3.5" aria-hidden />
                     </button>
                   )}
+                  {canFollowAuthors && unfollowedAuthorCount > 0 && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          title="Follow an author of this paper"
+                          aria-label="Follow an author of this paper"
+                          className={HEADER_ICON_BUTTON}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" aria-hidden />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-72 p-1" onClick={(e) => e.stopPropagation()}>
+                        <ul className="max-h-72 overflow-y-auto">
+                          {authorNames.map((name) => {
+                            const normalized = normalizeAuthorName(name)
+                            const followed = followedAuthorNames?.has(normalized) ?? false
+                            const pending = followAuthorPendingName === normalized
+                            return (
+                              <li key={normalized} className="flex items-center justify-between gap-2 px-2 py-1">
+                                <span className="min-w-0 truncate text-sm text-alma-800" title={name}>{name}</span>
+                                {followed ? (
+                                  <span className="shrink-0 text-caption text-slate-500">Following</span>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    className="shrink-0"
+                                    disabled={pending}
+                                    onClick={() => onFollowAuthor?.(name, paper.id)}
+                                  >
+                                    {pending && <Loader2 className="h-3 w-3 animate-spin" />}
+                                    Follow
+                                  </Button>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </PopoverContent>
+                    </Popover>
+                  )}
                   {trailingHeader}
                 </div>
               )}
@@ -491,85 +574,105 @@ export function PaperCard({
               </PaperHoverCard>
             </div>
 
-            {/* Authors — with publication year appended inline
-                (T15, 2026-04-24). Year was previously a separate row;
-                inline keeps the "who, when" pair readable at a glance
-                and frees vertical space. Hidden when the paper has no
-                year at all (sparse-field policy). */}
+            {/* Byline: who on the left, where and when in a fixed column on the
+                right. The date always ends at the same x, so a date-sorted list
+                reads down one edge; on a phone it drops to a line of its own.
+                A long author list keeps the people who decide it for a reader:
+                the first three, the last two, and anyone you follow. */}
             {(paper.authors || paper.journal || yearInline) && (
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm leading-snug text-slate-500">
-                {paper.authors && (authorNames.length > 0 ? authorNames : [truncate(paper.authors, 120)]).map((authorName, index, list) => {
-                  const normalized = normalizeAuthorName(authorName)
-                  const isFollowed = followedAuthorNames?.has(normalized) ?? false
-                  const isPending = followAuthorPendingName === normalized
-                  const canWrapHover = authorNames.length > 0
-                  const label = (
-                    <span className="cursor-default rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:text-slate-700">
-                      {authorName}
-                    </span>
-                  )
-                  return (
-                    <span key={`${paper.id}-${authorName}-${index}`} className="group/author inline-flex items-center gap-1">
-                      {canWrapHover ? (
-                        <AuthorHoverCard
-                          name={authorName}
-                          isFollowed={isFollowed}
-                          followPending={isPending}
-                          onFollow={canFollowAuthors ? () => onFollowAuthor?.(authorName, paper.id) : undefined}
+              <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5 text-sm leading-snug text-slate-500 sm:flex-nowrap">
+                {paper.authors && (
+                  <span className="min-w-0">
+                    {authorRuns.map((run, runIndex) => {
+                      const isLastRun = runIndex === authorRuns.length - 1
+                      if (run.kind === 'hidden') {
+                        return (
+                          <span key={`hidden-${run.index}`} className="whitespace-nowrap">
+                            <Button
+                              variant="muted"
+                              size="inline"
+                              onClick={(e) => { e.stopPropagation(); setAuthorsExpanded(true) }}
+                              title={`Show ${run.count} more authors`}
+                              aria-label={`Show ${run.count} more authors`}
+                              className="tabular-nums"
+                            >
+                              +{run.count}
+                            </Button>
+                            {!isLastRun && <span className="text-slate-400">, </span>}
+                          </span>
+                        )
+                      }
+                      const authorName = run.name
+                      const normalized = normalizeAuthorName(authorName)
+                      const isFollowed = followedAuthorNames?.has(normalized) ?? false
+                      const isPending = followAuthorPendingName === normalized
+                      const canWrapHover = authorNames.length > 0
+                      const label = (
+                        <span
+                          className={cn(
+                            'cursor-default rounded-control transition-colors hover:bg-control-quiet hover:text-slate-700',
+                            isFollowed && 'font-medium text-slate-700',
+                          )}
                         >
-                          {label}
-                        </AuthorHoverCard>
-                      ) : (
-                        label
-                      )}
-                      {canFollowAuthors && !isFollowed && (
-                        <button
-                          type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 transition hover:border-control-edge-strong focus-ring hover:text-alma-600 disabled:cursor-not-allowed"
-                          onClick={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            onFollowAuthor?.(authorName, paper.id)
-                          }}
-                          disabled={isPending}
-                          title={`Follow ${authorName}`}
-                          aria-label={`Follow ${authorName}`}
-                        >
-                          {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                        </button>
-                      )}
-                      {index < list.length - 1 && <span className="text-slate-300">,</span>}
-                    </span>
-                  )
-                })}
-                {yearInline && (
-                  <span className="text-slate-400 tabular-nums" title={paper.publication_date || undefined}>
-                    · {yearInline}
+                          {authorName}
+                        </span>
+                      )
+                      return (
+                        <span key={`${paper.id}-${authorName}-${run.index}`} className="group/author">
+                          {canWrapHover ? (
+                            <AuthorHoverCard
+                              name={authorName}
+                              isFollowed={isFollowed}
+                              followPending={isPending}
+                              onFollow={canFollowAuthors ? () => onFollowAuthor?.(authorName, paper.id) : undefined}
+                            >
+                              {label}
+                            </AuthorHoverCard>
+                          ) : (
+                            label
+                          )}
+                          {!isLastRun && <span className="text-slate-400">, </span>}
+                        </span>
+                      )
+                    })}
+                    {authorsExpanded && authorNames.length > AUTHORS_SHOWN_WHOLE && (
+                      <Button
+                        variant="muted"
+                        size="inline"
+                        onClick={(e) => { e.stopPropagation(); setAuthorsExpanded(false) }}
+                        className="ml-2"
+                      >
+                        Show fewer
+                      </Button>
+                    )}
                   </span>
                 )}
-                {/* Journal sits on the authors line, italicised (APA style),
-                    not down in the metadata strip. */}
-                {paper.journal && (
-                  <span
-                    className="inline-flex min-w-0 items-center gap-1.5 italic text-slate-500"
-                    title={paper.journal}
-                  >
-                    {(paper.authors || yearInline) && (
-                      <span className="not-italic text-slate-300">·</span>
+                {(paper.journal || yearInline) && (
+                  <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 sm:ml-auto sm:max-w-[45%] sm:shrink-0">
+                    {paper.journal && (
+                      canFollowVenue ? (
+                        <VenueHoverCard
+                          journal={paper.journal}
+                          isFollowed={followedVenueKeys?.has(paper.journal.toLowerCase()) ?? false}
+                          followPending={venueFollowPending === paper.journal.toLowerCase()}
+                          onFollow={onFollowVenue}
+                        >
+                          <span
+                            className="min-w-0 cursor-default truncate rounded-control italic transition-colors hover:bg-control-quiet hover:text-slate-700"
+                            title={paper.journal}
+                          >
+                            {paper.journal}
+                          </span>
+                        </VenueHoverCard>
+                      ) : (
+                        <span className="min-w-0 truncate italic" title={paper.journal}>{paper.journal}</span>
+                      )
                     )}
-                    {canFollowVenue ? (
-                      <VenueHoverCard
-                        journal={paper.journal}
-                        isFollowed={followedVenueKeys?.has(paper.journal.toLowerCase()) ?? false}
-                        followPending={venueFollowPending === paper.journal.toLowerCase()}
-                        onFollow={onFollowVenue}
-                      >
-                        <span className="cursor-default truncate rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:not-italic hover:text-slate-700">
-                          {truncate(paper.journal, 60)}
-                        </span>
-                      </VenueHoverCard>
-                    ) : (
-                      <span className="truncate">{truncate(paper.journal, 60)}</span>
+                    {paper.journal && yearInline && <span className="text-slate-300">·</span>}
+                    {yearInline && (
+                      <span className="shrink-0 whitespace-nowrap tabular-nums text-slate-500" title={paper.publication_date || undefined}>
+                        {yearInline}
+                      </span>
                     )}
                   </span>
                 )}
