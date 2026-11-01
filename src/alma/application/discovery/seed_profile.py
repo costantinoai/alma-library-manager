@@ -743,6 +743,27 @@ def _negative_preference_context(
     }
 
 
+def _top_negative_terms(
+    values: dict[str, float],
+    *,
+    limit: int,
+    field_name: str,
+) -> list[dict[str, Any]]:
+    ranked = [
+        {field_name: key, "weight": round(float(weight), 4)}
+        for key, weight in sorted(
+            (
+                (str(key).strip(), float(weight))
+                for key, weight in values.items()
+                if str(key).strip() and float(weight or 0.0) > 0.0
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )[: max(1, limit)]
+    ]
+    return ranked
+
+
 def _candidate_negative_preference_penalty(
     candidate: dict,
     negative_context: dict[str, dict[str, float]],
