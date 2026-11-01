@@ -339,6 +339,7 @@ const BUTTON_OWNERS = new Set([
   'components/shared/JargonHint.tsx',
   'components/shared/PaperCard.tsx',
   'components/shared/PaperTile.tsx',
+  'components/shared/SignalChip.tsx',
   'components/shared/StatusChip.tsx',
   'components/shared/StatusRow.tsx',
 ])

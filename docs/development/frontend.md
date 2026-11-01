@@ -92,7 +92,7 @@ Settings-scoped helpers the rest of the app also re-uses:
 * `SettingsNumberField` — spinner-input.
 * `KeyValueRow`, `PackageChip`.
 
-For paper rows: `PaperCard` (compact / default / detailed variants),
+For paper rows: `PaperCard` (compact / default / detailed sizes; Feed, Discovery and Library each have one list view, no density control),
 `PaperActionBar` (the rating verbs), `StatusBadge` (the only badge
 path).
 
@@ -101,11 +101,10 @@ path).
 `components/ui/data-table/DataTable.tsx` is the shared table
 primitive. Built on `@tanstack/react-table` + `@dnd-kit`. Used by:
 
-* Library Saved compact view.
+* Library Saved.
 * Settings → Corpus Explorer modal.
 * Insights Reports tab.
 * Authors followed-list table.
-* Feed compact view.
 
 Features: column visibility toggle, drag-reorder, resize, sort,
 optional row selection, persistence to `localStorage` per

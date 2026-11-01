@@ -751,12 +751,11 @@ Kept per browser. Clearing site data resets them. None reaches the backend excep
 | `alma.sidebar.collapsed` | `frontend/src/components/layout/AppShell.tsx` | off | `AppShell` | Collapsed sidebar. | no measure | Sidebar | live |
 | `alma.feed.hideLibrary` | `frontend/src/pages/FeedPage.tsx` | off | `FeedPage` | Hides papers already in the Library from the Feed. | no measure | Feed page | live |
 | `alma.discovery.hideLibrary` | `frontend/src/pages/DiscoveryPage.tsx` | off | `DiscoveryPage` | Hides papers already in the Library from a lens. | no measure | Discovery page | live |
-| `alma.library.saved.viewMode` | `frontend/src/components/library/SavedTab.tsx` | `compact` | `SavedTab` | Cards or table. | no measure | Library page | live |
-| `alma.library.saved.cardSort` | `frontend/src/components/library/SavedTab.tsx` | `date` | `SavedTab` | Card sort. | no measure | Library page | live |
 | `alma.library.saved.compactSortKey` | `frontend/src/components/library/SavedTab.tsx` | `year` | `SavedTab` | Table sort column. | no measure | Library page | live |
 | `alma.library.saved.compactSortDir` | `frontend/src/components/library/SavedTab.tsx` | `desc` | `SavedTab` | Table sort direction. | no measure | Library page | live |
 | `alma.library.saved.prefsVersion` | `frontend/src/components/library/SavedTab.tsx` | `2026-03-07.list-default.v1` | `SavedTab` | Resets the four keys above when it changes. | no measure | nowhere | live |
 | `alma.datatable.` | `frontend/src/components/ui/data-table/DataTable.tsx` | per table | `DataTable` | Column visibility, order, size and sort of each table, under one key per `storageKey`. | no measure | Each table | live |
+| `alma.storage.version` | `frontend/src/lib/storageMigrations.ts` | `1` | `migrateLocalStorage` | Whether keys left by removed views were cleared. | no measure | nowhere | live |
 | `alma-connector-notice-dismissed` | `frontend/src/hooks/useConnectorStatus.ts` | unset | `useConnectorStatus` | Which browser connector notice was dismissed. | no measure | Notice | live |
 | `alma.pending-author-follows.v1` | `frontend/src/components/authors/SuggestedAuthorsRail.tsx` | empty | `SuggestedAuthorsRail` | State: follows not yet acknowledged. | no measure | nowhere | live |
 | `alma.onboarding.state` | `frontend/src/components/onboarding/useOnboardingState.ts` | unset | `useOnboardingState` | State: wizard progress, per session. | no measure | nowhere | live |

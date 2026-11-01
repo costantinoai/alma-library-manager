@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, Loader2, Plus, Compass } from 'lucide-react'
+import { ChevronDown, ExternalLink, Loader2, Compass, UserPlus } from 'lucide-react'
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { SignalChip } from '@/components/shared/SignalChip'
@@ -8,6 +8,7 @@ import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { PaperHoverCard } from './PaperHoverCard'
 import { PaperActionBar, type PaperReaction } from '@/components/discovery/PaperActionBar'
@@ -152,8 +153,6 @@ interface PaperCardProps {
   savedClickRemoves?: boolean
   /** Whether the paper is already on the reading list (controls Queue button). */
   isQueued?: boolean
-  /** When true, the abstract is expanded by default (Feed extended view). */
-  forceShowAbstract?: boolean
   /** When true, the TLDR line and the abstract toggle are both hidden,
    *  even at the `default` size. Used by Discovery's normal view to keep
    *  cards dense — the user opens the detail panel for the full text. */
@@ -162,8 +161,8 @@ interface PaperCardProps {
    *  shorter-height) form even at the `default` card size. Lets surfaces
    *  keep dense triage buttons without flipping the whole card to compact. */
   compactActions?: boolean
-  /** Explicit override for action-bar label visibility. */
-  showActionLabels?: boolean
+  /** Extra detail behind the Why toggle, below the score breakdown. */
+  whyDetail?: React.ReactNode
   /** Optional bulk-selection affordance — renders a hover-revealed checkbox
    * in the card header's leading column so it never overlaps the title.
    * The checkbox stays visible while the row is checked. Pass a stable
@@ -193,6 +192,37 @@ function parseAuthorNames(value?: string | null): string[] {
     unique.push(part)
   }
   return unique
+}
+
+/** A list this short is shown whole: eliding it would save nothing. */
+const AUTHORS_SHOWN_WHOLE = 6
+const AUTHORS_KEPT_FIRST = 3
+const AUTHORS_KEPT_LAST = 2
+
+type AuthorRun =
+  | { kind: 'name'; name: string; index: number }
+  | { kind: 'hidden'; count: number; index: number }
+
+/**
+ * Collapses a long author list into names and `+N` gaps. A reader decides on
+ * the first authors, who did the work, and the last, whose lab it is; 24% of
+ * the corpus has more than 6 authors and the longest lists run past 100.
+ * A followed author in the middle is never hidden: that is the name you came for.
+ */
+function authorRunsFor(names: string[], isKept: (name: string) => boolean): AuthorRun[] {
+  if (names.length <= AUTHORS_SHOWN_WHOLE) {
+    return names.map((name, index) => ({ kind: 'name', name, index }))
+  }
+  const runs: AuthorRun[] = []
+  names.forEach((name, index) => {
+    const keep =
+      index < AUTHORS_KEPT_FIRST || index >= names.length - AUTHORS_KEPT_LAST || isKept(name)
+    const previous = runs[runs.length - 1]
+    if (keep) runs.push({ kind: 'name', name, index })
+    else if (previous?.kind === 'hidden') previous.count += 1
+    else runs.push({ kind: 'hidden', count: 1, index })
+  })
+  return runs
 }
 
 // ── Main card ──
@@ -248,10 +278,9 @@ export function PaperCard({
   isSaved = false,
   savedClickRemoves = false,
   isQueued = false,
-  forceShowAbstract = false,
   suppressSummaries = false,
   compactActions = false,
-  showActionLabels,
+  whyDetail,
   selection,
 }: PaperCardProps) {
   // Resolve the effective size: explicit `size` wins; legacy `compact` prop
@@ -259,9 +288,10 @@ export function PaperCard({
   const effectiveSize: PaperCardSize = size ?? (compact ? 'compact' : 'default')
   const isCompact = effectiveSize === 'compact'
   const isDetailed = effectiveSize === 'detailed'
-  const showAbstractByDefault = forceShowAbstract || isDetailed
+  const showAbstractByDefault = isDetailed
   const [showBreakdown, setShowBreakdown] = useState(isDetailed)
   const [showAbstract, setShowAbstract] = useState(showAbstractByDefault)
+  const [authorsExpanded, setAuthorsExpanded] = useState(false)
 
   // When the caller flips forceShowAbstract or size between variants keep the
   // card in sync so already-mounted cards update with the surface choice.
@@ -316,8 +346,17 @@ export function PaperCard({
   const padding = isCompact ? 'p-3' : 'p-4'
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
+  const canToggleAbstract = !suppressSummaries && !showAbstractByDefault && !!paper.abstract
   const authorNames = parseAuthorNames(paper.authors)
+  const authorRuns: AuthorRun[] = authorNames.length > 0
+    ? (authorsExpanded
+        ? authorNames.map((name, index) => ({ kind: 'name' as const, name, index }))
+        : authorRunsFor(authorNames, (name) => followedAuthorNames?.has(normalizeAuthorName(name)) ?? false))
+    : (paper.authors ? [{ kind: 'name', name: truncate(paper.authors, 120), index: 0 }] : [])
   const canFollowAuthors = !!(paper.id && onFollowAuthor)
+  const unfollowedAuthorCount = authorNames.filter(
+    (name) => !(followedAuthorNames?.has(normalizeAuthorName(name)) ?? false),
+  ).length
   const canFollowVenue = !!(paper.journal && onFollowVenue)
 
   // Track abstract engagement duration on collapse or unmount
@@ -463,6 +502,48 @@ export function PaperCard({
                       <Compass className="h-3.5 w-3.5" aria-hidden />
                     </button>
                   )}
+                  {canFollowAuthors && unfollowedAuthorCount > 0 && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          title="Follow an author of this paper"
+                          aria-label="Follow an author of this paper"
+                          className={HEADER_ICON_BUTTON}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" aria-hidden />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-72 p-1" onClick={(e) => e.stopPropagation()}>
+                        <ul className="max-h-72 overflow-y-auto">
+                          {authorNames.map((name) => {
+                            const normalized = normalizeAuthorName(name)
+                            const followed = followedAuthorNames?.has(normalized) ?? false
+                            const pending = followAuthorPendingName === normalized
+                            return (
+                              <li key={normalized} className="flex items-center justify-between gap-2 px-2 py-1">
+                                <span className="min-w-0 truncate text-sm text-alma-800" title={name}>{name}</span>
+                                {followed ? (
+                                  <span className="shrink-0 text-caption text-slate-500">Following</span>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    className="shrink-0"
+                                    disabled={pending}
+                                    onClick={() => onFollowAuthor?.(name, paper.id)}
+                                  >
+                                    {pending && <Loader2 className="h-3 w-3 animate-spin" />}
+                                    Follow
+                                  </Button>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </PopoverContent>
+                    </Popover>
+                  )}
                   {trailingHeader}
                 </div>
               )}
@@ -491,144 +572,145 @@ export function PaperCard({
               </PaperHoverCard>
             </div>
 
-            {/* Authors — with publication year appended inline
-                (T15, 2026-04-24). Year was previously a separate row;
-                inline keeps the "who, when" pair readable at a glance
-                and frees vertical space. Hidden when the paper has no
-                year at all (sparse-field policy). */}
+            {/* Byline: who on the left, where and when in a fixed column on the
+                right. The date always ends at the same x, so a date-sorted list
+                reads down one edge; on a phone it drops to a line of its own.
+                A long author list keeps the people who decide it for a reader:
+                the first three, the last two, and anyone you follow. */}
             {(paper.authors || paper.journal || yearInline) && (
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm leading-snug text-slate-500">
-                {paper.authors && (authorNames.length > 0 ? authorNames : [truncate(paper.authors, 120)]).map((authorName, index, list) => {
-                  const normalized = normalizeAuthorName(authorName)
-                  const isFollowed = followedAuthorNames?.has(normalized) ?? false
-                  const isPending = followAuthorPendingName === normalized
-                  const canWrapHover = authorNames.length > 0
-                  const label = (
-                    <span className="cursor-default rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:text-slate-700">
-                      {authorName}
-                    </span>
-                  )
-                  return (
-                    <span key={`${paper.id}-${authorName}-${index}`} className="group/author inline-flex items-center gap-1">
-                      {canWrapHover ? (
-                        <AuthorHoverCard
-                          name={authorName}
-                          isFollowed={isFollowed}
-                          followPending={isPending}
-                          onFollow={canFollowAuthors ? () => onFollowAuthor?.(authorName, paper.id) : undefined}
+              <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-0.5 text-sm leading-snug text-slate-500 sm:flex-nowrap">
+                {paper.authors && (
+                  <span className="min-w-0">
+                    {authorRuns.map((run, runIndex) => {
+                      const isLastRun = runIndex === authorRuns.length - 1
+                      if (run.kind === 'hidden') {
+                        return (
+                          <span key={`hidden-${run.index}`} className="whitespace-nowrap">
+                            <Button
+                              variant="muted"
+                              size="inline"
+                              onClick={(e) => { e.stopPropagation(); setAuthorsExpanded(true) }}
+                              title={`Show ${run.count} more authors`}
+                              aria-label={`Show ${run.count} more authors`}
+                              className="tabular-nums"
+                            >
+                              +{run.count}
+                            </Button>
+                            {!isLastRun && <span className="text-slate-400">, </span>}
+                          </span>
+                        )
+                      }
+                      const authorName = run.name
+                      const normalized = normalizeAuthorName(authorName)
+                      const isFollowed = followedAuthorNames?.has(normalized) ?? false
+                      const canWrapHover = authorNames.length > 0
+                      const label = (
+                        <span
+                          className={cn(
+                            'cursor-default rounded-control transition-colors hover:bg-control-quiet hover:text-slate-700',
+                            isFollowed && 'font-medium text-slate-700',
+                          )}
                         >
-                          {label}
-                        </AuthorHoverCard>
-                      ) : (
-                        label
-                      )}
-                      {canFollowAuthors && !isFollowed && (
-                        <button
-                          type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 transition hover:border-control-edge-strong focus-ring hover:text-alma-600 disabled:cursor-not-allowed"
-                          onClick={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            onFollowAuthor?.(authorName, paper.id)
-                          }}
-                          disabled={isPending}
-                          title={`Follow ${authorName}`}
-                          aria-label={`Follow ${authorName}`}
-                        >
-                          {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                        </button>
-                      )}
-                      {index < list.length - 1 && <span className="text-slate-300">,</span>}
-                    </span>
-                  )
-                })}
-                {yearInline && (
-                  <span className="text-slate-400 tabular-nums" title={paper.publication_date || undefined}>
-                    · {yearInline}
+                          {authorName}
+                        </span>
+                      )
+                      return (
+                        <span key={`${paper.id}-${authorName}-${run.index}`} className="group/author">
+                          {canWrapHover ? (
+                            <AuthorHoverCard name={authorName} paperId={paper.id || undefined}>
+                              {label}
+                            </AuthorHoverCard>
+                          ) : (
+                            label
+                          )}
+                          {!isLastRun && <span className="text-slate-400">, </span>}
+                        </span>
+                      )
+                    })}
+                    {authorsExpanded && authorNames.length > AUTHORS_SHOWN_WHOLE && (
+                      <Button
+                        variant="muted"
+                        size="inline"
+                        onClick={(e) => { e.stopPropagation(); setAuthorsExpanded(false) }}
+                        className="ml-2"
+                      >
+                        Show fewer
+                      </Button>
+                    )}
                   </span>
                 )}
-                {/* Journal sits on the authors line, italicised (APA style),
-                    not down in the metadata strip. */}
-                {paper.journal && (
-                  <span
-                    className="inline-flex min-w-0 items-center gap-1.5 italic text-slate-500"
-                    title={paper.journal}
-                  >
-                    {(paper.authors || yearInline) && (
-                      <span className="not-italic text-slate-300">·</span>
+                {(paper.journal || yearInline) && (
+                  <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 sm:ml-auto sm:max-w-[45%] sm:shrink-0">
+                    {paper.journal && (
+                      canFollowVenue ? (
+                        <VenueHoverCard
+                          journal={paper.journal}
+                          isFollowed={followedVenueKeys?.has(paper.journal.toLowerCase()) ?? false}
+                          followPending={venueFollowPending === paper.journal.toLowerCase()}
+                          onFollow={onFollowVenue}
+                        >
+                          <span
+                            className="min-w-0 cursor-default truncate rounded-control italic transition-colors hover:bg-control-quiet hover:text-slate-700"
+                            title={paper.journal}
+                          >
+                            {paper.journal}
+                          </span>
+                        </VenueHoverCard>
+                      ) : (
+                        <span className="min-w-0 truncate italic" title={paper.journal}>{paper.journal}</span>
+                      )
                     )}
-                    {canFollowVenue ? (
-                      <VenueHoverCard
-                        journal={paper.journal}
-                        isFollowed={followedVenueKeys?.has(paper.journal.toLowerCase()) ?? false}
-                        followPending={venueFollowPending === paper.journal.toLowerCase()}
-                        onFollow={onFollowVenue}
-                      >
-                        <span className="cursor-default truncate rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:not-italic hover:text-slate-700">
-                          {truncate(paper.journal, 60)}
-                        </span>
-                      </VenueHoverCard>
-                    ) : (
-                      <span className="truncate">{truncate(paper.journal, 60)}</span>
+                    {paper.journal && yearInline && <span className="text-slate-300">·</span>}
+                    {yearInline && (
+                      <span className="shrink-0 whitespace-nowrap tabular-nums text-slate-500" title={paper.publication_date || undefined}>
+                        {yearInline}
+                      </span>
                     )}
                   </span>
                 )}
               </div>
             )}
 
-            {/* Signal row — one dense line with bullet separators (T15,
-                2026-04-24). Reading left to right: the surface's own why-chips
-                (`metaSlot` — Feed's matched authors/monitors, Discovery's
-                provenance), citations (with the S2 influential count when
-                > 0), the paper_signal rank and the user's star rating — all of
-                them short inline facts. The score bar used to close this row
-                and now has its own line below it. Every field is
-                optional (sparse-field policy); the row hides entirely when
-                there is nothing to show. The year lives in the authors row
-                above, never here. */}
+            {/* Signal row. The surface's why on the left; the paper's own facts
+                on the right, under the date, so they stay in one column however
+                many chips the left side wraps to. Every field is optional
+                (sparse-field policy); the row hides when there is nothing. */}
             {(hasMetaLead || metaSlot) && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 text-xs text-slate-500">
                 {metaSlot && (
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                     {metaSlot}
                   </span>
                 )}
-                {citationsLabel && (
-                  <>
-                    {metaSlot && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums"
-                      title={
-                        (paper.influential_citation_count ?? 0) > 0
-                          ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
-                          : `${paper.cited_by_count} citations`
-                      }
-                    >
-                      {citationsLabel}
-                    </span>
-                  </>
-                )}
-                {rankDisplay != null && (
-                  <>
-                    {(metaSlot || citationsLabel) && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums text-slate-600"
-                      title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
-                    >
-                      Rank {rankDisplay}
-                    </span>
-                  </>
-                )}
-                {starDisplay && (
-                  <>
-                    {(metaSlot || citationsLabel || rankDisplay != null) && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums text-gold-500"
-                      title={`Your rating: ${paper.rating}/5`}
-                    >
-                      {starDisplay}
-                    </span>
-                  </>
+                {hasMetaLead && (
+                  <span className="ml-auto flex shrink-0 items-center gap-x-1.5 tabular-nums max-sm:ml-0">
+                    {citationsLabel && (
+                      <span
+                        title={
+                          (paper.influential_citation_count ?? 0) > 0
+                            ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
+                            : `${paper.cited_by_count} citations`
+                        }
+                      >
+                        {citationsLabel}
+                      </span>
+                    )}
+                    {citationsLabel && rankDisplay != null && <span className="text-slate-300">·</span>}
+                    {rankDisplay != null && (
+                      <span
+                        className="text-slate-600"
+                        title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
+                      >
+                        Rank {rankDisplay}
+                      </span>
+                    )}
+                    {(citationsLabel || rankDisplay != null) && starDisplay && <span className="text-slate-300">·</span>}
+                    {starDisplay && (
+                      <span className="text-gold-500" title={`Your rating: ${paper.rating}/5`}>
+                        {starDisplay}
+                      </span>
+                    )}
+                  </span>
                 )}
               </div>
             )}
@@ -649,55 +731,6 @@ export function PaperCard({
                     {source.replace(/_/g, ' ')}
                   </SignalChip>
                 ))}
-              </div>
-            )}
-
-            {/* Score row — the bar and its Why toggle, on a line of their own
-                below every chip row and above the actions.
-
-                They used to be the last item of the dense signal row, sharing a
-                line with "very close topic", the citation count and the star
-                rating. A measured bar is not a chip: it has its own baseline,
-                its own width and a number welded to it, so wrapped in among
-                pills it was the one element the eye could never find twice in
-                the same place. On its own line the reading is fixed — what this
-                paper is about, then how well it scored, then what you can do
-                about it. */}
-            {score != null && (
-              <div className="mt-2 flex items-center gap-2">
-                <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
-                {(hasBreakdown || hasExplanation) && (
-                  <HoverCard openDelay={200} closeDelay={100}>
-                    <HoverCardTrigger asChild>
-                      <Button variant="muted" size="inline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          const next = !showBreakdown
-                          setShowBreakdown(next)
-                          if (next && onExpandBreakdown) onExpandBreakdown()
-                        }}
-                        className="gap-0.5 px-1.5 py-0.5 text-caption"
-                        title="Show score breakdown"
-                      >
-                        Why
-                        <ChevronDown
-                          className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
-                        />
-                      </Button>
-                    </HoverCardTrigger>
-                    <HoverCardContent
-                      side="top"
-                      align="start"
-                      className="w-72 p-3"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ScoreBreakdownTeaser
-                        breakdown={scoreBreakdown}
-                        explanation={explanation}
-                      />
-                    </HoverCardContent>
-                  </HoverCard>
-                )}
               </div>
             )}
 
@@ -724,19 +757,8 @@ export function PaperCard({
               </p>
             )}
 
-            {!suppressSummaries && !showAbstractByDefault && paper.abstract && (
-              <Button variant="muted" size="inline"
-                onClick={(e) => { e.stopPropagation(); handleAbstractToggle() }}
-                className="mt-1.5 gap-0.5 text-caption"
-              >
-                Abstract
-                <ChevronDown
-                  className={`h-3 w-3 transition-transform duration-200 ${showAbstract ? 'rotate-180' : ''}`}
-                />
-              </Button>
-            )}
-            {!suppressSummaries && ((showAbstractByDefault || showAbstract) && paper.abstract) && (
-              <SubPanel variant="flat" padded={false}  className="mt-1.5 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            {!suppressSummaries && showAbstractByDefault && paper.abstract && (
+              <SubPanel variant="flat" padded={false} className="mt-1.5 px-3 py-2 text-xs leading-relaxed text-slate-600">
                 {paper.abstract}
               </SubPanel>
             )}
@@ -759,16 +781,6 @@ export function PaperCard({
 
         </div>
 
-        {/* Score breakdown (expandable) */}
-        {showBreakdown && (hasBreakdown || hasExplanation) && (
-          <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2.5">
-            <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-slate-400">
-              Score Breakdown
-            </p>
-            <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
-          </SubPanel>
-        )}
-
         {children}
 
         {/* Caller-provided quick actions row. Discover-similar pivot used to
@@ -781,45 +793,122 @@ export function PaperCard({
           </div>
         )}
 
-        {/* Action bar */}
-        {hasActions && (
-          <div className="mt-3 border-t border-slate-100 pt-3" onClick={(e) => e.stopPropagation()}>
-            <PaperActionBar
-              onDismiss={onDismiss}
-              onQueue={onQueue}
-              onAdd={onAdd}
-              onLike={onLike}
-              onLove={onLove}
-              onDislike={onDislike}
-              onUndo={onUndo}
-              disabled={actionDisabled}
-              compact={isCompact || compactActions}
-              dismissLabel={dismissLabel}
-              dismissTitle={dismissTitle}
-              dislikeLabel={dislikeLabel}
-              dislikeTitle={dislikeTitle}
-              savedLabel={savedLabel}
-              savedReadOnly={savedReadOnly}
-              onAddToCollection={onAddToCollection}
-              addToCollectionLabel={addToCollectionLabel}
-              addToCollectionTitle={addToCollectionTitle}
-              reaction={reaction}
-              isSaved={isSaved}
-              savedClickRemoves={savedClickRemoves}
-              isQueued={isQueued}
-              showLabels={showActionLabels}
-              collectionAction={collectionConfirm ? (
-                <AddToCollectionMenu
-                  onConfirm={collectionConfirm}
-                  disabled={actionDisabled}
-                  compact={(isCompact || compactActions) && showActionLabels !== true}
-                  defaultSelectedIds={defaultCollectionIds}
-                  isSaved={isSaved}
-                />
-              ) : undefined}
-            />
+        {/* Footer: what you can do on the left, what you can read on the right.
+            The score ends at the card's right edge on every card and every
+            surface, so a ranked list reads down one column. Both toggles open
+            below this row, so the control you pressed does not move. */}
+        {(hasActions || score != null || canToggleAbstract) && (
+          <div
+            className={cn(
+              'mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-slate-100 pt-3',
+              rank != null && 'sm:pl-10',
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {hasActions && (
+              <PaperActionBar
+                onDismiss={onDismiss}
+                onQueue={onQueue}
+                onAdd={onAdd}
+                onLike={onLike}
+                onLove={onLove}
+                onDislike={onDislike}
+                onUndo={onUndo}
+                disabled={actionDisabled}
+                compact={isCompact || compactActions}
+                dismissLabel={dismissLabel}
+                dismissTitle={dismissTitle}
+                dislikeLabel={dislikeLabel}
+                dislikeTitle={dislikeTitle}
+                savedLabel={savedLabel}
+                savedReadOnly={savedReadOnly}
+                  onAddToCollection={onAddToCollection}
+                addToCollectionLabel={addToCollectionLabel}
+                addToCollectionTitle={addToCollectionTitle}
+                reaction={reaction}
+                isSaved={isSaved}
+                savedClickRemoves={savedClickRemoves}
+                isQueued={isQueued}
+                collectionAction={collectionConfirm ? (
+                  <AddToCollectionMenu
+                    onConfirm={collectionConfirm}
+                    disabled={actionDisabled}
+                    compact={isCompact || compactActions}
+                    defaultSelectedIds={defaultCollectionIds}
+                    isSaved={isSaved}
+                  />
+                ) : undefined}
+              />
+            )}
+            {(canToggleAbstract || score != null) && (
+              <div className="ml-auto flex items-center gap-3 max-sm:ml-0">
+                {canToggleAbstract && (
+                  <Button variant="muted" size="inline"
+                    onClick={handleAbstractToggle}
+                    aria-expanded={showAbstract}
+                    className="gap-0.5 text-caption"
+                  >
+                    Abstract
+                    <ChevronDown
+                      className={`h-3 w-3 transition-transform duration-200 ${showAbstract ? 'rotate-180' : ''}`}
+                    />
+                  </Button>
+                )}
+                {score != null && (hasBreakdown || hasExplanation) && (
+                  <HoverCard openDelay={200} closeDelay={100}>
+                    <HoverCardTrigger asChild>
+                      <Button variant="muted" size="inline"
+                        onClick={() => {
+                          const next = !showBreakdown
+                          setShowBreakdown(next)
+                          if (next && onExpandBreakdown) onExpandBreakdown()
+                        }}
+                        aria-expanded={showBreakdown}
+                        className="gap-0.5 text-caption"
+                        title="Show score breakdown"
+                      >
+                        Why
+                        <ChevronDown
+                          className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
+                        />
+                      </Button>
+                    </HoverCardTrigger>
+                    <HoverCardContent
+                      side="top"
+                      align="end"
+                      className="w-72 p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ScoreBreakdownTeaser
+                        breakdown={scoreBreakdown}
+                        explanation={explanation}
+                      />
+                    </HoverCardContent>
+                  </HoverCard>
+                )}
+                {score != null && (
+                  <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
+                )}
+              </div>
+            )}
           </div>
         )}
+
+        {canToggleAbstract && showAbstract && (
+          <SubPanel variant="flat" padded={false} className="mt-2 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            {paper.abstract}
+          </SubPanel>
+        )}
+
+        {showBreakdown && (hasBreakdown || hasExplanation) && (
+          <SubPanel variant="flat" padded={false} className="mt-2 px-3 py-2.5">
+            <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-slate-400">
+              Score Breakdown
+            </p>
+            <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
+          </SubPanel>
+        )}
+        {showBreakdown && whyDetail}
       </div>
     </Card>
   )

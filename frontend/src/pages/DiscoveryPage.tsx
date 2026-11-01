@@ -12,22 +12,16 @@ import {
   ArrowDownWideNarrow,
   ArrowUpRight,
   CalendarDays,
-  ExternalLink,
   Eye,
   EyeOff,
   Gauge,
   GitBranch,
-  LayoutGrid,
-  LayoutList,
   Loader2,
   RefreshCw,
-  Rows3,
   SlidersHorizontal,
   Sparkles,
 } from 'lucide-react'
-import type { ColumnDef } from '@tanstack/react-table'
 
-import { DataTable } from '@/components/ui/data-table'
 
 import {
   createLens,
@@ -65,9 +59,10 @@ import { RecommendationEngagement } from '@/components/discovery/RecommendationE
 import { LostLanesNotice, type LostLane } from '@/components/discovery/LostLanesNotice'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
+import { provenanceRarityKeys, type ProvenanceSignals } from '@/components/discovery/provenanceChips'
+import { countChipKeys } from '@/components/shared/signalKinds'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
-import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -90,7 +85,7 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import { Toggle } from '@/components/ui/toggle'
 
 // List view state — mirrors the Feed page so Discovery and Feed feel
@@ -109,7 +104,6 @@ const IMPRESSION_SORT_MODE: Record<DiscoverySort, DiscoveryImpression['sort_mode
 }
 // Task 50 M4: `map` is no longer a view mode — the frontier map is a panel
 // above the list (50-B), so the list density and the map are independent.
-type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
 // Per-refresh target — number of recommendations actually staged on
 // the Discovery page after dedup, diversity, lifecycle filters, and
 // truncation. The backend oversamples internally so the post-filter
@@ -180,6 +174,59 @@ function patchRecommendationPaper(
 // `exploration.FIRST_SCREEN_CARDS`: the backend keeps every active branch in these.
 const DEFAULT_VISIBLE_RECS = 20
 
+/** Reads a recommendation's stored breakdown into what its chips show. */
+function provenanceSignals(rec: LensRecommendation): ProvenanceSignals {
+  const breakdown = (rec.score_breakdown ?? null) as Record<string, unknown> | null
+  const readStringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? (value as unknown[]).filter(
+          (t): t is string => typeof t === 'string' && t.trim().length > 0,
+        )
+      : []
+  const readNumber = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  const readString = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim().length > 0 ? value : null
+  // T4: numeric provenance lives under `breakdown.provenance` when the
+  // row was scored by the post-2026-04-24 refresh. Legacy rows have
+  // these fields scattered at the top level (semantic_similarity_raw,
+  // etc.) — fall back to those so nothing looks newly empty.
+  const provenance = (breakdown?.provenance ?? null) as
+    | Record<string, unknown>
+    | null
+  const specterCosine =
+    readNumber(provenance?.specter_cosine) ??
+    readNumber(breakdown?.semantic_similarity_raw)
+  const lexicalSimilarity =
+    readNumber(provenance?.lexical_similarity) ??
+    readNumber(breakdown?.lexical_similarity_raw)
+  return {
+      branchLabel: rec.branch_label ?? null,
+      branchMode: rec.branch_mode ?? null,
+      sourceType: rec.source_type ?? null,
+      sourceApi: rec.source_api ?? null,
+      matchedQuery:
+        typeof breakdown?.matched_query === 'string'
+          ? (breakdown.matched_query as string)
+          : null,
+      branchCoreTopics: readStringArray(breakdown?.branch_core_topics),
+      branchExploreTopics: readStringArray(breakdown?.branch_explore_topics),
+      specterCosine,
+      lexicalSimilarity,
+      sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
+      sharedAuthorsSample: readString(provenance?.shared_authors_sample),
+      negativeHit: readNumber(provenance?.negative_hit),
+      branchFloor: provenance?.branch_floor === true,
+      firstScreenLift: provenance?.first_screen_lift === true,
+      consensusCount: readNumber(breakdown?.consensus_count),
+      projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
+      couplingCount: readNumber(breakdown?.coupling_count),
+      couplingPartnerTitle: readString(breakdown?.coupling_partner_title),
+      cocitationCount: readNumber(breakdown?.cocitation_count),
+      cocitationPartnerTitle: readString(breakdown?.cocitation_partner_title),
+    }
+}
+
 export function DiscoveryPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -222,12 +269,7 @@ export function DiscoveryPage() {
   // List view state: sort (slate order, score or publication date)
   // and density (compact / normal / extended).
   const [sort, setSort] = useState<DiscoverySort>('suggested')
-  const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
   const observeCardImpression = useDiscoveryImpressions('discovery_card', IMPRESSION_SORT_MODE[sort])
-  const observeCompactImpression = useDiscoveryImpressions(
-    'discovery_compact',
-    'custom',
-  )
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
   const [showAllRecs, setShowAllRecs] = useState(false)
@@ -741,6 +783,10 @@ export function DiscoveryPage() {
       return dateB.localeCompare(dateA)
     })
   }, [allRecommendations, dismissedIds, sort])
+  const provenanceChipCounts = useMemo(
+    () => countChipKeys(recommendations.map((rec) => provenanceRarityKeys(provenanceSignals(rec)))),
+    [recommendations],
+  )
 
   const fetchExplanation = (recId: string) => {
     if (recId in explanations) return // already fetched or in-flight
@@ -875,62 +921,13 @@ export function DiscoveryPage() {
   const renderProvenance = (
     rec: LensRecommendation,
     options: { variant?: 'panel' | 'inline' } = {},
-  ) => {
-    const breakdown = (rec.score_breakdown ?? null) as Record<string, unknown> | null
-    const readStringArray = (value: unknown): string[] =>
-      Array.isArray(value)
-        ? (value as unknown[]).filter(
-            (t): t is string => typeof t === 'string' && t.trim().length > 0,
-          )
-        : []
-    const readNumber = (value: unknown): number | null =>
-      typeof value === 'number' && Number.isFinite(value) ? value : null
-    const readString = (value: unknown): string | null =>
-      typeof value === 'string' && value.trim().length > 0 ? value : null
-    // T4: numeric provenance lives under `breakdown.provenance` when the
-    // row was scored by the post-2026-04-24 refresh. Legacy rows have
-    // these fields scattered at the top level (semantic_similarity_raw,
-    // etc.) — fall back to those so nothing looks newly empty.
-    const provenance = (breakdown?.provenance ?? null) as
-      | Record<string, unknown>
-      | null
-    const specterCosine =
-      readNumber(provenance?.specter_cosine) ??
-      readNumber(breakdown?.semantic_similarity_raw)
-    const lexicalSimilarity =
-      readNumber(provenance?.lexical_similarity) ??
-      readNumber(breakdown?.lexical_similarity_raw)
-    return (
-      <RecommendationProvenance
-        variant={options.variant}
-        signals={{
-          branchLabel: rec.branch_label ?? null,
-          branchMode: rec.branch_mode ?? null,
-          sourceType: rec.source_type ?? null,
-          sourceApi: rec.source_api ?? null,
-          matchedQuery:
-            typeof breakdown?.matched_query === 'string'
-              ? (breakdown.matched_query as string)
-              : null,
-          branchCoreTopics: readStringArray(breakdown?.branch_core_topics),
-          branchExploreTopics: readStringArray(breakdown?.branch_explore_topics),
-          specterCosine,
-          lexicalSimilarity,
-          sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
-          sharedAuthorsSample: readString(provenance?.shared_authors_sample),
-          negativeHit: readNumber(provenance?.negative_hit),
-          branchFloor: provenance?.branch_floor === true,
-          firstScreenLift: provenance?.first_screen_lift === true,
-          consensusCount: readNumber(breakdown?.consensus_count),
-          projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
-          couplingCount: readNumber(breakdown?.coupling_count),
-          couplingPartnerTitle: readString(breakdown?.coupling_partner_title),
-          cocitationCount: readNumber(breakdown?.cocitation_count),
-          cocitationPartnerTitle: readString(breakdown?.cocitation_partner_title),
-        }}
-      />
-    )
-  }
+  ) => (
+    <RecommendationProvenance
+      variant={options.variant}
+      signals={provenanceSignals(rec)}
+      chipCounts={provenanceChipCounts}
+    />
+  )
 
   const renderSeededSimilarityCard = (item: SimilarityResultItem) => {
     // `paper_id` is populated for dense-fallback matches (real papers.id)
@@ -1426,18 +1423,6 @@ export function DiscoveryPage() {
             ],
           }}
           count={recommendations.length}
-          view={{
-            value: viewMode,
-            ariaLabel: 'Discovery view mode',
-            onChange: (value) => setViewMode(value as DiscoveryViewMode),
-            // Task 50 M4: `map` left the view modes — the frontier map is the
-            // panel above, visible ALONGSIDE whichever list density is active.
-            options: [
-              { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
-              { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
-              { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
-            ],
-          }}
         />
 
         <div className="space-y-3" data-tour="discovery-card">
@@ -1471,17 +1456,6 @@ export function DiscoveryPage() {
                   Refresh lens
                 </Button>
               ) : undefined}
-            />
-          ) : viewMode === 'compact' ? (
-            <DiscoveryCompactTable
-              recommendations={recommendations}
-              rowRef={(element, rec, position) =>
-                observeCompactImpression(element, rec.id, position)
-              }
-              onOpenDetails={(paper) => {
-                setSelectedPaper(paper)
-                setDetailOpen(true)
-              }}
             />
           ) : (
             (showAllRecs ? recommendations : recommendations.slice(0, DEFAULT_VISIBLE_RECS)).map((rec, recIdx) => {
@@ -1519,18 +1493,10 @@ export function DiscoveryPage() {
                   className="rounded-card transition-shadow"
                 >
                 <PaperCard
-                  // The `compact` viewMode is handled in the earlier
-                  // branch above (line 959); by the time we reach here
-                  // viewMode is narrowed to `'normal' | 'extended'`, so
-                  // the size is always default.
-                  size="default"
-                  forceShowAbstract={viewMode === 'extended'}
-                  // Normal view = dense scan: no TLDR, no abstract toggle,
-                  // smaller triage buttons. Extended view keeps the full
-                  // surfaces. Compact view already collapses through `size`.
-                  suppressSummaries={viewMode === 'normal'}
-                  compactActions={viewMode === 'normal'}
-                  showActionLabels={viewMode === 'extended'}
+                  // Discovery is a scan: no TLDR and no Abstract toggle on the
+                  // card. The detail panel holds the full text.
+                  suppressSummaries
+                  compactActions
                   paper={cardPaper}
                   score={rec.score}
                   rank={recIdx + 1}
@@ -1579,17 +1545,11 @@ export function DiscoveryPage() {
                   savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
                   savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
                   trailingHeader={rec.is_new ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
-                  // Normal view: provenance rides the signal row itself, next
-                  // to the score bar and the Why toggle, so the card is four
-                  // rows deep. Extended still gets the full panel below.
-                  metaSlot={
-                    viewMode === 'normal'
-                      ? renderProvenance(rec, { variant: 'inline' })
-                      : undefined
-                  }
-                >
-                  {viewMode !== 'normal' && renderProvenance(rec, { variant: 'panel' })}
-                </PaperCard>
+                  // Provenance rides the signal row. Its long form (query,
+                  // branch topics) opens with Why, the only place it lives.
+                  metaSlot={renderProvenance(rec, { variant: 'inline' })}
+                  whyDetail={renderProvenance(rec, { variant: 'panel' })}
+                />
                 </div>
               )
             })
@@ -1599,7 +1559,7 @@ export function DiscoveryPage() {
               paginates differently) and only visible when the truncation
               actually omitted recs. Click reveals the rest of the
               already-fetched batch — no additional network request. */}
-          {viewMode !== 'compact' && recommendations.length > DEFAULT_VISIBLE_RECS && (
+          {recommendations.length > DEFAULT_VISIBLE_RECS && (
             <div className="flex justify-center pt-2">
               <Button
                 type="button"
@@ -1619,169 +1579,5 @@ export function DiscoveryPage() {
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
     </div>
-  )
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// DiscoveryCompactTable — compact-mode table for the recommendations
-// list. Mirrors FeedPage's `FeedCompactTable` (same shared `DataTable`
-// primitive, same column-pattern: Title / Authors / Published /
-// Journal / one Discovery-specific column at the end). Discovery's
-// last column is "Score" instead of Feed's "Source" since the row's
-// raison d'être here is the lens-ranked relevance.
-//
-// Column visibility / order / sort state persists per-user via
-// `storageKey="discovery.compact"`.
-// ──────────────────────────────────────────────────────────────────────
-
-interface DiscoveryCompactRow {
-  id: string
-  rec: LensRecommendation
-  paper: Publication | null
-  title: string
-  authors: string
-  publishedSortKey: string
-  publishedLabel: string
-  journal: string
-  scoreLabel: string
-  scoreValue: number
-  isNew: boolean
-}
-
-interface DiscoveryCompactTableProps {
-  recommendations: LensRecommendation[]
-  onOpenDetails: (paper: Publication | null) => void
-  rowRef: (
-    element: HTMLTableRowElement | null,
-    recommendation: LensRecommendation,
-    position: number,
-  ) => void
-}
-
-function DiscoveryCompactTable({
-  recommendations,
-  onOpenDetails,
-  rowRef,
-}: DiscoveryCompactTableProps) {
-  const rows: DiscoveryCompactRow[] = useMemo(
-    () =>
-      recommendations.map((rec) => {
-        const paper = rec.paper ?? null
-        const score = typeof rec.score === 'number' ? rec.score : 0
-        return {
-          id: rec.id,
-          rec,
-          paper,
-          title: paper?.title || rec.paper_id,
-          authors: paper?.authors ?? '',
-          publishedSortKey:
-            paper?.publication_date ??
-            (paper?.year != null ? String(paper.year) : ''),
-          publishedLabel: formatPublicationDate(paper),
-          journal: paper?.journal ?? '',
-          // The ranking score, on the same 0-100 band as the ScoreMeter on
-          // every card. It was rendered here as `toFixed(2)` under a comment
-          // claiming the engine normalises to ~[0,1] — it does not, so the
-          // table and the cards disagreed about what the same number meant.
-          scoreLabel: Math.round(score).toString(),
-          scoreValue: score,
-          isNew: Boolean(rec.is_new),
-        }
-      }),
-    [recommendations],
-  )
-
-  const columns: ColumnDef<DiscoveryCompactRow>[] = useMemo(
-    () => [
-      {
-        id: 'title',
-        accessorKey: 'title',
-        header: 'Title',
-        size: 420,
-        meta: { cellOverflow: 'none' },
-        cell: ({ row }) => (
-          <div className="flex min-w-0 items-center gap-1.5">
-            {row.original.isNew && <StatusBadge tone="positive">New</StatusBadge>}
-            <span
-              className="min-w-0 flex-1 truncate font-medium text-alma-800"
-              title={row.original.title}
-            >
-              {row.original.title}
-            </span>
-            <PaperPdfLink paperId={row.original.paper?.id} className="shrink-0 text-slate-400 hover:text-alma-folio" />
-            {row.original.paper?.url && (
-              <a
-                href={row.original.paper.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 text-slate-400 hover:text-alma-folio"
-                title="Open source"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-          </div>
-        ),
-      },
-      {
-        id: 'authors',
-        accessorKey: 'authors',
-        header: 'Authors',
-        size: 200,
-        cell: ({ row }) => (
-          <span className="text-slate-600" title={row.original.authors}>
-            {row.original.authors}
-          </span>
-        ),
-      },
-      {
-        id: 'published',
-        accessorKey: 'publishedSortKey',
-        header: 'Published',
-        size: 120,
-        sortingFn: 'alphanumeric',
-        cell: ({ row }) => (
-          <span className="whitespace-nowrap text-slate-600">
-            {row.original.publishedLabel}
-          </span>
-        ),
-      },
-      {
-        id: 'journal',
-        accessorKey: 'journal',
-        header: 'Journal',
-        size: 180,
-        cell: ({ row }) => (
-          <span className="text-slate-500" title={row.original.journal}>
-            {row.original.journal}
-          </span>
-        ),
-      },
-      {
-        id: 'score',
-        accessorKey: 'scoreValue',
-        header: 'Score',
-        size: 80,
-        sortingFn: 'basic',
-        cell: ({ row }) => (
-          <span className="font-brand tabular-nums text-alma-800">
-            {row.original.scoreLabel}
-          </span>
-        ),
-      },
-    ],
-    [],
-  )
-
-  return (
-    <DataTable
-      data={rows}
-      columns={columns}
-      storageKey="discovery.compact"
-      getRowId={(row) => row.id}
-      onRowClick={(row) => onOpenDetails(row.paper)}
-      rowRef={(element, row, position) => rowRef(element, row.rec, position)}
-    />
   )
 }

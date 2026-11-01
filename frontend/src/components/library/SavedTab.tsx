@@ -1,20 +1,19 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Compass,
   Heart,
   FolderOpen,
   Search,
   Trash2,
   Edit3,
   Loader2,
-  StickyNote,
   X,
   Sparkles,
-  List,
-  LayoutGrid,
   HeartOff,
   ChevronDown,
   ExternalLink,
+  ThumbsUp,
 } from 'lucide-react'
 import {
   api,
@@ -42,9 +41,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { IdentityChip, PaperCard } from '@/components/shared'
+import { IdentityChip } from '@/components/shared'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
-import { RevealList, RevealItem } from '@/components/ui/reveal'
 import {
   Dialog,
   DialogContent,
@@ -56,29 +54,23 @@ import {
 import { StarRating } from '@/components/StarRating'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
-import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
-import { navigateTo } from '@/lib/hashRoute'
-import { reactionFromRating } from '@/lib/reactions'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { formatPaperSource, plural } from '@/lib/format'
-import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
-import { type SavedSortOption } from './types'
+import { navigateTo } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
+import { cn, formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
 import { RowButton } from '@/components/ui/row-button'
-import { Alert } from '@/components/ui/alert'
 import { SubPanel } from '@/components/ui/sub-panel'
 
-type ViewMode = 'cards' | 'compact'
 type CompactSortKey =
   | 'title'
   | 'authors'
@@ -99,15 +91,11 @@ type SavedPage = {
 
 const STORAGE_KEYS = {
   prefsVersion: 'alma.library.saved.prefsVersion',
-  viewMode: 'alma.library.saved.viewMode',
-  cardSort: 'alma.library.saved.cardSort',
   compactSortKey: 'alma.library.saved.compactSortKey',
   compactSortDir: 'alma.library.saved.compactSortDir',
 }
 const PREFS_VERSION = '2026-03-07.list-default.v1'
 
-const VIEW_MODES: readonly ViewMode[] = ['cards', 'compact']
-const CARD_SORTS: readonly SavedSortOption[] = ['date', 'rating', 'signal', 'title']
 const COMPACT_SORT_KEYS: readonly CompactSortKey[] = [
   'title',
   'authors',
@@ -171,8 +159,6 @@ interface SavedTabProps {
 
 export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const [search, setSearch] = useState('')
-  const [sort, setSort] = useState<SavedSortOption>(() => readStoredValueVersioned(STORAGE_KEYS.cardSort, CARD_SORTS, 'date', STORAGE_KEYS.prefsVersion))
-  const [viewMode, setViewMode] = useState<ViewMode>(() => readStoredValueVersioned(STORAGE_KEYS.viewMode, VIEW_MODES, 'compact', STORAGE_KEYS.prefsVersion))
   const [compactSortKey, setCompactSortKey] = useState<CompactSortKey>(() => readStoredValueVersioned(STORAGE_KEYS.compactSortKey, COMPACT_SORT_KEYS, 'year', STORAGE_KEYS.prefsVersion))
   const [compactSortDir, setCompactSortDir] = useState<SortDir>(() => readStoredValueVersioned(STORAGE_KEYS.compactSortDir, SORT_DIRECTIONS, 'desc', STORAGE_KEYS.prefsVersion))
   const [editingLike, setEditingLike] = useState<Publication | null>(null)
@@ -195,10 +181,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const debouncedSearch = useDebounce(search, 300)
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const { followedAuthorNames, pendingAuthorName, followAuthor } = usePaperAuthorFollow()
-  const { followedVenueKeys, pendingVenueName, followVenue } = usePaperVenueFollow()
   const queryOrder = useMemo(() => {
-    if (viewMode === 'cards') return sort
     switch (compactSortKey) {
       case 'year':
         return 'date'
@@ -209,30 +192,14 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       default:
         return compactSortKey
     }
-  }, [viewMode, sort, compactSortKey])
-  const queryOrderDir = useMemo<'asc' | 'desc'>(() => {
-    if (viewMode === 'cards') {
-      return sort === 'title' ? 'asc' : 'desc'
-    }
-    return compactSortDir
-  }, [viewMode, sort, compactSortDir])
-
+  }, [compactSortKey])
   useEffect(() => {
     try {
       window.localStorage.setItem(STORAGE_KEYS.prefsVersion, PREFS_VERSION)
-      window.localStorage.setItem(STORAGE_KEYS.viewMode, viewMode)
     } catch {
       // Ignore localStorage access issues.
     }
-  }, [viewMode])
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEYS.cardSort, sort)
-    } catch {
-      // Ignore localStorage access issues.
-    }
-  }, [sort])
+  }, [])
 
   useEffect(() => {
     try {
@@ -251,14 +218,14 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   }, [compactSortDir])
 
   const likesQuery = useInfiniteQuery({
-    queryKey: ['library-saved', debouncedSearch, queryOrder, queryOrderDir],
+    queryKey: ['library-saved', debouncedSearch, queryOrder, compactSortDir],
     initialPageParam: 0,
     queryFn: async ({ pageParam }): Promise<SavedPage> => {
       const offset = typeof pageParam === 'number' ? pageParam : 0
       const page = await listSavedPapers({
         search: debouncedSearch || undefined,
         order: queryOrder,
-        orderDir: queryOrderDir,
+        orderDir: compactSortDir,
         limit: SAVED_PAGE_SIZE + 1,
         offset,
       })
@@ -304,8 +271,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     },
   })
 
-  const undoMutation = usePaperUndo()
-
   const updateLikeMutation = useMutation({
     mutationFn: ({ pubKey, notes, rating }: { pubKey: string; notes?: string; rating?: number }) =>
       updateSavedPaper(pubKey, { notes, rating }),
@@ -325,6 +290,8 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     },
   })
 
+  const undoMutation = usePaperUndo()
+
   // Like and Love are the `like` / `love` actions, as on every other surface:
   // the one action route owns the rating and records the verb. The star widget
   // and the edit dialog stay on `updateLikeMutation`, because an explicit star
@@ -336,7 +303,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       void invalidateAfterPaperMutation(queryClient)
       toast({
         title: action === 'love' ? 'Loved' : 'Liked',
-        description: 'Saved paper updated successfully.',
+        description: 'Rating updated.',
         action: offerUndo(paperId),
       })
     },
@@ -405,15 +372,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })
 
-  const toggleSelect = useCallback((key: string) => {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
-
   const selectAll = useCallback(() => {
     const allKeys = visibleLikes.map((l) => l.id)
     setSelectedKeys(new Set(allKeys))
@@ -470,7 +428,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
 
   useEffect(() => {
     setSelectedKeys(new Set())
-  }, [debouncedSearch, queryOrder, queryOrderDir])
+  }, [debouncedSearch, queryOrder, compactSortDir])
 
   function openEdit(like: Publication) {
     setEditingLike(like)
@@ -491,7 +449,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1 max-w-md">
+        <div className="relative flex-1 max-w-md" data-tour="library-card">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input
             placeholder="Search saved papers..."
@@ -500,45 +458,6 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             className="pl-9"
           />
         </div>
-        {viewMode === 'cards' && (
-          <Select value={sort} onValueChange={(value) => setSort(value as SavedSortOption)}>
-            <SelectTrigger className="w-60">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="date">Sort by Publication Date</SelectItem>
-              <SelectItem value="rating">Sort by Rating (stars)</SelectItem>
-              <SelectItem value="signal">Sort by Ranking (signal match)</SelectItem>
-              <SelectItem value="title">Sort by Title</SelectItem>
-            </SelectContent>
-          </Select>
-        )}
-        {/* Same segmented control as every other view switcher in the app —
-            ink rail, raised active segment. It used to be two hand-rolled
-            buttons whose on-state was a raw slate fill: neither the active
-            colour (folio) nor a token. */}
-        {/* The Library tour's "open any paper" step anchors HERE, not on a
-            card: the default view is the compact table, so a card-only anchor
-            resolved to nothing and the coachmark floated over a dimmed page
-            pointing at empty space (2026-07-27 audit). The view switch is the
-            one element present in both modes. */}
-        <ToggleGroup
-          data-tour="library-card"
-          type="single"
-          variant="segment"
-          value={viewMode}
-          onValueChange={(value) => {
-            if (value === 'cards' || value === 'compact') setViewMode(value)
-          }}
-          aria-label="View mode"
-        >
-          <ToggleGroupItem value="cards" title="Card view" className="h-7 min-w-0 px-2">
-            <LayoutGrid className="h-4 w-4" />
-          </ToggleGroupItem>
-          <ToggleGroupItem value="compact" title="Compact table view" className="h-7 min-w-0 px-2">
-            <List className="h-4 w-4" />
-          </ToggleGroupItem>
-        </ToggleGroup>
       </div>
 
       {/* Content */}
@@ -554,7 +473,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             {debouncedSearch ? 'Try another title or author, or clear the search.' : 'Save papers from Feed, Discovery, or similar-results workflows to build the library.'}
           </p>
         </div>
-      ) : viewMode === 'compact' ? (
+      ) : (
         <SavedCompactTable
           visibleLikes={visibleLikes}
           hasMore={hasMore}
@@ -565,85 +484,12 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           onSortChange={(key, dir) => { setCompactSortKey(key); setCompactSortDir(dir) }}
           onRate={(paperId, rating) => updateLikeMutation.mutate({ pubKey: paperId, rating })}
           onReadingStatus={(paperId, readingStatus) => readingStatusMutation.mutate({ paperId, readingStatus })}
+          onReact={(paperId, action) => reactMutation.mutate({ paperId, action })}
+          onUndoRating={(paperId) => undoMutation.mutate({ paperId, aspect: 'rating' })}
           onEdit={openEdit}
           onAddToCollection={setAddToCollectionKey}
           onOpenDetails={onOpenDetails}
         />
-      ) : (
-        /* ── Card view ── */
-        <RevealList className="space-y-3">
-          {visibleLikes.map((like, i) => {
-            const isSelected = selectedKeys.has(like.id)
-            return (
-            <RevealItem key={like.id} index={i}>
-            <div className="relative rounded-control">
-              <PaperCard
-                selection={{
-                  checked: isSelected,
-                  onCheckedChange: () => toggleSelect(like.id),
-                  ariaLabel: 'Select paper',
-                }}
-                paper={like}
-                followedAuthorNames={followedAuthorNames}
-                followAuthorPendingName={pendingAuthorName}
-                onFollowAuthor={followAuthor}
-                followedVenueKeys={followedVenueKeys}
-                venueFollowPending={pendingVenueName}
-                onFollowVenue={followVenue}
-                onRate={(rating) => updateLikeMutation.mutate({ pubKey: like.id, rating })}
-                onDismiss={() => setDeleteKey(like.id)}
-                onLike={() => reactMutation.mutate({ paperId: like.id, action: 'like' })}
-                onLove={() => reactMutation.mutate({ paperId: like.id, action: 'love' })}
-                onUndo={(aspect) => undoMutation.mutate({ paperId: like.id, aspect })}
-                onPivot={() => navigateTo('discovery', { seed: like.id, seedTitle: like.title })}
-                dismissLabel="Remove"
-                dismissTitle="Remove from library"
-                reaction={reactionFromRating(like.rating)}
-                isSaved={like.status === 'library'}
-              >
-                {/* No date row here: the card prints the publication date
-                    inline after the authors, and the save date has its own
-                    "Added" column in the compact table. */}
-                {/* Notes */}
-                {like.notes && (
-                  <Alert variant="warning" layout="row" className="mt-2 items-start gap-1.5 px-3 py-2">
-                    <StickyNote className="mt-0.5 h-3 w-3 shrink-0 text-warning-500" />
-                    <p className="text-xs text-warning-700">{like.notes}</p>
-                  </Alert>
-                )}
-                {/* Quick actions */}
-                <div className="mt-2 flex items-center gap-1">
-                  <Select
-                    value={like.reading_status || 'not_on_list'}
-                    onValueChange={(value) => readingStatusMutation.mutate({ paperId: like.id, readingStatus: readingStatusFromSelect(value) })}
-                  >
-                    <SelectTrigger className="h-8 w-32 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {READING_STATUS_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button variant="ghost" size="icon" onClick={() => openEdit(like)} title="Edit notes and rating">
-                    <Edit3 className="h-4 w-4 text-slate-500" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => setAddToCollectionKey(like.id)} title="Add to collection">
-                    <FolderOpen className="h-4 w-4 text-slate-500" />
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => setDeleteKey(like.id)} title="Remove from library">
-                    <Trash2 className="h-4 w-4 text-critical-500" />
-                  </Button>
-                </div>
-              </PaperCard>
-            </div>
-            </RevealItem>
-            )
-          })}
-        </RevealList>
       )}
 
       {hasMore && !likesQuery.isLoading && !likesQuery.isError && (
@@ -898,6 +744,8 @@ interface SavedCompactTableProps {
   onSortChange: (key: CompactSortKey, dir: SortDir) => void
   onRate: (paperId: string, rating: number) => void
   onReadingStatus: (paperId: string, readingStatus: ReadingStatus) => void
+  onReact: (paperId: string, action: 'like' | 'love') => void
+  onUndoRating: (paperId: string) => void
   onEdit: (paper: Publication) => void
   onAddToCollection: (paperId: string) => void
   onOpenDetails?: (paper: Publication) => void
@@ -913,6 +761,8 @@ function SavedCompactTable({
   onSortChange,
   onRate,
   onReadingStatus,
+  onReact,
+  onUndoRating,
   onEdit,
   onAddToCollection,
   onOpenDetails,
@@ -1102,12 +952,43 @@ function SavedCompactTable({
     {
       id: 'actions',
       header: () => <span className="sr-only">Actions</span>,
-      size: 96,
+      size: 176,
       enableSorting: false,
       enableHiding: false,
       meta: { cellOverflow: 'none' },
-      cell: ({ row }) => (
+      cell: ({ row }) => {
+        const reaction = reactionFromRating(row.original.rating)
+        return (
         <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => (reaction === 'like' ? onUndoRating(row.original.id) : onReact(row.original.id, 'like'))}
+            title={reaction === 'like' ? 'Remove Like' : 'Like: a positive signal'}
+            aria-label="Like"
+            aria-pressed={reaction === 'like'}
+          >
+            <ThumbsUp className={cn('size-3.5 text-success-600', reaction === 'like' && 'fill-current')} />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => (reaction === 'love' ? onUndoRating(row.original.id) : onReact(row.original.id, 'love'))}
+            title={reaction === 'love' ? 'Remove Love' : 'Love: a strong positive signal'}
+            aria-label="Love"
+            aria-pressed={reaction === 'love'}
+          >
+            <Heart className={cn('size-3.5 text-success-600', reaction === 'love' && 'fill-current')} />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => navigateTo('discovery', { seed: row.original.id, seedTitle: row.original.title })}
+            title="Discover similar papers"
+            aria-label="Discover similar papers"
+          >
+            <Compass className="size-3.5" />
+          </Button>
           <Button
             size="icon-sm"
             variant="ghost"
@@ -1127,9 +1008,10 @@ function SavedCompactTable({
             <FolderOpen className="size-3.5" />
           </Button>
         </div>
-      ),
+        )
+      },
     },
-  ], [onRate, onReadingStatus, onEdit, onAddToCollection])
+  ], [onRate, onReadingStatus, onReact, onUndoRating, onEdit, onAddToCollection])
 
   return (
     <DataTable<Publication>

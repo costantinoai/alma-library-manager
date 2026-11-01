@@ -127,10 +127,10 @@ export function AddToCollectionMenu({
           disabled={disabled}
           title="Save to Library and add to collections"
           aria-label={compact ? 'Collections' : undefined}
-          className="gap-1.5 border border-control-edge bg-control-well text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
+          className={`gap-1.5 border border-control-edge bg-control-well text-slate-700 hover:bg-accent-soft hover:text-alma-folio ${compact ? 'h-7 px-2.5' : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
-          <FolderPlus className="h-4 w-4" />
+          <FolderPlus className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
           {!compact && <span>Collections</span>}
         </Button>
       </PopoverTrigger>

@@ -12,7 +12,7 @@ export interface ListViewOption {
   title: string
 }
 
-/** Always-one-active segmented control, the same shape for sort and view. */
+/** Always-one-active segmented control. */
 export interface ListSegment {
   value: string
   ariaLabel: string
@@ -38,8 +38,6 @@ export interface ListControlBarProps {
   countLabel?: string
   /** Inline select-all toggle, shown only when `show` is true. */
   selectAll?: { allSelected: boolean; onToggle: () => void; show: boolean }
-  /** Always-one-active view-mode segmented control. */
-  view: ListSegment
 }
 
 function SegmentedChoice({ segment }: { segment: ListSegment }) {
@@ -74,7 +72,7 @@ function SegmentedChoice({ segment }: { segment: ListSegment }) {
  * U-10: the single canonical control bar for the Feed + Discovery lists.
  *
  * Both surfaces previously hand-rolled the same strip (sort pill · counter +
- * select-all · view-mode toggle) and had started to drift on styling/ARIA. This
+ * select-all) and had started to drift on styling/ARIA. This
  * owns the container + every shared control so the two read as the same product
  * by construction; pages pass only their data + a `leading` slot for the
  * Feed-only All/New filter.
@@ -85,7 +83,6 @@ export function ListControlBar({
   count,
   countLabel = 'in view',
   selectAll,
-  view,
 }: ListControlBarProps) {
   return (
     <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-3 px-3 py-2 shadow-paper-sm">
@@ -106,7 +103,7 @@ export function ListControlBar({
         </Button>
       )}
 
-      {/* Right cluster: counter with inline select-all, then view mode. */}
+      {/* Right cluster: counter with inline select-all. */}
       <div className="ml-auto flex items-center gap-3">
         <div className="hidden items-center gap-1.5 text-xs text-slate-500 sm:inline-flex">
           <span className="tabular-nums font-medium text-slate-700">{count}</span>
@@ -124,7 +121,6 @@ export function ListControlBar({
           )}
         </div>
 
-        <SegmentedChoice segment={view} />
       </div>
     </SubPanel>
   )

@@ -69,6 +69,29 @@ interface SignalSpec {
   tone: StatusBadgeTone
   icon?: ComponentType<{ className?: string }>
   hint?: string
+  /** The chip's words, kept as short as a scan needs: the icon already says the
+   *  category, and the full meaning opens from `SignalChip`'s `explain`. */
+  label?: (value: string | number) => string
+}
+
+/** A kind's short label for `value`. Kinds without one show the value itself. */
+export function signalLabel(kind: SignalKind, value: string | number): string {
+  return SIGNAL_KINDS[kind].label?.(value) ?? String(value)
+}
+
+/** Rarest first: a chip on nearly every card tells two papers apart on nothing.
+ *  `counts` holds how many items in the visible list carry each key; without it
+ *  the items keep their order. Ties keep their order too. */
+export function byRarity<T>(items: T[], key: (item: T) => string, counts?: Map<string, number>): T[] {
+  if (!counts) return items
+  return [...items].sort((a, b) => (counts.get(key(a)) ?? 0) - (counts.get(key(b)) ?? 0))
+}
+
+/** How many of `lists` carry each key, for `byRarity`. */
+export function countChipKeys(lists: string[][]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const list of lists) for (const key of new Set(list)) counts.set(key, (counts.get(key) ?? 0) + 1)
+  return counts
 }
 
 export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
@@ -76,20 +99,22 @@ export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
     tone: 'positive',
     icon: Heart,
     hint: 'Close to papers you save and rate highly',
+    label: () => 'Your taste',
   },
   'taste-avoid': {
     tone: 'warning',
     icon: AlertTriangle,
     hint: 'Close to papers you dismissed or disliked',
+    label: () => 'Near dislike',
   },
   retracted: { tone: 'negative', icon: AlertTriangle, hint: 'This work has been retracted' },
 
-  consensus: { tone: 'accent', icon: Layers, hint: 'Independently found by several sources' },
-  topic: { tone: 'accent', icon: Target, hint: 'Semantic (SPECTER2) closeness to your library' },
-  wording: { tone: 'accent', icon: Type, hint: 'Keyword / phrasing overlap with your library' },
-  authors: { tone: 'accent', icon: Users, hint: 'Shares authors with papers you have' },
-  coupling: { tone: 'accent', icon: Link2, hint: 'Cites the same works as a paper you saved' },
-  cocitation: { tone: 'accent', icon: GitMerge, hint: 'Cited alongside a paper you saved' },
+  consensus: { tone: 'accent', icon: Layers, hint: 'Independently found by several sources', label: (n) => `${n} sources` },
+  topic: { tone: 'accent', icon: Target, hint: 'Semantic (SPECTER2) closeness to your library', label: (band) => `${band} topic` },
+  wording: { tone: 'accent', icon: Type, hint: 'Keyword / phrasing overlap with your library', label: (band) => `${band} words` },
+  authors: { tone: 'accent', icon: Users, hint: 'Shares authors with papers you have', label: (n) => (n === 1 ? 'Co-author' : `${n} authors`) },
+  coupling: { tone: 'accent', icon: Link2, hint: 'Cites the same works as a paper you saved', label: (n) => (Number(n) === 1 ? '1 ref' : `${n} refs`) },
+  cocitation: { tone: 'accent', icon: GitMerge, hint: 'Cited alongside a paper you saved', label: (n) => `${n} co-cited` },
   branch: { tone: 'accent', icon: GitBranch, hint: 'The lens branch that pursued it' },
   trending: { tone: 'accent', icon: TrendingUp, hint: 'Citation momentum' },
 

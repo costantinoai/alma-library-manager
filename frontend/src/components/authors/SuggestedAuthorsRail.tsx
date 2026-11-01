@@ -16,6 +16,8 @@ import {
 } from '@/api/client'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { GitMerge, X } from 'lucide-react'
+import { countChipKeys } from '@/components/shared/signalKinds'
+import { authorSuggestionChips } from './authorSuggestionEvidence'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -416,6 +418,10 @@ export function SuggestedAuthorsRail({
   const expandedCap = Math.min(columns * EXPANDED_ROWS, FETCH_COUNT)
   const visibleCap = expanded ? expandedCap : collapsedCap
   const visible = useMemo(() => filtered.slice(0, visibleCap), [filtered, visibleCap])
+  const chipCounts = useMemo(
+    () => countChipKeys(visible.map((s) => authorSuggestionChips(s).map((chip) => chip.rarityKey))),
+    [visible],
+  )
   // Show the toggle when the filtered pool actually has more rows than
   // the current cap — collapsing always works, expanding only matters
   // when there's something extra to reveal.
@@ -462,6 +468,7 @@ export function SuggestedAuthorsRail({
               <RevealItem key={keyId} index={i} className="h-full">
                 <SuggestedAuthorCard
                   suggestion={s}
+                  chipCounts={chipCounts}
                   onClick={() => onOpenDetail?.(s)}
                   onFollow={() => {
                     if (!s.openalex_id && !s.existing_author_id) {
