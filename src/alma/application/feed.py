@@ -107,24 +107,29 @@ def _commit_if_pending(db: sqlite3.Connection) -> None:
 
 
 def clear_feed_items_for_monitor(db: sqlite3.Connection, monitor_id: str) -> int:
-    """Delete feed rows owned by one monitor definition."""
+    """Delete the unjudged feed rows owned by one monitor definition.
+
+    A row the user judged is their record, not the monitor's: it stays when the
+    monitor, or the author behind it, goes away.
+    """
     if not _table_exists(db, "feed_items"):
         return 0
     cursor = db.execute(
-        "DELETE FROM feed_items WHERE COALESCE(monitor_id, '') = ?",
+        "DELETE FROM feed_items WHERE COALESCE(monitor_id, '') = ? AND status = 'new'",
         (str(monitor_id or "").strip(),),
     )
     return int(cursor.rowcount or 0)
 
 
 def prune_feed_items_for_missing_monitors(db: sqlite3.Connection) -> int:
-    """Remove feed rows whose monitor definition no longer exists."""
+    """Remove unjudged feed rows whose monitor definition no longer exists."""
     if not _table_exists(db, "feed_items") or not _table_exists(db, "feed_monitors"):
         return 0
     cursor = db.execute(
         """
         DELETE FROM feed_items
         WHERE COALESCE(monitor_id, '') <> ''
+          AND status = 'new'
           AND NOT EXISTS (
               SELECT 1
               FROM feed_monitors fm
@@ -633,6 +638,7 @@ def _upsert_candidate_paper(
         parent_paper_id=parent_paper_id,
         doi=doi,
         reason="feed_component_ingest",
+        is_new=existing_paper_id is None,
     )
 
     try:
