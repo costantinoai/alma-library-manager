@@ -256,7 +256,7 @@ export function HealthDimensionDrilldown({
       <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
         {dim ? (
           <>
-            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] px-5 py-4 text-left">
+            <DialogHeader className="space-y-2 border-b border-divider px-5 py-4 text-left">
               <div className="flex items-center gap-2">
                 <StatusBadge tone={dimensionBadgeTone(dim.severity)} className="capitalize">
                   {severityLabel(dim.severity)}
@@ -329,7 +329,7 @@ export function HealthDimensionDrilldown({
                   before listing the papers that carry it. */}
               {breakdown.length > 0 ? (
                 <div className="space-y-2 pb-2">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                  <p className="text-caption font-medium uppercase tracking-wide text-slate-400">
                     What&apos;s broken — and what the repair does
                   </p>
                   {breakdown.map((defect) => (
@@ -347,7 +347,7 @@ export function HealthDimensionDrilldown({
                       </p>
                     </SubPanel>
                   ))}
-                  <p className="pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                  <p className="pt-2 text-caption font-medium uppercase tracking-wide text-slate-400">
                     Affected papers
                   </p>
                 </div>
@@ -479,7 +479,7 @@ export function HealthDimensionDrilldown({
                               Remove
                             </AsyncButton>
                           ) : (
-                            <span className="text-[11px] text-slate-400">
+                            <span className="text-caption text-slate-400">
                               Tracked (not in Library) — edit/remove unavailable
                             </span>
                           )}

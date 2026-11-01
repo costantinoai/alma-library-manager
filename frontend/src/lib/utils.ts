@@ -8,7 +8,7 @@ import { formatDay, formatDayTime } from '@/lib/format'
 const twMerge = extendTailwindMerge({
   extend: {
     theme: {
-      borderRadius: ['card', 'control'],
+      borderRadius: ['card', 'control', 'check'],
     },
     classGroups: {
       'font-size': [{ text: ['2xs', 'caption', 'lede', 'figure-sm', 'figure-md', 'figure-lg'] }],

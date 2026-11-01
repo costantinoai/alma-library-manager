@@ -295,7 +295,7 @@ export function AuthorMergeDialog({
               <EyebrowLabel tone="muted">
                 {absorbMode ? 'Choose surviving author' : 'Choose duplicate'}
               </EyebrowLabel>
-              <span className="truncate text-[10px] text-slate-400">
+              <span className="truncate text-2xs text-slate-400">
                 {fixed
                   ? absorbMode
                     ? `absorbing ${fixed.name}`
@@ -332,7 +332,7 @@ export function AuthorMergeDialog({
                         const a = absorbMode ? fixed : candidate
                         if (p && a) setMergeChoices(defaultMergeChoices(p, a))
                       }}
-                      className={`block rounded-sm border p-3 shadow-paper-sm ${
+                      className={`block rounded-card border p-3 shadow-paper-sm ${
                         isSelected
                           ? 'border-accent bg-accent-soft'
                           : 'border-control-edge bg-control-well hover:border-control-edge-strong'
@@ -364,7 +364,7 @@ export function AuthorMergeDialog({
                 {absorbOpenAlexOnly ? 'What the merge does' : 'Pick winning values'}
               </EyebrowLabel>
               {selected ? (
-                <span className="truncate text-[10px] text-slate-400">← {selected.name}</span>
+                <span className="truncate text-2xs text-slate-400">← {selected.name}</span>
               ) : null}
             </div>
             {primary && alt && absorbOpenAlexOnly ? (
@@ -416,7 +416,7 @@ export function AuthorMergeDialog({
                               <label
                                 key={side}
                                 htmlFor={itemId}
-                                className={`flex cursor-pointer items-start gap-2 rounded-sm border p-2 text-sm transition ${
+                                className={`flex cursor-pointer items-start gap-2 rounded-control border p-2 text-sm transition ${
                                   isSelected
                                     ? 'border-accent bg-accent-soft'
                                     : 'border-control-edge bg-control-well hover:border-control-edge-strong'
@@ -430,7 +430,7 @@ export function AuthorMergeDialog({
                                 />
                                 <span className="min-w-0">
                                   <span
-                                    className={`block text-[11px] font-medium uppercase tracking-wide ${
+                                    className={`block text-caption font-medium uppercase tracking-wide ${
                                       isSelected ? 'text-accent' : 'text-slate-500'
                                     }`}
                                   >

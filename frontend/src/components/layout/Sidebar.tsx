@@ -106,7 +106,7 @@ function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: Na
         // tint (cardstock catching light); active state uses a Folio-blue
         // overlay so the cardstock fibre reads through the tint, and a 3px
         // Folio-blue ribbon on the left echoes the bookmark in the mark.
-        'group focus-ring relative flex w-full items-center rounded-sm py-2.5 text-sm font-medium transition-colors',
+        'group focus-ring relative flex w-full items-center rounded-control py-2.5 text-sm font-medium transition-colors',
         collapsed ? 'lg:justify-center lg:gap-0 lg:px-2 gap-3 px-3' : 'gap-3 px-3',
         isActive
           ? 'bg-alma-folio/[0.32] text-alma-cream'
@@ -115,14 +115,14 @@ function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: Na
     >
       {isActive && (
         <span
-          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-alma-folio"
+          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-control bg-alma-folio"
           aria-hidden
         />
       )}
       <item.icon className="h-5 w-5 shrink-0" />
       <span className={cn(collapsed && 'lg:hidden')}>{item.label}</span>
       {badge > 0 && !collapsed && (
-        <span className="ml-auto rounded-full bg-alma-folio px-1.5 py-0.5 text-[10px] font-medium text-alma-cream">
+        <span className="ml-auto rounded-full bg-alma-folio px-1.5 py-0.5 text-2xs font-medium text-alma-cream">
           {badge}
         </span>
       )}
@@ -235,7 +235,7 @@ export function Sidebar({
          */}
         <div
           className={cn(
-            'relative flex flex-col items-center border-b border-[var(--color-border)] bg-surface-1 shadow-paper-sm transition-[padding] duration-200',
+            'relative flex flex-col items-center border-b border-divider bg-surface-1 shadow-paper-sm transition-[padding] duration-200',
             collapsed ? 'px-2 pb-2 pt-2 lg:px-1.5' : 'px-4 pb-2.5 pt-2.5',
           )}
         >
@@ -258,7 +258,7 @@ export function Sidebar({
             />
             <span
               className={cn(
-                'font-brand text-[34px] font-semibold leading-none tracking-[0.01em] text-alma-800',
+                'font-brand text-figure-md font-semibold leading-none tracking-[0.01em] text-alma-800',
                 collapsed && 'lg:hidden',
               )}
             >
@@ -271,7 +271,7 @@ export function Sidebar({
               {/* Subtitle with the acronym letters (A · L · Ma) highlighted in
                   the title navy, the rest in Folio-blue — so the eye picks up
                   "ALMa" inside "Another Library Manager". */}
-              <span className="mt-0.5 text-[9.5px] font-bold uppercase leading-none tracking-[0.16em] text-alma-folio">
+              <span className="mt-0.5 text-2xs font-bold uppercase leading-none tracking-[0.16em] text-alma-folio">
                 <span className="text-alma-800">A</span>nother{' '}
                 <span className="text-alma-800">L</span>ibrary{' '}
                 <span className="text-alma-800">Ma</span>nager
@@ -330,18 +330,18 @@ export function Sidebar({
         >
           {!collapsed && (
             <>
-              <div className="font-brand text-[11px] uppercase tracking-[0.18em] text-alma-300">
+              <div className="font-brand text-caption uppercase tracking-[0.18em] text-alma-300">
                 <span className="text-alma-100">A</span>·<span className="text-alma-100">L</span>·<span className="text-alma-100">Ma</span>
                 {bootstrap?.app?.version && (
                   <span className="ml-1.5 text-alma-400 normal-case tracking-normal">v{bootstrap.app.version}</span>
                 )}
               </div>
-              <div className="mt-0.5 text-[10px] text-alma-400">Another Library Manager</div>
+              <div className="mt-0.5 text-2xs text-alma-400">Another Library Manager</div>
               <a
                 href={DOCS_BASE_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-[10px] text-alma-400 hover:text-alma-cream"
+                className="mt-2 inline-flex items-center gap-1 text-2xs text-alma-400 hover:text-alma-cream"
               >
                 Documentation ↗
               </a>
@@ -353,7 +353,7 @@ export function Sidebar({
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className={cn(
-              'focus-ring hidden items-center justify-center gap-2 rounded-sm py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-alma-300 transition-colors hover:bg-surface-4/[0.04] hover:text-alma-cream lg:flex',
+              'focus-ring hidden items-center justify-center gap-2 rounded-control py-1.5 text-caption font-medium uppercase tracking-[0.16em] text-alma-300 transition-colors hover:bg-surface-4/[0.04] hover:text-alma-cream lg:flex',
               collapsed ? 'lg:w-full' : 'mt-3 w-full',
             )}
           >

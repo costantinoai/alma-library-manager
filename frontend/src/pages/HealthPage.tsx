@@ -466,12 +466,12 @@ export function HealthPage() {
             </Button>
           </Alert>
         ) : snapshotQuery.isLoading ? (
-          <div className="h-24 animate-pulse rounded-sm bg-control-quiet" />
+          <div className="h-24 animate-pulse rounded-control bg-control-quiet" />
         ) : snapshot ? (
           <HealthVitals snapshot={snapshot} />
         ) : null}
 
-        <div className="border-t border-[var(--color-border)] pt-4">
+        <div className="border-t border-divider pt-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <SectionLabel>System status</SectionLabel>
             <Button variant="outline" size="sm" onClick={diagnosticsSections.refresh} disabled={diagnosticsSections.building}>

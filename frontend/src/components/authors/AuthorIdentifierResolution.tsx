@@ -123,7 +123,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
           OpenAlex candidates
         </p>
         {candidateQuery.data?.openalex_cap_reached ? (
-          <p className="mb-2 text-[11px] text-warning-700">
+          <p className="mb-2 text-caption text-warning-700">
             OpenAlex daily API limit reached — online OpenAlex matches are
             unavailable until the quota resets (around 00:00 UTC).
           </p>
@@ -135,11 +135,11 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
             {(candidateQuery.data?.openalex ?? []).slice(0, 3).map((c) => (
               <div
                 key={c.openalex_id}
-                className="flex items-center justify-between gap-3 rounded border border-[var(--color-border)] px-2 py-1.5"
+                className="flex items-center justify-between gap-3 rounded-control border border-divider px-2 py-1.5"
               >
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium text-slate-700">{c.display_name}</p>
-                  <p className="truncate text-[11px] text-slate-500">
+                  <p className="truncate text-caption text-slate-500">
                     {c.openalex_id} · score {c.score}
                   </p>
                 </div>
@@ -180,11 +180,11 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
           {(candidateQuery.data?.scholar ?? []).slice(0, 3).map((c) => (
             <div
               key={c.scholar_id}
-              className="flex items-center justify-between gap-3 rounded border border-[var(--color-border)] px-2 py-1.5"
+              className="flex items-center justify-between gap-3 rounded-control border border-divider px-2 py-1.5"
             >
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium text-slate-700">{c.display_name}</p>
-                <p className="truncate text-[11px] text-slate-500">
+                <p className="truncate text-caption text-slate-500">
                   {c.scholar_id} · score {c.score}
                   {c.source ? ` · ${c.source}` : ''}
                 </p>
@@ -206,7 +206,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
                     <p className="truncate text-xs font-medium text-slate-700">
                       {c.display_name || c.scholar_id}
                     </p>
-                    <p className="truncate text-[11px] text-slate-500">
+                    <p className="truncate text-caption text-slate-500">
                       {c.scholar_id} · score {c.score}
                     </p>
                   </div>
@@ -223,7 +223,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
           ) : null}
         </div>
         {candidateQuery.data?.scholar_manual_search_enabled ? (
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1 text-caption text-slate-500">
             Manual search uses scraping and may fail due to rate limits.
           </p>
         ) : null}

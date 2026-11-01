@@ -38,11 +38,11 @@ const Toaster = ({ ...props }: ToasterProps) => {
           // Paper-warm toast surface with a thin gold left-edge ribbon
           // (the v2 trim accent). Sits on shadow-paper-lg so it floats
           // clearly above the page without going hard-shadow.
-          toast: "border-l-4! border-l-gold-400! shadow-paper-lg! rounded!",
+          toast: "border-l-4! border-l-gold-400! shadow-paper-lg! rounded-card!",
           // slate-600, not slate-500: 500 misses AA on this paper.
           description: "text-slate-600!",
-          actionButton: "bg-alma-800! text-alma-cream! rounded-sm!",
-          cancelButton: "bg-control-quiet! text-alma-700! rounded-sm!",
+          actionButton: "bg-alma-800! text-alma-cream! rounded-control!",
+          cancelButton: "bg-control-quiet! text-alma-700! rounded-control!",
         },
       }}
       {...props}

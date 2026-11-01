@@ -252,7 +252,7 @@ export function OpenAlexSection({
               </p>
             )}
             {usage?.source && (
-              <p className="mt-1 text-[11px] text-slate-400">Source: {usage.source}</p>
+              <p className="mt-1 text-caption text-slate-400">Source: {usage.source}</p>
             )}
             {usage?.summary && <p className="mt-2 text-xs text-slate-500">{usage.summary}</p>}
           </SubPanel>

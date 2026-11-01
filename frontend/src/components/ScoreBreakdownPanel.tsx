@@ -74,7 +74,7 @@ function AtomRow({ atom }: { atom: ScoreAtom }) {
   const counted = atom.counted ?? atom.role !== 'max'
   const spent = atom.available && counted
   return (
-    <div className="flex items-baseline gap-2 py-0.5 text-[11px]">
+    <div className="flex items-baseline gap-2 py-0.5 text-caption">
       <span
         className={cn('min-w-0 flex-1 truncate', spent ? 'text-slate-600' : 'text-slate-400')}
         title={atom.label}
@@ -82,13 +82,13 @@ function AtomRow({ atom }: { atom: ScoreAtom }) {
         {atom.label}
       </span>
       {atom.role === 'penalty' && (
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-critical-600">
+        <span className="shrink-0 font-mono text-2xs uppercase tracking-wide text-critical-600">
           −{atom.weight}×
         </span>
       )}
       {atom.role === 'max' && atom.available && !counted && (
         <span
-          className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-slate-500"
+          className="shrink-0 font-mono text-2xs uppercase tracking-wide text-slate-500"
           title="Measured, but another member of its group was paid instead — one piece of evidence is only counted once."
         >
           not used
@@ -136,7 +136,7 @@ function FamilyRow({
         disabled={!expandable}
         title={family.description}
         className={cn(
-          'rounded-sm px-1.5 py-1',
+          'rounded-control px-1.5 py-1',
           expandable && 'hover:bg-control-quiet-hover',
         )}
       >
@@ -148,7 +148,7 @@ function FamilyRow({
           )}
           aria-hidden
         />
-        <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', color)} aria-hidden />
+        <span className={cn('h-2.5 w-2.5 shrink-0 rounded-control', color)} aria-hidden />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="truncate text-xs font-medium text-slate-700">{family.label}</span>
           {family.imputed && (
@@ -170,7 +170,7 @@ function FamilyRow({
         </span>
         {/* The arithmetic, legibly. This rendered at `text-slate-300` on cream
             until 2026-07-28: present in the DOM, invisible on screen. */}
-        <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-slate-500 sm:inline">
+        <span className="hidden shrink-0 font-mono text-caption tabular-nums text-slate-500 sm:inline">
           {Math.round(family.value * 100)}% × {family.weight.toFixed(2)}
         </span>
         <span className="w-14 shrink-0">
@@ -203,14 +203,14 @@ function signedPoints(value: number): string {
 function AdjustmentAtomRow({ atom }: { atom: ScoreAdjustmentAtom }) {
   const tone = atom.available ? 'text-slate-600' : 'text-slate-400'
   return (
-    <div className="flex items-baseline gap-2 py-0.5 text-[11px]" title={atom.description}>
+    <div className="flex items-baseline gap-2 py-0.5 text-caption" title={atom.description}>
       <span className={cn('min-w-0 flex-1 truncate', tone)} title={atom.label}>
         {atom.label}
       </span>
       <span className={cn('w-12 shrink-0 text-right font-mono tabular-nums', tone)}>
         {atom.available ? atom.value.toFixed(2) : '—'}
       </span>
-      <span className="shrink-0 font-mono text-[10px] text-slate-500">
+      <span className="shrink-0 font-mono text-2xs text-slate-500">
         × {atom.weight.toFixed(1)}
       </span>
       <span
@@ -251,7 +251,7 @@ function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {
         disabled={!expandable}
         title={adjustment.description}
         className={cn(
-          'rounded-sm px-1.5 py-0.5 text-xs',
+          'rounded-control px-1.5 py-0.5 text-xs',
           expandable && 'hover:bg-control-quiet-hover',
         )}
       >
@@ -347,7 +347,7 @@ export function ScoreBreakdownPanel({
           value: family.points,
           fillClassName: familyColor(family.key),
         }))}
-        className="h-3 rounded-sm ring-1 ring-control-edge"
+        className="h-3 rounded-control ring-1 ring-control-edge"
         label={`Score composition: ${families
           .map((family) => `${family.label} ${points(family.points)}`)
           .join(', ')}`}
@@ -391,7 +391,7 @@ export function ScoreBreakdownPanel({
       </div>
 
       {unmeasured.length > 0 && (
-        <p className="px-1.5 text-[11px] leading-relaxed text-slate-500">
+        <p className="px-1.5 text-caption leading-relaxed text-slate-500">
           <span className="font-medium text-slate-600">Estimated:</span>{' '}
           {unmeasured.map((family) => family.label).join(', ')} could not be measured for
           this paper, so each was scored at its corpus average. Not knowing something
@@ -444,7 +444,7 @@ export function ScoreBreakdownTeaser({
           ))}
         </ul>
       )}
-      <p className="border-t border-edge-2 pt-1.5 text-[11px] text-slate-500">
+      <p className="border-t border-edge-2 pt-1.5 text-caption text-slate-500">
         Click for the full breakdown
       </p>
     </div>

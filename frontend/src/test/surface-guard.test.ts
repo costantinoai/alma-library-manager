@@ -9,28 +9,22 @@ import { join, relative, sep } from 'node:path'
  * tokens + primitives, never a raw Tailwind ramp class hand-written in a
  * component. This test scans the source for the banned raw classes and
  * fails if any appear outside the allowlist (the token source lives in
- * index.css, which is not scanned; the primitive *definitions* in
- * components/ui legitimately spell the raw classes the rest of the app
- * must route through; lib/palette.ts owns the data palettes).
+ * index.css, which is not scanned; lib/palette.ts owns the data palettes).
  *
  * The offender list is printed on failure (file:line + the offending class)
  * so any regression is immediately actionable.
  */
 const ROOT = join(process.cwd(), 'src')
 
-/** Files allowed to contain raw classes: the primitive definitions + the
- * one data-driven color palette. Everything else must use the ladder /
- * semantic tokens / primitives. Paths are relative to src/, posix-style. */
+/** Files allowed to contain raw classes: the one data-driven colour palette.
+ * Primitives are scanned like everything else. Paths are relative to src/,
+ * posix-style. */
 function isAllowlisted(rel: string): boolean {
-  // All primitive definitions live under components/ui/.
-  if (rel.startsWith('components/ui/')) return true
   // This guard file names the banned classes in its own patterns.
   if (rel === 'test/surface-guard.test.ts') return true
-  // Categorical data palettes (signal dots, source chips, category icons) now
-  // live in the single `lib/palette.ts` module (44.5) — a `.ts` file, which
-  // this `.tsx`-only walk never scans. No component may spell a raw hue: they
-  // import the named maps from that one source instead.
-  return false
+  // Categorical data palettes (signal dots, source chips, category icons) live
+  // in the single `lib/palette.ts` module. No component may spell a raw hue.
+  return rel === 'lib/palette.ts'
 }
 
 const BANNED: Array<{ name: string; re: RegExp }> = [
@@ -47,9 +41,11 @@ const BANNED: Array<{ name: string; re: RegExp }> = [
   // TEXT ramp); genuine data-category palettes are exempted per-file above.
   {
     name: 'raw semantic color',
-    re: /\b(bg|text|border|ring|fill|stroke|divide)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g,
+    re: /\b(bg|text|border|ring|fill|stroke|divide|from|to|via|outline|shadow|accent|decoration)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|stone|zinc|gray|neutral)-\d{2,3}\b/g,
   },
   // Arbitrary hex in a utility — must be a token.
+  // Ramps deleted from index.css, and the `Alert` variant that went with them.
+  { name: 'deleted ramp', re: /\b(bg|text|border|ring)-(parchment|pale)-\d+\b|var\(--color-(parchment|pale|muted)\b/g },
   { name: 'arbitrary hex', re: /\b(bg|text|border|ring|fill|stroke)-\[#[0-9a-fA-F]{3,8}\]/g },
 ]
 
@@ -57,7 +53,7 @@ function walk(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry)
     if (statSync(full).isDirectory()) walk(full, acc)
-    else if (full.endsWith('.tsx')) acc.push(full)
+    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) acc.push(full)
   }
   return acc
 }
@@ -69,8 +65,7 @@ function scan(): string[] {
     if (isAllowlisted(rel)) continue
     const lines = readFileSync(file, 'utf8').split('\n')
     lines.forEach((line, i) => {
-      // Skip data-driven inline styles (style={{ backgroundColor: ... }}).
-      if (/style=\{\{/.test(line)) return
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return
       for (const { re } of BANNED) {
         for (const m of line.matchAll(re)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
       }
@@ -114,6 +109,7 @@ const CONTROL_PRIMITIVES = [
   'components/ui/switch.tsx',
   'components/ui/tabs.tsx',
   'components/ui/textarea.tsx',
+  'components/ui/toggle-group.tsx',
   'components/ui/toggle-variants.ts',
 ]
 
@@ -285,9 +281,13 @@ describe('colour-guard', () => {
 })
 
 /* ───────────────────────────────────────
- * layer-guard — one z-index scale, `--z-index-*` in index.css, and one shadow
- * scale, `shadow-paper-*`.
+ * layer-guard — one z-index scale, `--z-index-*` in index.css, one shadow scale,
+ * `shadow-paper-*`, and two radii plus the pill: `rounded-card`,
+ * `rounded-control`, `rounded-full`.
  * ─────────────────────────────────────── */
+const RADIUS_BANNED = /(?<![\w-])rounded(?:-[tblr]{1,2})?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|\[[^\]]*\]))?(?![\w-])(?!\/)/g
+// Sizes and hairlines are tokens: `text-caption`, `border-divider`.
+const TOKEN_BANNED = /\btext-\[[\d.]+(?:px|rem)\]|-\[(?:color:)?var\(--color-border/g
 const SHADOW_BANNED = /(?<![\w-])shadow-(?:sm|md|lg|xl|2xl|inner|\[)/g
 const LAYER_BANNED = /(?<![\w-])-?z-(\d+|\[\d+\])(?![\w-])|\bzIndex:\s*(\S+\s*\?\s*)?\d/g
 
@@ -300,14 +300,20 @@ function scanLayers(): string[] {
       const code = line.trim()
       if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//') || code.startsWith('{/*')) return
       for (const m of line.matchAll(LAYER_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      for (const m of line.matchAll(TOKEN_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
       for (const m of line.matchAll(SHADOW_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      // InflowStrip's 1 px caps are chart marks, not rectangles.
+      if (rel === 'components/home/InflowStrip.tsx') return
+      for (const m of line.matchAll(RADIUS_BANNED)) {
+        if (m[0] !== 'rounded-[inherit]') hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      }
     })
   }
   return hits
 }
 
 describe('layer-guard', () => {
-  it('no numeric z-index and no shadow outside the scales in index.css', () => {
+  it('no numeric z-index, shadow or radius outside the scales in index.css', () => {
     expect(scanLayers()).toEqual([])
   })
 })
@@ -338,9 +344,13 @@ const BUTTON_OWNERS = new Set([
 ])
 
 /** A `Button` gets its colour, radius and shadow from `variant`, never by hand.
- *  `PaperActionBar` is the one named exception: its tone map is the action
- *  contract in CLAUDE.md, valence per verb. */
-const BUTTON_REPAINT_OWNERS = new Set(['components/discovery/PaperActionBar.tsx'])
+ *  The paper-card action bar is the one named exception: its tone map is the
+ *  action contract in CLAUDE.md, valence per verb, and the collection menu sits
+ *  in that bar. */
+const BUTTON_REPAINT_OWNERS = new Set([
+  'components/discovery/PaperActionBar.tsx',
+  'components/discovery/AddToCollectionMenu.tsx',
+])
 const BUTTON_TAG = /<(Button|AlertDialogAction|AlertDialogCancel)\b(?:[^>"'{]|"[^"]*"|'[^']*'|\{(?:[^{}]|\{[^{}]*\})*\})*>/g
 const BUTTON_PAINT =
   /(?<![\w:-])(?:[a-z-]+:)*(?:text-(?:slate|alma|critical|warning|success|info|accent|gold)|bg-|border-(?!0\b)|rounded|shadow-)[\w/[\].-]*/
@@ -437,5 +447,33 @@ function scanPrimitives(): string[] {
 describe('primitive-guard', () => {
   it('state boxes, pills and folds go through their primitives', () => {
     expect(scanPrimitives()).toEqual([])
+  })
+})
+
+/* ───────────────────────────────────────
+ * class-guard — a colour class must compile. Tailwind drops a class with no
+ * token in silence, which is how `text-accent-700` shipped as inherited colour.
+ * ─────────────────────────────────────── */
+function scanUnknownColours(): string[] {
+  const css = readFileSync(join(ROOT, 'index.css'), 'utf8')
+  const ramps = new Set([...css.matchAll(/--color-([a-z-]+?)-\d+:/g)].map((m) => m[1]))
+  ramps.add('slate') // Tailwind's own, the neutral text ramp
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts' || rel === 'lib/palette.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
+      for (const m of line.matchAll(/\b(?:bg|text|border(?:-[lrtbxy])?|ring|fill|stroke|divide)-([a-z]+(?:-[a-z]+)?)-(\d{2,3})\b/g)) {
+        if (!ramps.has(m[1])) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('class-guard', () => {
+  it('every ramp colour class has a token behind it', () => {
+    expect(scanUnknownColours()).toEqual([])
   })
 })

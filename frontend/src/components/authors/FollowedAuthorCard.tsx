@@ -65,7 +65,7 @@ export function FollowedAuthorCard({
             <AuthorResolvedBadge author={author} size="sm" />
           </div>
           {author.affiliation ? (
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">{author.affiliation}</p>
+            <p className="mt-0.5 truncate text-caption text-slate-500">{author.affiliation}</p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -103,7 +103,7 @@ export function FollowedAuthorCard({
         </div>
       </header>
 
-      <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
+      <div className="flex flex-wrap gap-3 text-caption text-slate-500">
         {author.h_index != null ? <span>h-index {author.h_index}</span> : null}
         {author.citedby != null ? <span>{formatNumber(author.citedby)} citations</span> : null}
         {author.works_count != null ? <span>{formatNumber(author.works_count)} works</span> : null}
@@ -114,7 +114,7 @@ export function FollowedAuthorCard({
 
       <AuthorSignalBar signal={signal ?? null} breakdown="hover" />
 
-      <div className="mt-auto flex items-center justify-between gap-3 border-t border-edge-2 pt-2 text-[11px] text-slate-500">
+      <div className="mt-auto flex items-center justify-between gap-3 border-t border-edge-2 pt-2 text-caption text-slate-500">
         <span>
           {lastYieldParts.length > 0 ? lastYieldParts.join(' · ') : 'No refresh yet'}
           {lastCheck ? ` · ${formatTimestamp(lastCheck)}` : null}

@@ -222,7 +222,7 @@ export function LibraryManagementCard() {
             <div className="space-y-3">
               <div className="space-y-0.5">
                 <h4 className="text-xs font-semibold text-slate-700">Unified Database</h4>
-                <p className="truncate font-mono text-[11px] text-slate-500" title={libraryDatabase.path}>
+                <p className="truncate font-mono text-caption text-slate-500" title={libraryDatabase.path}>
                   {libraryDatabase.path}
                 </p>
               </div>
@@ -303,7 +303,7 @@ export function LibraryManagementCard() {
                   {libraryInfoQuery.data.backups.map((backup: BackupInfo) => (
                     <div
                       key={backup.name}
-                      className="flex items-center justify-between rounded-sm border border-[var(--color-border)] px-3 py-2"
+                      className="flex items-center justify-between rounded-card border border-divider px-3 py-2"
                     >
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium text-slate-700">{backup.name}</p>
@@ -443,7 +443,7 @@ export function LibraryManagementCard() {
                       >
                         Also reset learned feedback
                       </Label>
-                      <p className="text-[11px] leading-snug text-critical-700/80">
+                      <p className="text-caption leading-snug text-critical-700/80">
                         Wipes feedback events, lens weights, author
                         dismissals, author centroids, suggestion cache,
                         and recommendation actions. The ranker starts

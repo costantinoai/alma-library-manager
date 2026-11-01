@@ -881,7 +881,7 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     return (
       <div className="flex flex-wrap gap-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-9 w-36 animate-pulse rounded-sm bg-control-quiet" />
+          <div key={i} className="h-9 w-36 animate-pulse rounded-control bg-control-quiet" />
         ))}
       </div>
     )
@@ -994,7 +994,7 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
                               </AsyncButton>
                             ) : null}
                           </div>
-                          <SubPanel variant="flat" padded={false}  className="divide-y divide-[var(--color-border)]">
+                          <SubPanel variant="flat" padded={false}  className="divide-y divide-divider">
                             {rows.map((row) => (
                               <div key={row.key} className="px-3 py-2.5">
                                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
@@ -1042,7 +1042,7 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
                       {review.length > 0 ? (
                         <div>
                           {sectioned ? <EyebrowLabel tone="muted" className="mb-1.5">Also flagged</EyebrowLabel> : null}
-                          <SubPanel variant="flat" padded={false}  className="divide-y divide-[var(--color-border)]">
+                          <SubPanel variant="flat" padded={false}  className="divide-y divide-divider">
                             {review.map((item) => (
                               <div key={`review-${item.id}`} className="px-3 py-2.5">
                                 <p className="flex items-center gap-2 text-sm font-medium text-alma-800">
@@ -1079,9 +1079,9 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
 
               {/* Footer: the measurement caveat sits with the exit action, out
                   of the reading path. */}
-              <div className="flex items-center justify-between gap-4 border-t border-[var(--color-border)] pt-3">
+              <div className="flex items-center justify-between gap-4 border-t border-divider pt-3">
                 {openComp.note ? (
-                  <p className="min-w-0 flex-1 text-[11px] italic leading-snug text-slate-500">{openComp.note}</p>
+                  <p className="min-w-0 flex-1 text-caption italic leading-snug text-slate-500">{openComp.note}</p>
                 ) : <span />}
                 <AsyncButton
                   size="sm"

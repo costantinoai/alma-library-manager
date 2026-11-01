@@ -13,7 +13,7 @@ const Checkbox = React.forwardRef<
       // Empty box reads as a small recessed INK well (control wash + inset
       // shadow). Checked fills with the accent (folio) — the single
       // selected/active color shared by every control.
-      'peer h-4 w-4 shrink-0 rounded-sm border border-control-edge bg-control-well shadow-paper-inset-cool focus-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-alma-folio data-[state=checked]:bg-alma-folio data-[state=checked]:text-alma-cream data-[state=checked]:shadow-none',
+      'peer h-4 w-4 shrink-0 rounded-check border border-control-edge bg-control-well shadow-paper-inset-cool focus-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-alma-folio data-[state=checked]:bg-alma-folio data-[state=checked]:text-alma-cream data-[state=checked]:shadow-none',
       className,
     )}
     {...props}

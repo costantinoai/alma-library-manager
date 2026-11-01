@@ -441,7 +441,7 @@ export function SuggestedAuthorsRail({
       {isLoading ? (
         <div className="grid gap-3" style={gridStyle}>
           {Array.from({ length: collapsedCap }).map((_, i) => (
-            <Skeleton key={i} className="h-52 rounded-lg" />
+            <Skeleton key={i} className="h-52 rounded-card" />
           ))}
         </div>
       ) : hasError ? (
@@ -546,7 +546,7 @@ export function SuggestedAuthorsRail({
               return (
                 <li
                   key={s.openalex_id || s.key}
-                  className="flex items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-sm"
+                  className="flex items-center justify-between gap-3 rounded-control px-2 py-1.5 text-sm"
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <StatusBadge

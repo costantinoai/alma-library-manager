@@ -98,7 +98,7 @@ export function RepairGroup({
       {allClear.length > 0 ? (
         <div className="space-y-3">
           <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-2 p-3 shadow-paper-sm">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+            <span className="text-caption font-medium uppercase tracking-wide text-slate-400">
               Healthy & routine tools
             </span>
             {allClear.map((op) => {

@@ -817,7 +817,7 @@ export function DiscoveryPage() {
     const sorted = [...items].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
     return (
       <div key={title} className="space-y-1">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+        <p className="text-2xs font-semibold uppercase tracking-[0.1em] text-slate-400">
           {title}
         </p>
         <div className="flex flex-wrap gap-1">
@@ -1311,7 +1311,7 @@ export function DiscoveryPage() {
                       {pullGroups.some(Boolean) ? (
                         pullGroups
                       ) : (
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-caption text-slate-500">
                           No taste summary is recorded for this refresh.
                         </p>
                       )}
@@ -1325,7 +1325,7 @@ export function DiscoveryPage() {
                       {pushGroups.some(Boolean) ? (
                         pushGroups
                       ) : (
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-caption text-slate-500">
                           No taste summary is recorded for this refresh.
                         </p>
                       )}
@@ -1516,7 +1516,7 @@ export function DiscoveryPage() {
                   key={rec.id}
                   ref={(element) => observeCardImpression(element, rec.id, recIdx + 1)}
                   id={`rec-card-${rec.paper_id}`}
-                  className="rounded-lg transition-shadow"
+                  className="rounded-card transition-shadow"
                 >
                 <PaperCard
                   // The `compact` viewMode is handled in the earlier

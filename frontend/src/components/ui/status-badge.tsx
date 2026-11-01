@@ -57,7 +57,7 @@ const statusBadgeVariants = cva(
         info: 'border border-accent-edge bg-alma-folio/[0.04] text-alma-folio',
       },
       size: {
-        sm: 'px-2 py-px text-[0.65rem]',
+        sm: 'px-2 py-px text-2xs',
         default: 'px-2.5 py-0.5 text-xs',
         lg: 'px-3 py-1 text-sm',
       },

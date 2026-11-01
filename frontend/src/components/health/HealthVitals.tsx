@@ -65,7 +65,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
       </div>
 
       {/* Ribbon legend — the per-severity dimension counts. */}
-      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-caption text-slate-500">
         {RIBBON_SEGMENTS.map((seg) => (
           <span key={seg.key} className="inline-flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${seg.className}`} />
@@ -75,7 +75,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
       </div>
 
       {/* Slim KPI caption — the two corpus facts worth a glance, no tile grid. */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--color-border)] pt-3 text-xs text-slate-500">
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-divider pt-3 text-xs text-slate-500">
         <span className="tabular-nums text-alma-700">{totals.papers_total.toLocaleString()}</span>
         <span>papers assessed</span>
         <span className="text-alma-200">·</span>

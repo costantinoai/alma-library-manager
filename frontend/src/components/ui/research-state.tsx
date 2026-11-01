@@ -39,7 +39,7 @@ export function ResearchState({
     <Surface
       role={kind === 'error' ? 'alert' : 'status'}
       className={cn(
-        'relative overflow-hidden rounded-sm shadow-paper-sheet',
+        'relative overflow-hidden rounded-card shadow-paper-sheet',
         scope === 'page'
           ? 'mx-auto flex min-h-[52vh] max-w-3xl items-center px-7 py-14 sm:px-12'
           : 'px-5 py-8 sm:px-7',
@@ -61,7 +61,7 @@ export function ResearchState({
               kind === 'error' ? 'text-critical-600' : 'text-alma-folio',
             )}
           />
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">
+          <span className="font-mono text-2xs uppercase tracking-[0.14em] text-slate-500">
             {notation}
           </span>
         </div>

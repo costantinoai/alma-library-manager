@@ -89,7 +89,7 @@ function SortableLensChip({
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
+        'group inline-flex items-stretch overflow-hidden rounded-card border transition-colors',
         isActive
           ? 'border-alma-folio bg-alma-folio-soft'
           : 'border-control-edge bg-control-well hover:border-control-edge-strong',
@@ -129,7 +129,7 @@ function SortableLensChip({
           'w-auto justify-center border-l px-2',
           isActive
             ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-700/10 hover:text-critical-700'
-            : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
+            : 'border-divider text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
         )}
         aria-label={`Delete ${lens.name}`}
         title={`Delete ${lens.name}`}
@@ -286,7 +286,7 @@ export function LensManager({
     <section
       className={cn(
         'space-y-3',
-        !bare && 'rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sheet',
+        !bare && 'rounded-card border border-divider bg-surface-1 p-4 shadow-paper-sheet',
       )}
     >
       {/* A host that frames this (the Discovery "Lenses" band) has already
@@ -334,7 +334,7 @@ export function LensManager({
       </div>
 
       {showCreateForm && (
-        <div className="grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_auto_1fr_auto]">
+        <div className="grid gap-2 border-t border-divider pt-3 md:grid-cols-[1fr_auto_1fr_auto]">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}

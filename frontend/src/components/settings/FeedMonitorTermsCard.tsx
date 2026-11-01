@@ -184,7 +184,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge tone="outline">{formatMonitorTypeLabel(monitor.monitor_type)} Monitor</StatusBadge>
             <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
-            <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
+            <label className="inline-flex items-center gap-2 rounded-full border border-divider px-2.5 py-1 text-caption font-medium text-slate-700">
               <Checkbox
                 checked={enabled}
                 disabled={busy}
@@ -431,7 +431,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
               <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
             )}
             {!needsResolution && (
-              <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
+              <label className="inline-flex items-center gap-2 rounded-full border border-divider px-2.5 py-1 text-caption font-medium text-slate-700">
                 <Checkbox
                   checked={enabled}
                   disabled={busy}
@@ -654,7 +654,7 @@ export function FeedMonitorTermsCard() {
           {newType === 'venue' ? (
             <div className="space-y-2">
               {selectedVenue ? (
-                <div className="flex items-center gap-2 rounded-sm border border-accent-edge bg-accent-soft px-3 py-2 text-sm">
+                <div className="flex items-center gap-2 rounded-card border border-accent-edge bg-accent-soft px-3 py-2 text-sm">
                   <BookOpen className="h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                   <span className="min-w-0 flex-1 truncate font-medium text-alma-folio">
                     {selectedVenue.display_name}

@@ -72,8 +72,8 @@ export function ConceptCallout({
         className={cn(
           'bg-surface-2',
           flush
-            ? 'border-t border-[var(--color-border)]'
-            : 'rounded-sm border border-[var(--color-border)]',
+            ? 'border-t border-divider'
+            : 'rounded-card border border-divider',
         )}
       >
         <CollapsibleTrigger
@@ -85,7 +85,7 @@ export function ConceptCallout({
         >
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
           <div className="min-w-0 flex-1 text-sm">
-            <span className="mr-2 text-[11px] font-bold uppercase tracking-[0.16em] text-alma-folio">
+            <span className="mr-2 text-caption font-bold uppercase tracking-[0.16em] text-alma-folio">
               {eyebrow}
             </span>
             <span className="text-slate-600">{summary}</span>
@@ -96,7 +96,7 @@ export function ConceptCallout({
           />
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-2 border-t border-[var(--color-border)] px-4 py-3 text-sm leading-relaxed text-slate-600">
+          <div className="space-y-2 border-t border-divider px-4 py-3 text-sm leading-relaxed text-slate-600">
             {children}
           </div>
         </CollapsibleContent>

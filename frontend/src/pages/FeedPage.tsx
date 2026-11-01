@@ -684,7 +684,7 @@ export function FeedPage() {
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" align="start" className="max-w-xs">
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    <p className="mb-1 text-caption font-semibold uppercase tracking-wide text-slate-400">
                       Degraded monitors
                     </p>
                     <ul className="space-y-1 text-xs">
@@ -818,7 +818,7 @@ export function FeedPage() {
         <TabsList
           variant="underline"
           data-tour="feed-scope"
-          className="border-b border-[var(--color-border)]"
+          className="border-b border-divider"
           aria-label="Feed scope"
         >
           {([
@@ -958,10 +958,10 @@ export function FeedPage() {
         <section
           role="region"
           aria-label="Bulk actions"
-          className="flex flex-wrap items-center gap-3 rounded-sm border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-paper-sm"
+          className="flex flex-wrap items-center gap-3 rounded-card border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-paper-sm"
         >
           <div className="flex items-center gap-2.5 text-sm">
-            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-[11px] font-semibold tabular-nums text-on-fill shadow-paper-sm">
+            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-caption font-semibold tabular-nums text-on-fill shadow-paper-sm">
               {selectedIds.size}
             </span>
             <span className="text-slate-700">
@@ -1056,7 +1056,7 @@ export function FeedPage() {
                   <RowButton
                     onClick={() => toggleJournalOpen(entry.journal)}
                     aria-expanded={open}
-                    className="rounded-sm border border-control-edge bg-control-well px-3 py-2 hover:bg-control-quiet"
+                    className="rounded-control border border-control-edge bg-control-well px-3 py-2 hover:bg-control-quiet"
                   >
                     <ChevronRight
                       className={cn(
@@ -1116,7 +1116,7 @@ export function FeedPage() {
             return (
               <RevealItem key={item.id} index={i}>
               <div
-                className="relative rounded-sm"
+                className="relative rounded-control"
                 data-tour={i === 0 ? 'feed-card' : undefined}
               >
                 <PaperCard

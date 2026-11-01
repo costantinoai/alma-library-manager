@@ -169,14 +169,14 @@ export function RepairConfirmDialog({
             ) : candidates.length === 0 ? (
               <p className="text-sm text-slate-500">No pending merges — run a scan first.</p>
             ) : (
-              <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-sm border border-[var(--color-border)] bg-surface-2 p-2">
+              <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-card border border-divider bg-surface-2 p-2">
                 {candidates.map((c) => {
                   const badge = sourceBadge(c)
                   const busy = rowBusy(c.id)
                   return (
                     <li
                       key={c.id}
-                      className="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm"
+                      className="flex items-center justify-between gap-2 rounded-control px-2 py-1.5 text-sm"
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <StatusBadge tone={badge.tone} size="sm" className="shrink-0">

@@ -706,22 +706,22 @@ export function OnlineSearchTab({
             disabled={loading}
           />
           <InputGroupAddon align="inline-end">
-            <Kbd className="text-[10px]">↵</Kbd>
+            <Kbd className="text-2xs">↵</Kbd>
           </InputGroupAddon>
         </InputGroup>
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs leading-relaxed text-slate-500">
             Prefix with{' '}
-            <code className="rounded bg-control-quiet px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               author:
             </code>{' '}
             ,{' '}
-            <code className="rounded bg-control-quiet px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               title:
             </code>
             , or{' '}
-            <code className="rounded bg-control-quiet px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               journal:
             </code>{' '}
             to scope the search. DOIs and OpenAlex URLs are detected automatically.
@@ -744,7 +744,7 @@ export function OnlineSearchTab({
             id="online-search-filters" className="flex flex-wrap items-end gap-3 p-3"
           >
             <div className="space-y-1">
-              <Label htmlFor="online-year-min" className="text-[11px] font-medium text-slate-600">
+              <Label htmlFor="online-year-min" className="text-caption font-medium text-slate-600">
                 From year
               </Label>
               <Input
@@ -760,7 +760,7 @@ export function OnlineSearchTab({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="online-year-max" className="text-[11px] font-medium text-slate-600">
+              <Label htmlFor="online-year-max" className="text-caption font-medium text-slate-600">
                 To year
               </Label>
               <Input
@@ -794,7 +794,7 @@ export function OnlineSearchTab({
 
       {/* ── Per-source progress strip ── */}
       {(loading || Object.keys(sourceProgress).length > 0) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500" data-testid="online-search-progress">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-slate-500" data-testid="online-search-progress">
           {Object.entries(sourceProgress).map(([source, progress]) => {
             const Icon = progress.status === 'pending' ? Loader2
               : progress.status === 'partial' ? CheckCircle2
@@ -823,7 +823,7 @@ export function OnlineSearchTab({
             )
           })}
           {loading && !streamFinalised && (
-            <span className="ml-auto text-[10px] text-slate-400">ranking…</span>
+            <span className="ml-auto text-2xs text-slate-400">ranking…</span>
           )}
         </div>
       )}
@@ -1098,7 +1098,7 @@ function WhyChips({ score, breakdown }: WhyChipsProps) {
   const families = topFamilies(breakdown, 3)
   if (families.length === 0) return null
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pl-1 text-[10px] text-slate-500">
+    <div className="flex flex-wrap items-center gap-1.5 pl-1 text-2xs text-slate-500">
       <span className="font-medium uppercase tracking-[0.08em] text-slate-500">Why</span>
       {typeof score === 'number' && score > 0 && (
         <StatusBadge tone="neutral" size="sm" title="Personal-fit score (0-100)">

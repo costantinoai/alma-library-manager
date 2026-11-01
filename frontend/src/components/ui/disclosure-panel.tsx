@@ -84,7 +84,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
       <Surface
         ref={ref}
         className={cn(
-          'overflow-hidden rounded-sm shadow-paper-sm',
+          'overflow-hidden rounded-card shadow-paper-sm',
           danger && 'border-critical-500 bg-critical-50',
           className,
         )}
@@ -133,7 +133,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
             </div>
             <span
               className={cn(
-                'shrink-0 text-[11px] font-bold uppercase tracking-[0.16em]',
+                'shrink-0 text-caption font-bold uppercase tracking-[0.16em]',
                 danger ? 'text-critical-700' : 'text-slate-500',
               )}
             >
@@ -144,7 +144,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
           <div
             className={cn(
               'border-t p-4',
-              danger ? 'border-critical-100' : 'border-[var(--color-border)]',
+              danger ? 'border-critical-100' : 'border-divider',
               contentClassName,
             )}
           >

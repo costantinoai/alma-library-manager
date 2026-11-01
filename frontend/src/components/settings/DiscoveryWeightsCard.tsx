@@ -397,7 +397,7 @@ export function DiscoveryWeightsCard() {
             <SettingsSection title="Source Control">
               <div className="grid gap-3">
                 {SOURCE_LABELS.map((source) => (
-                  <div key={source.key} className="rounded-sm border border-[var(--color-border)] p-3">
+                  <div key={source.key} className="rounded-card border border-divider p-3">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <p className="text-sm font-medium text-alma-800">{source.label}</p>
@@ -628,7 +628,7 @@ export function DiscoveryWeightsCard() {
           </SettingsSections>
 
           {/* Footer */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-4">
             <p className="text-sm text-slate-500">
               Discovery settings affect Discovery refresh and Feed monitor intake.
             </p>
@@ -684,13 +684,13 @@ function WeightSlider({
   const safeValue = Number.isFinite(value) ? value : 0
   const pct = (v: number | undefined) => (v == null ? null : `${Math.round(v * 100)}%`)
   return (
-    <div className="space-y-1.5 rounded-sm border border-[var(--color-border)] p-3">
+    <div className="space-y-1.5 rounded-card border border-divider p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-800">
             {label}
             {share != null && (
-              <span className="ml-2 font-mono text-[11px] font-normal text-slate-500" title="Share of the ranking this slider gets once all sliders are rescaled to sum to 1.">
+              <span className="ml-2 font-mono text-caption font-normal text-slate-500" title="Share of the ranking this slider gets once all sliders are rescaled to sum to 1.">
                 share {pct(share)}
                 {savedShare != null && Math.abs(savedShare - share) > 0.005 && (
                   <span className="text-slate-400"> · saved {pct(savedShare)}</span>

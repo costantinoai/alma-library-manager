@@ -21,7 +21,7 @@ const TabsList = React.forwardRef<
         // white segment on top of it (see TabsTrigger). A cream rail on a
         // cream card had no edge to lift off.
         variant === 'rail'
-          ? 'inline-flex h-10 items-center justify-center rounded-sm bg-control-track p-1 text-alma-700'
+          ? 'inline-flex h-10 items-center justify-center rounded-control bg-control-track p-1 text-alma-700'
           : 'flex items-center gap-1',
         className,
       )}
@@ -45,7 +45,7 @@ const TabsTrigger = React.forwardRef<
           ? // Raised-knob exception: the active tab lifts to the TOP of the paper
             // ladder so it reads as a segment sitting on the ink rail at any
             // elevation, and takes folio text — the shared active signal.
-            'rounded-sm px-3 py-1.5 transition-all data-[state=active]:bg-surface-4 data-[state=active]:text-alma-folio data-[state=active]:shadow-paper-sm'
+            'rounded-control px-3 py-1.5 transition-all data-[state=active]:bg-surface-4 data-[state=active]:text-alma-folio data-[state=active]:shadow-paper-sm'
           : 'relative -mb-px border-b-2 border-transparent px-3 py-2 text-slate-500 transition-colors hover:text-alma-800 data-[state=active]:border-accent data-[state=active]:text-alma-900',
         className,
       )}

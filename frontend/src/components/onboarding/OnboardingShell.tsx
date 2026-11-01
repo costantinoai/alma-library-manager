@@ -66,7 +66,7 @@ export function OnboardingShell({
                 <span className="font-brand text-xl font-semibold tracking-[0.01em] text-alma-800">
                   ALMa
                 </span>
-                <span className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.16em] text-alma-folio">
+                <span className="mt-0.5 text-2xs font-bold uppercase tracking-[0.16em] text-alma-folio">
                   <span className="text-alma-800">A</span>nother{' '}
                   <span className="text-alma-800">L</span>ibrary{' '}
                   <span className="text-alma-800">Ma</span>nager
@@ -74,7 +74,7 @@ export function OnboardingShell({
               </div>
               <div className="ml-auto flex items-center gap-2">
                 <div className="text-right">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                  <span className="text-2xs font-bold uppercase tracking-[0.16em] text-slate-400">
                     Step {Math.min(step + 1, total)} of {total}
                   </span>
                 </div>

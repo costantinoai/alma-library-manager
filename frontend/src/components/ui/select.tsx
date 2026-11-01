@@ -18,7 +18,7 @@ const SelectTrigger = React.forwardRef<
       // Trigger reads as a recessed INK well, matching the Input + Textarea
       // + Checkbox primitives so every form control sits consistently inside
       // its host instead of wearing that host's own cream.
-      'flex h-10 w-full items-center justify-between rounded-sm border border-control-edge bg-control-well px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
+      'flex h-10 w-full items-center justify-between rounded-control border border-control-edge bg-control-well px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
       className,
     )}
     {...props}
@@ -69,7 +69,7 @@ const SelectContent = React.forwardRef<
       ref={ref}
       position={position}
       className={cn(
-        'relative z-popover max-h-96 min-w-[8rem] overflow-hidden rounded-sm border border-edge-3 bg-surface-3 text-alma-900 shadow-paper-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+        'relative z-popover max-h-96 min-w-[8rem] overflow-hidden rounded-card border border-edge-3 bg-surface-3 text-alma-900 shadow-paper-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         position === 'popper' &&
           'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
         className,
@@ -112,7 +112,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm text-alma-900 outline-none focus:bg-accent-soft focus:text-alma-900 data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex w-full cursor-default select-none items-center rounded-control py-1.5 pl-8 pr-2 text-sm text-alma-900 outline-none focus:bg-accent-soft focus:text-alma-900 data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
     )}
     {...props}
@@ -133,7 +133,7 @@ const SelectSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Separator
     ref={ref}
-    className={cn('-mx-1 my-1 h-px bg-[var(--color-border)]', className)}
+    className={cn('-mx-1 my-1 h-px bg-divider', className)}
     {...props}
   />
 ))

@@ -47,13 +47,13 @@ const DialogContent = React.forwardRef<
           // patched this locally with ad-hoc max-h-[NNvh] overrides — this is
           // the primitive-level default; per-dialog className overrides still
           // win via cn()'s twMerge.
-          'fixed left-[50%] top-[50%] z-modal grid max-h-[85dvh] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
+          'fixed left-[50%] top-[50%] z-modal grid max-h-[85dvh] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-card border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
           className,
         )}
         {...props}
       >
         {children}
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-ring">
+        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-control opacity-70 transition-opacity hover:opacity-100 focus-ring">
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

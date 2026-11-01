@@ -340,7 +340,7 @@ export function TagsTab() {
                   <RowButton selected={assignPubKey === like.id}
                     key={like.id}
                     onClick={() => setAssignPubKey(like.id)}
-                    className={cn('gap-3 rounded-lg border px-3 py-2.5', assignPubKey === like.id ? 'border-alma-folio text-inherit' : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet')}
+                    className={cn('gap-3 rounded-control border px-3 py-2.5', assignPubKey === like.id ? 'border-alma-folio text-inherit' : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet')}
                   >
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">

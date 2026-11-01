@@ -66,7 +66,7 @@ export function VenueAutocomplete({ onSelect, placeholder, disabled, autoFocus }
         placeholder={placeholder ?? 'Search a journal by name…'}
       />
       {showDropdown && (
-        <div className="absolute z-popover mt-1 max-h-64 w-full overflow-y-auto rounded-sm border border-[var(--color-border)] bg-surface-3 shadow-paper-md">
+        <div className="absolute z-popover mt-1 max-h-64 w-full overflow-y-auto rounded-card border border-divider bg-surface-3 shadow-paper-md">
           {search.isFetching && results.length === 0 && (
             <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-400">
               <Loader2 className="h-3 w-3 animate-spin" /> Searching journals…

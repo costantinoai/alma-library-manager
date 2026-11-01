@@ -476,7 +476,7 @@ export function InsightsOverviewTab({
                         onClick={() =>
                           openDrilldown('journal', j.journal, `Papers in journal: ${j.journal}`)
                         }
-                        className="gap-3 rounded-sm px-2 py-1.5 hover:bg-control-quiet"
+                        className="gap-3 rounded-control px-2 py-1.5 hover:bg-control-quiet"
                       >
                         <span className="min-w-0 flex-1">
                           <span className="flex items-baseline justify-between gap-2">
@@ -652,7 +652,7 @@ function TimelineTooltip(props: {
     top_paper_citations?: number
   }
   return (
-    <div className="max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
+    <div className="max-w-xs rounded-card border border-divider bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
       <p className="font-semibold text-alma-800">{label}</p>
       <p className="mt-0.5 text-slate-600">
         {row.count ?? 0} paper{row.count === 1 ? '' : 's'} · median{' '}
@@ -665,7 +665,7 @@ function TimelineTooltip(props: {
         </p>
       ) : null}
       {row.top_paper_title ? (
-        <p className="mt-1.5 border-t border-[var(--color-border)] pt-1.5 text-slate-500">
+        <p className="mt-1.5 border-t border-divider pt-1.5 text-slate-500">
           <span className="text-slate-400">Most cited:</span>{' '}
           <span className="text-alma-800">{row.top_paper_title}</span>
           {row.top_paper_citations ? ` (${row.top_paper_citations})` : ''}

@@ -57,7 +57,7 @@ export function StarRating({ value, onChange, size = 'sm' }: StarRatingProps) {
             onClick={() => onChange(i)}
             onMouseEnter={() => setHovered(i)}
             onMouseLeave={() => setHovered(0)}
-            className="cursor-pointer rounded-sm p-0.5 transition-colors hover:bg-gold-400/12 focus-ring"
+            className="cursor-pointer rounded-control p-0.5 transition-colors hover:bg-gold-400/12 focus-ring"
           >
             <Star
               className={cn(
@@ -74,7 +74,7 @@ export function StarRating({ value, onChange, size = 'sm' }: StarRatingProps) {
         <button
           type="button"
           onClick={() => onChange(0)}
-          className="ml-1 cursor-pointer rounded-sm p-0.5 text-slate-400 transition-colors hover:bg-critical-700/10 hover:text-critical-600 focus-ring"
+          className="ml-1 cursor-pointer rounded-control p-0.5 text-slate-400 transition-colors hover:bg-critical-700/10 hover:text-critical-600 focus-ring"
           aria-label="Clear rating"
           tabIndex={-1}
         >

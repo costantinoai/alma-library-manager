@@ -119,14 +119,14 @@ export function PaperTile({
             <button
               type="button"
               onClick={onSelect}
-              className="line-clamp-3 text-left rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
+              className="line-clamp-3 text-left rounded-control transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
             >
               {title}
             </button>
           ) : href ? (
             <a
               href={href}
-              className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
+              className="line-clamp-3 rounded-control transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
             >
               {title}
             </a>
@@ -154,7 +154,7 @@ export function PaperTile({
             note?.notePlate,
           )}
         >
-          <span className="min-w-0 truncate text-[11px] font-medium text-slate-500">
+          <span className="min-w-0 truncate text-caption font-medium text-slate-500">
             {reason}
           </span>
           <div className="relative z-local flex shrink-0 items-center gap-1.5">

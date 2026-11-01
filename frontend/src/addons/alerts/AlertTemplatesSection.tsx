@@ -82,7 +82,7 @@ export function AlertTemplatesSection() {
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
             {templates.map((template) => (
-              <div key={template.key} className="rounded-sm border border-[var(--color-border)] p-4">
+              <div key={template.key} className="rounded-card border border-divider p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -98,7 +98,7 @@ export function AlertTemplatesSection() {
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.entries(template.metrics).map(([key, value]) => (
-                    <StatusBadge key={`${template.key}-${key}`} tone="outline" className="text-[11px]">
+                    <StatusBadge key={`${template.key}-${key}`} tone="outline" className="text-caption">
                       {key.replace(/_/g, ' ')}: {String(value)}
                     </StatusBadge>
                   ))}

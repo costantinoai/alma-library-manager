@@ -557,7 +557,7 @@ function OperationsView({
                 <span className="min-w-0 truncate">{op.trigger_source}</span>
               </StatusBadge>
             )}
-            <span className="font-mono text-[10px] text-slate-400">
+            <span className="font-mono text-2xs text-slate-400">
               {op.job_id.length > 12 ? `${op.job_id.slice(0, 12)}...` : op.job_id}
             </span>
           </div>
@@ -567,7 +567,7 @@ function OperationsView({
             <p
               className={cn(
                 'break-words text-xs text-critical-700',
-                op.status === 'failed' && 'rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1',
+                op.status === 'failed' && 'rounded-control border border-critical-100 bg-critical-50/70 px-2 py-1',
               )}
             >
               {op.error}
@@ -583,7 +583,7 @@ function OperationsView({
 
           {/* Terminal summary: counts \u00b7 duration \u00b7 finished timestamp */}
           {terminal && (op.processed != null || op.started_at || duration) && (
-            <p className="flex flex-wrap items-center gap-x-2 text-[11px] tabular-nums text-slate-500">
+            <p className="flex flex-wrap items-center gap-x-2 text-caption tabular-nums text-slate-500">
               {op.processed != null && op.total != null && op.total > 0 && (
                 <span className="text-slate-600">
                   {op.processed}/{op.total}
@@ -598,7 +598,7 @@ function OperationsView({
 
           {/* Active/unknown: just started timestamp */}
           {!terminal && op.started_at && (
-            <p className="text-[11px] text-slate-400">Started {formatTimestamp(op.started_at)}</p>
+            <p className="text-caption text-slate-400">Started {formatTimestamp(op.started_at)}</p>
           )}
         </div>
       </RowButton>
@@ -678,7 +678,7 @@ function renderMetricChips(record: Record<string, unknown> | null) {
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
       {entries.map(([key, value]) => (
-        <span key={key} className="rounded-sm bg-surface-cool-3 px-2 py-1 text-[10px] text-slate-600 ring-1 ring-slate-200">
+        <span key={key} className="rounded-control bg-surface-cool-3 px-2 py-1 text-2xs text-slate-600 ring-1 ring-slate-200">
           {key.replace(/_/g, ' ')}: {formatMetric(value)}
         </span>
       ))}
@@ -698,15 +698,15 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">External Lanes</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">External Lanes</p>
           {renderMetricChips(asRecord(data.external_lanes))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Cache</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Graph Cache</p>
           {renderMetricChips(asRecord(data.graph_cache))}
         </div>
       </SubPanel>
@@ -719,22 +719,22 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Fallback</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Graph Fallback</p>
           {renderMetricChips(graphFallback)}
         </div>
         {laneRuns.length > 0 && (
           <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">External Lane Runs</p>
+            <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">External Lane Runs</p>
             {laneRuns.map((lane, idx) => {
               const record = asRecord(lane)
               if (!record) return null
               return (
-                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
-                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-700">
+                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-control border border-slate-200 bg-surface-cool-2 px-2 py-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-2xs text-slate-700">
                     <span className="font-medium">{String(record.lane_type ?? 'lane')}</span>
                     {'query' in record && <span>{String(record.query)}</span>}
                     {'branch_label' in record && <span className="text-slate-500">({String(record.branch_label)})</span>}
-                    {'result_count' in record && <span className="rounded-sm bg-surface-cool-3 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
+                    {'result_count' in record && <span className="rounded-control bg-surface-cool-3 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
                   </div>
                 </div>
               )
@@ -768,15 +768,15 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Score Range</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Score Range</p>
           {renderMetricChips(asRecord(data.score_range))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Similarity</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Similarity</p>
           {renderMetricChips(asRecord(data.raw_similarity))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Modes</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Modes</p>
           {renderMetricChips({
             ...((asRecord(data.text_similarity_modes) ?? {})),
             ...Object.fromEntries(
@@ -793,14 +793,14 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     if (topCandidates.length === 0) return null
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-1 p-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top Ranked Candidates</p>
+        <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Top Ranked Candidates</p>
         {topCandidates.map((item, idx) => {
           const record = asRecord(item)
           if (!record) return null
           return (
-            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
-              <div className="text-[11px] font-medium text-slate-700">{String(record.title ?? '')}</div>
-              <div className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-control border border-slate-200 bg-surface-cool-2 px-2 py-1">
+              <div className="text-caption font-medium text-slate-700">{String(record.title ?? '')}</div>
+              <div className="mt-0.5 flex flex-wrap gap-1.5 text-2xs text-slate-500">
                 {'score' in record && <span>score {String(record.score)}</span>}
                 {'source_type' in record && <span>{String(record.source_type)}</span>}
                 {'branch_label' in record && Boolean(record.branch_label) && <span>{String(record.branch_label)}</span>}
@@ -816,11 +816,11 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Timings</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Timings</p>
           {renderMetricChips(asRecord(data.timings_ms))}
         </div>
       </SubPanel>
@@ -1001,7 +1001,7 @@ function OperationDetailView({
         )}
 
         {(terminal || (!active && job.started_at)) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption tabular-nums text-slate-500">
             {terminal && job.processed != null && job.total != null && job.total > 0 && (
               <span className="font-medium text-slate-700">
                 {job.processed}/{job.total}
@@ -1014,12 +1014,12 @@ function OperationDetailView({
         )}
 
         {job.error && (
-          <p className="rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1 text-xs text-critical-700">
+          <p className="rounded-control border border-critical-100 bg-critical-50/70 px-2 py-1 text-xs text-critical-700">
             {job.error}
           </p>
         )}
 
-        <p className="break-all font-mono text-[10px] text-slate-400">{job.job_id}</p>
+        <p className="break-all font-mono text-2xs text-slate-400">{job.job_id}</p>
       </div>
 
       {stoppedWithReason && (
@@ -1055,7 +1055,7 @@ function OperationDetailView({
         <div className="border-b border-slate-100 px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <EyebrowLabel tone="muted">Result</EyebrowLabel>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-2xs text-slate-400">
               {resultKeys.length} field{resultKeys.length === 1 ? '' : 's'}
             </span>
           </div>
@@ -1075,11 +1075,11 @@ function OperationDetailView({
             </div>
           )}
           <details className="group mt-2">
-            <summary className="flex cursor-pointer select-none items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
+            <summary className="flex cursor-pointer select-none items-center gap-1 text-2xs font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
               <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
               Raw JSON
             </summary>
-            <pre className="mt-2 max-h-96 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-3 text-[11px] leading-relaxed text-slate-700 shadow-paper-inset-cool">
+            <pre className="mt-2 max-h-96 overflow-auto rounded-card border border-slate-200 bg-surface-cool-2 p-3 text-caption leading-relaxed text-slate-700 shadow-paper-inset-cool">
               {JSON.stringify(job.result, null, 2)}
             </pre>
           </details>
@@ -1089,7 +1089,7 @@ function OperationDetailView({
       {/* ── LOG STREAM TOOLBAR ── */}
       <div className="sticky top-0 z-local flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
         <EyebrowLabel tone="muted">Log stream</EyebrowLabel>
-        <span className="text-[11px] tabular-nums text-slate-400">
+        <span className="text-caption tabular-nums text-slate-400">
           {filteredLogs.length}/{logs.length}
         </span>
         {errorsPlus > 0 && (
@@ -1167,10 +1167,10 @@ function OperationDetailView({
                   <>
                     {renderDiscoveryLogData(entry.step, entry.data)}
                     <details className="mt-2">
-                      <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
+                      <summary className="cursor-pointer select-none text-2xs font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
                         Raw data
                       </summary>
-                      <pre className="mt-2 max-h-48 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-2 font-mono text-[10px] leading-4 text-slate-600 shadow-paper-inset-cool">
+                      <pre className="mt-2 max-h-48 overflow-auto rounded-card border border-slate-200 bg-surface-cool-2 p-2 font-mono text-2xs leading-4 text-slate-600 shadow-paper-inset-cool">
                         {JSON.stringify(entry.data, null, 2)}
                       </pre>
                     </details>
@@ -1187,7 +1187,7 @@ function OperationDetailView({
 
 function QueryErrorView({ title, message }: { title: string; message: string }) {
   return (
-    <div className="m-3 rounded border border-critical-100 bg-critical-50 px-3 py-2 text-xs text-critical-700">
+    <div className="m-3 rounded-card border border-critical-100 bg-critical-50 px-3 py-2 text-xs text-critical-700">
       <p className="font-medium">{title}</p>
       <p className="mt-1 break-all">{message}</p>
     </div>
@@ -1434,7 +1434,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
                   <Activity className="h-3.5 w-3.5" />
                   Operations
                   {activeOps.length > 0 && (
-                    <StatusBadge className="ml-1 bg-slate-700 text-on-fill text-[10px] px-1.5 py-0">
+                    <StatusBadge className="ml-1 bg-slate-700 text-on-fill text-2xs px-1.5 py-0">
                       {activeOps.length}
                     </StatusBadge>
                   )}

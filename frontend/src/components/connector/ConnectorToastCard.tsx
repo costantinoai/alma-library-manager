@@ -25,7 +25,7 @@ export function ConnectorToastCard({
   const copy = COPY[notice.kind]
 
   return (
-    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded border border-[var(--color-border)] border-l-4 border-l-gold-400 bg-surface-1 p-4 shadow-paper-lg">
+    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded-card border border-divider border-l-4 border-l-gold-400 bg-surface-1 p-4 shadow-paper-lg">
       <div className="relative mt-0.5 shrink-0">
         {!reduceMotion && (
           <motion.span
@@ -49,7 +49,7 @@ export function ConnectorToastCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-alma-900">{copy.title}</p>
-          <span className="rounded border border-[var(--color-border)] bg-control-quiet px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
+          <span className="rounded-control border border-divider bg-control-quiet px-1.5 py-0.5 font-mono text-2xs leading-none tracking-tight text-alma-700">
             v{notice.connectorVersion}
           </span>
         </div>

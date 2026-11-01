@@ -372,11 +372,11 @@ export const BRANCH_COLORS = [
   'var(--color-alma-800)',
   'var(--color-alma-folio)',
   'var(--color-gold-400)',
-  'var(--color-pale-500)',
+  'var(--color-chart-sky)',
   'var(--color-alma-500)',
-  'var(--color-parchment-500)',
+  'var(--color-chart-sand)',
   'var(--color-gold-500)',
-  'var(--color-pale-700)',
+  'var(--color-chart-slate)',
 ] as const
 
 /**

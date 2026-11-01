@@ -158,7 +158,7 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
             {monitors.map((m) => (
               <li
                 key={m.query}
-                className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2"
+                className="flex items-center justify-between gap-3 rounded-card border border-divider bg-surface-2 px-3 py-2"
               >
                 <code className="truncate text-sm text-alma-800">{m.query}</code>
                 <Button variant="danger-muted" size="icon-xs"

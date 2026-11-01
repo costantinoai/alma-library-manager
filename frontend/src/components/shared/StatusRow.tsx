@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { dimensionBadgeTone, severityLabel } from '@/lib/severity'
 
 const BASE =
-  'flex w-full items-center gap-3 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left'
+  'flex w-full items-center gap-3 rounded-card border border-control-edge bg-control-well px-3 py-2 text-left'
 
 interface StatusRowProps {
   severity?: string | null
@@ -39,7 +39,7 @@ export function StatusRow({ severity, label, metric, onOpen, title }: StatusRowP
       <span className="min-w-0 flex-1 truncate text-sm text-alma-800">{label}</span>
       {metric}
       {clickable ? (
-        <span className="shrink-0 text-[11px] font-medium text-alma-folio opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="shrink-0 text-caption font-medium text-alma-folio opacity-0 transition-opacity group-hover:opacity-100">
           view →
         </span>
       ) : null}

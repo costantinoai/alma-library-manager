@@ -129,7 +129,7 @@ export function SimilarResultsDialog({
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-control-quiet hover:text-slate-700"
+                          className="inline-flex items-center justify-center rounded-control p-2 text-slate-500 hover:bg-control-quiet hover:text-slate-700"
                           title="Open paper"
                         >
                           <ExternalLink className="h-4 w-4" />

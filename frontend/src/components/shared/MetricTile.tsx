@@ -127,7 +127,7 @@ export function MetricTile({
         <CardContent className="p-5">
           <div className="flex items-center gap-4">
             <div
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-sm"
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-control"
               style={{ backgroundColor: iconColor ? `${iconColor}15` : undefined }}
             >
               <Icon className="h-6 w-6" style={{ color: iconColor }} />
@@ -154,14 +154,14 @@ export function MetricTile({
         // brighter than its host. min-w-0 + truncate guards against the
         // narrow-column overflow that the v2 tiles suffered from on
         // sub-400px grids.
-        !isBare && 'rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm',
+        !isBare && 'rounded-card border border-divider bg-surface-2 p-3 shadow-paper-sm',
         // Interactive (drilldown) tiles get the folio accent on hover/focus —
         // the single interactive identity (no new color). A bare tile has no
         // border to tint, so it moves its numeral instead.
         onClick &&
           'cursor-pointer transition-colors focus-ring',
         onClick && !isBare && 'hover:border-alma-folio',
-        onClick && isBare && 'group rounded-sm',
+        onClick && isBare && 'group rounded-control',
         className,
       )}
       {...interactiveProps}
@@ -172,7 +172,7 @@ export function MetricTile({
           // A bare figure is set LARGER but LIGHTER: with no box to hold it, a
           // semibold numeral at this size reads as a headline competing with
           // the page's own. Size carries the emphasis, weight stays quiet.
-          isBare ? 'text-[1.75rem] font-normal leading-none' : 'text-xl font-semibold',
+          isBare ? 'text-figure-sm font-normal leading-none' : 'text-xl font-semibold',
           VALUE_TONE_CLASS[tone],
           onClick && isBare && 'transition-colors group-hover:text-alma-folio',
           isCentered && 'text-center',
@@ -193,7 +193,7 @@ export function MetricTile({
       {hint && (
         <p
           className={cn(
-            'mt-0.5 line-clamp-2 text-[11px] text-slate-400',
+            'mt-0.5 line-clamp-2 text-caption text-slate-400',
             isCentered && 'text-center',
           )}
         >

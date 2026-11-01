@@ -244,7 +244,7 @@ export function SettingsPage() {
                     <section.icon className="h-3.5 w-3.5" />
                     {section.label}
                   </EyebrowLabel>
-                  <ul className="space-y-0.5 border-l border-[var(--color-border)] pl-2">
+                  <ul className="space-y-0.5 border-l border-divider pl-2">
                     {entries.map((entry) => {
                       const active = activeAnchor === entry.id
                       return (
@@ -252,10 +252,10 @@ export function SettingsPage() {
                           <RowButton
                             onClick={() => jumpTo(entry.id)}
                             className={cn(
-                              '-ml-[calc(0.5rem+1px)] gap-0 rounded-r-md border-l-2 py-1 pl-3 pr-2 text-sm',
+                              '-ml-[calc(0.5rem+1px)] gap-0 rounded-r-control border-l-2 py-1 pl-3 pr-2 text-sm',
                               active
                                 ? 'border-alma-folio bg-accent-soft font-medium text-alma-folio'
-                                : 'border-transparent text-slate-600 hover:border-[var(--color-border)] hover:text-alma-800',
+                                : 'border-transparent text-slate-600 hover:border-divider hover:text-alma-800',
                             )}
                           >
                             {entry.label}

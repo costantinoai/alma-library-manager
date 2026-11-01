@@ -15,8 +15,8 @@
  *   1. The surface ladder (--color-surface-0..4) + edge ramp (--color-edge-0..4)
  *      — THE surface source of truth; consumed via bg-surface-N / border-edge-N
  *      and the relational Surface/Card/SubPanel primitives.
- *   2. The navy `alma` ramp + parchment / pale / gold ramps (ink, trim, warm
- *      tints, borders) and the semantic ramps (success/warning/critical/info).
+ *   2. The navy `alma` ramp, the gold trim ramp and the semantic ramps
+ *      (success/warning/critical/info).
  *   3. Role CSS variables (`:root` block below) — `--color-bg`, `--color-text`,
  *      `--color-border`, `--color-accent`, `--color-focus` for primitive CSS
  *      that reads by role.
@@ -166,6 +166,11 @@
   --color-on-fill: #FFFFFF;
   /* The paper divider hairline, `border-divider`. Controls use `control-edge`. */
   --color-divider: #D5C7AB;
+  --color-divider-cool: #DCD6C5;
+  /* Chart series with no ramp of their own. */
+  --color-chart-sky: #6F98BB;
+  --color-chart-sand: #C2A86B;
+  --color-chart-slate: #3D5F7C;
 
   /* ── Layers ─────────────────────────────────────────────────────────────
    * The ONE z-index scale, `z-<name>`. `local` orders siblings inside a card.
@@ -196,6 +201,8 @@
    * anything you press or type in. */
   --radius-card: 8px;
   --radius-control: 6px;
+  /* A 16 px box at 6 px reads as a radio. */
+  --radius-check: 4px;
 
   /* ── Type sizes below `text-xs`, and the few above the default steps ──── */
   --text-2xs: 10px;
@@ -204,36 +211,6 @@
   --text-figure-sm: 28px;
   --text-figure-md: 34px;
   --text-figure-lg: 44px;
-
-  /* ── Parchment ramp ─────────────────────────────────────────────────────
-   * Anchored at parchment-200 (#F3EAD6 brand parchment). Used for warm
-   * surfaces, editorial accents, library/paper tone treatments.
-   */
-  --color-parchment-50:  #FBF8F1;
-  --color-parchment-100: #F8F2E3;
-  --color-parchment-200: #F3EAD6;   /* BRAND PARCHMENT anchor */
-  --color-parchment-300: #E9DCBC;
-  --color-parchment-400: #DAC795;
-  --color-parchment-500: #C2A86B;
-  --color-parchment-600: #A1894F;
-  --color-parchment-700: #7F6B3C;
-  --color-parchment-800: #5A4C2A;
-  --color-parchment-900: #3A311B;
-
-  /* ── Pale-blue ramp ─────────────────────────────────────────────────────
-   * Anchored at pale-300 (#B7D2E4 brand pale-blue). Used for quiet
-   * panels, info highlights, soft secondary surfaces.
-   */
-  --color-pale-50:  #F1F6FA;
-  --color-pale-100: #E2ECF4;
-  --color-pale-200: #CFDDEB;
-  --color-pale-300: #B7D2E4;   /* BRAND PALE-BLUE anchor */
-  --color-pale-400: #93B6D2;
-  --color-pale-500: #6F98BB;
-  --color-pale-600: #517A9E;
-  --color-pale-700: #3D5F7C;
-  --color-pale-800: #2A4258;
-  --color-pale-900: #182937;
 
   /* ── Gold ramp ──────────────────────────────────────────────────────────
    * Anchored at gold-400 (#C49A45 brand gold) — re-tuned from the old
@@ -357,7 +334,7 @@
 
   /* ── Paper-inset shadow (sub-panels) ───────────────────────────────────
    * Recessed feel for sub-boxes nested inside a Card — a frame pressed
-   * into the page. Used by SubPanel `tone="parchment"`. The cool variant
+   * into the page. Used by SubPanel. The cool variant
    * mirrors the same depth on slate surfaces (Activity panel sub-boxes).
    */
   --shadow-paper-inset:
@@ -379,9 +356,8 @@
   --color-bg:          var(--color-surface-0);   /* the desk / app body */
   --color-text:        var(--color-alma-900);    /* ink */
   --color-heading:     var(--color-alma-800);    /* navy */
-  --color-muted:       #64748B;
   --color-border:      var(--color-divider);      /* warm parchment hairline — control outlines + dividers */
-  --color-border-cool: #DCD6C5;                   /* cooler hairline variant */
+  --color-border-cool: var(--color-divider-cool);
   --color-accent:      var(--color-alma-folio);
   --color-accent-soft: var(--color-alma-folio-soft);
   --color-focus:       var(--color-alma-folio);
@@ -467,36 +443,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Editorial focus ring — Folio-blue halo on warm offset, per
- * branding/docs/accessibility.md. Apply to interactive controls that
- * want a more distinctive ring than Tailwind's default focus-visible. */
-.alma-focus-ring:focus-visible {
-  outline: 3px solid var(--color-focus);
-  outline-offset: 3px;
-}
-
-/* Paper grain overlay — a near-subliminal texture layer applied to
- * elevated card surfaces. The body bg already carries the same grain in
- * negative space; on a hero card we let a fraction of that grain show
- * through the cream surface so the card reads as paper, not as a flat
- * fill. Kept extremely faint (~3% alpha) so it never competes with type. */
-.alma-paper-grain {
-  position: relative;
-  isolation: isolate;
-}
-.alma-paper-grain::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image: url("/brand/paper-texture.svg");
-  background-repeat: repeat;
-  opacity: 0.45;
-  mix-blend-mode: multiply;
-  border-radius: inherit;
-}
-
 /* Cardstock cover — the sidebar reads as a small piece of dyed carton
  * paper. Matte, faintly fibrous, with a gentle inner vignette so the
  * corners feel slightly compressed (the way a piece of cardstock does
@@ -550,33 +496,6 @@ body {
     inset 0 1px 0 0 rgb(255 255 255 / 0.07),
     inset 0 -1px 0 0 rgb(0 0 0 / 0.32);
 }
-
-/* The active nav item on the cardstock cover reads as a cloth bookmark
- * tucked behind the page: a Folio-blue ribbon on the left edge plus a
- * faint blue-tinted overlay across the row. Currently unused — the
- * Sidebar inlines an absolutely-positioned span instead — but kept here
- * as a utility for future reuse outside the Sidebar. */
-.alma-bookmark-ribbon {
-  position: relative;
-}
-.alma-bookmark-ribbon::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: linear-gradient(
-    to bottom,
-    var(--color-alma-folio) 0%,
-    #2A6E97 50%,
-    var(--color-alma-folio) 100%
-  );
-  box-shadow: 0 0 8px 0 rgb(30 91 134 / 0.45);
-  pointer-events: none;
-}
-
 
 /* Ink tooltip: slate is the TEXT ramp for paper, and its dark steps vanish on
  * ink (slate-700 measured 1.7:1). Inside the chip the ramp points at on-ink

@@ -454,7 +454,7 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           <label className="mb-1 block text-sm font-medium text-slate-700">
             Zotero Collection (optional)
           </label>
-          <div className="max-h-48 overflow-y-auto rounded-sm border border-[var(--color-border)]">
+          <div className="max-h-48 overflow-y-auto rounded-card border border-divider">
             <RowButton selected={selectedCollectionKey === null}
               onClick={() => {
                 setSelectedCollectionKey(null)
@@ -668,7 +668,7 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
   const sourceCalls = preflight.likely_source_calls
 
   return (
-    <div className="rounded-sm border border-accent-edge bg-accent-soft p-4">
+    <div className="rounded-card border border-accent-edge bg-accent-soft p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <CheckCircle className="h-5 w-5 text-alma-700" />
@@ -727,7 +727,7 @@ function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }
       'Your import is running in the background. You can keep using the app — Library will refresh automatically when it finishes.',
   })
   return (
-    <div className="rounded-lg border border-accent-edge bg-accent-soft p-4">
+    <div className="rounded-card border border-accent-edge bg-accent-soft p-4">
       <div className="mb-2 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
         <span className="font-medium text-alma-800">{title}</span>

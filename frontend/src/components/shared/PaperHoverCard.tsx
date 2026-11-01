@@ -55,7 +55,7 @@ export function PaperHoverCard({
           </p>
 
           {venueBits.length > 0 && (
-            <p className="truncate text-[11px] text-slate-500" title={venueBits.join(' · ')}>
+            <p className="truncate text-caption text-slate-500" title={venueBits.join(' · ')}>
               {venueBits.join(' · ')}
             </p>
           )}
@@ -66,7 +66,7 @@ export function PaperHoverCard({
             </p>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-slate-500">
             {paper.cited_by_count != null && paper.cited_by_count > 0 && (
               <span className="tabular-nums">
                 {paper.cited_by_count.toLocaleString()} citations
@@ -79,7 +79,7 @@ export function PaperHoverCard({
 
           <ScoreBreakdownTeaser breakdown={scoreBreakdown} explanation={explanation} />
 
-          <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 text-[11px]">
+          <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 text-caption">
             <span className="text-slate-400">Click card for full details</span>
             {paper.url && (
               <a

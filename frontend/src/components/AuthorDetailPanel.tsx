@@ -256,7 +256,7 @@ function OpenAlexWorkRow({
             href={work.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="shrink-0 rounded-md p-1 text-slate-400 hover:text-alma-600"
+            className="shrink-0 rounded-control p-1 text-slate-400 hover:text-alma-600"
             aria-label="Open work on OpenAlex"
           >
             <ExternalLink className="h-3.5 w-3.5" />
@@ -519,7 +519,7 @@ export function AuthorDetailPanel({
       {/* Flex column capped at the viewport: header + footer stay put while the
           active tab is the one scrolling region. `w-[calc(100vw-2rem)]` keeps
           the dialog inside narrow windows (the primitive centres it), and
-          `overflow-hidden` clips the rounded corners around the scroll area. */}
+          `overflow-hidden` clips the rounded-card corners around the scroll area. */}
       <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-2rem)] max-w-3xl flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           {/* `pr-12` on the inner row leaves clearance for the Dialog
@@ -758,7 +758,7 @@ export function AuthorDetailPanel({
                 })}
               </div>
               {openalexQuery.data?.total != null && scope === 'openalex' ? (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-caption text-slate-500">
                   Showing {openalexQuery.data.results.length} of {formatNumber(openalexQuery.data.total)}
                   {' '}works from OpenAlex
                 </p>

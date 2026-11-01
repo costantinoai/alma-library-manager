@@ -402,7 +402,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                       <AuthorHoverCard name={name}>
                         <a
                           href={buildHashRoute('authors', { q: name })}
-                          className="rounded-sm px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
+                          className="rounded-control px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {name}
@@ -517,7 +517,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 <Card className="max-h-96 overflow-auto whitespace-pre-wrap p-4 leading-relaxed text-alma-900">
                   {p.abstract.length > 200 && (
                     <span
-                      className="float-left mr-2 mt-1 font-brand text-[44px] font-semibold leading-none text-alma-800"
+                      className="float-left mr-2 mt-1 font-brand text-figure-lg font-semibold leading-none text-alma-800"
                       aria-hidden
                     >
                       {p.abstract[0]}
@@ -526,7 +526,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   {p.abstract.length > 200 ? p.abstract.slice(1) : p.abstract}
                 </Card>
               ) : (
-                <div className="rounded-md border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
+                <div className="rounded-card border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
                   No abstract available for this paper.
                 </div>
               )}
@@ -579,7 +579,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                       >
                         {t.term}
                         {t.score != null && (
-                          <span className="ml-1 text-[10px] tabular-nums opacity-70">
+                          <span className="ml-1 text-2xs tabular-nums opacity-70">
                             {(Number(t.score) * 100).toFixed(0)}
                           </span>
                         )}
@@ -719,7 +719,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               <section>
                 <div className="mb-1 flex items-center justify-between">
                   <EyebrowLabel tone="muted">Notes</EyebrowLabel>
-                  {hasUnsavedNotes && <span className="text-[10px] font-normal italic text-warning-600">Unsaved changes</span>}
+                  {hasUnsavedNotes && <span className="text-2xs font-normal italic text-warning-600">Unsaved changes</span>}
                 </div>
                 <Textarea
                   value={notesDraft}
@@ -754,7 +754,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
             ) : (
               p.notes && (
                 <section>
-                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="mb-1 text-caption font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </div>
                   <Card className="p-3 text-slate-700 whitespace-pre-wrap">
@@ -960,10 +960,10 @@ function RelatedWorksSection({
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
-        <RowButton className="group/rel justify-between rounded-sm border border-control-edge bg-control-well px-3 py-2 hover:border-control-edge-strong hover:bg-control-quiet"
+        <RowButton className="group/rel justify-between rounded-control border border-control-edge bg-control-well px-3 py-2 hover:border-control-edge-strong hover:bg-control-quiet"
         >
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <span className="text-caption font-semibold uppercase tracking-wide text-slate-500">
               {heading}
             </span>
             {(isLoading || count > 0 || localCount > 0) && (
@@ -975,7 +975,7 @@ function RelatedWorksSection({
                     : String(localCount)}
               </StatusBadge>
             )}
-            <span className="truncate text-[11px] text-slate-400">{sublabel}</span>
+            <span className="truncate text-caption text-slate-400">{sublabel}</span>
           </div>
           <ChevronDown
             className={cn(
@@ -991,7 +991,7 @@ function RelatedWorksSection({
             <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
           </div>
         ) : works.length === 0 ? (
-          <div className="rounded-md border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
+          <div className="rounded-card border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
             {emptyCopy}
           </div>
         ) : (

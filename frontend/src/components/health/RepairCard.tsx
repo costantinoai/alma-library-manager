@@ -176,7 +176,7 @@ export function RepairCard({
 
   return (
     <div
-      className={`space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper ${spine}`}
+      className={`space-y-3 rounded-card border border-divider bg-surface-2 p-4 shadow-paper ${spine}`}
     >
       {/* Head: what it is · cost · rolled-up severity · pending · ETA */}
       <div className="flex items-start justify-between gap-3">
@@ -270,7 +270,7 @@ export function RepairCard({
             <DimensionStatusRow key={dim.key} dim={dim} onOpen={() => onOpenDim(dim)} />
           ))}
           {healthyCount > 0 ? (
-            <p className="pl-1 text-[11px] text-slate-400">+{healthyCount} healthy</p>
+            <p className="pl-1 text-caption text-slate-400">+{healthyCount} healthy</p>
           ) : null}
         </div>
       ) : dims.length > 0 && !assessmentFailed ? (
@@ -304,7 +304,7 @@ export function RepairCard({
       </div>
 
       {/* Controls footer: auto-repair · scope/cap · preview · run */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-3">
         <div className="flex items-center gap-2">
           {!op.destructive ? (
             <label className="flex items-center gap-2 text-sm text-slate-700">

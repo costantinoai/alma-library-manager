@@ -576,7 +576,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             const isSelected = selectedKeys.has(like.id)
             return (
             <RevealItem key={like.id} index={i}>
-            <div className="relative rounded-sm">
+            <div className="relative rounded-control">
               <PaperCard
                 selection={{
                   checked: isSelected,
@@ -797,7 +797,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     }
                   }}
                   disabled={addToCollectionMutation.isPending}
-                  className="gap-3 rounded-sm border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-control border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div
                     className="h-3 w-3 rounded-full shrink-0"
@@ -840,7 +840,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                   key={coll.id}
                   onClick={() => bulkCollectionMutation.mutate({ ids: Array.from(selectedKeys), collectionId: coll.id })}
                   disabled={bulkCollectionMutation.isPending}
-                  className="gap-3 rounded-sm border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-control border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: coll.color }} />
                   <div className="min-w-0 flex-1">
@@ -1018,7 +1018,7 @@ function SavedCompactTable({
         if (raw == null || raw <= 0) {
           return (
             <span
-              className="block text-center text-[11px] tabular-nums text-slate-300"
+              className="block text-center text-caption tabular-nums text-slate-300"
               title="Not yet scored — sort by Ranking once to populate."
             >
               —

@@ -165,7 +165,7 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       >
         <SubPanel variant="accent" className="space-y-3">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio text-alma-cream">
               <UserRoundCheck className="h-5 w-5" aria-hidden />
             </span>
             <div className="min-w-0">
@@ -194,7 +194,7 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       >
         <SubPanel variant="accent" className="space-y-3">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio text-alma-cream">
               <UserRoundCheck className="h-5 w-5" aria-hidden />
             </span>
             <div className="min-w-0">

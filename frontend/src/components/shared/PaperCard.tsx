@@ -433,7 +433,7 @@ export function PaperCard({
         <div className="flex items-start gap-3">
           {/* Rank pill */}
           {rank != null && (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-control-quiet text-[11px] font-bold text-slate-500">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-control-quiet text-caption font-bold text-slate-500">
               {rank}
             </div>
           )}
@@ -477,14 +477,14 @@ export function PaperCard({
                     href={paper.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[15px] font-semibold leading-snug text-alma-800 transition-colors hover:text-alma-600"
+                    className="text-lede font-semibold leading-snug text-alma-800 transition-colors hover:text-alma-600"
                     onClick={(e) => { e.stopPropagation(); handleExternalLinkClick('url') }}
                   >
                     {paper.title}
                     <ExternalLink className="ml-1 inline-block h-3 w-3 text-slate-300" />
                   </a>
                 ) : (
-                  <h3 className="text-[15px] font-semibold leading-snug text-alma-800">
+                  <h3 className="text-lede font-semibold leading-snug text-alma-800">
                     {paper.title}
                   </h3>
                 )}
@@ -504,7 +504,7 @@ export function PaperCard({
                   const isPending = followAuthorPendingName === normalized
                   const canWrapHover = authorNames.length > 0
                   const label = (
-                    <span className="cursor-default rounded px-0.5 transition-colors hover:bg-control-quiet hover:text-slate-700">
+                    <span className="cursor-default rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:text-slate-700">
                       {authorName}
                     </span>
                   )
@@ -525,7 +525,7 @@ export function PaperCard({
                       {canFollowAuthors && !isFollowed && (
                         <button
                           type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-control-edge-strong focus-ring hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 transition hover:border-control-edge-strong focus-ring hover:text-alma-600 disabled:cursor-not-allowed"
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
@@ -564,7 +564,7 @@ export function PaperCard({
                         followPending={venueFollowPending === paper.journal.toLowerCase()}
                         onFollow={onFollowVenue}
                       >
-                        <span className="cursor-default truncate rounded px-0.5 transition-colors hover:bg-control-quiet hover:not-italic hover:text-slate-700">
+                        <span className="cursor-default truncate rounded-control px-0.5 transition-colors hover:bg-control-quiet hover:not-italic hover:text-slate-700">
                           {truncate(paper.journal, 60)}
                         </span>
                       </VenueHoverCard>
@@ -714,7 +714,7 @@ export function PaperCard({
                 text instead of expanding inline. */}
             {!suppressSummaries && paper.tldr && paper.tldr.trim() && (
               <p
-                className="mt-1.5 line-clamp-2 text-[11.5px] italic leading-snug text-slate-500"
+                className="mt-1.5 line-clamp-2 text-caption italic leading-snug text-slate-500"
                 title={paper.tldr}
               >
                 <span className="mr-1 font-semibold not-italic text-slate-400">
@@ -741,7 +741,7 @@ export function PaperCard({
               </SubPanel>
             )}
             {!suppressSummaries && showAbstractByDefault && !paper.abstract && (
-              <div className="mt-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-2 text-xs italic text-slate-400">
+              <div className="mt-1.5 rounded-card border border-dashed border-divider px-3 py-2 text-xs italic text-slate-400">
                 No abstract available.
               </div>
             )}
@@ -762,7 +762,7 @@ export function PaperCard({
         {/* Score breakdown (expandable) */}
         {showBreakdown && (hasBreakdown || hasExplanation) && (
           <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2.5">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-slate-400">
               Score Breakdown
             </p>
             <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />

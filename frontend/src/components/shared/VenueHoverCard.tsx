@@ -82,7 +82,7 @@ export function VenueHoverCard({
                 {match?.display_name || journal}
               </p>
               {match?.type && (
-                <p className="text-[11px] capitalize text-slate-500">
+                <p className="text-caption capitalize text-slate-500">
                   {match.type}
                   {match.issn_l ? ` · ISSN ${match.issn_l}` : ''}
                 </p>
@@ -97,7 +97,7 @@ export function VenueHoverCard({
           </div>
 
           {lookup.isLoading && (
-            <p className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+            <p className="inline-flex items-center gap-1.5 text-caption text-slate-400">
               <Loader2 className="h-3 w-3 animate-spin" /> Finding this journal…
             </p>
           )}
@@ -105,13 +105,13 @@ export function VenueHoverCard({
           {match && (
             <SubPanel variant="flat" padded={false}  className="grid grid-cols-2 gap-2 px-2 py-1.5 text-center">
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-slate-500">Works</p>
+                <p className="text-2xs uppercase tracking-wide text-slate-500">Works</p>
                 <p className="text-sm font-semibold tabular-nums text-alma-800">
                   {formatCount(match.works_count)}
                 </p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-slate-500">h-index</p>
+                <p className="text-2xs uppercase tracking-wide text-slate-500">h-index</p>
                 <p className="text-sm font-semibold tabular-nums text-alma-800">
                   {match.summary_stats?.h_index ?? '—'}
                 </p>
@@ -120,7 +120,7 @@ export function VenueHoverCard({
           )}
 
           {notFound && (
-            <SubPanel variant="flat" padded={false}  className="border-dashed px-2 py-1.5 text-[11px] text-slate-500">
+            <SubPanel variant="flat" padded={false}  className="border-dashed px-2 py-1.5 text-caption text-slate-500">
               No OpenAlex journal matched “{journal}”. Try following it from Settings → Feed Monitor
               Controls.
             </SubPanel>
@@ -129,7 +129,7 @@ export function VenueHoverCard({
           {/* Big-venue keyword nudge */}
           {match && !isFollowed && isBigVenue && (
             <SubPanel variant="flat" padded={false}  className="space-y-1.5 p-2">
-              <p className="text-[11px] text-slate-500">
+              <p className="text-caption text-slate-500">
                 This journal publishes a lot. Add keywords to keep the Journals feed focused, or
                 follow everything.
               </p>

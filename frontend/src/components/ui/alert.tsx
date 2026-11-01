@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 // exactly the drift this vocabulary is meant to prevent; reach for
 // `variant="warning"` instead.
 const alertVariants = cva(
-  "relative w-full rounded border border-[var(--color-border)] [&>svg]:text-alma-800",
+  "relative w-full rounded-card border border-divider [&>svg]:text-alma-800",
   {
     variants: {
       // `callout` hangs the icon in the margin of a block of text. `row` is the

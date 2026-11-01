@@ -214,7 +214,7 @@ export function ReadingListTab() {
               </div>
 
               {section.items.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-6 text-sm text-slate-400">
+                <div className="rounded-card border border-dashed border-divider px-4 py-6 text-sm text-slate-400">
                   No papers in this bucket.
                 </div>
               ) : (

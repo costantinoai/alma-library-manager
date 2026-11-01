@@ -232,7 +232,7 @@ export function ImportsTab({ initiallyOpen = false }: { initiallyOpen?: boolean 
                           <span className="inline-flex">{statusBadge}</span>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <span className="font-mono text-[11px]">{reason}</span>
+                          <span className="font-mono text-caption">{reason}</span>
                         </TooltipContent>
                       </Tooltip>
                     ) : (

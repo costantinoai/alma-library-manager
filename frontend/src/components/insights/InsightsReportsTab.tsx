@@ -217,7 +217,7 @@ export function InsightsReportsTab({
                 </div>
               </div>
             )}
-            <div className="rounded-sm border border-[var(--color-border)] p-3">
+            <div className="rounded-card border border-divider p-3">
               <h4 className="mb-2 text-sm font-semibold text-slate-700">Recommendation Engagement</h4>
               <div className="flex gap-4 text-sm">
                 <span className="text-slate-500">
@@ -259,7 +259,7 @@ export function InsightsReportsTab({
                 so a busy window can't dominate by volume; insufficient state. */}
             <div className="grid gap-4 lg:grid-cols-3">
               {topicDriftData.windows.map((w) => (
-                <div key={w.label} className="rounded-sm border border-[var(--color-border)] p-3">
+                <div key={w.label} className="rounded-card border border-divider p-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <h4 className="text-sm font-semibold text-slate-700 capitalize">{w.label}</h4>
                     {!w.sufficient && <StatusBadge tone="neutral" size="sm">thin</StatusBadge>}
@@ -291,7 +291,7 @@ export function InsightsReportsTab({
               <div className="flex flex-wrap gap-4">
                 {topicDriftData.emerging_topics.length > 0 && (
                   <div>
-                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
+                    <h4 className="mb-2 text-caption font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {topicDriftData.emerging_topics.map((t) => (
                         <StatusBadge
@@ -307,7 +307,7 @@ export function InsightsReportsTab({
                 )}
                 {topicDriftData.fading_topics.length > 0 && (
                   <div>
-                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
+                    <h4 className="mb-2 text-caption font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {topicDriftData.fading_topics.map((t) => (
                         <StatusBadge

@@ -17,7 +17,7 @@ const Command = React.forwardRef<
     className={cn(
       // Command mounts inside a Dialog (level 1) — inherit that surface
       // rather than repaint, so it sits flush on the dialog body.
-      "flex h-full w-full flex-col overflow-hidden rounded-md bg-transparent text-alma-900",
+      "flex h-full w-full flex-col overflow-hidden rounded-card bg-transparent text-alma-900",
       className
     )}
     {...props}
@@ -41,12 +41,12 @@ const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
 >(({ className, ...props }, ref) => (
-  <div className="flex items-center border-b border-[var(--color-border)] px-3" cmdk-input-wrapper="">
+  <div className="flex items-center border-b border-divider px-3" cmdk-input-wrapper="">
     <Search className="mr-2 h-4 w-4 shrink-0 text-alma-700/60" />
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        "flex h-11 w-full rounded-md bg-transparent py-3 text-sm text-alma-900 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-11 w-full rounded-control bg-transparent py-3 text-sm text-alma-900 outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
@@ -104,7 +104,7 @@ const CommandSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 h-px bg-[var(--color-border)]", className)}
+    className={cn("-mx-1 h-px bg-divider", className)}
     {...props}
   />
 ))
@@ -117,7 +117,7 @@ const CommandItem = React.forwardRef<
   <CommandPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-default gap-2 select-none items-center rounded-md px-2 py-1.5 text-sm text-alma-900 outline-none data-[disabled=true]:pointer-events-none data-[selected='true']:bg-accent-soft data-[selected=true]:text-alma-900 data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      "relative flex cursor-default gap-2 select-none items-center rounded-control px-2 py-1.5 text-sm text-alma-900 outline-none data-[disabled=true]:pointer-events-none data-[selected='true']:bg-accent-soft data-[selected=true]:text-alma-900 data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
       className
     )}
     {...props}

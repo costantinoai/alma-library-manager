@@ -280,7 +280,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                       </StatusBadge>
                     </div>
                     {isDomainExpanded && domain.fields.length > 0 && (
-                      <div className="ml-6 space-y-1 border-l border-[var(--color-border)] pl-3">
+                      <div className="ml-6 space-y-1 border-l border-divider pl-3">
                         {domain.fields.map((field) => {
                           const fieldKey = `${domain.name}::${field.name}`
                           const isFieldExpanded = expandedFields.has(fieldKey)

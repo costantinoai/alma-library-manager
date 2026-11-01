@@ -43,7 +43,7 @@ export function TopBar({
   const shortcutKey = isMacPlatform() ? '⌘K' : 'Ctrl K'
 
   return (
-    <header className="sticky top-0 z-chrome flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
+    <header className="sticky top-0 z-chrome flex h-16 items-center justify-between border-b border-divider bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="icon"
           onClick={onMenuClick}
@@ -74,7 +74,7 @@ export function TopBar({
           >
             <Search className="h-3.5 w-3.5" />
             <span>Search</span>
-            <kbd className="ml-1 rounded border border-[var(--color-border)] bg-control-quiet px-1.5 font-sans text-[10px] font-medium text-alma-700">
+            <kbd className="ml-1 rounded-control border border-divider bg-control-quiet px-1.5 font-sans text-2xs font-medium text-alma-700">
               {shortcutKey}
             </kbd>
           </Button>

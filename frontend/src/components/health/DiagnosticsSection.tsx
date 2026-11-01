@@ -46,7 +46,7 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
 
       {healthy.length > 0 ? (
         <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-2 p-3 shadow-paper-sm">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+          <span className="text-caption font-medium uppercase tracking-wide text-slate-400">
             All clear
           </span>
           {healthy.map((dim) => (

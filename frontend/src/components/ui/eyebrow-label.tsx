@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
  * EyebrowLabel — small-caps overline for section announcements.
  *
  * Replaces the proliferating
- *   `text-[11px] font-semibold uppercase tracking-wide text-slate-500`
+ *   `text-caption font-semibold uppercase tracking-wide text-slate-500`
  * inline pattern (~30+ call sites: Discovery profile-list titles,
  * Insights diagnostics headers, Settings card subtitles, PaperCard
  * score-breakdown header, etc.).
@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
  *   `font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase`.
  */
 const eyebrowVariants = cva(
-  'block text-[11px] font-bold uppercase tracking-[0.16em]',
+  'block text-caption font-bold uppercase tracking-[0.16em]',
   {
     variants: {
       tone: {
