@@ -447,7 +447,8 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                 "author_id": str(row["author_id"]),
                 "author_name": str(row["author_name"] or row["author_id"]),
                 "openalex_id": openalex_id or None,
-                "status": status or "unresolved",
+                # A manual save with no OpenAlex id is not resolved, whatever it stored.
+                "status": "unresolved" if status in ("", "resolved_manual") else status,
                 "method": method or None,
                 "confidence": confidence,
                 "reason_code": action["code"],
