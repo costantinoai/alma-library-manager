@@ -828,9 +828,9 @@ export function FeedPage() {
               <Icon className="h-4 w-4" aria-hidden />
               {label}
               {scope === 'journals' && journalMonitorCount > 0 && (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-alma-800/[0.08] px-1 text-[10px] font-semibold tabular-nums text-slate-700">
+                <StatusBadge tone="neutral" size="sm" className="ml-0.5 font-semibold tabular-nums">
                   {journalMonitorCount}
-                </span>
+                </StatusBadge>
               )}
             </TabsTrigger>
           ))}
@@ -1069,9 +1069,9 @@ export function FeedPage() {
                       {entry.journal}
                     </span>
                     {entry.newCount > 0 && (
-                      <span className="inline-flex items-center rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-alma-folio">
+                      <StatusBadge tone="info" className="px-2 text-caption font-semibold">
                         {entry.newCount} new
-                      </span>
+                      </StatusBadge>
                     )}
                     <span className="text-xs tabular-nums text-slate-400">{entry.count}</span>
                   </RowButton>

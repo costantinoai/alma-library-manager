@@ -16,7 +16,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -204,9 +204,9 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <span>{topics.length} canonical topic{topics.length !== 1 ? 's' : ''}</span>
-            <Badge variant="outline" className="text-xs">
+            <StatusBadge tone="outline" className="text-xs">
               {topics.reduce((sum, t) => sum + t.aliases.length, 0)} aliases
-            </Badge>
+            </StatusBadge>
           </div>
           <p className="text-xs text-slate-500">
             Topics are official source-backed concepts from OpenAlex and related scholarly metadata, with canonical names and aliases for cleanup.
@@ -275,9 +275,9 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                       >
                         {domain.name}
                       </RowButton>
-                      <Badge variant="secondary" className="text-xs">
+                      <StatusBadge tone="neutral" className="text-xs">
                         {domain.paper_count}
-                      </Badge>
+                      </StatusBadge>
                     </div>
                     {isDomainExpanded && domain.fields.length > 0 && (
                       <div className="ml-6 space-y-1 border-l border-[var(--color-border)] pl-3">
@@ -303,9 +303,9 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                                 >
                                   {field.name}
                                 </RowButton>
-                                <Badge variant="outline" className="text-xs">
+                                <StatusBadge tone="outline" className="text-xs">
                                   {field.paper_count}
-                                </Badge>
+                                </StatusBadge>
                               </div>
                               {isFieldExpanded && field.subfields.length > 0 && (
                                 <div className="ml-6 space-y-0.5 border-l border-slate-100 pl-3">
@@ -317,9 +317,9 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                                       >
                                         {subfield.name}
                                       </RowButton>
-                                      <Badge variant="outline" className="text-xs">
+                                      <StatusBadge tone="outline" className="text-xs">
                                         {subfield.paper_count}
-                                      </Badge>
+                                      </StatusBadge>
                                     </div>
                                   ))}
                                 </div>
@@ -374,14 +374,14 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium text-alma-800">{topic.canonical}</h3>
-                      <Badge variant="secondary">{topic.paper_count} papers</Badge>
+                      <StatusBadge tone="neutral">{topic.paper_count} papers</StatusBadge>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {topic.aliases.length === 0 ? (
                         <span className="text-xs text-slate-400">No aliases</span>
                       ) : (
                         topic.aliases.map((alias) => (
-                          <Badge key={alias} variant="outline" className="text-xs pr-1">
+                          <StatusBadge key={alias} tone="outline" className="text-xs pr-1">
                             <span>{alias}</span>
                             <Button variant="danger-muted" size="inline"
                               className="ml-1"
@@ -390,7 +390,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                             >
                               <X className="h-3 w-3" />
                             </Button>
-                          </Badge>
+                          </StatusBadge>
                         ))
                       )}
                     </div>

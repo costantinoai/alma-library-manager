@@ -425,7 +425,7 @@ function ProfileChip({
     tone === 'primary'
       ? 'border-accent bg-accent-soft text-alma-800'
       : tone === 'orcid'
-        ? 'border-warning-100 bg-warning-50/70 text-alma-800'
+        ? 'border-warning-700/20 bg-warning-700/[0.06] text-alma-800'
         : 'border-edge-2 bg-surface-2 text-alma-800'
   const dotTone =
     tone === 'primary' ? 'bg-accent' : tone === 'orcid' ? 'bg-warning-500' : 'bg-slate-400'

@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { IdentityChip, PaperCard } from '@/components/shared'
@@ -75,6 +75,7 @@ import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
 import { RowButton } from '@/components/ui/row-button'
+import { Alert } from '@/components/ui/alert'
 
 type ViewMode = 'cards' | 'compact'
 type CompactSortKey =
@@ -604,10 +605,10 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     "Added" column in the compact table. */}
                 {/* Notes */}
                 {like.notes && (
-                  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-warning-50 px-3 py-2">
+                  <Alert variant="warning" layout="row" className="mt-2 items-start gap-1.5 px-3 py-2">
                     <StickyNote className="mt-0.5 h-3 w-3 shrink-0 text-warning-500" />
                     <p className="text-xs text-warning-700">{like.notes}</p>
-                  </div>
+                  </Alert>
                 )}
                 {/* Quick actions */}
                 <div className="mt-2 flex items-center gap-1">
@@ -807,7 +808,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                       <p className="text-xs text-slate-500">{truncate(coll.description, 50)}</p>
                     )}
                   </div>
-                  <Badge variant="secondary">{coll.item_count} items</Badge>
+                  <StatusBadge tone="neutral">{coll.item_count} items</StatusBadge>
                 </RowButton>
               ))
             )}
@@ -844,7 +845,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-alma-800">{coll.name}</p>
                   </div>
-                  <Badge variant="secondary">{coll.item_count} items</Badge>
+                  <StatusBadge tone="neutral">{coll.item_count} items</StatusBadge>
                 </RowButton>
               ))
             )}

@@ -11,7 +11,7 @@ import {
 } from '@/api/client'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -209,7 +209,7 @@ export function ReadingListTab() {
                   <h3 className="text-lg font-semibold text-alma-800">{section.title}</h3>
                   <p className="text-sm text-slate-500">{section.description}</p>
                 </div>
-                <Badge variant="outline">{section.items.length}</Badge>
+                <StatusBadge tone="outline">{section.items.length}</StatusBadge>
               </div>
 
               {section.items.length === 0 ? (
@@ -238,11 +238,11 @@ export function ReadingListTab() {
                     }
                     const readingStatusSlot = (
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={paper.status === 'library' ? 'default' : 'secondary'}>
+                        <StatusBadge tone="neutral">
                           {readingListStatusLabel(paper)}
-                        </Badge>
-                        {paper.added_from && <Badge variant="outline">{formatPaperSource(paper.added_from)}</Badge>}
-                        {paper.added_at && <Badge variant="outline">Added {formatDate(paper.added_at)}</Badge>}
+                        </StatusBadge>
+                        {paper.added_from && <StatusBadge tone="outline">{formatPaperSource(paper.added_from)}</StatusBadge>}
+                        {paper.added_at && <StatusBadge tone="outline">Added {formatDate(paper.added_at)}</StatusBadge>}
                         <Select
                           value={(paper.reading_status as ReadingStatusValue | null) ?? 'clear'}
                           onValueChange={(value) => {

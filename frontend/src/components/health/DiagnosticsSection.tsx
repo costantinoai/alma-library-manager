@@ -12,6 +12,7 @@ import type { HealthDimension } from '@/api/client'
 import { sortBySeverity } from './healthFormat'
 import { DimensionStatusRow } from './DimensionStatusRow'
 import { SectionLabel } from './SectionLabel'
+import { StatusBadge } from '@/components/ui/status-badge'
 
 interface DiagnosticsSectionProps {
   dims: HealthDimension[]
@@ -48,13 +49,10 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
             All clear
           </span>
           {healthy.map((dim) => (
-            <span
-              key={dim.key}
-              className="inline-flex items-center gap-1.5 rounded-full border border-alma-800/10 bg-alma-800/[0.06] px-2.5 py-1 text-xs text-alma-700"
-            >
+            <StatusBadge key={dim.key} tone="neutral" className="gap-1.5 py-1">
               <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
               {dim.label}
-            </span>
+            </StatusBadge>
           ))}
         </div>
       ) : null}

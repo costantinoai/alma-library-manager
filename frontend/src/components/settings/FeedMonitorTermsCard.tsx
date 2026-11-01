@@ -35,7 +35,6 @@ import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { PageSection } from '@/components/ui/page-section'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
@@ -182,7 +181,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{formatMonitorTypeLabel(monitor.monitor_type)} Monitor</Badge>
+            <StatusBadge tone="outline">{formatMonitorTypeLabel(monitor.monitor_type)} Monitor</StatusBadge>
             <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
             <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
               <Checkbox
@@ -422,9 +421,9 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
         <div className="flex min-w-0 flex-1 items-start gap-2">
           <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
+            <StatusBadge tone="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
               <BookOpen className="mr-1 h-3 w-3" /> Journal
-            </Badge>
+            </StatusBadge>
             {needsResolution ? (
               <StatusBadge tone="warning">needs re-linking</StatusBadge>
             ) : (

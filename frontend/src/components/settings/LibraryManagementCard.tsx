@@ -32,6 +32,8 @@ import { formatBytes } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { parseAlmaTimestamp } from '@/lib/utils'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { Alert } from '@/components/ui/alert'
 
 export function LibraryManagementCard() {
   const queryClient = useQueryClient()
@@ -343,16 +345,12 @@ export function LibraryManagementCard() {
                 actions don't dominate the card. Two side-by-side rows
                 of (description, button) keep the buttons aligned to
                 the right edge instead of stacking under the prose. */}
-            <details className="group rounded-lg border border-critical-500 bg-critical-50">
-              <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="h-4 w-4 text-critical-600" />
-                  <h4 className="text-sm font-semibold text-critical-700">Danger Zone</h4>
-                </div>
-                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-critical-700 group-open:hidden">Show</span>
-                <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-critical-700 group-open:inline">Hide</span>
-              </summary>
-              <div className="space-y-3 border-t border-critical-100 px-4 pb-4 pt-3">
+            <DisclosurePanel
+              tone="danger"
+              title="Danger Zone"
+              icon={ShieldAlert}
+              contentClassName="space-y-3"
+            >
                 <p className="text-xs text-critical-700">
                   Destructive actions here are queued in Activity so you can track the job, but they
                   rewrite the database in place. Take a fresh backup first if you're not sure.
@@ -431,7 +429,7 @@ export function LibraryManagementCard() {
                       are not touched.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
-                  <div className="flex items-start gap-2 rounded-md border border-critical-100 bg-critical-50 p-3">
+                  <Alert variant="negative" layout="row" className="items-start">
                     <Checkbox
                       id="reset-also-feedback"
                       checked={alsoResetSignal}
@@ -453,7 +451,7 @@ export function LibraryManagementCard() {
                         preserved.
                       </p>
                     </div>
-                  </div>
+                  </Alert>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
@@ -466,8 +464,8 @@ export function LibraryManagementCard() {
                 </AlertDialogContent>
               </AlertDialog>
                 </div>
-              </div>
-            </details>
+              
+            </DisclosurePanel>
           </>
         )}
       </SettingsCard>

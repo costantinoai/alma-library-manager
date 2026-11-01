@@ -43,7 +43,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/LoadingState'
@@ -638,15 +637,15 @@ export function AuthorDetailPanel({
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {topTopics.length > 0 ? (
                       topTopics.map((t) => (
-                        <Badge key={t.term} variant="outline">
+                        <StatusBadge key={t.term} tone="outline">
                           {t.term} · {t.papers}
-                        </Badge>
+                        </StatusBadge>
                       ))
                     ) : isSuggestionOnly && suggestion && suggestion.shared_topics.length > 0 ? (
                       suggestion.shared_topics.map((t) => (
-                        <Badge key={t} variant="outline">
+                        <StatusBadge key={t} tone="outline">
                           {t}
-                        </Badge>
+                        </StatusBadge>
                       ))
                     ) : (
                       <span className="text-sm text-slate-400">No topic profile yet.</span>
@@ -772,12 +771,12 @@ export function AuthorDetailPanel({
                   <span className="ml-2 text-sm text-slate-500">Fetching from OpenAlex...</span>
                 </div>
               ) : openalexQuery.isError ? (
-                <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+                <Alert variant="negative" layout="row" className="px-3 py-4">
                   <AlertCircle className="h-4 w-4 text-critical-500" />
                   <span className="text-sm text-critical-700">
                     Failed to fetch OpenAlex bibliography. This author may not have an OpenAlex ID.
                   </span>
-                </div>
+                </Alert>
               ) : (openalexQuery.data?.results ?? []).length === 0 ? (
                 <div className="py-6 text-center">
                   <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
@@ -807,10 +806,10 @@ export function AuthorDetailPanel({
                 <span className="ml-2 text-sm text-slate-500">Loading publications...</span>
               </div>
             ) : pubsQuery.isError ? (
-              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+              <Alert variant="negative" layout="row" className="px-3 py-4">
                 <AlertCircle className="h-4 w-4 text-critical-500" />
                 <span className="text-sm text-critical-700">Failed to load publications.</span>
-              </div>
+              </Alert>
             ) : publications.length === 0 ? (
               <div className="py-6 text-center">
                 <BookOpen className="mx-auto h-8 w-8 text-slate-300" />

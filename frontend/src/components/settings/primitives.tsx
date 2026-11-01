@@ -179,7 +179,7 @@ export function ToggleRow({
     <label
       className={cn(
         'flex items-center justify-between gap-3 rounded-lg border px-3 py-2',
-        isWarning ? 'border-warning-500/40 bg-warning-50' : 'border-[var(--color-border)]',
+        isWarning ? 'border-warning-500/40 bg-warning-700/[0.06]' : 'border-[var(--color-border)]',
         disabled && 'opacity-70',
         className,
       )}

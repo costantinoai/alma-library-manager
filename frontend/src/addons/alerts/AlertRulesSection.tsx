@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -64,6 +64,7 @@ import {
   type RuleType,
 } from './ruleFormLogic'
 import { RowButton } from '@/components/ui/row-button'
+import { Alert as AlertBox } from '@/components/ui/alert'
 
 /** Sentinel for the "type an ID by hand" entry in the author Select —
  * Radix forbids empty-string item values. */
@@ -455,10 +456,10 @@ function RuleFormDialog({
             />
 
             {isError && (
-              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertBox variant="negative" layout="row">
                 <AlertCircle className="h-4 w-4 text-critical-500" />
                 <span className="text-sm text-critical-700">{errorMessage}</span>
-              </div>
+              </AlertBox>
             )}
           </form>
         </Form>
@@ -685,7 +686,7 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h3 className="font-medium text-alma-800">{rule.name}</h3>
-                      {!rule.enabled && <Badge variant="secondary">Disabled</Badge>}
+                      {!rule.enabled && <StatusBadge tone="neutral">Disabled</StatusBadge>}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <RuleTypeBadge type={rule.rule_type} />
@@ -695,10 +696,10 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
                           title="Rules only run inside a digest. Click to open Digests and assign it."
                           className="w-auto"
                         >
-                          <Badge variant="warning">
+                          <StatusBadge tone="warning">
                             <AlertCircle className="mr-1 h-3 w-3" />
                             Not in any digest
-                          </Badge>
+                          </StatusBadge>
                         </RowButton>
                       )}
                     </div>

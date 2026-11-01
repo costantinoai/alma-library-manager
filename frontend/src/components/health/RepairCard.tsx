@@ -50,6 +50,7 @@ import {
 import { DimensionStatusRow } from './DimensionStatusRow'
 import { RepairConfirmDialog } from './RepairConfirmDialog'
 import { Button } from '@/components/ui/button'
+import { Alert } from '@/components/ui/alert'
 
 interface RepairCardProps {
   op: MaintenanceOperation
@@ -228,20 +229,20 @@ export function RepairCard({
       {noEligibleWork ? <p className="text-xs text-slate-500">No eligible work for this repair in the selected scope.</p> : null}
 
       {op.blocked_by.length > 0 ? (
-        <p className="rounded-sm border border-warning-100 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+        <Alert variant="warning" layout="row" className="block px-3 py-2 text-xs">
           Prerequisites unresolved:{' '}
           {op.blocked_by.map((item) => `${item.label} (${item.pending ?? 'unknown'})${item.assessment_error ? `: ${item.assessment_error.message} Cause: ${item.assessment_error.cause}. ${item.assessment_error.recovery}` : ''}`).join(', ')}
           {prerequisiteUnknown
             ? ' — re-assess Health before running this repair.'
             : ' — you can run this now, but results may be incomplete until it finishes.'}
-        </p>
+        </Alert>
       ) : null}
 
       {quotaBlocked ? (
-        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+        <Alert variant="negative" layout="row" className="items-start px-3 py-2 text-xs">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{quota?.reason ?? 'Provider quota cannot cover this run.'}</span>
-        </p>
+        </Alert>
       ) : quota && pending != null ? (
         <p className="text-xs text-slate-500">
           Planned cost: {quota.required.toLocaleString()} {quota.provider === 'openalex' ? 'OpenAlex credits' : quota.unit}
@@ -250,7 +251,7 @@ export function RepairCard({
       ) : null}
 
       {op.availability_blocker ? (
-        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+        <Alert variant="negative" layout="row" className="items-start px-3 py-2 text-xs">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
             {op.availability_blocker.message}{' '}
@@ -259,7 +260,7 @@ export function RepairCard({
             </a>
             {' '}Owner: {op.availability_blocker.owner}.
           </span>
-        </p>
+        </Alert>
       ) : null}
 
       {/* Status rows — the gaps this op repairs (click → affected papers). */}

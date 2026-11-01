@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { Alert } from '@/components/ui/alert'
 
 interface OpenAlexCandidate {
   openalex_id: string
@@ -99,7 +100,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
   return (
     <div className="space-y-4">
       {candidateQuery.data?.timed_out ? (
-        <div className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-3 py-2">
+        <Alert variant="warning" layout="row" className="justify-between gap-3 px-2 py-1.5">
           <p className="text-xs text-warning-700">
             Online candidate search timed out (a source is likely rate-limiting).
             No candidates this time — retry in a moment.
@@ -115,7 +116,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
             ) : null}
             Retry
           </Button>
-        </div>
+        </Alert>
       ) : null}
       <section>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -197,9 +198,9 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
             <>
               <p className="pt-1 text-xs font-medium text-warning-700">Manual scrape results</p>
               {manualScholarCandidates.slice(0, 3).map((c) => (
-                <div
+                <Alert variant="warning" layout="row"
                   key={`manual-${c.scholar_id}`}
-                  className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-2 py-1.5"
+                  className="justify-between gap-3 px-2 py-1.5"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium text-slate-700">
@@ -212,7 +213,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
                   <Button size="sm" variant="outline" onClick={() => setScholarId(c.scholar_id)}>
                     Use
                   </Button>
-                </div>
+                </Alert>
               ))}
             </>
           ) : null}

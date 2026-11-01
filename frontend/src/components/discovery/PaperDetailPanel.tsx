@@ -372,7 +372,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <DropdownMenuItem
                     onClick={() => setRemoveConfirmOpen(true)}
                     disabled={!isLibraryPaper}
-                    className="text-critical-700 focus:bg-critical-50 focus:text-critical-700"
+                    className="text-critical-700 focus:bg-critical-700/10 focus:text-critical-700"
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove from Library

@@ -29,6 +29,7 @@ import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 import { RowButton } from '@/components/ui/row-button'
+import { Alert } from '@/components/ui/alert'
 
 /**
  * Settings page — two-column layout (sticky TOC + scroll-spy on the left,
@@ -216,10 +217,10 @@ export function SettingsPage() {
   }
   if (settingsQuery.isError) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-8">
+      <Alert variant="negative" layout="row" className="justify-center px-4 py-8">
         <AlertCircle className="h-5 w-5 text-critical-500" />
         <span className="text-sm text-critical-700">Failed to load settings. Is the backend running?</span>
-      </div>
+      </Alert>
     )
   }
 

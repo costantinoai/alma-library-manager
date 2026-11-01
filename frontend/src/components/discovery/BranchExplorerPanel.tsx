@@ -15,7 +15,6 @@ import {
 
 import { getApiErrorMessage, type Lens, type LensBranchItem } from '@/api/client'
 import { useBranchPreview } from '@/hooks/useBranchPreview'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConceptCallout } from '@/components/ui/concept-callout'
@@ -235,9 +234,9 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 />
               </div>
               {coldStart?.state ? (
-                <Badge variant="outline" className="capitalize">
+                <StatusBadge tone="outline" className="capitalize">
                   Topic cold start: {String(coldStart.state).replace(/_/g, ' ')}
-                </Badge>
+                </StatusBadge>
               ) : null}
             </div>
             {!bare && (
@@ -610,7 +609,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                       <span className="hidden sm:inline">·</span>
                       <span>{branch.branch_score.toFixed(2)}</span>
                       {localState !== 'normal' && (
-                        <Badge size="sm" className="ml-1 capitalize">{localState}</Badge>
+                        <StatusBadge size="sm" className="ml-1 capitalize">{localState}</StatusBadge>
                       )}
                       <span className="ml-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 group-open:hidden">+</span>
                       <span className="ml-1 hidden text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 group-open:inline">−</span>
@@ -643,10 +642,10 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                     })()}
 
                     <div className="flex flex-wrap gap-1.5 text-[11px]">
-                      <Badge variant="secondary">{branch.seed_count} seeds</Badge>
-                      <Badge variant="outline">score {branch.branch_score.toFixed(2)}</Badge>
+                      <StatusBadge tone="neutral">{branch.seed_count} seeds</StatusBadge>
+                      <StatusBadge tone="outline">score {branch.branch_score.toFixed(2)}</StatusBadge>
                       {(branch.recommendation_count ?? 0) > 0 && (
-                        <Badge variant="outline">{branch.recommendation_count} outcomes</Badge>
+                        <StatusBadge tone="outline">{branch.recommendation_count} outcomes</StatusBadge>
                       )}
                     </div>
 
@@ -673,7 +672,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         </div>
                         <div className="flex flex-wrap gap-1">
                           {branch.core_topics.slice(0, 5).map((topic) => (
-                            <Badge key={`${branch.id}-core-${topic}`} className="bg-alma-folio-soft text-alma-800">{topic}</Badge>
+                            <StatusBadge key={`${branch.id}-core-${topic}`} className="bg-alma-folio-soft text-alma-800">{topic}</StatusBadge>
                           ))}
                         </div>
                       </div>
@@ -683,7 +682,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         </div>
                         <div className="flex flex-wrap gap-1">
                           {branch.explore_topics.slice(0, 5).map((topic) => (
-                            <Badge key={`${branch.id}-explore-${topic}`} className="bg-gold-100 text-gold-700">{topic}</Badge>
+                            <StatusBadge key={`${branch.id}-explore-${topic}`} className="bg-gold-100 text-gold-700">{topic}</StatusBadge>
                           ))}
                         </div>
                       </div>
@@ -717,11 +716,11 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         Clear
                       </Button>
                       {branch.is_active === false ? (
-                        <Badge variant="outline" className="ml-auto text-[10px]">inactive after controls</Badge>
+                        <StatusBadge tone="outline" className="ml-auto text-[10px]">inactive after controls</StatusBadge>
                       ) : (
-                        <Badge variant="outline" className="ml-auto text-[10px]">
+                        <StatusBadge tone="outline" className="ml-auto text-[10px]">
                           <Flame className="mr-1 h-3 w-3" /> active in refresh
-                        </Badge>
+                        </StatusBadge>
                       )}
                     </div>
                   </div>

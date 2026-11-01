@@ -376,3 +376,38 @@ describe('button-guard', () => {
     expect(scanButtons()).toEqual([])
   })
 })
+
+/* ───────────────────────────────────────
+ * primitive-guard — a state box is an Alert, a pill is a StatusBadge, a fold is
+ * a DisclosurePanel. The Activity family keeps its own quiet log tints, on the
+ * one documented exception. `BranchExplorerPanel` loses its raw fold in G3.6.
+ * ─────────────────────────────────────── */
+const ACTIVITY = 'components/ActivityPanel.tsx'
+const FOLD_OWNERS = new Set(['components/ui/disclosure-panel.tsx', ACTIVITY, 'components/discovery/BranchExplorerPanel.tsx'])
+
+function scanPrimitives(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) return
+      const at = `${rel}:${i + 1}`
+      if (/<Badge\b/.test(line)) hits.push(`${at}  <Badge>, use StatusBadge`)
+      if (/<details\b/.test(line) && !FOLD_OWNERS.has(rel)) hits.push(`${at}  <details>, use DisclosurePanel`)
+      if (/\bbg-(critical|warning|success|info)-(50|100)\b/.test(line) && !rel.startsWith('components/ui/') && rel !== ACTIVITY) {
+        hits.push(`${at}  state box, use Alert`)
+      }
+      if (/rounded-full.*\bbg-(critical|warning|success|info|alma|alma-folio)-\d+\/.*\bpx-/.test(line) && !rel.startsWith('components/ui/')) {
+        hits.push(`${at}  hand pill, use StatusBadge or SignalChip`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('primitive-guard', () => {
+  it('state boxes, pills and folds go through their primitives', () => {
+    expect(scanPrimitives()).toEqual([])
+  })
+})

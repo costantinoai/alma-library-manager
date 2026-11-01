@@ -148,7 +148,7 @@ function TierHint({ items }: { items: string[] }) {
 // while the section is collapsed.
 // ---------------------------------------------------------------------------
 
-type EnvVerdictTone = 'success' | 'warning' | 'destructive' | 'info'
+type EnvVerdictTone = 'success' | 'warning' | 'negative' | 'info'
 
 interface EnvVerdict {
   tone: EnvVerdictTone
@@ -168,7 +168,7 @@ function computeEnvVerdict(
 ): EnvVerdict {
   if (missingCount > 0) {
     return {
-      tone: 'destructive',
+      tone: 'negative',
       badgeTone: 'negative',
       badgeLabel: `${missingCount} missing`,
       icon: AlertCircle,

@@ -22,7 +22,6 @@ import type {
   TopicDriftData,
   WeeklyBriefData,
 } from '@/api/client'
-import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -199,9 +198,9 @@ export function InsightsReportsTab({
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">Trending Topics</h4>
                 <div className="flex flex-wrap gap-2">
                   {weeklyBrief.trending_topics.map((t) => (
-                    <Badge key={t.topic} variant="secondary">
+                    <StatusBadge key={t.topic} tone="neutral">
                       {t.topic} ({t.papers})
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
               </div>
@@ -211,9 +210,9 @@ export function InsightsReportsTab({
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">Active Authors</h4>
                 <div className="flex flex-wrap gap-2">
                   {weeklyBrief.active_authors.map((a) => (
-                    <Badge key={a.name} variant="outline">
+                    <StatusBadge key={a.name} tone="outline">
                       {a.name} ({a.new_papers} new)
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
               </div>

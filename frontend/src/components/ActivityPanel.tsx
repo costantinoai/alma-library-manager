@@ -15,7 +15,6 @@ import {
   X,
   Square,
 } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -1392,9 +1391,9 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             <Activity className="h-4 w-4 text-slate-500" />
             <span className="text-sm font-medium text-slate-700">Activity</span>
             {activeOps.length > 0 && (
-              <Badge className="bg-slate-700 text-on-fill text-xs">
+              <StatusBadge className="bg-slate-700 text-on-fill text-xs">
                 {activeOps.length} running
-              </Badge>
+              </StatusBadge>
             )}
           </div>
           {isOpen ? (
@@ -1435,9 +1434,9 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
                   <Activity className="h-3.5 w-3.5" />
                   Operations
                   {activeOps.length > 0 && (
-                    <Badge className="ml-1 bg-slate-700 text-on-fill text-[10px] px-1.5 py-0">
+                    <StatusBadge className="ml-1 bg-slate-700 text-on-fill text-[10px] px-1.5 py-0">
                       {activeOps.length}
-                    </Badge>
+                    </StatusBadge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger

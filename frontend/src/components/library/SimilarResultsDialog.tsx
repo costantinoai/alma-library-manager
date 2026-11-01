@@ -10,7 +10,7 @@ import {
 import { DiscoverIcon } from '@/components/ui/brand-icons'
 import { type SimilarityResultItem, type SimilarityResponse } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import {
   Dialog,
   DialogContent,
@@ -51,15 +51,15 @@ export function SimilarResultsDialog({
             <Sparkles className="h-5 w-5 text-accent" />
             Similar Papers
             {data && (
-              <Badge variant="secondary" className="ml-2">
+              <StatusBadge tone="neutral" className="ml-2">
                 {data.results.length} found
-              </Badge>
+              </StatusBadge>
             )}
             {data?.cached && (
-              <Badge variant="outline" className="ml-1 text-xs">
+              <StatusBadge tone="outline" className="ml-1 text-xs">
                 <Database className="mr-1 h-3 w-3" />
                 Cached
-              </Badge>
+              </StatusBadge>
             )}
           </DialogTitle>
           <DialogDescription>
@@ -101,9 +101,9 @@ export function SimilarResultsDialog({
                         <span className="text-xs font-mono text-slate-500">
                           {Math.round(item.score)}%
                         </span>
-                        <Badge variant="outline" className="text-xs">
+                        <StatusBadge tone="outline" className="text-xs">
                           {item.source_type}
-                        </Badge>
+                        </StatusBadge>
                         {item.year && (
                           <span className="text-xs text-slate-400">{item.year}</span>
                         )}

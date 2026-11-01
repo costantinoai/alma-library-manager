@@ -72,7 +72,6 @@ import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
 import { PageSection } from '@/components/ui/page-section'
@@ -962,9 +961,9 @@ export function DiscoveryPage() {
         }) : undefined}
       >
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <Badge variant="outline" size="sm">
+          <StatusBadge tone="outline" size="sm">
             {sourceType.replace(/_/g, ' ')}
-          </Badge>
+          </StatusBadge>
         </div>
       </PaperCard>
     )
@@ -1258,9 +1257,9 @@ export function DiscoveryPage() {
                   </p>
                 </div>
                 {selectedLensSummary?.recommendation_mode ? (
-                  <Badge variant="outline" size="sm">
+                  <StatusBadge tone="outline" size="sm">
                     {String(selectedLensSummary.recommendation_mode)}
-                  </Badge>
+                  </StatusBadge>
                 ) : null}
               </div>
 

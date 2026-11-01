@@ -26,6 +26,8 @@ export interface DisclosurePanelProps {
   onOpenChange?: (open: boolean) => void
   children: ReactNode
   className?: string
+  /** `danger` marks a fold of irreversible actions. */
+  tone?: 'default' | 'danger'
   /** Padding override for the revealed region (default `p-4`). */
   contentClassName?: string
   /** Onboarding-tour anchor (`components/onboarding/tours.ts`). */
@@ -65,6 +67,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
       children,
       className,
       contentClassName,
+      tone = 'default',
       ...rest
     },
     ref,
@@ -75,11 +78,16 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
     const pageTheme = usePageTheme()
     const [internalOpen, setInternalOpen] = useState(defaultOpen)
     const isOpen = open ?? internalOpen
+    const danger = tone === 'danger'
 
     return (
       <Surface
         ref={ref}
-        className={cn('overflow-hidden rounded-sm shadow-paper-sm', className)}
+        className={cn(
+          'overflow-hidden rounded-sm shadow-paper-sm',
+          danger && 'border-critical-500 bg-critical-50',
+          className,
+        )}
         {...rest}
       >
         <details
@@ -96,7 +104,9 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
                 <span
                   className={cn(
                     'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
-                    pageTheme
+                    danger
+                      ? 'bg-critical-700/10 text-critical-700'
+                      : pageTheme
                       ? `${pageTheme.medallion} ${pageTheme.icon}`
                       : 'bg-accent-soft text-alma-folio',
                   )}
@@ -106,7 +116,12 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
               )}
               <div className="flex min-w-0 flex-col gap-1.5">
                 <div className="flex flex-col gap-0.5">
-                  <span className="font-brand text-sm font-semibold text-alma-800">
+                  <span
+                    className={cn(
+                      'font-brand text-sm font-semibold',
+                      danger ? 'text-critical-700' : 'text-alma-800',
+                    )}
+                  >
                     {title}
                   </span>
                   {description && (
@@ -116,14 +131,20 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
                 {meta}
               </div>
             </div>
-            <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+            <span
+              className={cn(
+                'shrink-0 text-[11px] font-bold uppercase tracking-[0.16em]',
+                danger ? 'text-critical-700' : 'text-slate-500',
+              )}
+            >
               {/* Local state avoids an open ancestor changing a nested fold's label. */}
               {isOpen ? 'Hide' : 'Show'}
             </span>
           </summary>
           <div
             className={cn(
-              'border-t border-[var(--color-border)] p-4',
+              'border-t p-4',
+              danger ? 'border-critical-100' : 'border-[var(--color-border)]',
               contentClassName,
             )}
           >

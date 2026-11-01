@@ -36,6 +36,7 @@ import {
   type MaintenanceOperation,
   type MaintenanceRunRequest,
 } from '@/api/client'
+import { Alert } from '@/components/ui/alert'
 
 /** Source/confidence badge so the user knows how much to trust each pair:
  *  ORCID is authoritative; a name match is a heuristic to review (the weaker the
@@ -136,7 +137,7 @@ export function RepairConfirmDialog({
           <DialogDescription className="text-slate-600">{op.description}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2 rounded-sm border border-warning-100 bg-warning-50 p-3 text-sm text-warning-800">
+        <Alert variant="warning" layout="row" className="block space-y-2 text-sm">
           <p className="font-medium">
             This is a destructive operation — it merges or removes rows and is not
             reversed automatically.
@@ -153,7 +154,7 @@ export function RepairConfirmDialog({
             <p>{planQuery.error?.message ?? "Couldn't compute the plan. Close this dialog and try again."}</p>
           )}
           {plan?.eta ? <EtaHint eta={plan.eta} /> : null}
-        </div>
+        </Alert>
 
         {/* Merge review: the exact pairs (primary ← duplicate · source/confidence ·
             papers reassigned). Merge or REJECT each individually; reject is

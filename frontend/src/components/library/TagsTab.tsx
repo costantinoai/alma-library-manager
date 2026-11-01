@@ -40,6 +40,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'
 import { RowButton } from '@/components/ui/row-button'
 import { cn } from '@/lib/utils'
+import { Alert } from '@/components/ui/alert'
 
 export function TagsTab() {
   const [tuneOpen, setTuneOpen] = useState(false)
@@ -298,10 +299,10 @@ export function TagsTab() {
             </div>
           </div>
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <Alert variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to create tag.</span>
-            </div>
+            </Alert>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>

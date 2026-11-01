@@ -29,7 +29,6 @@ import {
 } from 'recharts'
 
 import type { AIStatus, InsightsData, InsightsDrilldownFilter } from '@/api/client'
-import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -566,9 +565,9 @@ export function InsightsOverviewTab({
                       <p className="font-brand font-semibold text-alma-800 tabular-nums">
                         {formatNumber(embeddings.total_vectors)} vectors
                       </p>
-                      <Badge variant="secondary" className="text-xs">
+                      <StatusBadge tone="neutral" className="text-xs">
                         {embeddings.coverage_pct}% coverage
-                      </Badge>
+                      </StatusBadge>
                     </div>
                     <p className="mt-1 text-xs text-slate-400">Model: {embeddings.model}</p>
                     <Progress

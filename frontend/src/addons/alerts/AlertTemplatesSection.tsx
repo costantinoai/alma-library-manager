@@ -3,7 +3,7 @@ import { AlertTriangle, BellRing, FolderOpen, GitBranch, Loader2, Rss, UserRound
 
 import { applyAlertTemplate, getAlertTemplates, type AlertAutomationTemplate } from './api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast, errorToast} from '@/hooks/useToast'
@@ -90,16 +90,16 @@ export function AlertTemplatesSection() {
                     </div>
                     <p className="text-sm text-slate-500">{template.description}</p>
                   </div>
-                  <Badge variant="secondary">{template.category.replace(/_/g, ' ')}</Badge>
+                  <StatusBadge tone="neutral">{template.category.replace(/_/g, ' ')}</StatusBadge>
                 </div>
                 {template.rationale && (
                   <p className="mt-3 rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">{template.rationale}</p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.entries(template.metrics).map(([key, value]) => (
-                    <Badge key={`${template.key}-${key}`} variant="outline" className="text-[11px]">
+                    <StatusBadge key={`${template.key}-${key}`} tone="outline" className="text-[11px]">
                       {key.replace(/_/g, ' ')}: {String(value)}
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
                 <div className="mt-4 flex items-center justify-between gap-3">

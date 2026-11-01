@@ -57,6 +57,7 @@ import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { freshnessNote } from '@/components/health/healthFormat'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { Alert } from '@/components/ui/alert'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
@@ -454,7 +455,7 @@ export function HealthPage() {
           one; the tabs below carry the WORK (what to fix / what already ran). */}
       <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm sm:p-5">
         {snapshotQuery.isError ? (
-          <div className="flex items-center justify-between gap-3 rounded-sm border border-critical-100 bg-critical-50 p-3">
+          <Alert variant="negative" layout="row" className="justify-between gap-3">
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-5 w-5 shrink-0 text-critical-600" />
               <p className="text-sm text-critical-700">Couldn't load the health snapshot.</p>
@@ -462,7 +463,7 @@ export function HealthPage() {
             <Button size="sm" variant="outline" onClick={() => snapshotQuery.refetch()}>
               Retry
             </Button>
-          </div>
+          </Alert>
         ) : snapshotQuery.isLoading ? (
           <div className="h-24 animate-pulse rounded-sm bg-control-quiet" />
         ) : snapshot ? (
@@ -583,7 +584,7 @@ export function HealthPage() {
           "healthy / no repairs". The read-only diagnostics above still render —
           a broken repair plan never blocks the snapshot. */}
       {operationsQuery.isError ? (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-critical-100 bg-critical-50 p-4">
+        <Alert variant="negative" layout="row" className="flex-wrap justify-between gap-3 p-4">
           <div className="flex items-center gap-3">
             <AlertTriangle className="h-5 w-5 shrink-0 text-critical-600" />
             <div>
@@ -598,7 +599,7 @@ export function HealthPage() {
           <Button size="sm" variant="outline" onClick={() => operationsQuery.refetch()}>
             Retry
           </Button>
-        </section>
+        </Alert>
       ) : operations.length > 0 ? (
         stageGroups.map((group) => (
           <RepairGroup key={group.key} title={group.label} ops={group.ops} {...groupProps} />

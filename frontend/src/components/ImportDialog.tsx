@@ -25,7 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -48,6 +48,7 @@ import { CollectionNameField } from '@/components/shared/CollectionNameField'
 import { describeJobLaunch } from '@/lib/activity'
 import { RowButton } from '@/components/ui/row-button'
 import { cn } from '@/lib/utils'
+import { Alert } from '@/components/ui/alert'
 
 type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -239,10 +240,10 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {/* Result */}
@@ -476,7 +477,7 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
                   <FolderOpen className="h-4 w-4" />
                   {c.name}
                 </span>
-                <Badge variant="secondary">{c.num_items}</Badge>
+                <StatusBadge tone="neutral">{c.num_items}</StatusBadge>
               </RowButton>
             ))}
             {collections.length === 0 && (
@@ -497,10 +498,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {/* Result */}
@@ -620,10 +621,10 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
       {preflight && <ImportPreflightDisplay preflight={preflight} />}
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {queued && <ImportQueuedDisplay envelope={queued} />}
@@ -672,7 +673,7 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
           <CheckCircle className="h-5 w-5 text-alma-700" />
           <span className="font-medium text-alma-900">Import review ready</span>
         </div>
-        <Badge variant="secondary">{preflight.valid_entries} entries</Badge>
+        <StatusBadge tone="neutral">{preflight.valid_entries} entries</StatusBadge>
       </div>
       <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
         <div>DOI-backed: <span className="font-medium">{preflight.identifiers.doi}</span></div>

@@ -42,6 +42,8 @@ const statusBadgeVariants = cva(
         // chips failed. Translucent ink reads as a distinct object at every
         // elevation (card, panel, popover) without needing a per-surface fill.
         neutral: 'border border-alma-800/10 bg-alma-800/[0.06] text-slate-700',
+        // A label or tag: a stronger hairline and a fainter fill than `neutral`.
+        outline: 'border border-alma-800/20 bg-alma-800/[0.03] text-slate-700',
         // Semantic valence — a calm translucent wash of the matching token.
         // Signal, not alarm: these sit on off-white paper surfaces.
         positive: 'border border-transparent bg-success-700/10 text-success-800',

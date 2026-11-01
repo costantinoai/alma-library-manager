@@ -20,6 +20,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 
 import { JargonHint } from '@/components/shared/JargonHint'
 import type { HealthSnapshot } from '@/api/client'
+import { StatusBadge } from '@/components/ui/status-badge'
 
 // Severity → ribbon segment color. Muted weights keep it a calm vitals strip,
 // not an alarm board.
@@ -86,15 +87,9 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
             description="Share of papers that have a vector for the active embedding model. Discovery similarity need high coverage; readiness flips on at 80%."
           />
         </span>
-        <span
-          className={
-            totals.embeddings_ready
-              ? 'rounded-full bg-success-700/10 px-2 py-0.5 text-[10px] font-medium text-success-700'
-              : 'rounded-full bg-warning-700/10 px-2 py-0.5 text-[10px] font-medium text-warning-700'
-          }
-        >
+        <StatusBadge tone={totals.embeddings_ready ? 'positive' : 'warning'} size="sm">
           {totals.embeddings_ready ? 'ready' : 'ready at ≥80%'}
-        </span>
+        </StatusBadge>
       </div>
     </div>
   )
