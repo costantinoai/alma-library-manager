@@ -131,7 +131,7 @@ export function OpenAlexSection({
             void handleSave()
           }}
         >
-          <ConnectionLine id="openalex" />
+          <ConnectionLine id="openalex" badged />
 
           <FormField
             control={form.control}

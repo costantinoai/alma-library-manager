@@ -61,8 +61,20 @@ export function SectionStatus({ section }: { section: string }) {
   )
 }
 
-/** State, the sentence behind it, when it was last checked, what to do, Check. */
-export function ConnectionLine({ id, named }: { id: string; named?: boolean }) {
+/**
+ * State, the sentence behind it, when it was last checked, what to do, Check.
+ * `badged` says the row above already wears this state: the line then carries
+ * only the sentence, so one status is never said twice.
+ */
+export function ConnectionLine({
+  id,
+  named,
+  badged,
+}: {
+  id: string
+  named?: boolean
+  badged?: boolean
+}) {
   const record = useConnection(id)
   const check = useCheckMutation()
   if (!record) return null
@@ -87,11 +99,13 @@ export function ConnectionLine({ id, named }: { id: string; named?: boolean }) {
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             {named && <span className="text-sm font-medium text-slate-700">{record.label}</span>}
-            <StatusPill
-              severity={checking ? 'info' : record.severity}
-              label={checking ? 'Checking' : record.status_label}
-              checking={checking}
-            />
+            {!badged && (
+              <StatusPill
+                severity={checking ? 'info' : record.severity}
+                label={checking ? 'Checking' : record.status_label}
+                checking={checking}
+              />
+            )}
             {record.source === 'environment' && (
               <span className="text-xs text-slate-500">Set in the environment, which wins over this page.</span>
             )}

@@ -187,7 +187,7 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
 
   return (
     <div className="mt-3 ml-10 space-y-4 border-l border-divider pl-4">
-      <ConnectionLine id={plugin.id} />
+      <ConnectionLine id={plugin.id} badged />
       {configQuery.isError && (
         <p className="text-xs text-critical-600">
           Configuration unavailable: {getApiErrorMessage(configQuery.error)}

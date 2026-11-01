@@ -169,7 +169,12 @@ landing page. Rules of thumb:
   `ConceptCallout` and `MetricTile` drop their chrome, and a section is a
   heading and at most one hairline. A surface stays where it does work: an
   input, a popover, a dialog, a clickable object in a list, a danger zone.
-  Pass `level` or `interactive` to keep a box on purpose.
+  Pass `level` or `interactive` to keep a box on purpose; `PaperCard` names
+  its level, because a paper is an object in a list at any depth. A portal
+  that draws its own card resets the host with `SurfaceProvider level={0}`.
+* `DataTable`: `fit` shares the frame's width by each column's `size`,
+  `defaultHidden` keeps minor columns in the Columns menu, and
+  `meta.stickyRight` pins a column from `lg` up.
 * Light only. Gold is trim, never a button. Activity's cool ladder is the
   one documented exception to the surface rule.
 * Tabular numerics where it matters (counts, scores, citations).

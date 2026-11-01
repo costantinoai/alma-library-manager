@@ -782,7 +782,7 @@ function SavedCompactTable({
       id: 'title',
       accessorKey: 'title',
       header: 'Title',
-      size: 320,
+      size: 300,
       // Custom flex layout (title text + trailing external-link icon) — we
       // manage truncation here via `min-w-0` on the inner span so the
       // shrink behaviour is correct inside the flex row.
@@ -811,7 +811,7 @@ function SavedCompactTable({
       id: 'authors',
       accessorKey: 'authors',
       header: 'Authors',
-      size: 200,
+      size: 170,
       cell: ({ row }) => (
         <span className="text-slate-600" title={row.original.authors}>
           {formatAuthorNames(row.original.authors)}
@@ -840,7 +840,7 @@ function SavedCompactTable({
       id: 'rating',
       accessorFn: (row) => row.rating ?? 0,
       header: 'Rating',
-      size: 130,
+      size: 120,
       meta: { cellOverflow: 'none' },
       cell: ({ row }) => (
         <div onClick={(e) => e.stopPropagation()}>
@@ -928,7 +928,7 @@ function SavedCompactTable({
     {
       id: 'reading',
       header: 'Read',
-      size: 140,
+      size: 184,
       enableSorting: false,
       meta: { cellOverflow: 'none' },
       cell: ({ row }) => (
@@ -937,7 +937,7 @@ function SavedCompactTable({
             value={row.original.reading_status || 'not_on_list'}
             onValueChange={(value) => onReadingStatus(row.original.id, readingStatusFromSelect(value))}
           >
-            <SelectTrigger className="h-8 text-xs">
+            <SelectTrigger className="h-8 whitespace-nowrap text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -955,7 +955,8 @@ function SavedCompactTable({
       size: 176,
       enableSorting: false,
       enableHiding: false,
-      meta: { cellOverflow: 'none' },
+      enableResizing: false,
+      meta: { cellOverflow: 'none', stickyRight: true },
       cell: ({ row }) => {
         const reaction = reactionFromRating(row.original.rating)
         return (
@@ -1017,7 +1018,11 @@ function SavedCompactTable({
     <DataTable<Publication>
       data={visibleLikes}
       columns={columns}
-      storageKey="library.saved.compact"
+      // New key: stored widths and visibility from the content-sized table
+      // would keep it 3,300 px wide for every returning reader.
+      storageKey="library.saved.fit"
+      fit
+      defaultHidden={['journal', 'signal', 'cited_by_count', 'added_from', 'added_at']}
       getRowId={(row) => row.id}
       sorting={sorting}
       onSortingChange={setSorting}
