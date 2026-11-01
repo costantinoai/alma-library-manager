@@ -30,7 +30,7 @@ That card controls three things:
 |---|---|---|
 | `none` | Disables live embedding generation. | You want the lightest possible install. |
 | `local` | Uses local SPECTER2 compute. | Best quality without a cloud dependency. |
-| `openai` | Uses OpenAI for embedding tasks. | You already have an OpenAI key and prefer cloud embedding. |
+| `openai` | Uses OpenAI for embedding tasks. Listed while the OpenAI add-on is on. | You already have an OpenAI key and prefer cloud embedding. |
 
 Separately from that selector, ALMa can also fetch
 **Semantic Scholar's pre-computed `specter_v2` vectors** in bulk. That
@@ -61,9 +61,12 @@ which Python installation should be probed and used.
 
 If you want the `openai` provider:
 
-1. add `OPENAI_API_KEY` to `.env`, or set it through the Settings UI
-2. choose `openai` as the provider
-3. use **Recheck** to refresh the status card
+1. switch OpenAI on in **Settings → Add-ons**
+2. add `OPENAI_API_KEY` to `.env`, or set it through the Settings UI
+3. choose `openai` as the provider
+4. use **Recheck** to refresh the status card
+
+The provider needs the `openai` Python package in the selected environment.
 
 OpenAI is optional and currently used for embeddings only in the public
 build.

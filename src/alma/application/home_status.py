@@ -404,22 +404,49 @@ def _embeddings(db: sqlite3.Connection) -> dict[str, Any]:
     missing = [name for name in LOCAL_AI_MODULES if not module_available(name)]
     local_ready = not missing
 
-    hosted_ready = False
+    from alma.ai.providers import hosted_provider_label, switched_off_provider
+
+    hosted_label = None
     if not local_ready:
         try:
-            from alma.ai.providers import OpenAIProvider
-
-            hosted_ready = OpenAIProvider().is_available()
+            hosted_label = hosted_provider_label()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("OpenAI availability check failed: %s", exc)
+            logger.debug("Hosted provider availability check failed: %s", exc)
+    hosted_ready = hosted_label is not None
 
-    label = "SPECTER2" if local_ready else ("OpenAI embeddings" if hosted_ready else "Embeddings")
+    label = "SPECTER2" if local_ready else (hosted_label or "Embeddings")
 
     papers = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}") or 0)
-    embedded = int(scalar(db, f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
-                           "AND EXISTS (SELECT 1 FROM publication_embeddings pe WHERE pe.paper_id = p.id)") or 0)
+    # Only vectors of the active model count: another model's cannot be compared
+    # with them, so they cover nothing Discovery can read.
+    from alma.discovery.similarity import get_active_embedding_model
+
+    embedded = int(
+        scalar(
+            db,
+            f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')} "
+            "AND EXISTS (SELECT 1 FROM publication_embeddings pe "
+            "WHERE pe.paper_id = p.id AND pe.model = ?)",
+            (get_active_embedding_model(db),),
+        )
+        or 0
+    )
     coverage = round((embedded / papers) * 100, 1) if papers else 0.0
 
+    provider_off = switched_off_provider(db)
+    if provider_off:
+        return pill(
+            key="embeddings",
+            label="Embeddings",
+            state="warning",
+            metric=f"{coverage:g}% · no provider",
+            detail=(
+                f"The selected provider, {provider_off}, is switched off, so nothing "
+                "computes new vectors. Papers still get vectors from Semantic Scholar."
+            ),
+            tier="always",
+            href=SETTINGS_AI,
+        )
     if not local_ready and not hosted_ready:
         return pill(
             key="embeddings",

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ADDONS } from '@/addons/registry'
+import { ADDON_PAGES } from '@/addons/registry'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import {
   BarChart3,
@@ -90,7 +90,7 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
   // Add-on pages join the list only while they are on.
   const pages: CommandAction[] = [
     ...PAGES,
-    ...ADDONS.filter((addon) =>
+    ...ADDON_PAGES.filter((addon) =>
       bootstrap?.addons.some((state) => state.id === addon.id && state.enabled),
     ).map((addon) => ({
       id: `nav-${addon.id}`,

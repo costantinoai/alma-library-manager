@@ -14794,141 +14794,6 @@
         }
       }
     },
-    "/api/v1/tags/suggestions/{paper_id}": {
-      "get": {
-        "tags": [
-          "tags"
-        ],
-        "summary": "Get tag suggestions for a publication",
-        "description": "Returns AI-generated tag suggestions for the specified publication.",
-        "operationId": "get_tag_suggestions_api_v1_tags_suggestions__paper_id__get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "paper_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Paper Id"
-            }
-          },
-          {
-            "name": "max_tags",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 5,
-              "title": "Max Tags"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TagSuggestionsResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/tags/suggestions/generate": {
-      "post": {
-        "tags": [
-          "tags"
-        ],
-        "summary": "Bulk generate tag suggestions",
-        "description": "Generate tag suggestions for all publications that don't have them yet. Runs as a background job.",
-        "operationId": "bulk_generate_suggestions_api_v1_tags_suggestions_generate_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BulkSuggestResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/tags/merge-suggestions": {
       "get": {
         "tags": [
@@ -15017,7 +14882,7 @@
           "tags"
         ],
         "summary": "Merge one tag into another",
-        "description": "Reassign all source tag usages/suggestions to target tag and delete source tag.",
+        "description": "Reassign every use of the source tag to the target tag and delete the source tag.",
         "operationId": "merge_tags_api_v1_tags_merge_post",
         "security": [
           {
@@ -15064,154 +14929,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/tags/suggestions/{paper_id}/accept": {
-      "post": {
-        "tags": [
-          "tags"
-        ],
-        "summary": "Accept a tag suggestion",
-        "description": "Accept a tag suggestion, creating a real tag assignment for the publication.",
-        "operationId": "accept_tag_suggestion_api_v1_tags_suggestions__paper_id__accept_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "paper_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Paper Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AcceptTagRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Accept Tag Suggestion Api V1 Tags Suggestions  Paper Id  Accept Post"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/tags/suggestions/{paper_id}/{tag}": {
-      "delete": {
-        "tags": [
-          "tags"
-        ],
-        "summary": "Dismiss a tag suggestion",
-        "description": "Remove a tag suggestion for a publication.",
-        "operationId": "dismiss_tag_suggestion_api_v1_tags_suggestions__paper_id___tag__delete",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "paper_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Paper Id"
-            }
-          },
-          {
-            "name": "tag",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Tag"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           },
           "401": {
             "description": "Unauthorized"
@@ -17473,7 +17190,7 @@
           "addons"
         ],
         "summary": "Delete an add-on's data for good",
-        "description": "Needs `confirm` to equal the add-on id, and the add-on switched off first (409 otherwise, and 409 while one of its jobs is active). Drops its tables, deletes its files, settings and credentials, after a backup. Papers and core data are never touched. Switching it on again starts empty.",
+        "description": "Needs `confirm` to equal the add-on id, and the add-on switched off first (409 otherwise, and 409 while one of its jobs is active). Drops its tables, deletes the rows it declares in core tables, its files, settings and credentials, after a backup. Papers are never touched. Switching it on again starts empty.",
         "operationId": "remove_addon_api_v1_addons__addon_id__remove_post",
         "security": [
           {
@@ -18729,6 +18446,289 @@
           }
         }
       }
+    },
+    "/api/v1/tags/suggestions/{paper_id}": {
+      "get": {
+        "tags": [
+          "tags"
+        ],
+        "summary": "Get tag suggestions for a publication",
+        "description": "Returns AI-generated tag suggestions for the specified publication.",
+        "operationId": "get_tag_suggestions_api_v1_tags_suggestions__paper_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "max_tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5,
+              "title": "Max Tags"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagSuggestionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tags/suggestions/generate": {
+      "post": {
+        "tags": [
+          "tags"
+        ],
+        "summary": "Bulk generate tag suggestions",
+        "description": "Generate tag suggestions for all publications that don't have them yet. Runs as a background job.",
+        "operationId": "bulk_generate_suggestions_api_v1_tags_suggestions_generate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkSuggestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tags/suggestions/{paper_id}/accept": {
+      "post": {
+        "tags": [
+          "tags"
+        ],
+        "summary": "Accept a tag suggestion",
+        "description": "Accept a tag suggestion, creating a real tag assignment for the publication.",
+        "operationId": "accept_tag_suggestion_api_v1_tags_suggestions__paper_id__accept_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptTagRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Accept Tag Suggestion Api V1 Tags Suggestions  Paper Id  Accept Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tags/suggestions/{paper_id}/{tag}": {
+      "delete": {
+        "tags": [
+          "tags"
+        ],
+        "summary": "Dismiss a tag suggestion",
+        "description": "Remove a tag suggestion for a publication.",
+        "operationId": "dismiss_tag_suggestion_api_v1_tags_suggestions__paper_id___tag__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tag"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -18745,9 +18745,9 @@
               }
             ],
             "title": "Provider",
-            "description": "Embedding provider name (none, local, openai)"
+            "description": "Embedding provider name: none, local, or one an add-on brings"
           },
-          "openai_api_key": {
+          "provider_api_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -18756,8 +18756,8 @@
                 "type": "null"
               }
             ],
-            "title": "Openai Api Key",
-            "description": "OpenAI API key"
+            "title": "Provider Api Key",
+            "description": "API key for the provider named in `provider`, or for the stored one. An empty value deletes it."
           },
           "local_model": {
             "anyOf": [

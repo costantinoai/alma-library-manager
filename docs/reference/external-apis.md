@@ -389,9 +389,9 @@ fetches.
 
 ## OpenAI
 
-OpenAI is optional and currently used as an embedding provider. Configure
-it in **Settings → Intelligence → AI provider** and store the key in
-`.env` or the secret store. See [AI capabilities](../concepts/ai.md).
+OpenAI is an add-on and currently used as an embedding provider. Switch it on
+in **Settings → Add-ons**, then configure it in **Settings → Intelligence → AI
+provider** and store the key in `.env` or the secret store. See [AI capabilities](../concepts/ai.md).
 
 ## Slack
 

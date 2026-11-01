@@ -30,7 +30,15 @@ import { formatBytes } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
 /** Queries that change shape when an add-on goes on or off. */
-const SWITCH_ROOTS = [['addons'], ['bootstrap'], ['plugins'], ['home'], ['home-brief'], ['health']]
+const SWITCH_ROOTS = [
+  ['addons'],
+  ['bootstrap'],
+  ['plugins'],
+  ['home'],
+  ['home-brief'],
+  ['health'],
+  ['ai-status'],
+]
 
 /**
  * Optional features, one row each. Disable keeps everything; Remove is a
@@ -77,6 +85,7 @@ function AddonRow({ addon }: { addon: AddonInfo }) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [removing, setRemoving] = useState(false)
+  const [confirmingOff, setConfirmingOff] = useState(false)
 
   const switchMutation = useMutation({
     mutationFn: (enabled: boolean) => setAddonEnabled(addon.id, enabled),
@@ -134,10 +143,34 @@ function AddonRow({ addon }: { addon: AddonInfo }) {
         <Switch
           checked={addon.enabled}
           disabled={switchMutation.isPending}
-          onCheckedChange={(enabled) => switchMutation.mutate(enabled)}
+          onCheckedChange={(enabled) => {
+            if (!enabled && addon.disable_warning) setConfirmingOff(true)
+            else switchMutation.mutate(enabled)
+          }}
           aria-label={`${addon.enabled ? 'Switch off' : 'Switch on'} ${addon.name}`}
         />
       </div>
+      {confirmingOff && (
+        <AlertDialog open onOpenChange={(open) => !open && setConfirmingOff(false)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Switch {addon.name} off?</AlertDialogTitle>
+              <AlertDialogDescription>{addon.disable_warning}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <Button
+                onClick={() => {
+                  setConfirmingOff(false)
+                  switchMutation.mutate(false)
+                }}
+              >
+                Switch off
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
       {removing && <RemoveDialog addon={addon} onClose={() => setRemoving(false)} />}
     </li>
   )
@@ -180,6 +213,12 @@ function RemoveDialog({ addon, onClose }: { addon: AddonInfo; onClose: () => voi
               <li key={table.name} className="flex justify-between gap-3">
                 <span className="font-mono text-xs">{table.name}</span>
                 <span>{table.rows.toLocaleString()} {table.rows === 1 ? 'row' : 'rows'}</span>
+              </li>
+            ))}
+            {footprint.core_rows.map((row) => (
+              <li key={row.label} className="flex justify-between gap-3">
+                <span>{row.label}</span>
+                <span>{row.rows.toLocaleString()} {row.rows === 1 ? 'row' : 'rows'}</span>
               </li>
             ))}
             {footprint.files > 0 && (

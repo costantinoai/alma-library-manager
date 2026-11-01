@@ -75,7 +75,10 @@ The Tags tab also surfaces:
 * **Tag merge suggestions** — when two tags are textually similar
   (`spec` and `specs`), ALMa proposes merging them.
 * **Suggested tags** — per-paper proposals derived from embeddings,
-  topics, and text signals, depending on what is available.
+  topics, and text signals, depending on what is available. These come
+  from the Auto tagger add-on, off by default: switch it on in
+  **Settings → Add-ons**. Off, suggestions stay stored. Its Remove deletes
+  them; tags you accepted are yours and stay.
 
 ## Topics
 

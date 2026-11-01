@@ -830,24 +830,6 @@ def get_slack_channel() -> str | None:
     return None
 
 
-def get_openai_api_key() -> str | None:
-    """Get the OpenAI API key.
-
-    Priority:
-    1. OPENAI_API_KEY environment variable
-    2. unified secret store
-    """
-    env_key = os.getenv("OPENAI_API_KEY")
-    if env_key:
-        return env_key
-    try:
-        from alma.core.secrets import SECRET_OPENAI_API_KEY, get_secret
-
-        return get_secret(SECRET_OPENAI_API_KEY)
-    except Exception:
-        return None
-
-
 # Expose a dict-like interface for backward compatibility
 def get_all_settings() -> dict[str, Any]:
     """Get all settings as a dictionary.

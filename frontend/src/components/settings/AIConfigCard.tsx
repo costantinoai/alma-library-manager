@@ -84,7 +84,7 @@ import { cn } from '@/lib/utils'
 const aiConfigSchema = z.object({
   provider: z.string(),
   local_model: z.string(),
-  openai_api_key: z.string(),
+  provider_api_key: z.string(),
   python_env_path: z.string(),
 })
 
@@ -93,7 +93,7 @@ type AIConfigForm = z.infer<typeof aiConfigSchema>
 const DEFAULT_FORM: AIConfigForm = {
   provider: 'none',
   local_model: 'specter2-base',
-  openai_api_key: '',
+  provider_api_key: '',
   python_env_path: '',
 }
 
@@ -360,7 +360,7 @@ export function AIConfigCard() {
     form.reset({
       provider: activeProvider?.name ?? tierProvider ?? 'none',
       local_model: status.local_model ?? 'specter2-base',
-      openai_api_key: form.getValues('openai_api_key') ?? '',
+      provider_api_key: form.getValues('provider_api_key') ?? '',
       python_env_path: status.dependency_environment?.path ?? '',
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -516,10 +516,13 @@ export function AIConfigCard() {
   }, [values.python_env_path, savedDependencyPath, confirmEnvPathMutation])
 
   const onSubmit = form.handleSubmit((data) => {
+    const takesKey = aiStatusQuery.data?.providers.some(
+      (p) => p.name === data.provider && p.credential,
+    )
     aiConfigMutation.mutate({
       provider: data.provider,
       local_model: data.provider === 'local' ? data.local_model : undefined,
-      openai_api_key: data.openai_api_key || undefined,
+      provider_api_key: (takesKey && data.provider_api_key) || undefined,
       python_env_path: (data.python_env_path ?? '').trim(),
     })
   })
@@ -549,13 +552,14 @@ export function AIConfigCard() {
   const coveragePct = status.embeddings.coverage_pct ?? 0
   const selectedLocal = status.providers.find((p) => p.name === 'local')
   const selectedLocalModels = selectedLocal?.local_models ?? []
+  const credential = status.providers.find((p) => p.name === values.provider)?.credential
 
   return (
     <TooltipProvider>
       <SettingsCard
         icon={Brain}
         title="AI & Embeddings"
-        description="Configure AI providers for semantic search, clustering, and auto-tagging. All AI features are optional."
+        description="Configure AI providers for semantic search and clustering. All AI features are optional."
         roomy
       >
         <form className="space-y-6" onSubmit={onSubmit}>
@@ -625,6 +629,24 @@ export function AIConfigCard() {
 
             {/* Embedding provider */}
             <SettingsSection title="Embedding Provider">
+              {status.provider_off && (
+                <Alert variant="warning" className="mb-3 px-3 py-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle className="text-xs">No provider is computing vectors</AlertTitle>
+                  <AlertDescription className="text-xs">
+                    The selected provider, {status.provider_off}, is switched off. Turn it on under{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigateTo('settings', { anchor: 'addons' })}
+                      className="font-medium text-alma-700 underline-offset-2 hover:underline"
+                    >
+                      Add-ons
+                    </button>
+                    , or choose another provider here. Semantic Scholar vectors keep arriving, and
+                    Discovery reads those.
+                  </AlertDescription>
+                </Alert>
+              )}
               <RadioGroup
                 value={values.provider}
                 onValueChange={(value) => form.setValue('provider', value, { shouldDirty: true })}
@@ -647,7 +669,9 @@ export function AIConfigCard() {
                       key={p.name}
                       value={p.name}
                       selected={values.provider === p.name}
-                      disabled={!p.available}
+                      // A provider that asks for a key stays selectable: its key
+                      // field is what makes it available.
+                      disabled={!p.available && !p.credential}
                       icon={<ProviderIcon icon={p.icon} />}
                       title={p.display_name ?? p.name}
                       meta={
@@ -695,14 +719,14 @@ export function AIConfigCard() {
                 />
               )}
 
-              {values.provider === 'openai' && (
-                <LabeledField label="OpenAI API Key">
+              {credential && (
+                <LabeledField label={credential.label}>
                   <Input
                     type="password"
-                    placeholder="Paste OpenAI API key"
-                    value={values.openai_api_key}
+                    placeholder={credential.placeholder}
+                    value={values.provider_api_key}
                     onChange={(e) =>
-                      form.setValue('openai_api_key', e.target.value, { shouldDirty: true })
+                      form.setValue('provider_api_key', e.target.value, { shouldDirty: true })
                     }
                   />
                 </LabeledField>

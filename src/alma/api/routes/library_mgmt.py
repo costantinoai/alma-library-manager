@@ -330,7 +330,6 @@ _RESET_TABLES = (
     "publication_clusters",
     "publication_references",
     "publication_tags",
-    "tag_suggestions",
     "tags",
     "collection_items",
     "collections",

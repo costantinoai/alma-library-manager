@@ -47,7 +47,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     Returns ``0.0`` when either vector is the zero vector — the
     geometric similarity is undefined there and 0 is the contract every
     caller already expects (callers had this exact byte-for-byte helper
-    duplicated in `discovery.similarity` and `ai.auto_tagger`).
+    duplicated in `discovery.similarity` and the auto tagger).
     """
     norm_a = np.linalg.norm(a)
     norm_b = np.linalg.norm(b)

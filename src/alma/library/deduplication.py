@@ -172,7 +172,6 @@ def _rewire_paper_refs(conn: sqlite3.Connection, old_paper_id: str, new_paper_id
         "publication_institutions",
         "publication_references",
         "publication_clusters",
-        "tag_suggestions",
         "feed_items",
         "recommendations",
         "lens_signals",

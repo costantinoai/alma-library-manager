@@ -26,7 +26,7 @@ What you lose:
 * Semantic similarity in Discovery.
 * Vector-backed Library search and similarity views.
 * Embedding-backed graph projections.
-* Highest-quality tag suggestions.
+* The embedding half of tag suggestions, with the Auto tagger add-on on.
 * `similarity` alert rules.
 
 ## Embeddings: the current model
@@ -42,7 +42,7 @@ Three provider modes exist in the Settings UI:
 |---|---|---|
 | `none` | Disable live embedding generation. | Small installs or pure metadata workflows. |
 | `local` | Compute SPECTER2 locally in a selected Python environment. | Best quality without a cloud dependency. |
-| `openai` | Use OpenAI for query-time embedding tasks. | When you want a cloud fallback and already have a key. |
+| `openai` | Use OpenAI for query-time embedding tasks. Needs the OpenAI add-on on. | When you want a cloud fallback and already have a key. |
 
 Independently of that selection, ALMa also knows how to fetch
 **Semantic Scholar's pre-computed `specter_v2` vectors** in bulk. Those
@@ -53,7 +53,7 @@ when the SPECTER2 stack (torch / transformers / adapters / numpy) is importable
 in the backend interpreter, and `none` otherwise — so a torch-capable install
 computes the residual automatically and a lean install stays S2-only. Fetching
 S2 pre-computed vectors is always on regardless. Set `ALMA_DEFAULT_AI_PROVIDER`
-(`none` / `local` / `openai`) to pin the choice explicitly (e.g. force `none`
+(`none`, `local`, or `openai` with its add-on) to pin the choice explicitly (e.g. force `none`
 on a torch box). S2 alone tops out around the mid-50%s on a broad tracked
 corpus; adding the local fill lifts it into the low-80%s within the same
 768-dim SPECTER2 space (measured 55% → 82% on a 4,174-paper corpus).
@@ -99,11 +99,26 @@ abstract can't be embedded and are the honest, reported floor.
 
 ### 3. OpenAI embeddings
 
-OpenAI is optional. In the current public build it is used only as an
-embedding provider, not as a general LLM surface. If you select
-`provider = openai`, ALMa expects `OPENAI_API_KEY` to exist in the
-secret store or environment and uses that provider for live embedding
-tasks that need it.
+OpenAI is an add-on, off by default: switch it on in **Settings → Add-ons**. An
+install where OpenAI is the selected provider, or that holds a key or OpenAI
+vectors, stays on after an upgrade. It is used only as an embedding provider, not
+as a general LLM surface. If you select `provider = openai`, ALMa expects the
+`openai` Python package in the environment and `OPENAI_API_KEY` in the secret
+store or environment, and uses that provider for live embedding tasks that need
+it.
+
+OpenAI vectors are 1536-dimensional and cannot be compared with SPECTER2's, so
+they are stored under their own model key and never mixed. Local SPECTER2 and
+Semantic Scholar vectors do not depend on this add-on.
+
+* **Off while it is the provider.** Settings warns first. Nothing computes new
+  vectors and Home and Health say there is no provider. Discovery reads the
+  SPECTER2 vectors Semantic Scholar keeps sending. Your OpenAI vectors, key and
+  choice stay, and switching it back on resumes.
+* **Remove.** Deletes the stored OpenAI vectors and the author centroids built
+  from them, and the saved key, after a database backup. The dialog names them.
+  A selected OpenAI provider goes back to the default: `local` where it can run,
+  otherwise `none`. A key in the environment is yours to delete.
 
 ## Dependency environment
 
@@ -134,7 +149,7 @@ Common background actions:
 * **Backfill S2 vectors** (across the whole corpus or a scope)
 * **AI compute missing** (local SPECTER2 fallback)
 * **Graph rebuild / projection refresh**
-* **Bulk tag suggestions / propagation**
+* **Bulk tag suggestions**, with the Auto tagger add-on on
 
 ## Why this rigour
 

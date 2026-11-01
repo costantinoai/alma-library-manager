@@ -45,7 +45,6 @@ _PREPRINT_TO_PAPER_MIGRATE_TABLES = (
     "publication_tags",
     "publication_institutions",
     "collection_items",
-    "tag_suggestions",
     "recommendations",
     "feed_items",
     "lens_signals",

@@ -11,7 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
-import { ADDONS, type AddonUi } from '@/addons/registry'
+import { ADDON_PAGES, type AddonUi } from '@/addons/registry'
 import { useBootstrap } from '@/hooks/useBootstrap'
 import { cn } from '@/lib/utils'
 import { BrandRule } from '@/components/ui/brand-rule'
@@ -168,7 +168,7 @@ export function Sidebar({
     label: group.label,
     items: [
       ...group.items,
-      ...ADDONS.filter(
+      ...ADDON_PAGES.filter(
         (addon) =>
           addon.navGroup === group.label &&
           bootstrap?.addons.some((state) => state.id === addon.id && state.enabled),

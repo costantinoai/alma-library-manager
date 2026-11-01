@@ -39,7 +39,6 @@ function operationToastTitle(
     (key.startsWith('library') ? 'Library' :
     key.startsWith('imports.') ? 'Import' :
     key.startsWith('graphs.') ? 'Graph' :
-    key.startsWith('tags.') ? 'Tags' :
     key.startsWith('ai.') ? 'AI' :
     key.startsWith('pdf.') ? 'PDF' :
     key.startsWith('addons.') ? 'Add-on' :
@@ -61,7 +60,7 @@ function rootsForOperation(operationKey?: string): string[] {
 
   // Remove changes what the shell, Settings and Home show.
   if (key.startsWith('addons.')) {
-    return ['addons', 'bootstrap', 'plugins', 'home', 'home-brief', 'health']
+    return ['addons', 'bootstrap', 'plugins', 'home', 'home-brief', 'health', 'ai-status']
   }
 
   // Paper PDFs (task 81): a fetch/attach refreshes that paper's PDF state; a
@@ -112,8 +111,9 @@ function rootsForOperation(operationKey?: string): string[] {
       'library-tags',
       'library-topics',
       'library-topics-hierarchy',
-      'tag-suggestions',
       'tag-merge-suggestions',
+      // A reset clears add-on rows too.
+      ...ADDONS.flatMap((entry) => entry.operations?.queryRoots ?? []),
     ]
   }
 
@@ -142,16 +142,6 @@ function rootsForOperation(operationKey?: string): string[] {
       // Recommendation reactions change the space-owned preference field
       // independently of the durable layout payload.
       'insights-diagnostics',
-    ]
-  }
-
-  if (key.startsWith('tags.')) {
-    return [
-      'library-tags',
-      'library-saved',
-      'tag-suggestions',
-      'tag-merge-suggestions',
-      'papers',
     ]
   }
 

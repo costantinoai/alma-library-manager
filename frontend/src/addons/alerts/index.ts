@@ -1,8 +1,8 @@
 import { Bell } from 'lucide-react'
 
-import type { AddonManifest } from '../registry'
+import type { AddonPageManifest } from '../registry'
 
-const alerts: AddonManifest = {
+const alerts: AddonPageManifest = {
   id: 'alerts',
   label: 'Alerts',
   navGroup: 'Manage',

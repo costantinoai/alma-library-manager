@@ -56,7 +56,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `collection_items` | Many-to-many `collection ↔ paper`. |
 | `tags` | User-defined tags (max 5 per paper enforced in code). |
 | `publication_tags` | Many-to-many `tag ↔ paper`. |
-| `tag_suggestions` | LLM-suggested tags awaiting user accept / dismiss. |
+| `tag_suggestions` | Suggested tags awaiting accept or dismiss. Auto tagger add-on: created on first enable, dropped by its Remove. |
 | `topics` | Source-backed scholarly topics. |
 | `topic_aliases` | User-defined aliases that collapse to a canonical topic. |
 

@@ -49,7 +49,11 @@ from alma.config import (
 logger = logging.getLogger(__name__)
 
 #: Every official add-on, in the order their routes, jobs and pills appear.
-ADDON_MODULES: tuple[str, ...] = ("alma.addons.alerts",)
+ADDON_MODULES: tuple[str, ...] = (
+    "alma.addons.alerts",
+    "alma.addons.auto_tagger",
+    "alma.addons.openai",
+)
 
 _PACKAGE = "alma.addons"
 _SQL_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
@@ -64,6 +68,20 @@ class JobSpec:
     name: str
     description: str
     interval_minutes: Callable[[], int]
+
+
+@dataclass(frozen=True)
+class CoreRows:
+    """Rows an add-on owns inside a core table.
+
+    The Remove dialog lists them by ``label``, and Remove deletes exactly them.
+    ``where`` comes from the manifest, never from a request.
+    """
+
+    label: str
+    table: str
+    where: str
+    params: tuple[Any, ...] = ()
 
 
 def _no_routers() -> Sequence[tuple[Any, str, Sequence[str]]]:
@@ -135,9 +153,28 @@ class AddOn:
     nav_badge: Callable[[sqlite3.Connection], int] | None = None
     #: Operation-key namespaces that block Remove while active.
     operation_prefixes: tuple[str, ...] = ()
+    #: ``on_tag_merged(conn, source, target)``: rows with ``id`` and ``name``. Runs
+    #: inside the merge's write unit, on or off, so a kept row follows its tag. It
+    #: must not open a unit, and a failure rolls the merge back.
+    on_tag_merged: Callable[[sqlite3.Connection, Any, Any], None] | None = None
+    #: The provider class this add-on brings (see ``AddonEmbeddingProvider``),
+    #: imported lazily. It exists for core only while the add-on is on.
+    embedding_provider: Callable[[], Any] | None = None
+    #: Rows it owns in core tables. Remove deletes them with its own tables.
+    core_rows: tuple[CoreRows, ...] = ()
+    #: ``on_remove(conn)``: core state that must not outlive it. Runs inside
+    #: Remove's write unit, so it must not open one.
+    on_remove: Callable[[sqlite3.Connection], None] | None = None
+    #: ``disable_warning(conn)``: what switching off costs right now, or None.
+    disable_warning: Callable[[sqlite3.Connection], str | None] | None = None
 
     def __post_init__(self) -> None:
-        for name in (self.id, *self.tables, *(table for table, _ in self.paper_tables)):
+        for name in (
+            self.id,
+            *self.tables,
+            *(table for table, _ in self.paper_tables),
+            *(rows.table for rows in self.core_rows),
+        ):
             if not _SQL_NAME.match(name):
                 raise ValueError(f"Add-on {self.id!r}: {name!r} is not a plain identifier")
         if activation_setting_key(self.id) in self.settings_defaults:
@@ -334,6 +371,14 @@ def startup(conn: sqlite3.Connection) -> None:
         except Exception as exc:
             _blocked[addon.id] = f"its schema could not be applied: {type(exc).__name__}"
             logger.exception("Add-on %s is off: schema failed", addon.id)
+    # A folder can vanish, or a switch change between runs, with the provider it
+    # brought still chosen. Readers must not stay on a model nothing fills.
+    from alma.ai.providers import reconcile_embedding_model
+
+    try:
+        reconcile_embedding_model(conn)
+    except Exception:
+        logger.exception("Could not correct embedding_model at startup")
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +475,10 @@ def set_enabled(conn: sqlite3.Connection, addon_id: str, value: bool) -> None:
             raise AddonConflict(f"{', '.join(dependents)} needs {addon.name} switched on")
     update_settings({activation_setting_key(addon_id): value})
     sync_jobs(addon_id)
+    if addon.embedding_provider is not None:
+        from alma.ai.providers import reconcile_embedding_model
+
+        reconcile_embedding_model(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +537,19 @@ def footprint(conn: sqlite3.Connection, addon_id: str) -> dict[str, Any]:
     return {
         "tables": tables,
         "rows": sum(table["rows"] for table in tables),
+        "core_rows": [
+            {
+                "label": rows.label,
+                "table": rows.table,
+                "rows": int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM {rows.table} WHERE {rows.where}",  # noqa: S608
+                        rows.params,
+                    ).fetchone()[0]
+                ),
+            }
+            for rows in addon.core_rows
+        ],
         "files": files,
         "bytes": size,
         "settings": sorted(key for key in addon.settings_defaults if key in settings),
@@ -506,6 +568,21 @@ def drop_tables(conn: sqlite3.Connection, addon_id: str) -> list[str]:
             dropped.append(table)
     conn.execute("DELETE FROM discovery_settings WHERE key = ?", (schema_key(addon_id),))
     return dropped
+
+
+def delete_core_rows(conn: sqlite3.Connection, addon_id: str) -> dict[str, int]:
+    """Delete what this add-on owns in core tables. The caller owns the write unit."""
+    addon = get(addon_id)
+    deleted = {
+        rows.label: conn.execute(
+            f"DELETE FROM {rows.table} WHERE {rows.where}",  # noqa: S608 -- manifest
+            rows.params,
+        ).rowcount
+        for rows in addon.core_rows
+    }
+    if addon.on_remove is not None:
+        addon.on_remove(conn)
+    return deleted
 
 
 def remove_files(addon_id: str) -> list[str]:
@@ -546,6 +623,19 @@ def _collect(
     except Exception:
         logger.exception("Add-on %s hook failed", addon.id)
         return []
+
+
+def tag_merged(conn: sqlite3.Connection, source: Any, target: Any) -> None:
+    """Tell every present add-on holding its tables that one tag became another.
+
+    The caller owns the write unit. Unlike the read hooks this one does not
+    swallow an error: half a merge is worse than none, so the unit rolls back.
+    """
+    for addon in present():
+        if addon.on_tag_merged is None:
+            continue
+        if len(_existing_tables(conn, addon.tables)) == len(addon.tables):
+            addon.on_tag_merged(conn, source, target)
 
 
 def plugins() -> tuple[Any, ...]:

@@ -2520,6 +2520,8 @@ export interface LocalModelInfo {
 }
 
 export interface AIProviderInfo {
+  /** Set when this provider needs a key; Settings then asks for one. */
+  credential?: { label: string; placeholder: string } | null
   name: string
   display_name?: string
   model_display_name?: string
@@ -3170,6 +3172,8 @@ export interface AIFeatureGroup {
 
 export interface AIStatus {
   providers: AIProviderInfo[]
+  /** The chosen provider's name while its add-on is off or gone. */
+  provider_off?: string | null
   embeddings: {
     total: number
     coverage_pct: number
@@ -3205,7 +3209,7 @@ export interface AIStatus {
       last_created_at?: string | null
       stale?: number
       active?: boolean
-      source?: 'semantic_scholar' | 'local' | 'openai' | 'unknown' | 'mixed' | string
+      source?: 'semantic_scholar' | 'local' | 'unknown' | 'mixed' | string
       sources?: Record<string, number>
     }>
     s2_backfill?: {
@@ -3250,7 +3254,7 @@ export interface AIStatus {
 export interface AIConfig {
   provider?: string
   local_model?: string
-  openai_api_key?: string
+  provider_api_key?: string
   python_env_type?: 'system' | 'venv' | 'uv' | 'conda' | 'miniconda' | 'miniforge' | string
   python_env_path?: string
 }
@@ -3484,22 +3488,7 @@ export function trackInteraction(
   })
 }
 
-// ── Tag Suggestion types ──
-
-export interface TagSuggestion {
-  paper_id: string
-  tag: string
-  tag_id?: string
-  confidence: number
-  source: 'embedding' | 'tfidf' | 'topic' | 'rule'
-  accepted: boolean
-  created_at?: string
-}
-
-export interface TagSuggestionsResponse {
-  suggestions: TagSuggestion[]
-  paper_title?: string
-}
+// ── Tag merge ──
 
 export interface TagMergeSuggestion {
   source_tag_id: string
@@ -3508,45 +3497,6 @@ export interface TagMergeSuggestion {
   target_tag: string
   confidence: number
   reason: string
-}
-
-// ── Tag Suggestion API functions ──
-
-/** Get tag suggestions for a specific paper */
-export function getTagSuggestions(paperId: string): Promise<TagSuggestionsResponse> {
-  return api.get<TagSuggestionsResponse>(`/tags/suggestions/${paperId}`)
-}
-
-/** Accept a tag suggestion (creates real tag assignment) */
-export function acceptTagSuggestion(
-  paperId: string,
-  tag: string,
-): Promise<{ success: boolean }> {
-  return api.post<{ success: boolean }>(
-    `/tags/suggestions/${paperId}/accept`,
-    { tag },
-  )
-}
-
-/** Dismiss a tag suggestion */
-export function dismissTagSuggestion(
-  paperId: string,
-  tag: string,
-): Promise<void> {
-  return api.delete<void>(
-    `/tags/suggestions/${paperId}/${encodeURIComponent(tag)}`,
-  )
-}
-
-export function bulkGenerateTagSuggestions(): Promise<{
-  job_id: string
-  status?: string
-  operation_id?: string
-  activity_url?: string
-  operation_key?: string
-  message?: string
-}> {
-  return api.post('/tags/suggestions/generate')
 }
 
 export function getTagMergeSuggestions(
@@ -4365,11 +4315,15 @@ export interface AddonInfo {
   enabled: boolean
   blocked: string | null
   has_data: boolean
+  /** What switching off costs right now. Set, it needs a confirmation. */
+  disable_warning: string | null
 }
 
 export interface AddonFootprint {
   tables: { name: string; rows: number }[]
   rows: number
+  /** Rows it owns inside core tables, named for the dialog. */
+  core_rows: { label: string; table: string; rows: number }[]
   files: number
   bytes: number
   settings: string[]
