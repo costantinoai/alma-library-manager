@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, FileSearch, LibraryBig, Mail, MessageSquare, PlugZap, TestTube2 } from 'lucide-react'
+import { ExternalLink, FileSearch, LibraryBig, Mail, MessageSquare, PlugZap } from 'lucide-react'
 
 import {
   getApiErrorMessage,
@@ -8,16 +8,18 @@ import {
   listPlugins,
   setPluginEnabled,
   sweepInboxNow,
-  testPluginConnection,
   updatePluginConfig,
   type PluginInfo,
 } from '@/api/client'
+import {
+  ConnectionBadge,
+  ConnectionLine,
+  FieldStatus,
+} from '@/components/settings/ConnectionStatus'
+import { useCheckAfterSave } from '@/components/settings/useConnections'
 import { SettingsCard } from '@/components/settings/primitives'
-import { StatusRow } from '@/components/shared/StatusRow'
 import { SchemaField } from '@/components/settings/PluginSchemaField'
 import { schemaFields, type ConfigValue } from '@/components/settings/pluginSchema'
-import { pluginState, type PluginState } from '@/components/settings/pluginState'
-import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { errorToast, useToast } from '@/hooks/useToast'
@@ -37,12 +39,6 @@ const CAPABILITY_LABELS: Record<string, string> = {
   send: 'Sends alerts',
   receive: 'Captures papers',
   pdf_source: 'Finds PDFs',
-}
-
-const STATE_PILL: Record<PluginState, { label: string; tone: 'neutral' | 'warning' | 'positive' }> = {
-  off: { label: 'Off', tone: 'neutral' },
-  'needs-setup': { label: 'Needs setup', tone: 'warning' },
-  ready: { label: 'Ready', tone: 'positive' },
 }
 
 /**
@@ -94,7 +90,6 @@ export function PluginsSection() {
 function PluginRow({ plugin }: { plugin: PluginInfo }) {
   const queryClient = useQueryClient()
   const Icon = ICONS[plugin.id as keyof typeof ICONS] ?? PlugZap
-  const pill = STATE_PILL[pluginState(plugin)]
 
   const activationMutation = useMutation({
     mutationFn: (enabled: boolean) => setPluginEnabled(plugin.id, enabled),
@@ -105,6 +100,7 @@ function PluginRow({ plugin }: { plugin: PluginInfo }) {
         ['home'],
         ['home-brief'],
         ['inbox-status'],
+        ['connections'],
       )
     },
     onError: (error) => errorToast('Could not change plugin state', getApiErrorMessage(error)),
@@ -126,7 +122,7 @@ function PluginRow({ plugin }: { plugin: PluginInfo }) {
           <p className="mt-0.5 text-xs text-slate-500">{plugin.description}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <StatusBadge tone={pill.tone} size="sm">{pill.label}</StatusBadge>
+          <ConnectionBadge id={plugin.id} />
           <Switch
             checked={plugin.enabled}
             disabled={activationMutation.isPending}
@@ -157,26 +153,16 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
     }
   }, [configQuery.data])
 
+  const checkAfterSave = useCheckAfterSave()
   const saveMutation = useMutation({
     mutationFn: () => updatePluginConfig(plugin.id, form),
     onSuccess: async (result) => {
       setForm(result.config as Record<string, ConfigValue>)
-      await invalidateQueries(queryClient, ['plugins'], ['settings'], ['home'], ['home-brief'])
+      await invalidateQueries(queryClient, ['plugins'], ['settings'], ['home'], ['home-brief'], ['connections'])
+      void checkAfterSave([plugin.id])
       toast({ title: `${plugin.display_name} settings saved` })
     },
     onError: (error) => errorToast('Plugin settings were not saved', getApiErrorMessage(error)),
-  })
-
-  const testMutation = useMutation({
-    mutationFn: () => testPluginConnection(plugin.id),
-    onSuccess: (result) => {
-      if (result.ok) {
-        toast({ title: `${plugin.display_name} test passed`, description: result.message })
-      } else {
-        errorToast(`${plugin.display_name} test failed`, result.error || result.message)
-      }
-    },
-    onError: (error) => errorToast(`${plugin.display_name} test failed`, getApiErrorMessage(error)),
   })
 
   const captureMutation = useMutation({
@@ -201,6 +187,7 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
 
   return (
     <div className="mt-3 ml-10 space-y-4 border-l border-divider pl-4">
+      <ConnectionLine id={plugin.id} />
       {configQuery.isError && (
         <p className="text-xs text-critical-600">
           Configuration unavailable: {getApiErrorMessage(configQuery.error)}
@@ -213,6 +200,17 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
           schema={schema}
           value={form[name] ?? (schema.default as ConfigValue) ?? ''}
           onChange={(value) => setForm((current) => ({ ...current, [name]: value }))}
+          status={
+            <FieldStatus
+              id={plugin.id}
+              field={name}
+              dirty={
+                configQuery.data != null
+                && name in form
+                && String(form[name] ?? '') !== String(configQuery.data.config[name] ?? '')
+              }
+            />
+          }
         />
       ))}
       {hasAdvanced && (
@@ -228,17 +226,6 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
         >
           {saveMutation.isPending ? 'Saving…' : 'Save plugin settings'}
         </Button>
-        {plugin.actions.includes('test') && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => testMutation.mutate()}
-            disabled={testMutation.isPending}
-          >
-            <TestTube2 className="h-4 w-4" />
-            {testMutation.isPending ? 'Testing…' : 'Test connection'}
-          </Button>
-        )}
         {plugin.actions.includes('capture') && (
           <Button
             variant="outline"
@@ -263,19 +250,6 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
           )}
         </span>
       </div>
-      {testMutation.data?.results && testMutation.data.results.length > 0 && (
-        <div className="space-y-1.5" aria-label={`${plugin.display_name} test results`}>
-          {testMutation.data.results.map((row) => (
-            <StatusRow
-              key={`${row.source ?? ''}:${row.address}`}
-              severity={row.severity}
-              label={row.address}
-              title={row.source}
-              metric={<span className="shrink-0 text-xs text-slate-500">{row.state}</span>}
-            />
-          ))}
-        </div>
-      )}
     </div>
   )
 }

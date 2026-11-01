@@ -1,6 +1,7 @@
 import { Globe } from 'lucide-react'
 
 import { type Settings } from '@/api/client'
+import { ConnectionLine } from '@/components/settings/ConnectionStatus'
 import { SettingsCard, SettingsSections, ToggleRow } from '@/components/settings/primitives'
 import { OpenAlexSection } from '@/components/settings/OpenAlexSection'
 import { SemanticScholarSection } from '@/components/settings/SemanticScholarSection'
@@ -65,6 +66,11 @@ export function ExternalApisCard({
         />
         <SemanticScholarSection formData={formData} onFormDataChange={onFormDataChange} />
       </SettingsSections>
+      <div className="space-y-3">
+        <ConnectionLine id="crossref" named />
+        <ConnectionLine id="zotero" named />
+        <ConnectionLine id="browser_connector" named />
+      </div>
     </SettingsCard>
   )
 }

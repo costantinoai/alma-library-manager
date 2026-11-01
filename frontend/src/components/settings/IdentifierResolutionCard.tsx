@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { Search } from 'lucide-react'
 
 import type { Settings } from '@/api/client'
+import { ConnectionLine } from '@/components/settings/ConnectionStatus'
 import { SettingsCard, SettingsSaveBar, ToggleRow } from '@/components/settings/primitives'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Form, FormControl, FormField, FormItem } from '@/components/ui/form'
@@ -162,6 +163,8 @@ export function IdentifierResolutionCard({
               )}
             />
           ))}
+
+          <ConnectionLine id="google_scholar" />
 
           <SubPanel variant="flat" padded={false}  className="px-3 py-2 text-xs text-slate-600">
             Default recommended strategy: OpenAlex + Semantic Scholar + ORCID automatically,

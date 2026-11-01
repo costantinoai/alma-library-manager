@@ -1,58 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { StatusBadge } from '@/components/ui/status-badge'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { errorToast } from '@/hooks/useToast'
 import {
   api,
   getApiErrorMessage,
-  type OpenAlexStatus,
-  type SemanticScholarStatus,
   type Settings,
 } from '@/api/client'
+import { ConnectionBadge } from '@/components/settings/ConnectionStatus'
+import { useCheckAfterSave } from '@/components/settings/useConnections'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
-
-function ConnectionDot({
-  configured,
-  valid,
-  loading,
-}: {
-  configured?: boolean
-  valid?: boolean | null
-  loading?: boolean
-}) {
-  if (loading) {
-    return (
-      <StatusBadge tone="neutral" size="sm">
-        <Loader2 className="h-3 w-3 animate-spin" /> Checking
-      </StatusBadge>
-    )
-  }
-  if (!configured) {
-    return (
-      <StatusBadge tone="neutral" size="sm">
-        Not set
-      </StatusBadge>
-    )
-  }
-  if (valid) {
-    return (
-      <StatusBadge tone="positive" size="sm">
-        <CheckCircle2 className="h-3 w-3" /> Connected
-      </StatusBadge>
-    )
-  }
-  return (
-    <StatusBadge tone="negative" size="sm">
-      <XCircle className="h-3 w-3" /> Check key
-    </StatusBadge>
-  )
-}
 
 export function StepConnect({ next, back }: StepContext) {
   const qc = useQueryClient()
@@ -76,20 +37,7 @@ export function StepConnect({ next, back }: StepContext) {
     setEmail(current.data.openalex_email ?? '')
   }, [current.data])
 
-  const openalexStatus = useQuery({
-    queryKey: ['openalex-status'],
-    queryFn: () => api.get<OpenAlexStatus>('/settings/openalex/status'),
-    staleTime: 60_000,
-    retry: 1,
-    refetchOnWindowFocus: false,
-  })
-  const s2Status = useQuery({
-    queryKey: ['semantic-scholar-status'],
-    queryFn: () => api.get<SemanticScholarStatus>('/settings/semantic-scholar/status'),
-    staleTime: 60_000,
-    retry: 1,
-    refetchOnWindowFocus: false,
-  })
+  const checkAfterSave = useCheckAfterSave()
 
   const save = useMutation({
     mutationFn: async () => {
@@ -105,10 +53,10 @@ export function StepConnect({ next, back }: StepContext) {
       invalidateQueries(
         qc,
         ['settings'],
-        ['openalex-status'],
-        ['semantic-scholar-status'],
+        ['connections'],
         ['openalex-usage'],
       )
+      void checkAfterSave(['openalex', 'semantic_scholar'])
     },
   })
 
@@ -197,11 +145,7 @@ export function StepConnect({ next, back }: StepContext) {
                 Get an OpenAlex key ↗
               </a>
             </Label>
-            <ConnectionDot
-              configured={openalexStatus.data?.configured}
-              valid={openalexStatus.data?.valid}
-              loading={openalexStatus.isLoading || openalexStatus.isFetching}
-            />
+            <ConnectionBadge id="openalex" />
           </div>
           <Input
             id="ob-oa-key"
@@ -226,11 +170,7 @@ export function StepConnect({ next, back }: StepContext) {
                 Request a Semantic Scholar key ↗
               </a>
             </Label>
-            <ConnectionDot
-              configured={s2Status.data?.configured}
-              valid={s2Status.data?.valid}
-              loading={s2Status.isLoading || s2Status.isFetching}
-            />
+            <ConnectionBadge id="semantic_scholar" />
           </div>
           <Input
             id="ob-s2-key"
