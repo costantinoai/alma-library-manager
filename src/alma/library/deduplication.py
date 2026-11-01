@@ -18,7 +18,11 @@ from collections.abc import Iterable
 
 from alma.core.author_names import parse_author_names, surname
 from alma.core.db_write import write_section
-from alma.core.paper_groups import absorb_paper_group
+from alma.core.paper_groups import (
+    PaperGroupIntegrityError,
+    absorb_paper_group,
+    is_component_row,
+)
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
@@ -277,60 +281,88 @@ def deduplicate_authors(conn: sqlite3.Connection) -> dict:
     }
 
 
+# A title key shorter than this ("Introduction", "Theory of mind") names many works.
+_MIN_TITLE_KEY_CHARS = 20
+# Below this share of the title's characters the key is noise: it keeps only
+# a-z0-9, so a Chinese title with "fMRI" in it would reduce to "fmri".
+_MIN_TITLE_KEY_SHARE = 0.5
+_REVIEW_SAMPLE = 20
+
+
 def _author_surnames(authors: str | None) -> set[str]:
-    return {surname(name).lower() for name in parse_author_names(authors or "")}
+    return {surname(name).casefold() for name in parse_author_names(authors or "")}
 
 
 def _same_authors(a: sqlite3.Row, b: sqlite3.Row) -> bool:
-    """Two rows sharing a title and year: same work unless their authors disagree.
-
-    "Introduction" appears every year. A row with no authors cannot disagree.
-    """
+    """Both rows list authors, and at least half of the shorter list is shared."""
     first, second = _author_surnames(a["authors"]), _author_surnames(b["authors"])
-    return not first or not second or bool(first & second)
+    shared = first & second
+    return bool(shared) and len(shared) * 2 >= min(len(first), len(second))
 
 
-def _duplicate_groups(rows: Iterable[sqlite3.Row]) -> list[list[sqlite3.Row]]:
-    """Rows that are one work, by the canonical identity keys.
+def _title_key(row: sqlite3.Row) -> tuple[str, int] | None:
+    """The (title, year) identity. A row with no year has none (`core.utils`)."""
+    title = normalize_title_key(row["title"] or "")
+    return (title, int(row["year"])) if title and row["year"] else None
 
-    A DOI decides on its own. A row with no DOI joins by normalized title and
-    year (`core.utils.normalize_title_key`), the third key of every ingest path,
-    and only when one candidate group fits: a preprint and its journal version
-    carry two DOIs under one title, and choosing between them is a guess. A row
-    with no year is never matched on its title. A URL is not an identity:
-    `openreview.net/pdf?id=...` is one path for every paper on that site.
+
+def _title_identifies_a_work(row: sqlite3.Row) -> bool:
+    title = row["title"] or ""
+    key = normalize_title_key(title)
+    letters = sum(ch.isalnum() for ch in title)
+    return len(key) >= _MIN_TITLE_KEY_CHARS and len(key) >= letters * _MIN_TITLE_KEY_SHARE
+
+
+def _duplicate_groups(
+    rows: Iterable[sqlite3.Row],
+) -> tuple[list[list[sqlite3.Row]], list[dict[str, str]]]:
+    """Rows that are one work, and the pairs left for a person to judge.
+
+    A DOI decides on its own. A URL is not an identity:
+    `openreview.net/pdf?id=...` is one path for every paper on that site. A row
+    with no DOI joins by title and year only on strong evidence: the title
+    identifies a work, both rows list authors and they agree, and one candidate
+    group fits, because a preprint and its journal version carry two DOIs under
+    one title. Anything weaker is reported and left separate, like an ambiguous
+    preprint match. A component row is never a merge candidate, whatever the
+    stored columns say (`is_component_row`).
     """
     by_doi: dict[str, list[sqlite3.Row]] = {}
     no_doi: list[sqlite3.Row] = []
     for row in rows:
+        if is_component_row(row):
+            continue
         doi = _norm_doi(row["doi"])
         if doi:
             by_doi.setdefault(doi, []).append(row)
         else:
             no_doi.append(row)
 
-    def title_key(row: sqlite3.Row) -> tuple[str, int] | None:
-        title = normalize_title_key(row["title"] or "")
-        return (title, int(row["year"])) if title and row["year"] else None
-
     groups = list(by_doi.values())
     groups_by_title: dict[tuple[str, int], list[list[sqlite3.Row]]] = {}
     for group in groups:
-        for key in {title_key(row) for row in group} - {None}:
+        for key in {_title_key(row) for row in group} - {None}:
             groups_by_title.setdefault(key, []).append(group)
 
+    review: list[dict[str, str]] = []
     for row in no_doi:
-        key = title_key(row)
+        key = _title_key(row)
         if key is None:
             continue
-        fitting = [g for g in groups_by_title.get(key, []) if all(_same_authors(row, m) for m in g)]
-        if len(fitting) == 1:
-            fitting[0].append(row)
-        elif not fitting:
+        candidates = groups_by_title.get(key, [])
+        if not candidates:
             new_group = [row]
             groups.append(new_group)
-            groups_by_title.setdefault(key, []).append(new_group)
-    return [group for group in groups if len(group) > 1]
+            groups_by_title[key] = [new_group]
+            continue
+        fitting = [g for g in candidates if all(_same_authors(row, member) for member in g)]
+        if len(fitting) == 1 and _title_identifies_a_work(row):
+            fitting[0].append(row)
+        else:
+            review.append(
+                {"paper_id": row["id"], "title": row["title"] or "", "candidate_id": candidates[0][0]["id"]}
+            )
+    return [group for group in groups if len(group) > 1], review
 
 
 def _keeper_score(row: sqlite3.Row) -> tuple[int, int]:
@@ -353,24 +385,38 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
     (`absorb_paper_group`). Rows already in a group are not looked at.
     """
     rows = conn.execute(f"SELECT * FROM papers p WHERE {standalone_paper_sql('p')}").fetchall()
+    groups, review = _duplicate_groups(rows)
 
     merged = 0
     rewired = 0
-    for group in _duplicate_groups(rows):
+    failed = 0
+    for group in groups:
         keeper_id = max(group, key=_keeper_score)["id"]
         for dup in group:
             if dup["id"] == keeper_id:
                 continue
-            # One gated write window per merged paper (commit-per-unit-of-work,
-            # all-local).
-            with write_section(conn, label="dedup paper merge"):
-                result = absorb_paper_group(conn, dup["id"], keeper_id, reason="library_dedup")
+            try:
+                # One gated write window per merged paper (commit-per-unit-of-work,
+                # all-local).
+                with write_section(conn, label="dedup paper merge"):
+                    result = absorb_paper_group(conn, dup["id"], keeper_id, reason="library_dedup")
+            except PaperGroupIntegrityError as exc:
+                # A broken pointer chain is Health's repair; the rest of the pass goes on.
+                logger.warning("Dedup skipped %s → %s: %s", dup["id"], keeper_id, exc)
+                failed += 1
+                continue
             if result.get("skipped"):
                 continue
             merged += 1
             rewired += sum(result.get("fk_migrated", {}).values())
 
-    return {"merged_papers": merged, "rewired_references": rewired}
+    return {
+        "merged_papers": merged,
+        "rewired_references": rewired,
+        "failed": failed,
+        "needs_review": len(review),
+        "review_sample": review[:_REVIEW_SAMPLE],
+    }
 
 
 def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> dict:

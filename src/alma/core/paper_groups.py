@@ -83,6 +83,9 @@ _DUPLICATE_USER_STATE_TABLES = (
     "recommendations",
     "feed_items",
     "lens_signals",
+    # A kept PDF is a file the user has. On a collision the survivor's row wins
+    # and `pdfs.store.prune_orphan_files` removes the loser's unreferenced file.
+    "paper_pdfs",
     "paper_pdf_rejections",
 )
 
