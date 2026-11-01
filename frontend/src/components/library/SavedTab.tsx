@@ -76,6 +76,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
 import { RowButton } from '@/components/ui/row-button'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type ViewMode = 'cards' | 'compact'
 type CompactSortKey =
@@ -665,7 +666,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-paper-md">
+        <SubPanel variant="flat" padded={false}  className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 px-4 py-3 shadow-paper-md">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>
@@ -708,7 +709,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           <Button size="sm" variant="ghost" onClick={clearSelection} aria-label="Clear selection">
             <X className="h-4 w-4" />
           </Button>
-        </div>
+        </SubPanel>
       )}
 
       {/* Similar Results Dialog */}

@@ -49,7 +49,7 @@ export function ConnectorToastCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-alma-900">{copy.title}</p>
-          <span className="rounded border border-[var(--color-border)] bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
+          <span className="rounded border border-[var(--color-border)] bg-control-quiet px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
             v{notice.connectorVersion}
           </span>
         </div>

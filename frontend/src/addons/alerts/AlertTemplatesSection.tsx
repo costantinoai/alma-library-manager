@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { CATEGORY_ICON_COLORS, CATEGORY_ICON_FALLBACK_COLOR } from '@/lib/palette'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 function templateIcon(category: string) {
   // Icon shape is per-category; color comes from the centralized palette (44.5).
@@ -93,7 +94,7 @@ export function AlertTemplatesSection() {
                   <StatusBadge tone="neutral">{template.category.replace(/_/g, ' ')}</StatusBadge>
                 </div>
                 {template.rationale && (
-                  <p className="mt-3 rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">{template.rationale}</p>
+                  <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2 text-xs text-slate-600">{template.rationale}</SubPanel>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.entries(template.metrics).map(([key, value]) => (

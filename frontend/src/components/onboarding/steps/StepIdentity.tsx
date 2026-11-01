@@ -329,9 +329,9 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
             </div>
 
             {searched && results.length === 0 ? (
-              <p className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3 text-sm text-slate-500">
+              <SubPanel variant="flat" padded={false}  className="px-4 py-3 text-sm text-slate-500">
                 No author profiles matched that name. Try a different spelling, or switch to ORCID.
-              </p>
+              </SubPanel>
             ) : null}
 
             <div className="space-y-2">
@@ -404,7 +404,7 @@ function ResultRow({
   onPick: () => void
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3">
+    <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-alma-800">{candidate.name}</p>
         <MetaLine candidate={candidate} />
@@ -412,6 +412,6 @@ function ResultRow({
       <Button variant="accent" size="sm" onClick={onPick} loading={pending} className="shrink-0">
         This is me
       </Button>
-    </div>
+    </SubPanel>
   )
 }

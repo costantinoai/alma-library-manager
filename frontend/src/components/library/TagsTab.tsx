@@ -41,6 +41,7 @@ import { ColorPicker } from './ColorPicker'
 import { RowButton } from '@/components/ui/row-button'
 import { cn } from '@/lib/utils'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 export function TagsTab() {
   const [tuneOpen, setTuneOpen] = useState(false)
@@ -193,9 +194,8 @@ export function TagsTab() {
           ) : (
             <div className="space-y-2">
               {mergeSuggestionsQuery.data?.map((item) => (
-                <div
-                  key={`${item.source_tag_id}:${item.target_tag_id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-3 py-2"
+                <SubPanel variant="flat" padded={false}
+                  key={`${item.source_tag_id}:${item.target_tag_id}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
                 >
                   <div className="text-sm text-slate-700">
                     <span className="font-medium">{item.source_tag}</span>
@@ -214,7 +214,7 @@ export function TagsTab() {
                     <GitMerge className="h-3.5 w-3.5" />
                     Merge
                   </Button>
-                </div>
+                </SubPanel>
               ))}
             </div>
           )}

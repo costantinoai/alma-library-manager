@@ -74,7 +74,7 @@ export function TopBar({
           >
             <Search className="h-3.5 w-3.5" />
             <span>Search</span>
-            <kbd className="ml-1 rounded border border-[var(--color-border)] bg-surface-2 px-1.5 font-sans text-[10px] font-medium text-alma-700">
+            <kbd className="ml-1 rounded border border-[var(--color-border)] bg-control-quiet px-1.5 font-sans text-[10px] font-medium text-alma-700">
               {shortcutKey}
             </kbd>
           </Button>

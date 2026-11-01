@@ -128,7 +128,7 @@ export function RepairConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-surface-1">
+      <DialogContent>
         <DialogHeader>
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 shrink-0 text-warning-600" aria-hidden />

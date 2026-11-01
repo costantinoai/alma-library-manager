@@ -65,6 +65,7 @@ import {
 } from './ruleFormLogic'
 import { RowButton } from '@/components/ui/row-button'
 import { Alert as AlertBox } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /** Sentinel for the "type an ID by hand" entry in the author Select —
  * Radix forbids empty-string item values. */
@@ -827,13 +828,13 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
                   : ''}
               </p>
               {testFireResult.matches.length > 0 && (
-                <ul className="max-h-64 space-y-1 overflow-y-auto rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false} className="max-h-64 overflow-y-auto p-3"><ul className="space-y-1">
                   {testFireResult.matches.map((title, i) => (
                     <li key={`${i}-${title}`} className="text-sm text-slate-700">
                       {title}
                     </li>
                   ))}
-                </ul>
+                </ul></SubPanel>
               )}
               {testFireResult.rule_type === 'feed_monitor' && (
                 <p className="text-xs text-slate-500">

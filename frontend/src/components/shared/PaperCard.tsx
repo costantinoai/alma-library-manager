@@ -19,6 +19,7 @@ import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 import { Button } from '@/components/ui/button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /** The card header's small round icon controls (PDF link, Discover similar).
  *  Local PDF access is independent of fetch plugins. */
@@ -735,9 +736,9 @@ export function PaperCard({
               </Button>
             )}
             {!suppressSummaries && ((showAbstractByDefault || showAbstract) && paper.abstract) && (
-              <div className="mt-1.5 rounded-md border border-slate-100 bg-surface-1 px-3 py-2 text-xs leading-relaxed text-slate-600">
+              <SubPanel variant="flat" padded={false}  className="mt-1.5 px-3 py-2 text-xs leading-relaxed text-slate-600">
                 {paper.abstract}
-              </div>
+              </SubPanel>
             )}
             {!suppressSummaries && showAbstractByDefault && !paper.abstract && (
               <div className="mt-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-2 text-xs italic text-slate-400">
@@ -760,12 +761,12 @@ export function PaperCard({
 
         {/* Score breakdown (expandable) */}
         {showBreakdown && (hasBreakdown || hasExplanation) && (
-          <div className="mt-3 rounded-md border border-slate-100 bg-surface-1 px-3 py-2.5">
+          <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2.5">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               Score Breakdown
             </p>
             <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
-          </div>
+          </SubPanel>
         )}
 
         {children}

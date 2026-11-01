@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
 import { ScoreBreakdownPanel } from '@/components/ScoreBreakdownPanel'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -81,9 +82,8 @@ export function SimilarResultsDialog({
               const itemKey = `${item.source_type}-${item.title}-${idx}`
               const isExpanded = expandedId === itemKey
               return (
-                <div
-                  key={itemKey}
-                  className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm transition-shadow hover:shadow-paper-md"
+                <SubPanel variant="flat" padded={false}
+                  key={itemKey} className="p-4 shadow-paper-sm transition-shadow hover:shadow-paper-md"
                 >
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">
@@ -143,7 +143,7 @@ export function SimilarResultsDialog({
                       </Button>
                     </div>
                   </div>
-                </div>
+                </SubPanel>
               )
             })
           )}

@@ -136,7 +136,7 @@ function FailedOperationsCard({
               const anyExpandable = rows.some(rowHasDetail)
               return (
                 <div className="space-y-3">
-                  <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                  <SubPanel variant="flat" padded={false}  className="divide-y divide-[var(--color-border)]">
                     {rows.map((op) => {
                       const summaryLine = op.error || op.message
                       const tail = op.log_tail ?? []
@@ -223,7 +223,7 @@ function FailedOperationsCard({
                         </Collapsible>
                       )
                     })}
-                  </div>
+                  </SubPanel>
                   <p className="text-xs text-slate-500">
                     {anyExpandable ? 'Click a row for its error and step log; complete' : 'Complete'}{' '}
                     run history lives in the Activity panel (top bar).

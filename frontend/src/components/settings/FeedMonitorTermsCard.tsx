@@ -54,6 +54,7 @@ import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn, formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type FeedMonitorCreateType = 'query' | 'topic' | 'venue'
 
@@ -217,7 +218,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
               />
             </div>
           ) : (
-            <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-sm text-slate-700">
+            <SubPanel variant="flat" padded={false}  className="px-3 py-2 text-sm text-slate-700">
               <div className="flex flex-wrap items-center gap-2 font-medium text-alma-800">
                 <UserRound className="h-4 w-4 text-slate-500" />
                 <span>{monitor.author_name || monitor.label}</span>
@@ -232,7 +233,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
                   </span>
                 )}
               </div>
-            </div>
+            </SubPanel>
           )}
         </div>
 

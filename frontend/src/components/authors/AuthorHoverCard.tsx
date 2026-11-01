@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { lookupAuthorByName, type Author } from '@/api/client'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface AuthorHoverCardProps {
   name: string
@@ -84,7 +85,7 @@ export function AuthorHoverCard({
 
           {author && (
             <>
-              <div className="grid grid-cols-3 gap-2 rounded-md border border-slate-100 bg-surface-2/70 px-2 py-1.5 text-center">
+              <SubPanel variant="flat" padded={false}  className="grid grid-cols-3 gap-2 px-2 py-1.5 text-center">
                 <div>
                   <p className="text-[10px] uppercase tracking-wide text-slate-500">h-index</p>
                   <p className="text-sm font-semibold tabular-nums text-alma-800">
@@ -103,7 +104,7 @@ export function AuthorHoverCard({
                     {formatCount(author.citedby)}
                   </p>
                 </div>
-              </div>
+              </SubPanel>
 
               {topInterests.length > 0 && (
                 <div className="flex flex-wrap gap-1">
@@ -124,9 +125,9 @@ export function AuthorHoverCard({
           )}
 
           {notInCorpus && (
-            <p className="rounded-md border border-dashed border-[var(--color-border)] bg-surface-2/60 px-2 py-1.5 text-[11px] text-slate-500">
+            <SubPanel variant="flat" padded={false}  className="border-dashed px-2 py-1.5 text-[11px] text-slate-500">
               Not in your authors corpus yet. Follow to start tracking their new papers.
-            </p>
+            </SubPanel>
           )}
 
           {/* Actions */}

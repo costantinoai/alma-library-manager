@@ -28,6 +28,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { RowButton } from '@/components/ui/row-button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type MergeFieldKey =
   | 'name'
@@ -315,9 +316,9 @@ export function AuthorMergeDialog({
               {authorsQuery.isLoading ? (
                 <LoadingState message="Loading authors..." />
               ) : mergeCandidates.length === 0 ? (
-                <div className="rounded-sm border border-dashed border-edge-2 bg-surface-2 p-4 text-sm text-slate-500">
+                <SubPanel variant="flat" padded={false}  className="border-dashed p-4 text-sm text-slate-500">
                   {emptyCandidateMessage}
-                </div>
+                </SubPanel>
               ) : (
                 mergeCandidates.map((candidate) => {
                   const isSelected = candidate.id === mergeTargetId
@@ -449,11 +450,11 @@ export function AuthorMergeDialog({
                 </div>
               )
             ) : (
-              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-edge-2 bg-surface-2 p-6 text-center text-sm text-slate-500">
+              <SubPanel variant="flat" padded={false}  className="flex min-h-[240px] items-center justify-center border-dashed p-6 text-center text-sm text-slate-500">
                 {absorbMode
                   ? 'Select the surviving author to compare metadata before merging.'
                   : 'Select an author from the corpus to compare metadata before merging.'}
-              </div>
+              </SubPanel>
             )}
           </div>
         </div>

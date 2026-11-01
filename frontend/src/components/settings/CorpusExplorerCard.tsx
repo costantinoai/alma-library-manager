@@ -78,6 +78,7 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // ---------------------------------------------------------------------------
 // Filters
@@ -237,9 +238,9 @@ export function CorpusExplorerCard() {
       <CardHeader className="gap-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-slate-600">
+            <SubPanel variant="flat" padded={false}  className="flex size-9 shrink-0 items-center justify-center text-slate-600">
               <Database className="size-4" />
-            </div>
+            </SubPanel>
             <div className="space-y-1">
               <CardTitle className="text-base">Corpus explorer</CardTitle>
               <CardDescription className="max-w-2xl">
@@ -468,7 +469,7 @@ function CorpusExplorerBody() {
         header: 'Resolution',
         size: 160,
         cell: ({ row }) => (
-          <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
+          <span className="rounded bg-control-quiet px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
             {row.original.openalex_resolution_status || '—'}
           </span>
         ),
@@ -668,7 +669,7 @@ function CorpusExplorerBody() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this paper?</AlertDialogTitle>
             <AlertDialogDescription>
-              Sets <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
+              Sets <code className="rounded bg-control-quiet px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
               on{' '}
               <span className="font-medium text-alma-800">
                 {removeTarget?.title || 'this paper'}

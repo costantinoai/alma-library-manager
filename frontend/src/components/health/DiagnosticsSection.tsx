@@ -13,6 +13,7 @@ import { sortBySeverity } from './healthFormat'
 import { DimensionStatusRow } from './DimensionStatusRow'
 import { SectionLabel } from './SectionLabel'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface DiagnosticsSectionProps {
   dims: HealthDimension[]
@@ -44,7 +45,7 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
       ) : null}
 
       {healthy.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
+        <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-2 p-3 shadow-paper-sm">
           <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
             All clear
           </span>
@@ -54,7 +55,7 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
               {dim.label}
             </StatusBadge>
           ))}
-        </div>
+        </SubPanel>
       ) : null}
     </section>
   )

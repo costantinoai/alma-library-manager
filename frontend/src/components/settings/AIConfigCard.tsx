@@ -74,6 +74,7 @@ import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // ---------------------------------------------------------------------------
 // Form schema — only fields the user can edit live here. Display-only state
@@ -556,7 +557,7 @@ export function AIConfigCard() {
           <SettingsSections>
             {/* Capability tier */}
             <SettingsSection title="Capability" defaultOpen>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+              <SubPanel variant="flat" padded={false}  className="p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-semibold text-slate-700">
@@ -576,7 +577,7 @@ export function AIConfigCard() {
                 <p className="mt-1 text-xs text-slate-500">
                   Provider: {tier1?.active_provider ?? 'none'}
                 </p>
-              </div>
+              </SubPanel>
             </SettingsSection>
 
             {/* AI feature map */}
@@ -593,7 +594,7 @@ export function AIConfigCard() {
             >
               <div className="grid gap-2 lg:grid-cols-2">
                 {(status.features?.groups ?? []).map((group) => (
-                  <div key={group.id} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 shadow-paper-sm">
+                  <SubPanel variant="flat" padded={false} key={group.id} className="p-3 shadow-paper-sm">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       {group.label}
                     </p>
@@ -612,7 +613,7 @@ export function AIConfigCard() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </SubPanel>
                 ))}
               </div>
             </SettingsSection>
@@ -758,11 +759,11 @@ export function AIConfigCard() {
                   <StatTile label="Stale" value={status.embeddings.stale ?? 0} />
                 </div>
                 {status.embeddings.coverage_by_status?.library ? (
-                  <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-2 py-1.5 text-xs text-slate-600">
+                  <SubPanel variant="flat" padded={false}  className="px-2 py-1.5 text-xs text-slate-600">
                     Library: {status.embeddings.coverage_by_status.library.up_to_date}/
                     {status.embeddings.coverage_by_status.library.total} active-model vectors (
                     {status.embeddings.coverage_by_status.library.missing} missing)
-                  </div>
+                  </SubPanel>
                 ) : null}
                 {(status.embeddings.models ?? []).length > 0 ? (
                   <div className="space-y-1">
@@ -1121,12 +1122,12 @@ function LocalModelTier({
   if (models.length <= 1) {
     const onlyModel = models[0]
     return (
-      <div className="ml-6 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 text-xs text-slate-600">
+      <SubPanel variant="flat" padded={false}  className="ml-6 p-3 text-xs text-slate-600">
         Local model:{' '}
         <span className="font-medium text-slate-800">
           {onlyModel?.display_name ?? 'SPECTER2 Base'}
         </span>
-      </div>
+      </SubPanel>
     )
   }
   return (

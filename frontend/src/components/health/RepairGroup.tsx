@@ -14,6 +14,7 @@ import { isOpAttention, sortOpsByAttention } from './healthFormat'
 import { RepairCard } from './RepairCard'
 import { SectionLabel } from './SectionLabel'
 import { ChipButton } from '@/components/ui/chip-button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface RepairGroupProps {
   title: string
@@ -96,7 +97,7 @@ export function RepairGroup({
 
       {allClear.length > 0 ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
+          <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-2 p-3 shadow-paper-sm">
             <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
               Healthy & routine tools
             </span>
@@ -120,7 +121,7 @@ export function RepairGroup({
                 </ChipButton>
               )
             })}
-          </div>
+          </SubPanel>
           {/* Expanded all-clear cards (still runnable / configurable). */}
           {allClear.filter((op) => expanded.has(op.key)).map(card)}
         </div>

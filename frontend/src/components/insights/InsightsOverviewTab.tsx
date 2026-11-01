@@ -52,6 +52,7 @@ import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { formatNumber, truncate } from '@/lib/utils'
 import { RowButton } from '@/components/ui/row-button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface Palette {
   blue: string
@@ -557,7 +558,7 @@ export function InsightsOverviewTab({
 
             <div className="space-y-3">
               <h4 className="font-brand text-sm font-semibold text-alma-800">Vector Embeddings</h4>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+              <SubPanel variant="flat" padded={false}  className="p-4 shadow-paper-sm">
                 <div className="flex items-center gap-3">
                   <Database className="h-5 w-5 text-alma-folio" />
                   <div className="flex-1">
@@ -577,9 +578,8 @@ export function InsightsOverviewTab({
                     {embeddingModels.length > 0 ? (
                       <div className="mt-3 space-y-1">
                         {embeddingModels.map((row) => (
-                          <div
-                            key={row.model}
-                            className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-2 py-1.5 text-xs"
+                          <SubPanel variant="flat" padded={false}
+                            key={row.model} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-2 py-1.5 text-xs"
                           >
                             <span className="truncate font-mono text-alma-800">{row.model}</span>
                             <span className="text-slate-500 tabular-nums">{formatNumber(row.vectors)} vectors</span>
@@ -591,13 +591,13 @@ export function InsightsOverviewTab({
                             >
                               {row.active ? 'active' : `${row.coverage_pct.toFixed(1)}%`}
                             </StatusBadge>
-                          </div>
+                          </SubPanel>
                         ))}
                       </div>
                     ) : null}
                   </div>
                 </div>
-              </div>
+              </SubPanel>
             </div>
           </CardContent>
         </Card>

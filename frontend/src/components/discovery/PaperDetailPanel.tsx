@@ -730,7 +730,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   // grayish off-white so the notes box reads as a
                   // neutral input field, distinct from the warm paper
                   // surfaces around it.
-                  className="bg-surface-2 text-sm text-slate-700"
+                  className="text-sm text-slate-700"
                 />
                 <div className="mt-2 flex items-center justify-end gap-2">
                   <Button
@@ -808,7 +808,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     rows={6}
                     value={editAbstract}
                     onChange={(e) => setEditAbstract(e.target.value)}
-                    className="bg-surface-2 text-sm text-slate-700"
+                    className="text-sm text-slate-700"
                   />
                 </div>
               </>
@@ -821,7 +821,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   value={editAbstract}
                   onChange={(e) => setEditAbstract(e.target.value)}
                   placeholder="Paste the paper's abstract here…"
-                  className="bg-surface-2 text-sm text-slate-700"
+                  className="text-sm text-slate-700"
                 />
               </div>
             )}

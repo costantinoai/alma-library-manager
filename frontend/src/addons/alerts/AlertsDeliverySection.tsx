@@ -40,6 +40,7 @@ import { StatusBadge } from './AlertBadges'
 import { RowButton } from '@/components/ui/row-button'
 import { Alert as AlertBox } from '@/components/ui/alert'
 import { StatusBadge as Pill } from '@/components/ui/status-badge'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface AlertsDeliverySectionProps {
   /** Open the History tab pre-filtered to one digest. */
@@ -633,33 +634,33 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
           {evalResult && (
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Papers Found</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_found}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">New Papers</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_new}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Papers Sent</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_sent}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Failed Sends</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_failed ?? 0}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Matched Rules</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.matched_rules ?? 0}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Channels</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.channels.join(', ') || 'None'}</p>
-                </div>
+                </SubPanel>
               </div>
               {evalResult.channel_results && (
-                <div className="rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Channel Results</p>
                   <div className="space-y-1">
                     {Object.entries(evalResult.channel_results).map(([channel, result]) => (
@@ -672,10 +673,10 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                       </div>
                     ))}
                   </div>
-                </div>
+                </SubPanel>
               )}
               {evalResult.papers && evalResult.papers.length > 0 && (
-                <div className="max-h-48 overflow-y-auto rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="max-h-48 overflow-y-auto p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Papers:</p>
                   <ul className="space-y-2">
                     {evalResult.papers.map((paper, i) => {
@@ -703,7 +704,7 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                       )
                     })}
                   </ul>
-                </div>
+                </SubPanel>
               )}
             </div>
           )}

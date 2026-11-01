@@ -49,6 +49,7 @@ import { describeJobLaunch } from '@/lib/activity'
 import { RowButton } from '@/components/ui/row-button'
 import { cn } from '@/lib/utils'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -745,7 +746,7 @@ function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }
 
 function ImportResultDisplay({ result }: { result: ImportResult }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
+    <SubPanel variant="flat" padded={false}  className="p-4">
       <div className="mb-2 flex items-center gap-2">
         <CheckCircle className="h-5 w-5 text-success-600" />
         <span className="font-medium text-alma-800">Import Complete</span>
@@ -773,7 +774,7 @@ function ImportResultDisplay({ result }: { result: ImportResult }) {
           </ul>
         </div>
       )}
-    </div>
+    </SubPanel>
   )
 }
 
@@ -792,11 +793,11 @@ function StatBox({
     red: 'text-critical-700',
   }
   return (
-    <div className="rounded-md bg-surface-1 p-2 text-center shadow-paper-sm">
+    <SubPanel variant="flat" padded={false}  className="p-2 text-center shadow-paper-sm">
       <div className={`text-lg font-bold ${color ? colorMap[color] : 'text-alma-800'}`}>
         {value}
       </div>
       <div className="text-xs text-slate-500">{label}</div>
-    </div>
+    </SubPanel>
   )
 }

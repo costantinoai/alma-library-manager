@@ -39,6 +39,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { CollectionIntelligenceCard } from './CollectionIntelligenceCard'
 import { ColorPicker } from './ColorPicker'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface CollectionsTabProps {
   /** Deep-link target (global search → `#/library?collection=<id>`): expand
@@ -369,7 +370,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
 
                   {/* Expanded items */}
                   {isExpanded && (
-                    <div className="border-t border-slate-100 bg-surface-2 px-5 py-4">
+                    <SubPanel variant="flat" padded={false}  className="border-t px-5 py-4">
                       {collectionItemsQuery.isLoading ? (
                         <div className="flex items-center justify-center py-4">
                           <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
@@ -422,7 +423,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                           })}
                         </div>
                       )}
-                    </div>
+                    </SubPanel>
                   )}
                 </CardContent>
               </Card>

@@ -30,6 +30,7 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 import { RowButton } from '@/components/ui/row-button'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /**
  * Settings page — two-column layout (sticky TOC + scroll-spy on the left,
@@ -206,11 +207,11 @@ export function SettingsPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+          <SubPanel variant="flat" padded={false} key={i} className="p-4 shadow-paper-sm">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="mt-3 h-3 w-2/3" />
             <Skeleton className="mt-4 h-10 w-full" />
-          </div>
+          </SubPanel>
         ))}
       </div>
     )

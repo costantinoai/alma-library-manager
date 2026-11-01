@@ -21,6 +21,7 @@ import { navigateTo } from '@/lib/hashRoute'
 import { invalidateAfterPaperMutation } from '@/lib/queryHelpers'
 import { formatPaperSource } from '@/lib/format'
 import { formatDate } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type ReadingStatusValue = 'clear' | 'reading' | 'done' | 'excluded'
 
@@ -193,13 +194,13 @@ export function ReadingListTab() {
       </div>
 
       {totalVisible === 0 ? (
-        <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-6 py-12 text-center">
+        <SubPanel variant="flat" padded={false}  className="px-6 py-12 text-center">
           <BookOpen className="mx-auto h-10 w-10 text-slate-300" />
           <p className="mt-4 text-sm font-medium text-slate-600">No reading-list papers match this view.</p>
           <p className="mt-1 text-xs text-slate-500">
             Queue papers from Saved Library or Corpus to turn reading status into a real workflow.
           </p>
-        </div>
+        </SubPanel>
       ) : (
         <div className="space-y-6">
           {sections.map((section) => (

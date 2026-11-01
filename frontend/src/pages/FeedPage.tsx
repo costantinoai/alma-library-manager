@@ -73,6 +73,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { RowButton } from '@/components/ui/row-button'
 import { Toggle } from '@/components/ui/toggle'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const FeedMonitorTermsCard = lazy(() => import('@/components/settings/FeedMonitorTermsCard').then(m => ({ default: m.FeedMonitorTermsCard })))
 const FeedAutoRefreshCard = lazy(() => import('@/components/settings/FeedAutoRefreshCard').then(m => ({ default: m.FeedAutoRefreshCard })))
@@ -1041,11 +1042,11 @@ export function FeedPage() {
               if (entry.count === 0) {
                 return (
                   <RevealItem key={`journal-header-${entry.journal}`} index={i}>
-                    <div className="flex w-full items-center gap-2 rounded-sm border border-dashed border-[var(--color-border)] bg-surface-1 px-3 py-2 text-slate-400">
+                    <SubPanel variant="flat" padded={false}  className="flex w-full items-center gap-2 border-dashed px-3 py-2 text-slate-400">
                       <BookOpen className="ml-6 h-4 w-4 shrink-0" aria-hidden />
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.journal}</span>
                       <span className="text-xs">no papers yet · Refresh to fetch</span>
-                    </div>
+                    </SubPanel>
                   </RevealItem>
                 )
               }

@@ -22,6 +22,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const openalexSchema = z.object({
   openalex_email: z
@@ -137,7 +138,7 @@ export function OpenAlexSection({
           {/* The green/red pill lives in the section header (visible collapsed);
               this box reveals the specific probe reason + the Re-check action,
               which can't sit in the header (it's a button inside the trigger). */}
-          <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2">
+          <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-2 px-3 py-2">
             <span className="text-xs text-slate-500">
               {statusQuery.data?.detail ?? 'Checking connection…'}
             </span>
@@ -152,7 +153,7 @@ export function OpenAlexSection({
             >
               Re-check
             </AsyncButton>
-          </div>
+          </SubPanel>
 
           <FormField
             control={form.control}
@@ -194,7 +195,7 @@ export function OpenAlexSection({
             )}
           />
 
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+          <SubPanel variant="flat" padded={false}  className="p-3">
             <div className="mb-3 flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-slate-700">OpenAlex Usage</p>
               <AsyncButton
@@ -254,7 +255,7 @@ export function OpenAlexSection({
               <p className="mt-1 text-[11px] text-slate-400">Source: {usage.source}</p>
             )}
             {usage?.summary && <p className="mt-2 text-xs text-slate-500">{usage.summary}</p>}
-          </div>
+          </SubPanel>
 
           <div className="flex items-center justify-end gap-3 pt-2">
             {saveSuccess && (

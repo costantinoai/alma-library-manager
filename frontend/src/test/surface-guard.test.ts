@@ -383,6 +383,31 @@ describe('button-guard', () => {
  * one documented exception. `BranchExplorerPanel` loses its raw fold in G3.6.
  * ─────────────────────────────────────── */
 const ACTIVITY = 'components/ActivityPanel.tsx'
+/** May name a paper step: chrome, portals with no surface context (tour, toast,
+ *  chart tooltip, autocomplete), shared tiles, list rows that must stay an `<li>`
+ *  or a conditional state, and the three files G3 removes or rewrites. */
+const PAPER_OWNERS = new Set([
+  'components/layout/Sidebar.tsx',
+  'components/layout/TopBar.tsx',
+  'components/onboarding/OnboardingTour.tsx',
+  'components/onboarding/steps/StepKeywords.tsx',
+  'components/onboarding/steps/StepVision.tsx',
+  'components/onboarding/steps/StepWelcome.tsx',
+  'components/connector/ConnectorToastCard.tsx',
+  'components/insights/InsightsOverviewTab.tsx',
+  'components/shared/VenueAutocomplete.tsx',
+  'components/shared/MetricTile.tsx',
+  'components/settings/primitives.tsx',
+  'components/settings/AIConfigCard.tsx',
+  'components/health/RepairCard.tsx',
+  'components/health/RepairConfirmDialog.tsx',
+  'components/authors/AuthorsNeedsAttentionSection.tsx',
+  'components/discovery/PaperDetailPanel.tsx',
+  'components/discovery/RecommendationProvenance.tsx',
+  'components/discovery/BranchExplorerPanel.tsx',
+  'components/discovery/LensManager.tsx',
+  'components/discovery/LensWeightsPanel.tsx',
+])
 const FOLD_OWNERS = new Set(['components/ui/disclosure-panel.tsx', ACTIVITY, 'components/discovery/BranchExplorerPanel.tsx'])
 
 function scanPrimitives(): string[] {
@@ -393,6 +418,9 @@ function scanPrimitives(): string[] {
     readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
       if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) return
       const at = `${rel}:${i + 1}`
+      if (/\bbg-surface-[0-3]\b/.test(line) && !rel.startsWith('components/ui/') && !PAPER_OWNERS.has(rel)) {
+        hits.push(`${at}  paper step, use Card or SubPanel`)
+      }
       if (/<Badge\b/.test(line)) hits.push(`${at}  <Badge>, use StatusBadge`)
       if (/<details\b/.test(line) && !FOLD_OWNERS.has(rel)) hits.push(`${at}  <details>, use DisclosurePanel`)
       if (/\bbg-(critical|warning|success|info)-(50|100)\b/.test(line) && !rel.startsWith('components/ui/') && rel !== ACTIVITY) {

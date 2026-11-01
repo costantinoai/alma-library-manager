@@ -30,6 +30,7 @@ import {
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { useDebounce } from '@/hooks/useDebounce'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface CommandPaletteProps {
   isOpen: boolean
@@ -237,14 +238,14 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
 
           {/* Footer — keyboard hints using the Kbd primitive for a single
               canonical shortcut-chip style across the app. */}
-          <div className="flex items-center justify-between gap-4 border-t border-[var(--color-border)] bg-surface-2 px-4 py-2 text-xs text-slate-500">
+          <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-4 border-t px-4 py-2 text-xs text-slate-500">
             <div className="flex items-center gap-3">
               <span className="inline-flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd><span className="ml-1">navigate</span></span>
               <span className="inline-flex items-center gap-1"><Kbd>↵</Kbd><span className="ml-1">select</span></span>
               <span className="inline-flex items-center gap-1"><Kbd>esc</Kbd><span className="ml-1">close</span></span>
             </div>
             {isSearching && <span className="text-slate-400">Searching…</span>}
-          </div>
+          </SubPanel>
         </Command>
       </DialogContent>
     </Dialog>

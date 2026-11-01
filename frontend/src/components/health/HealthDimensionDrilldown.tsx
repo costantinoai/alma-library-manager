@@ -44,6 +44,7 @@ import {
 import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { dimensionBadgeTone, severityLabel } from './healthFormat'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const PAGE = 20
 
@@ -252,10 +253,10 @@ export function HealthDimensionDrilldown({
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden bg-surface-1 p-0">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0">
         {dim ? (
           <>
-            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] bg-surface-1 px-5 py-4 text-left">
+            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] px-5 py-4 text-left">
               <div className="flex items-center gap-2">
                 <StatusBadge tone={dimensionBadgeTone(dim.severity)} className="capitalize">
                   {severityLabel(dim.severity)}
@@ -281,7 +282,7 @@ export function HealthDimensionDrilldown({
 
             {/* Selection toolbar */}
             {items.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-surface-2 px-5 py-2 text-sm">
+              <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-3 border-b px-5 py-2 text-sm">
                 <label className="flex items-center gap-2 text-slate-600">
                   <Checkbox
                     checked={allShownSelected}
@@ -318,7 +319,7 @@ export function HealthDimensionDrilldown({
                     ) : null}
                   </div>
                 ) : null}
-              </div>
+              </SubPanel>
             ) : null}
 
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-4">
@@ -332,9 +333,8 @@ export function HealthDimensionDrilldown({
                     What&apos;s broken — and what the repair does
                   </p>
                   {breakdown.map((defect) => (
-                    <div
-                      key={defect.key}
-                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm"
+                    <SubPanel variant="flat" padded={false}
+                      key={defect.key} className="p-3 shadow-paper-sm"
                     >
                       <div className="flex items-baseline justify-between gap-3">
                         <p className="text-sm font-medium text-alma-800">{defect.label}</p>
@@ -345,7 +345,7 @@ export function HealthDimensionDrilldown({
                       <p className="mt-1 text-xs leading-relaxed text-slate-500">
                         {defect.explanation}
                       </p>
-                    </div>
+                    </SubPanel>
                   ))}
                   <p className="pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
                     Affected papers
@@ -365,9 +365,8 @@ export function HealthDimensionDrilldown({
                   const year = (item.publication_date || '').slice(0, 4)
                   const editing = editingId === item.paper_id
                   return (
-                    <div
-                      key={item.paper_id}
-                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm"
+                    <SubPanel variant="flat" padded={false}
+                      key={item.paper_id} className="p-3 shadow-paper-sm"
                     >
                       <div className="flex items-start gap-3">
                         <Checkbox
@@ -486,7 +485,7 @@ export function HealthDimensionDrilldown({
                           )}
                         </div>
                       )}
-                    </div>
+                    </SubPanel>
                   )
                 })
               )}

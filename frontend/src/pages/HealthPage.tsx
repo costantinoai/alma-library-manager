@@ -58,6 +58,7 @@ import { freshnessNote } from '@/components/health/healthFormat'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
@@ -453,7 +454,7 @@ export function HealthPage() {
           ribbon, then a strip of clickable system-component chips. That question
           must be answerable without picking a tab first, so it never moves into
           one; the tabs below carry the WORK (what to fix / what already ran). */}
-      <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm sm:p-5">
+      <SubPanel variant="flat" padded={false}  className="space-y-4 p-4 shadow-paper-sm sm:p-5">
         {snapshotQuery.isError ? (
           <Alert variant="negative" layout="row" className="justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -493,7 +494,7 @@ export function HealthPage() {
             />
           </div>
         </div>
-      </section>
+      </SubPanel>
 
       {/* The affected-papers drilldown, opened by any status row on the page. */}
       <HealthDimensionDrilldown
@@ -530,7 +531,7 @@ export function HealthPage() {
           IS a recommended op OR a sequence is mid-flight (so its controls/status
           stay visible even as the recommended op changes underneath it). */}
       {recommended || sequenceActive ? (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
+        <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center justify-between gap-3 p-4">
           <div>
             <SectionLabel>Recommended next</SectionLabel>
             {recommended ? (
@@ -576,7 +577,7 @@ export function HealthPage() {
               </>
             ) : null}
           </div>
-        </section>
+        </SubPanel>
       ) : null}
 
       {/* Repair groups — status + action in one card, in backend stage order.
