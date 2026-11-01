@@ -41,7 +41,6 @@ LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD = 0.70
 # maintenance registry's `default_manual_limit` for `paper_group_reconcile`, so
 # the import path can't do more group work in one go than the user's own
 # "Reconcile paper groups" button would.
-_IMPORT_GROUP_RECONCILE_LIMIT = 1_000
 
 
 def _import_work_type(raw_type: object) -> str | None:
@@ -1921,26 +1920,47 @@ def _import_or_stage_paper(
     return paper_id, "imported"
 
 
-def run_import_group_reconcile(conn: sqlite3.Connection) -> dict:
-    """Post-import stage: settle paper groups AFTER enrichment, before dedup.
+def settle_imported_paper_groups(conn: sqlite3.Connection, paper_ids: list[str]) -> dict:
+    """Post-import stage: settle the imported papers' groups AFTER enrichment.
 
-    Write-time settling (`settle_new_paper_group`) can only classify what a row
-    already carries. An import that arrives as title + author only has no DOI and
-    no work type, so its figure / supplementary / preprint nature becomes visible
-    only once the enrichment stage above fills those fields. This pass is where
-    those late-classified rows join their group.
-
-    It is the SAME idempotent op Health exposes as "Reconcile paper groups"
-    (`paper_group_reconcile`), bounded by `_IMPORT_GROUP_RECONCILE_LIMIT` so a
-    large import can't turn a post-import step into an unbounded corpus sweep.
+    Write-time settling can only classify what a row already carries. An import
+    that arrives as title + author only has no DOI and no work type, so its
+    figure / supplementary / preprint nature becomes visible only once the
+    enrichment stage fills those fields. This pass re-settles exactly those rows
+    through the one ingest step; the corpus-wide repair is Health's button.
     """
-    from alma.core.db_write import write_section
-    from alma.services.paper_group_reconcile import reconcile_paper_groups
-
-    return reconcile_paper_groups(
-        conn, limit=_IMPORT_GROUP_RECONCILE_LIMIT,
-        section=lambda unit: write_section(conn, label=f"import paper-group reconcile:{unit}"),
-    )
+    settled = components = 0
+    for paper_id in paper_ids:
+        with write_section(conn, label="import paper-group settle"):
+            row = conn.execute(
+                "SELECT doi, work_type, component_type, parent_paper_id, canonical_paper_id "
+                "FROM papers WHERE id = ?",
+                (paper_id,),
+            ).fetchone()
+            if row is None or row["canonical_paper_id"] or row["parent_paper_id"]:
+                continue
+            component_type = row["component_type"]
+            parent_paper_id = None
+            if component_type is None:
+                component_type, parent_paper_id = resolve_component(
+                    conn, doi=row["doi"], work_type=row["work_type"]
+                )
+                if component_type is not None:
+                    conn.execute(
+                        "UPDATE papers SET component_type = ?, parent_paper_id = ? WHERE id = ?",
+                        (component_type, parent_paper_id, paper_id),
+                    )
+            settle_new_paper_group(
+                conn,
+                paper_id,
+                component_type=component_type,
+                parent_paper_id=parent_paper_id,
+                doi=row["doi"],
+                reason="import_enrichment",
+            )
+            settled += 1
+            components += int(component_type is not None)
+    return {"settled": settled, "components": components}
 
 
 def _record_import_outcome(
@@ -2192,14 +2212,6 @@ def _lookup_import_target(
 # despite arriving with the paper. Each `IN` builds its set once per statement:
 # neither link has a usable index, so a correlated EXISTS scans the whole table
 # for every author.
-_LINKED_PUBLICATION_SQL = """
-    a.id IN (SELECT p.author_id FROM papers p WHERE p.author_id IS NOT NULL)
-    OR lower(trim(a.name)) IN (
-        SELECT lower(trim(pa.display_name)) FROM publication_authors pa
-    )
-"""
-
-
 def _trigger_background_enrichment(
     result: ImportResult,
     imported_refs: list[str] | None = None,
@@ -2209,60 +2221,37 @@ def _trigger_background_enrichment(
     Only runs when the import actually added new papers.  Failures are
     logged but never propagated -- enrichment is a best-effort step.
     """
-    if result.imported + result.staged <= 0:
+    refs = [paper_id for paper_id in (imported_refs or []) if paper_id]
+    if not refs:
         return
 
-    def _read_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
-        try:
-            row = conn.execute("SELECT value FROM discovery_settings WHERE key = ?", (key,)).fetchone()
-            if row is None:
-                return default
-            return row["value"] if isinstance(row, sqlite3.Row) else row[0]
-        except Exception:
-            return default
-
     def _auto_resolve_author_ids(conn: sqlite3.Connection, job_id: str) -> dict:
-        """Resolve OpenAlex/Scholar IDs for unresolved authors.
+        """Resolve OpenAlex/Scholar IDs for the unresolved authors of THESE papers.
 
         Uses the optimized bulk resolver: publication-first (DB lookup) then
-        concurrent fallback title search for remaining unresolved authors.
+        concurrent fallback title search for remaining unresolved authors. An
+        import is about its own papers: an author left unresolved by an earlier
+        run stays with Health's repair, it does not cost this import a title
+        search per author.
         """
         from alma.api.routes.authors import _resolve_identifiers_bulk_optimized
 
-        unresolved_no_publications = int(
-            conn.execute(
-                f"""
-                SELECT COUNT(*) AS c
-                FROM authors a
-                WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT ({_LINKED_PUBLICATION_SQL})
-                """
-            ).fetchone()["c"] or 0
-        )
-        unresolved_placeholder_no_publications = int(
-            conn.execute(
-                f"""
-                SELECT COUNT(*) AS c
-                FROM authors a
-                WHERE a.id LIKE 'import_author_%'
-                  AND COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-                  AND NOT ({_LINKED_PUBLICATION_SQL})
-                """
-            ).fetchone()["c"] or 0
-        )
-        unresolved_non_placeholder_no_publications = max(
-            0,
-            unresolved_no_publications - unresolved_placeholder_no_publications,
-        )
+        placeholders = ", ".join("?" for _ in refs)
         rows = conn.execute(
             f"""
             SELECT a.id, a.name
             FROM authors a
             WHERE COALESCE(a.id_resolution_status, '') IN ('', 'unresolved', 'needs_manual_review', 'no_match', 'error')
-              AND ({_LINKED_PUBLICATION_SQL})
+              AND (
+                a.id IN (SELECT p.author_id FROM papers p WHERE p.id IN ({placeholders}))
+                OR lower(trim(a.name)) IN (
+                    SELECT lower(trim(pa.display_name)) FROM publication_authors pa
+                    WHERE pa.paper_id IN ({placeholders})
+                )
+              )
             ORDER BY a.name
-            LIMIT 5000
-            """
+            """,
+            (*refs, *refs),
         ).fetchall()
 
         if not rows:
@@ -2272,34 +2261,17 @@ def _trigger_background_enrichment(
                 "needs_manual_review": 0,
                 "no_match": 0,
                 "error": 0,
-                "skipped_no_publications": unresolved_no_publications,
-                "skipped_placeholder_no_publications": unresolved_placeholder_no_publications,
-                "skipped_non_placeholder_no_publications": unresolved_non_placeholder_no_publications,
             }
 
         from alma.api.scheduler import add_job_log
-        skipped_no_publications = unresolved_no_publications
-        skip_details = []
-        if unresolved_placeholder_no_publications:
-            skip_details.append(f"placeholder_no_pubs={unresolved_placeholder_no_publications}")
-        if unresolved_non_placeholder_no_publications:
-            skip_details.append(f"other_no_pubs={unresolved_non_placeholder_no_publications}")
-        skip_suffix = f" ({', '.join(skip_details)})" if skip_details else ""
+
         add_job_log(
             job_id,
-            (
-                f"Resolving identifiers for {len(rows)} unresolved authors with linked publications "
-                f"(skipped={skipped_no_publications} with no publications){skip_suffix}"
-            ),
+            f"Resolving identifiers for {len(rows)} unresolved authors of {len(refs)} imported papers",
             step="author_id_resolution",
         )
-
         authors = [(row["id"], row["name"]) for row in rows]
-        summary = _resolve_identifiers_bulk_optimized(conn, authors, job_id, max_workers=10)
-        summary["skipped_no_publications"] = skipped_no_publications
-        summary["skipped_placeholder_no_publications"] = unresolved_placeholder_no_publications
-        summary["skipped_non_placeholder_no_publications"] = unresolved_non_placeholder_no_publications
-        return summary
+        return _resolve_identifiers_bulk_optimized(conn, authors, job_id, max_workers=10)
 
     try:
         from alma.api.scheduler import (
@@ -2307,21 +2279,19 @@ def _trigger_background_enrichment(
             schedule_immediate,
             set_job_status,
         )
-        from alma.library.deduplication import run_deduplication
-        from alma.library.enrichment import enrich_all_unenriched, enrich_publication
+        from alma.library.enrichment import enrich_publication
 
         job_id = f"import_postprocess_{uuid.uuid4().hex[:10]}"
-        refs = imported_refs or []
-        # Targeted plan: enrich → paper_groups → author_linking → resolve_ids →
-        # dedup. Full plan drops author_linking.
-        pipeline_total = 5 if refs else 4
+        # An import touches only what it brought in. Corpus-wide repair (paper
+        # groups, duplicate merging) is a Health action the user starts.
+        pipeline_total = 4
         set_job_status(
             job_id,
             status="running",
             started_at=utcnow().isoformat(),
             operation_key="imports.postprocess",
             trigger_source="user",
-            message="Post-import pipeline: enrich, resolve IDs, and deduplicate",
+            message=f"Post-import pipeline for {len(refs)} papers: enrich and resolve IDs",
             processed=0,
             total=pipeline_total,
         )
@@ -2329,8 +2299,8 @@ def _trigger_background_enrichment(
             job_id,
             (
                 f"Post-import pipeline started for {result.imported} imported items "
-                "(stages: enrichment -> paper groups -> author linking -> author ID resolution "
-                "-> dedup; enrichment queues downstream vectors automatically)"
+                "(stages: enrichment -> paper groups -> author linking -> author ID resolution; "
+                "enrichment queues downstream vectors automatically)"
             ),
             step="start",
         )
@@ -2580,102 +2550,36 @@ def _trigger_background_enrichment(
 
             conn = open_db_connection()
             try:
-                subtask_jobs: dict[str, str] = {}
-                if refs:
-                    from alma.library.enrichment import resolve_imported_authors
+                from alma.library.enrichment import resolve_imported_authors
 
-                    valid_refs = [r for r in refs if r]
-                    stage_plan = [
-                        (
-                            "enrich",
-                            "Targeted OpenAlex enrichment",
-                            lambda sid: _run_targeted_enrichment_stage(conn, valid_refs, sid),
-                        ),
-                        (
-                            "paper_groups",
-                            "Reconcile paper groups",
-                            lambda sid: run_import_group_reconcile(conn),
-                        ),
-                        (
-                            "author_linking",
-                            "Author linking to tracked profiles",
-                            lambda sid: run_write_unit(
-                                conn,
-                                lambda: resolve_imported_authors(conn),
-                                label="import author-linking (staged)",
-                            ),
-                        ),
-                        (
-                            "resolve_ids",
-                            "Author ID resolution",
-                            lambda sid: _auto_resolve_author_ids(conn, sid),
-                        ),
-                        (
-                            "dedup",
-                            "Deduplicate database entities",
-                            lambda sid: run_deduplication(conn, job_id=sid),
-                        ),
-                    ]
-                    stage_total = len(stage_plan)
-                    stage_results: dict[str, dict] = {}
-                    for idx, (stage_key, stage_label, runner) in enumerate(stage_plan, start=1):
-                        sid, summary = _run_stage(
-                            conn,
-                            stage_key=stage_key,
-                            stage_label=stage_label,
-                            stage_index=idx,
-                            stage_total=stage_total,
-                            runner=runner,
-                        )
-                        subtask_jobs[stage_key] = sid
-                        stage_results[stage_key] = summary
-
-                    add_job_log(
-                        job_id,
-                        "Post-import pipeline completed",
-                        step="done",
-                        data={"subtasks": subtask_jobs},
-                    )
-                    enrich_summary = stage_results.get("enrich", {})
-                    return {
-                        "enrichment": enrich_summary,
-                        "resolved_authors": stage_results.get("author_linking", {}),
-                        "resolved_author_ids": stage_results.get("resolve_ids", {}),
-                        "paper_groups": stage_results.get("paper_groups", {}),
-                        "dedup": stage_results.get("dedup", {}),
-                        "targeted_enrichment_total": int(enrich_summary.get("total") or 0),
-                        "targeted_enriched": int(enrich_summary.get("enriched") or 0),
-                        "subtasks": subtask_jobs,
-                    }
-
-                add_job_log(
-                    job_id,
-                    "No explicit refs found; running full post-import pipeline",
-                    step="full_enrichment",
-                )
                 stage_plan = [
                     (
                         "enrich",
-                        "Full OpenAlex enrichment",
-                        lambda sid: enrich_all_unenriched(conn, job_id=sid),
+                        "Targeted OpenAlex enrichment",
+                        lambda sid: _run_targeted_enrichment_stage(conn, refs, sid),
                     ),
                     (
                         "paper_groups",
-                        "Reconcile paper groups",
-                        lambda sid: run_import_group_reconcile(conn),
+                        "Settle imported paper groups",
+                        lambda sid: settle_imported_paper_groups(conn, refs),
+                    ),
+                    (
+                        "author_linking",
+                        "Author linking to tracked profiles",
+                        lambda sid: run_write_unit(
+                            conn,
+                            lambda: resolve_imported_authors(conn),
+                            label="import author-linking (staged)",
+                        ),
                     ),
                     (
                         "resolve_ids",
                         "Author ID resolution",
                         lambda sid: _auto_resolve_author_ids(conn, sid),
                     ),
-                    (
-                        "dedup",
-                        "Deduplicate database entities",
-                        lambda sid: run_deduplication(conn, job_id=sid),
-                    ),
                 ]
                 stage_total = len(stage_plan)
+                subtask_jobs: dict[str, str] = {}
                 stage_results: dict[str, dict] = {}
                 for idx, (stage_key, stage_label, runner) in enumerate(stage_plan, start=1):
                     sid, summary = _run_stage(
@@ -2695,11 +2599,14 @@ def _trigger_background_enrichment(
                     step="done",
                     data={"subtasks": subtask_jobs},
                 )
+                enrich_summary = stage_results.get("enrich", {})
                 return {
-                    "enrichment": stage_results.get("enrich", {}),
+                    "enrichment": enrich_summary,
+                    "resolved_authors": stage_results.get("author_linking", {}),
                     "resolved_author_ids": stage_results.get("resolve_ids", {}),
                     "paper_groups": stage_results.get("paper_groups", {}),
-                    "dedup": stage_results.get("dedup", {}),
+                    "targeted_enrichment_total": int(enrich_summary.get("total") or 0),
+                    "targeted_enriched": int(enrich_summary.get("enriched") or 0),
                     "subtasks": subtask_jobs,
                 }
             finally:
