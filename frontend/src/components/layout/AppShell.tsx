@@ -136,7 +136,7 @@ export function AppShell({
               <AlertDescription>
                 External network access is off
                 {networkPolicyQuery.data.forced_off_by_env ? ' by an operations override' : ''}.
-                Local Library and search still work; API, Slack, email, and hosted-AI calls
+                Local Library and search still work; API, Slack, and email calls
                 are blocked.
               </AlertDescription>
               <Button
