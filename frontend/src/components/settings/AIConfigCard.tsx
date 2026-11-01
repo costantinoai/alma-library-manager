@@ -816,7 +816,7 @@ export function AIConfigCard() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => deleteInactiveEmbeddingsMutation.mutate()}
-                          className="bg-critical-600 text-white hover:bg-critical-700"
+                          className="bg-critical-600 text-on-fill hover:bg-critical-700"
                         >
                           Delete inactive
                         </AlertDialogAction>

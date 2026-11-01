@@ -817,7 +817,7 @@ export function AffiliationPickerDialog({
                       </div>
                     </div>
                     {isCurrent ? (
-                      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-accent-600">
+                      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-alma-folio-600">
                         <Check className="h-3.5 w-3.5" /> Selected
                       </span>
                     ) : (

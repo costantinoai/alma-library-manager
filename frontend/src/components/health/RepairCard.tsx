@@ -326,7 +326,7 @@ export function RepairCard({
               Paused by you until {formatTimestamp(pausedUntil)}
               <button
                 type="button"
-                className="rounded px-1.5 py-0.5 font-medium text-accent-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
+                className="rounded px-1.5 py-0.5 font-medium text-alma-folio-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
                 onClick={() => onResume(op.key)}
               >
                 Resume

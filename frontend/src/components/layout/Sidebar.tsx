@@ -107,7 +107,7 @@ function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: Na
         'group relative flex w-full items-center rounded-sm py-2.5 text-sm font-medium transition-colors',
         collapsed ? 'lg:justify-center lg:gap-0 lg:px-2 gap-3 px-3' : 'gap-3 px-3',
         isActive
-          ? 'bg-[rgb(30_91_134_/_0.32)] text-alma-cream'
+          ? 'bg-alma-folio/[0.32] text-alma-cream'
           : 'text-alma-200 hover:bg-surface-4/[0.04] hover:text-alma-cream',
       )}
     >
@@ -198,7 +198,7 @@ export function Sidebar({
       {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-scrim lg:hidden"
           onClick={onClose}
         />
       )}

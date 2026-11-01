@@ -11,7 +11,7 @@ import { join, relative, sep } from 'node:path'
  * fails if any appear outside the allowlist (the token source lives in
  * index.css, which is not scanned; the primitive *definitions* in
  * components/ui legitimately spell the raw classes the rest of the app
- * must route through; PaperCard owns the SIGNAL_META data palette).
+ * must route through; lib/palette.ts owns the data palettes).
  *
  * The offender list is printed on failure (file:line + the offending class)
  * so any regression is immediately actionable.
@@ -232,5 +232,54 @@ describe('control-guard: controls are ink, surfaces are paper', () => {
     ]) {
       expect(css).toContain(token)
     }
+  })
+})
+
+/* ───────────────────────────────────────
+ * colour-guard — a colour is a token, wherever it is written.
+ *
+ * The scans above read `.tsx` class strings. A colour can also sit in a `.ts`
+ * constant, a chart prop or an inline style, so this one reads every source
+ * line, primitives included. Comments are skipped: they may name a value.
+ * ─────────────────────────────────────── */
+const COLOUR_OWNERS = new Set(['lib/palette.ts', 'test/surface-guard.test.ts'])
+
+const COLOUR_BANNED: Array<{ name: string; re: RegExp }> = [
+  { name: 'hex literal', re: /#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?\b/g },
+  { name: 'rgb literal', re: /\brgba?\(\s*\d/g },
+  { name: 'rgb utility', re: /\[rgba?\(/g },
+  { name: 'black or white, use scrim / on-fill', re: /\b(bg|text|border)-(black|white)(\/[\d.]+)?(?![\w-])/g },
+  // Only colours with a `--color-*` token compile. These two never had one.
+  { name: 'class with no CSS', re: /\btext-accent-\d+\b/g },
+]
+
+function allSource(dir: string, acc: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) allSource(full, acc)
+    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) acc.push(full)
+  }
+  return acc
+}
+
+function scanColours(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (COLOUR_OWNERS.has(rel)) continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      const code = line.trim()
+      if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//')) return
+      for (const { name, re } of COLOUR_BANNED) {
+        for (const m of line.matchAll(re)) hits.push(`${rel}:${i + 1}  ${m[0]}  (${name})`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('colour-guard', () => {
+  it('every colour outside lib/palette.ts is a token', () => {
+    expect(scanColours()).toEqual([])
   })
 })

@@ -20,7 +20,7 @@ import {
 } from 'recharts'
 
 import { api, type InsightsData } from '@/api/client'
-import { COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
+import { CHART_FRAME, COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { SectionHeader } from '@/components/shared'
@@ -89,19 +89,19 @@ export function RecommendationEngagement({
                     layout="vertical"
                     margin={{ left: 10 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_FRAME.grid} />
                     <XAxis
                       type="number"
-                      tick={{ fontSize: 12, fill: '#152642' }}
-                      stroke="#D9CBAF"
+                      tick={{ fontSize: 12, fill: CHART_FRAME.tick }}
+                      stroke={CHART_FRAME.axis}
                       allowDecimals={false}
                     />
                     <YAxis
                       dataKey="name"
                       type="category"
                       width={110}
-                      tick={{ fontSize: 11, fill: '#152642' }}
-                      stroke="#D9CBAF"
+                      tick={{ fontSize: 11, fill: CHART_FRAME.tick }}
+                      stroke={CHART_FRAME.axis}
                     />
                     <Tooltip
                       {...TOOLTIP_STYLE}

@@ -36,15 +36,4 @@ export interface TabDefinition {
   icon: LucideIcon
 }
 
-export const PRESET_COLORS = [
-  '#3B82F6', // blue
-  '#8B5CF6', // violet
-  '#EC4899', // pink
-  '#EF4444', // red
-  '#F59E0B', // amber
-  '#10B981', // emerald
-  '#06B6D4', // cyan
-  '#6366F1', // indigo
-  '#84CC16', // lime
-  '#F97316', // orange
-]
+export { PRESET_COLORS } from '@/lib/palette'

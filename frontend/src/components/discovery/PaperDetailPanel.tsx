@@ -871,7 +871,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 e.preventDefault()
                 removeMutation.mutate()
               }}
-              className="bg-critical-600 text-white hover:bg-critical-700"
+              className="bg-critical-600 text-on-fill hover:bg-critical-700"
               disabled={removeMutation.isPending}
             >
               {removeMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}

@@ -419,7 +419,7 @@ export function PaperCard({
               onCheckedChange={(value) => selection.onCheckedChange(value === true)}
               className={cn(
                 selection.checked &&
-                  'border-white/80 data-[state=checked]:border-white data-[state=checked]:bg-surface-4 data-[state=checked]:text-alma-600',
+                  'border-on-fill/80 data-[state=checked]:border-on-fill data-[state=checked]:bg-surface-4 data-[state=checked]:text-alma-600',
               )}
             />
           </div>

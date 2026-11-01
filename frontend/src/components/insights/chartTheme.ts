@@ -8,27 +8,34 @@
  */
 
 export const COLORS = {
-  blue: '#0F1E36', // alma-800 (brand navy)
-  purple: '#152642', // alma-700 (deeper navy)
-  green: '#1E5B86', // alma-folio (Folio binding blue)
-  amber: '#C49A45', // gold-400 (brand gold)
-  cyan: '#6F98BB', // pale-500 (mid pale-blue)
-  pink: '#C2A86B', // parchment-500 (warm parchment)
-  indigo: '#344E7C', // alma-500 (mid navy)
-  orange: '#A77E36', // gold-500 (warm trim)
-  red: '#f43f5e', // critical (semantic token)
-  slate: '#64748b',
+  blue: 'var(--color-alma-800)', // brand navy
+  purple: 'var(--color-alma-700)', // deeper navy
+  green: 'var(--color-alma-folio)', // Folio binding blue
+  amber: 'var(--color-gold-400)', // brand gold
+  cyan: 'var(--color-pale-500)', // mid pale-blue
+  pink: 'var(--color-parchment-500)', // warm parchment
+  indigo: 'var(--color-alma-500)', // mid navy
+  orange: 'var(--color-gold-500)', // warm trim
+  red: 'var(--color-critical-500)', // critical
+  slate: 'var(--color-muted)',
+}
+
+/** The chart frame: grid lines, axis lines, tick labels. */
+export const CHART_FRAME = {
+  grid: 'var(--color-border-cool)',
+  axis: 'var(--color-border)',
+  tick: 'var(--color-alma-700)',
 }
 
 export const TOOLTIP_STYLE = {
   contentStyle: {
-    background: '#0F1E36', // alma-800 (brand navy)
-    border: '1px solid #C49A45', // gold trim — editorial card edge
+    background: 'var(--color-alma-800)',
+    border: '1px solid var(--color-gold-400)', // gold trim, editorial card edge
     borderRadius: 2,
-    color: '#FFF9F0', // alma-cream
+    color: 'var(--color-alma-cream)',
     fontSize: 13,
     padding: '6px 10px',
   },
-  itemStyle: { color: '#FFF9F0' },
-  labelStyle: { color: '#C49A45', fontWeight: 600, marginBottom: 4 },
+  itemStyle: { color: 'var(--color-alma-cream)' },
+  labelStyle: { color: 'var(--color-gold-400)', fontWeight: 600, marginBottom: 4 },
 }

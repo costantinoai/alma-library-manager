@@ -362,3 +362,35 @@ export const MONITOR_MIX_FILL = {
   journals: 'bg-alma-folio',
   other: 'bg-slate-500',
 } as const
+
+/**
+ * Discovery branch dots: eight distinguishable identity slots. A hue here answers
+ * which branch, never how good it is.
+ */
+export const BRANCH_COLORS = [
+  'var(--color-alma-800)',
+  'var(--color-alma-folio)',
+  'var(--color-gold-400)',
+  'var(--color-pale-500)',
+  'var(--color-alma-500)',
+  'var(--color-parchment-500)',
+  'var(--color-gold-500)',
+  'var(--color-pale-700)',
+] as const
+
+/**
+ * What a collection or tag can be coloured. Identity, not valence. Hex on purpose:
+ * the chosen value is stored on the row, so a stored colour must not follow a token.
+ */
+export const PRESET_COLORS = [
+  '#3B82F6', // blue
+  '#8B5CF6', // violet
+  '#EC4899', // pink
+  '#EF4444', // red
+  '#F59E0B', // amber
+  '#10B981', // emerald
+  '#06B6D4', // cyan
+  '#6366F1', // indigo
+  '#84CC16', // lime
+  '#F97316', // orange
+]

@@ -46,6 +46,7 @@ import {
   TIMELINE_SERIES,
   useSeriesVisibility,
 } from '@/components/insights/chartSeries'
+import { CHART_FRAME, COLORS } from '@/components/insights/chartTheme'
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { Meter } from '@/components/ui/meter'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
@@ -90,7 +91,7 @@ function EmptyChart({ message }: { message: string }) {
 // the full name is restored by the tooltip.
 function SingleLineTick({ x, y, payload }: { x?: number; y?: number; payload?: { value?: string } }) {
   return (
-    <text x={x} y={y} dy={4} textAnchor="end" fontSize={11} fill="#152642">
+    <text x={x} y={y} dy={4} textAnchor="end" fontSize={11} fill={CHART_FRAME.tick}>
       {payload?.value ?? ''}
     </text>
   )
@@ -247,11 +248,11 @@ export function InsightsOverviewTab({
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={publications_by_year}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                <XAxis dataKey="year" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                <YAxis yAxisId="left" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_FRAME.grid} />
+                <XAxis dataKey="year" tick={{ fontSize: 12, fill: CHART_FRAME.tick }} stroke={CHART_FRAME.axis} />
+                <YAxis yAxisId="left" tick={{ fontSize: 12, fill: CHART_FRAME.tick }} stroke={CHART_FRAME.axis} />
                 {(timeline.visible.avg_citations || timeline.visible.median_citations) && (
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: CHART_FRAME.tick }} stroke={CHART_FRAME.axis} />
                 )}
                 <Tooltip {...tooltipStyle} content={<TimelineTooltip />} />
                 <Legend />
@@ -302,7 +303,7 @@ export function InsightsOverviewTab({
                     type="monotone"
                     dataKey="avg_citations"
                     name="Mean Citations"
-                    stroke={colors.slate ?? '#94a3b8'}
+                    stroke={colors.slate ?? COLORS.slate}
                     strokeWidth={1.5}
                     strokeDasharray="4 3"
                     dot={false}
@@ -350,14 +351,14 @@ export function InsightsOverviewTab({
             ) : (
               <ResponsiveContainer width="100%" height={Math.max(250, provenanceRows.length * 28)}>
                 <BarChart data={provenanceRows} layout="vertical" margin={{ left: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                  <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_FRAME.grid} />
+                  <XAxis type="number" tick={{ fontSize: 12, fill: CHART_FRAME.tick }} stroke={CHART_FRAME.axis} />
                   <YAxis
                     dataKey="label"
                     type="category"
                     width={provenanceMode === 'countries' ? 48 : 200}
                     tick={<SingleLineTick />}
-                    stroke="#D9CBAF"
+                    stroke={CHART_FRAME.axis}
                   />
                   <Tooltip
                     {...tooltipStyle}
@@ -418,9 +419,9 @@ export function InsightsOverviewTab({
                   layout="vertical"
                   margin={{ left: 10 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                  <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <YAxis dataKey="term" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_FRAME.grid} />
+                  <XAxis type="number" tick={{ fontSize: 12, fill: CHART_FRAME.tick }} stroke={CHART_FRAME.axis} />
+                  <YAxis dataKey="term" type="category" width={200} tick={<SingleLineTick />} stroke={CHART_FRAME.axis} />
                   {/* Cluster labels are long and the axis truncates them; the
                       tooltip restores the FULL label on hover. */}
                   <Tooltip
@@ -540,10 +541,10 @@ export function InsightsOverviewTab({
               <h4 className="font-brand text-sm font-semibold text-alma-800">Library</h4>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { icon: Heart, color: '#1E5B86', label: 'Saved Papers', value: library.total_saved },
-                  { icon: FolderOpen, color: '#0F1E36', label: 'Collections', value: library.total_collections },
-                  { icon: UserPlus, color: '#C49A45', label: 'Followed Authors', value: library.total_followed_authors },
-                  { icon: Tag, color: '#A77E36', label: 'Avg Rating', value: library.avg_rating > 0 ? `${library.avg_rating}/5` : '—' },
+                  { icon: Heart, color: COLORS.green, label: 'Saved Papers', value: library.total_saved },
+                  { icon: FolderOpen, color: COLORS.blue, label: 'Collections', value: library.total_collections },
+                  { icon: UserPlus, color: COLORS.amber, label: 'Followed Authors', value: library.total_followed_authors },
+                  { icon: Tag, color: COLORS.orange, label: 'Avg Rating', value: library.avg_rating > 0 ? `${library.avg_rating}/5` : '—' },
                 ].map((tile) => (
                   <MetricTile
                     key={tile.label}

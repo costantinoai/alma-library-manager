@@ -177,13 +177,13 @@ export function OnboardingTour({
                 left: rect.left - PAD,
                 width: rect.width + PAD * 2,
                 height: rect.height + PAD * 2,
-                boxShadow: '0 0 0 9999px rgba(20, 35, 58, 0.55)',
+                boxShadow: '0 0 0 9999px var(--color-scrim)',
                 transition: reduced ? undefined : 'all 0.2s ease',
               }}
               aria-hidden
             />
           ) : (
-            <div className="absolute inset-0" style={{ backgroundColor: 'rgba(20, 35, 58, 0.55)' }} aria-hidden />
+            <div className="absolute inset-0" style={{ backgroundColor: 'var(--color-scrim)' }} aria-hidden />
           )}
           {/* Click-catcher to block the app behind (card stops propagation). */}
           <div className="absolute inset-0" onClick={() => onClose('skipped')} aria-hidden />

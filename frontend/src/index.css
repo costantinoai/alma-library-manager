@@ -160,6 +160,11 @@
    * The only "alma-cream" survivor; it is a text color, not a surface. */
   --color-alma-cream: #FFF9F0;
 
+  /* The one scrim behind every modal layer: brand navy, never black. */
+  --color-scrim: rgb(20 35 58 / 0.55);
+  /* Text and marks on a filled state colour. */
+  --color-on-fill: #FFFFFF;
+
   /* ── Parchment ramp ─────────────────────────────────────────────────────
    * Anchored at parchment-200 (#F3EAD6 brand parchment). Used for warm
    * surfaces, editorial accents, library/paper tone treatments.

@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/useToast'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { BranchStructureStatus } from './BranchStructureStatus'
+import { BRANCH_COLORS } from '@/lib/palette'
 
 interface BranchExplorerPanelProps {
   lens: Lens | null
@@ -40,19 +41,6 @@ interface BranchExplorerPanelProps {
   bare?: boolean
 }
 
-// Branch palette — pinned to the v3 brand. Eight distinguishable slots
-// drawn from navy / Folio-blue / gold / parchment / pale tones so the
-// branch color dots stay consistent with the rest of the product.
-const BRANCH_COLORS = [
-  '#0F1E36', // alma-800 (navy)
-  '#1E5B86', // alma-folio (Folio binding blue)
-  '#C49A45', // gold-400
-  '#6F98BB', // pale-500
-  '#344E7C', // alma-500 (mid navy)
-  '#C2A86B', // parchment-500
-  '#A77E36', // gold-500
-  '#3D5F7C', // pale-700
-] as const
 const BRANCH_PRESETS = [
   { id: 'steady', label: 'Steady', description: 'Tight continuity around core taste.', temperature: 0.12 },
   { id: 'balanced', label: 'Balanced', description: 'Stable mix of continuity and exploration.', temperature: 0.28 },

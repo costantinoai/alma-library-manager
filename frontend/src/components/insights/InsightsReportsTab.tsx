@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import { ActionCardHeader, MetricTile } from '@/components/shared'
+import { CHART_FRAME } from '@/components/insights/chartTheme'
 import { formatDate, truncate } from '@/lib/utils'
 import { formatPercent } from '@/lib/format'
 
@@ -378,7 +379,7 @@ export function InsightsReportsTab({
                 />
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={signalImpactData.signals} margin={{ left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_FRAME.grid} />
                     <XAxis dataKey="signal" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 12 }} />
                     <Tooltip {...tooltipStyle} />

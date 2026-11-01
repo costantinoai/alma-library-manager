@@ -458,7 +458,7 @@ export function LibraryManagementCard() {
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       onClick={() => resetMutation.mutate({ alsoSignal: alsoResetSignal })}
-                      className="bg-critical-600 text-white hover:bg-critical-700"
+                      className="bg-critical-600 text-on-fill hover:bg-critical-700"
                     >
                       {alsoResetSignal ? 'Reset DB + feedback' : 'Yes, reset DB only'}
                     </AlertDialogAction>
@@ -515,7 +515,7 @@ function ConfirmAction({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
-            className={destructive ? 'bg-critical-600 text-white hover:bg-critical-700' : undefined}
+            className={destructive ? 'bg-critical-600 text-on-fill hover:bg-critical-700' : undefined}
           >
             {confirmLabel}
           </AlertDialogAction>

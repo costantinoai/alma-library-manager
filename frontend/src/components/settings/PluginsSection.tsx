@@ -253,7 +253,7 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
           <span>v{plugin.version}</span>
           {plugin.docs_path && (
             <a
-              className="inline-flex items-center gap-1 text-accent-700 hover:underline"
+              className="inline-flex items-center gap-1 text-alma-folio-700 hover:underline"
               href={docsUrl(plugin.docs_path)}
               target="_blank"
               rel="noreferrer"

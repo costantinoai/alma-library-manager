@@ -18,9 +18,9 @@ export const buttonVariants = cva(
         accent:
           'bg-alma-folio text-alma-cream shadow-paper-sm hover:bg-alma-folio-600 hover:shadow-paper-md active:bg-alma-folio-700',
         destructive:
-          'bg-critical-600 text-white shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
+          'bg-critical-600 text-on-fill shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
         success:
-          'bg-success-600 text-white shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
+          'bg-success-600 text-on-fill shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
         gold:
           'bg-gold-400 text-alma-900 shadow-paper-sm hover:bg-gold-500 hover:text-alma-cream hover:shadow-paper-md',
         // Unfilled variants fill from the CONTROL INK ladder, never from the
