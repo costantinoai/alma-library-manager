@@ -1,7 +1,28 @@
 import { type ClassValue, clsx } from 'clsx'
-import { twMerge } from 'tailwind-merge'
+import { extendTailwindMerge } from 'tailwind-merge'
 
 import { formatDay, formatDayTime } from '@/lib/format'
+
+// Theme tokens tailwind-merge cannot infer. Without these, `text-caption` reads
+// as a text COLOUR and `cn('text-caption', 'text-slate-500')` drops the size.
+const twMerge = extendTailwindMerge({
+  extend: {
+    theme: {
+      borderRadius: ['card', 'control'],
+    },
+    classGroups: {
+      'font-size': [{ text: ['2xs', 'caption', 'lede', 'figure-sm', 'figure-md', 'figure-lg'] }],
+      z: [
+        {
+          z: [
+            'local', 'sticky', 'chrome', 'dock-scrim', 'dock', 'nav-scrim', 'nav',
+            'scrim', 'modal', 'tour', 'onboarding', 'popover', 'tooltip',
+          ],
+        },
+      ],
+    },
+  },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

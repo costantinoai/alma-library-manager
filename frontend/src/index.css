@@ -164,6 +164,46 @@
   --color-scrim: rgb(20 35 58 / 0.55);
   /* Text and marks on a filled state colour. */
   --color-on-fill: #FFFFFF;
+  /* The paper divider hairline, `border-divider`. Controls use `control-edge`. */
+  --color-divider: #D5C7AB;
+
+  /* ── Layers ─────────────────────────────────────────────────────────────
+   * The ONE z-index scale, `z-<name>`. `local` orders siblings inside a card.
+   * `popover` sits above dialogs and above onboarding by rule, so a hint or
+   * menu opened from anything modal is never behind its host. Sonner brings
+   * its own layer above all of these. */
+  --z-index-local: 10;
+  --z-index-sticky: 20;
+  --z-index-chrome: 30;
+  --z-index-dock-scrim: 35;
+  --z-index-dock: 40;
+  --z-index-nav-scrim: 44;
+  --z-index-nav: 45;
+  --z-index-scrim: 50;
+  --z-index-modal: 51;
+  --z-index-tour: 55;
+  --z-index-onboarding: 60;
+  --z-index-popover: 70;
+  --z-index-tooltip: 80;
+
+  /* Clearance above the closed Activity dock, for anything pinned to the
+   * bottom of the page column (`bottom-dock`). The dock's bar is 37 px. */
+  --spacing-dock: 3rem;
+
+  /* ── Radius roles ───────────────────────────────────────────────────────
+   * Rectangles have two radii, and pills are `rounded-full`:
+   * `rounded-card` for anything that holds content, `rounded-control` for
+   * anything you press or type in. */
+  --radius-card: 8px;
+  --radius-control: 6px;
+
+  /* ── Type sizes below `text-xs`, and the few above the default steps ──── */
+  --text-2xs: 10px;
+  --text-caption: 11px;
+  --text-lede: 15px;
+  --text-figure-sm: 28px;
+  --text-figure-md: 34px;
+  --text-figure-lg: 44px;
 
   /* ── Parchment ramp ─────────────────────────────────────────────────────
    * Anchored at parchment-200 (#F3EAD6 brand parchment). Used for warm
@@ -340,7 +380,7 @@
   --color-text:        var(--color-alma-900);    /* ink */
   --color-heading:     var(--color-alma-800);    /* navy */
   --color-muted:       #64748B;
-  --color-border:      #D5C7AB;                   /* warm parchment hairline — control outlines + dividers */
+  --color-border:      var(--color-divider);      /* warm parchment hairline — control outlines + dividers */
   --color-border-cool: #DCD6C5;                   /* cooler hairline variant */
   --color-accent:      var(--color-alma-folio);
   --color-accent-soft: var(--color-alma-folio-soft);
@@ -404,6 +444,11 @@
  * primitive definitions — this comment block is the only place the mapping
  * lives in prose.
  * ───────────────────────────────────────────────────────────────────────── */
+
+/* The ONE focus ring. Every pressable thing that is not a `Button` wears this. */
+@utility focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1;
+}
 
 body {
   margin: 0;
