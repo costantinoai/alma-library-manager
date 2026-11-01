@@ -28,11 +28,16 @@ export function severityRank(severity?: string | null): number {
   return SEVERITY_RANK[severity ?? ''] ?? 9
 }
 
-/** `StatusBadge` tone for a severity — `ok` maps to positive, not info. */
+/**
+ * `StatusBadge` tone for a severity — `ok` maps to positive, not info. `unknown`
+ * is the backend's word for "no verdict" (off, not set, can't check), so it stays
+ * neutral: nothing is wrong and nothing is proven.
+ */
 export function dimensionBadgeTone(severity?: string | null): StatusBadgeTone {
   if (severity === 'critical') return 'negative'
   if (severity === 'warning') return 'warning'
   if (severity === 'ok') return 'positive'
+  if (severity === 'unknown') return 'neutral'
   return 'info'
 }
 

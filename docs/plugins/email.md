@@ -45,11 +45,13 @@ Each field also accepts an environment-variable override for a headless setup:
 
 ## Check it works
 
-**Send test email** runs the test on the scheduler pool (Activity op key
-`integrations.email.test`) through the same `EmailNotifier` real digests use.
-The toast names the recipients on success, or the SMTP error on failure.
+Saving runs a check, and **Check** repeats it (Activity op key
+`integrations.email.test`). It connects and logs in through the same
+`EmailNotifier` real digests use, and **sends no mail**. The row shows the SMTP
+error if the server refuses. *Working* means the server took the login; whether
+your recipients receive mail shows with the first digest.
 
-The test only runs while the plugin is on. Off, it is refused outright — see
+The check only runs while the plugin is on. Off, it is refused outright — see
 [what is true of every plugin](index.md#what-is-true-of-every-plugin).
 
 ## What arrives

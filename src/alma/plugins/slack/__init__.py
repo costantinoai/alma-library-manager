@@ -20,19 +20,19 @@ class SlackConfig(StrictPluginConfig):
         default="",
         title="Bot token",
         description="Slack Bot User OAuth Token. Stored in the secret store.",
-        json_schema_extra={"x-alma-secret": True, "x-alma-order": 10},
+        json_schema_extra={"x-alma-secret": True, "x-alma-order": 10, "x-alma-required": True},
     )
     alert_channel: str = Field(
         default="",
         title="Send alerts to",
         description="Channel name, Slack id, or user name for outbound digests.",
-        json_schema_extra={"x-alma-order": 20},
+        json_schema_extra={"x-alma-order": 20, "x-alma-adds": "alert digests posted to Slack"},
     )
     inbox_channel: str = Field(
         default="",
         title="Capture papers from",
         description="Channel ALMa polls for paper links sent from your phone.",
-        json_schema_extra={"x-alma-order": 30},
+        json_schema_extra={"x-alma-order": 30, "x-alma-adds": "papers captured from your phone"},
     )
 
 
@@ -67,9 +67,27 @@ def write_config(_db: sqlite3.Connection | None, config: BaseModel) -> None:
 
 
 def status(_db: sqlite3.Connection | None) -> dict:
+    from alma.config import get_slack_token
+    from alma.core.secrets import SECRET_SLACK_BOT_TOKEN, get_secret
     from alma.slack.client import slack_status
 
-    return slack_status()
+    state = slack_status()
+    token = get_slack_token()
+    return {
+        **state,
+        "missing": "Add a channel to send alerts to or to capture papers from.",
+        "source": (
+            ("saved" if get_secret(SECRET_SLACK_BOT_TOKEN) == token else "environment")
+            if token
+            else None
+        ),
+    }
+
+
+def secret_values() -> tuple[str, ...]:
+    from alma.config import get_slack_token
+
+    return (get_slack_token() or "",)
 
 
 def inbound_channel():
@@ -90,37 +108,44 @@ async def send_alert(papers: list[dict], alert_name: str) -> bool:
 
 
 async def test_connection() -> dict:
-    from alma.slack.client import SlackResolveError, get_slack_notifier
+    """Ask Slack about the token and the channels. Posts nothing.
+
+    It also runs right after a save, so it may never reach anyone. The price
+    is that delivery itself stays unproven: `chat:write` is read from the
+    token's scopes, and membership of a private channel is not tested.
+    """
+    from alma.slack.client import SlackResolveError, get_slack_notifier, slack_status
 
     notifier = get_slack_notifier()
-    target = notifier.resolve_channel(None)
-    try:
-        resolved_id = notifier._resolve_target(target)
-    except SlackResolveError as exc:
+    auth = notifier.auth_status()
+    if auth["ok"] is not True:
+        return auth
+
+    state = slack_status()
+    if state["can_send"] and auth["scopes"] is not None and "chat:write" not in auth["scopes"]:
         return {
             "ok": False,
-            "target": target,
-            "error": str(exc),
-            "message": f"Could not resolve Slack target {target!r}: {exc}",
+            "error": "missing_scope",
+            "message": "This token has no chat:write scope, so it cannot post alerts.",
+            "action": "Add chat:write to the Slack app, reinstall it, and paste the new token.",
         }
-    try:
-        ok = await notifier.send_test_message()
-    except Exception as exc:  # pragma: no cover - network failure boundary
-        return {
-            "ok": False,
-            "target": target,
-            "error": str(exc),
-            "message": f"Slack test failed: {exc}",
-        }
+    for target in (state["outbound_channel"], state["inbound_channel"]):
+        if not target:
+            continue
+        try:
+            notifier.resolve_channel_id(target)
+        except SlackResolveError as exc:
+            if "slack_unreachable" in str(exc):
+                return {"ok": None, "error": str(exc), "message": "Slack could not be reached."}
+            return {
+                "ok": False,
+                "error": str(exc),
+                "message": f"Slack does not know {target!r}: {exc}",
+                "action": "Check the name, and that the bot has been invited to the channel.",
+            }
     return {
-        "ok": ok,
-        "target": target,
-        "resolved_id": resolved_id,
-        "message": (
-            f"Slack test message delivered to {target}"
-            if ok
-            else "Slack rejected the test message; check the bot's chat:write scope."
-        ),
+        "ok": True,
+        "message": f"Token accepted by {auth['team']}, channels found. No message was sent.",
     }
 
 
@@ -140,6 +165,7 @@ SLACK_PLUGIN = PluginManifest(
     alert_sender=send_alert,
     connection_tester=test_connection,
     action_ids=("test", "capture"),
+    secret_values=secret_values,
 )
 
 __all__ = ["SLACK_PLUGIN", "SlackConfig"]

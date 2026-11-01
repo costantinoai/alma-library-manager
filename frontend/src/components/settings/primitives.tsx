@@ -572,30 +572,6 @@ export function SettingsSection({
 }
 
 // ---------------------------------------------------------------------------
-// ConnectionPill — green/red health pill for a connection's section header.
-// ---------------------------------------------------------------------------
-
-/**
- * Binary connection-health pill shown next to a service name in a
- * `SettingsSection` header (OpenAlex / Semantic Scholar): green "Connected"
- * when the live probe validated the key, red "Not connected" otherwise, and
- * a neutral "Checking…" while the first probe is still in flight. The
- * specific reason (key rejected / not set / couldn't verify) lives in the
- * section body so the header stays a glanceable green-or-red signal.
- */
-export function ConnectionPill({
-  valid,
-  loading,
-}: {
-  valid: boolean | null | undefined
-  loading?: boolean
-}) {
-  if (loading) return <StatusBadge tone="neutral" size="sm">Checking…</StatusBadge>
-  if (valid === true) return <StatusBadge tone="positive" size="sm">Connected</StatusBadge>
-  return <StatusBadge tone="negative" size="sm">Not connected</StatusBadge>
-}
-
-// ---------------------------------------------------------------------------
 // SettingsSections — flex container for a stack of `SettingsSection`s.
 // ---------------------------------------------------------------------------
 

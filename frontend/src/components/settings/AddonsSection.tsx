@@ -38,6 +38,7 @@ const SWITCH_ROOTS = [
   ['home-brief'],
   ['health'],
   ['ai-status'],
+  ['connections'],
 ]
 
 /**
@@ -137,7 +138,7 @@ function AddonRow({ addon }: { addon: AddonInfo }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <StatusBadge tone={addon.enabled ? 'positive' : 'neutral'} size="sm">
+        <StatusBadge tone={addon.enabled ? 'accent' : 'neutral'} size="sm">
           {addon.enabled ? 'On' : 'Off'}
         </StatusBadge>
         <Switch

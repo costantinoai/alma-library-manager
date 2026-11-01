@@ -5404,118 +5404,6 @@
         }
       }
     },
-    "/api/v1/settings/openalex/status": {
-      "get": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Get Openalex Status",
-        "description": "Report whether the OpenAlex API key is configured and, if so, whether\na live probe accepts it. Drives the connection pill in Settings \u2192\nConnections \u2192 OpenAlex, mirroring the Semantic Scholar status contract.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False`` \u2014 no key set (env or secret store).\n  - ``valid=True``       \u2014 probe returned 200, or 429 (key authenticated\n                           before the rate limiter applied).\n  - ``valid=False``      \u2014 OpenAlex rejected the key (401 / 403).\n  - ``valid=None``       \u2014 probe could not complete / unexpected status.\n\nThe probe hits ``/rate-limit`` directly (bypasses the response cache) so\na manual re-check always re-probes with the current key.",
-        "operationId": "get_openalex_status_api_v1_settings_openalex_status_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/settings/semantic-scholar/status": {
-      "get": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Get Semantic Scholar Status",
-        "description": "Report whether the Semantic Scholar key is configured and, if so,\nwhether a live authenticated probe accepts it. Drives the connection dot\nin Settings \u2192 Connections \u2192 Semantic Scholar.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False``         \u2014 no key set (env or secret store).\n  - ``valid=True``               \u2014 probe returned 200, OR 429 (the key\n                                   was accepted; S2 authenticates before\n                                   applying the 1 req/s throttle).\n  - ``valid=False``              \u2014 S2 rejected the key (401 / 403).\n  - ``valid=None``               \u2014 probe could not complete (network /\n                                   timeout / unexpected status); unknown.\n\nThe probe is a single cheapest-possible `/paper/search?limit=1` call with\na short timeout and no retries \u2014 it is on-demand only (card mount / manual\nrefresh), so it doesn't meaningfully spend the 1 req/s budget.",
-        "operationId": "get_semantic_scholar_status_api_v1_settings_semantic_scholar_status_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/library/saved": {
       "get": {
         "tags": [
@@ -18592,6 +18480,135 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/connections": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Connections",
+        "description": "Every dependency's state and each section's worst one. A pure local read:\nit never probes a service. Checks run through the POST below.",
+        "operationId": "get_connections_api_v1_settings_connections_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Connections Api V1 Settings Connections Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/connections/{connection_id}/check": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Check Connection",
+        "description": "Run one real, read-only check as an Activity job. Posts and sends nothing.",
+        "operationId": "check_connection_api_v1_settings_connections__connection_id__check_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Check Connection Api V1 Settings Connections  Connection Id  Check Post"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"

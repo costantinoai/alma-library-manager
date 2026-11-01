@@ -362,8 +362,8 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings` | Full settings document |
 | `PUT` | `/settings` | Update a section |
 | `GET` | `/settings/openalex/usage` | Live OpenAlex quota state |
-| `GET` | `/settings/openalex/status` | OpenAlex connection status |
-| `GET` | `/settings/semantic-scholar/status` | Semantic Scholar connection status |
+| `GET` | `/settings/connections` | Every outside service: state, detail, last check, last use. Local read, never probes |
+| `POST` | `/settings/connections/{id}/check` | Run one read-only check as an Activity job. Posts and sends nothing |
 | `GET` | `/settings/export` | Export the settings document |
 
 ### Onboarding and walkthroughs

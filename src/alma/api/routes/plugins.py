@@ -7,18 +7,16 @@ send/receive seams.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from alma.api.deps import get_current_user, get_db
 from alma.api.models import ErrorResponse, PluginConfigResponse, PluginInfo
+from alma.application import connection_status
 from alma.core.redaction import redact_sensitive_text
-from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -143,14 +141,15 @@ def update_plugin_config(
     summary="Test an integration",
     description=(
         "Runs the integration manifest's registered connectivity test through "
-        "the Activity envelope and the same transport used in production. "
-        "409 when the plugin is switched off — the test really does reach the "
-        "service (it posts a message, it sends mail), so it is not something a "
-        "deactivated plugin may do."
+        "the Activity envelope and the same transport used in production. It "
+        "posts and sends nothing, and its verdict is what Settings and Home show "
+        "for this plugin. 409 when the plugin is switched off or the network is "
+        "off, because the test really does reach the service."
     ),
 )
 def test_plugin_connection(
     plugin_id: str,
+    db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ) -> dict:
     manifest = _manifest_or_404(plugin_id)
@@ -184,49 +183,9 @@ def test_plugin_connection(
             ),
         )
 
-    from alma.api.scheduler import (
-        activity_envelope,
-        find_active_job,
-        schedule_immediate,
-        set_job_status,
-    )
-
-    operation_key = f"integrations.{manifest.id}.test"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            existing["job_id"],
-            status=str(existing.get("status") or "running"),
-            operation_key=operation_key,
-            message=f"{manifest.display_name} test already in progress",
-            already_running=True,
+    try:
+        return connection_status.start_check(
+            db, plugin_id, actor=str(user.get("username") or "api_user")
         )
-
-    job_id = f"integration_{manifest.id}_test_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
-        started_at=utcnow().isoformat(),
-        message=f"Testing {manifest.display_name}",
-    )
-
-    def _runner() -> dict:
-        try:
-            return asyncio.run(manifest.test_connection())
-        except Exception as exc:  # pragma: no cover - external boundary
-            return {
-                "ok": False,
-                "error": str(exc),
-                "message": f"{manifest.display_name} test failed: {exc}",
-            }
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message=f"{manifest.display_name} test queued",
-    )
+    except connection_status.CheckRefusedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

@@ -28,6 +28,7 @@ import {
 
 import { api, type AIConfig, type AIDependencyEnvironment, type AIStatus } from '@/api/client'
 import { navigateTo } from '@/lib/hashRoute'
+import { ConnectionLine } from '@/components/settings/ConnectionStatus'
 import {
   AsyncButton,
   KeyValueRow,
@@ -367,7 +368,7 @@ export function AIConfigCard() {
   const aiConfigMutation = useMutation({
     mutationFn: (config: AIConfig) => api.post<AIStatus>('/ai/configure', config),
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['ai-status'])
+      void invalidateQueries(queryClient, ['ai-status'], ['connections'])
       toast({ title: 'AI settings updated' })
     },
     onError: () => errorToast('Failed to update AI settings'),
@@ -377,7 +378,7 @@ export function AIConfigCard() {
     mutationFn: (path: string) =>
       api.post<AIStatus>('/ai/configure', { python_env_path: path }),
     onSuccess: async (data) => {
-      await invalidateQueries(queryClient, ['ai-status'])
+      await invalidateQueries(queryClient, ['ai-status'], ['connections'])
       form.setValue('python_env_path', data.dependency_environment?.path ?? '', {
         shouldDirty: false,
       })
@@ -389,7 +390,7 @@ export function AIConfigCard() {
   const recheckEnvironmentMutation = useMutation({
     mutationFn: () => api.post<AIStatus>('/ai/recheck-environment'),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['ai-status'])
+      await invalidateQueries(queryClient, ['ai-status'], ['connections'])
       toast({ title: 'AI environment rechecked' })
     },
     onError: () => errorToast('Failed to recheck AI environment'),
@@ -570,13 +571,11 @@ export function AIConfigCard() {
                       ]}
                     />
                   </div>
-                  <StatusBadge tone={tier1?.ready ? 'positive' : 'warning'} size="sm">
-                    {tier1?.ready ? 'Ready' : 'Not ready'}
-                  </StatusBadge>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">
                   Provider: {tier1?.active_provider ?? 'none'}
                 </p>
+                <ConnectionLine id="ai" />
               </SubPanel>
             </SettingsSection>
 

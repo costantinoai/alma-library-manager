@@ -5,10 +5,10 @@ import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle, RefreshCw, Save } from 'lucide-react'
 
-import { api, type Settings, type OpenAlexUsage, type OpenAlexStatus } from '@/api/client'
+import { api, type Settings, type OpenAlexUsage } from '@/api/client'
+import { ConnectionBadge, ConnectionLine, FieldStatus } from '@/components/settings/ConnectionStatus'
 import {
   AsyncButton,
-  ConnectionPill,
   SettingsSection,
   StatTile,
 } from '@/components/settings/primitives'
@@ -65,6 +65,14 @@ export function OpenAlexSection({
     mode: 'onBlur',
   })
 
+  // What the server last sent (masked), so "typed but not saved" is a fact.
+  const savedQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<Settings>('/settings'),
+    enabled: false,
+  })
+  const savedKey = savedQuery.data?.openalex_api_key ?? ''
+
   useEffect(() => {
     form.reset({
       openalex_email: formData.openalex_email ?? '',
@@ -94,18 +102,6 @@ export function OpenAlexSection({
     enabled: formData.backend === 'openalex',
   })
 
-  // On-demand key-validity probe (one cheap /rate-limit call). No polling —
-  // refetches only on mount, manual re-check, or when the SettingsPage
-  // invalidates the key after a save.
-  const statusQuery = useQuery({
-    queryKey: ['openalex-status'],
-    queryFn: () => api.get<OpenAlexStatus>('/settings/openalex/status'),
-    retry: 1,
-    refetchOnWindowFocus: false,
-    staleTime: 60_000,
-    enabled: formData.backend === 'openalex',
-  })
-
   if (formData.backend !== 'openalex') return null
 
   const handleSave = async () => {
@@ -121,7 +117,7 @@ export function OpenAlexSection({
       title={
         <span className="inline-flex items-center gap-2">
           OpenAlex
-          <ConnectionPill valid={statusQuery.data?.valid} loading={statusQuery.isLoading} />
+          <ConnectionBadge id="openalex" />
         </span>
       }
       description="API credentials and live usage for OpenAlex — the active backend's primary metadata source."
@@ -135,25 +131,7 @@ export function OpenAlexSection({
             void handleSave()
           }}
         >
-          {/* The green/red pill lives in the section header (visible collapsed);
-              this box reveals the specific probe reason + the Re-check action,
-              which can't sit in the header (it's a button inside the trigger). */}
-          <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-2 px-3 py-2">
-            <span className="text-xs text-slate-500">
-              {statusQuery.data?.detail ?? 'Checking connection…'}
-            </span>
-            <AsyncButton
-              type="button"
-              variant="outline"
-              size="sm"
-              icon={<RefreshCw className="h-3 w-3" />}
-              pending={statusQuery.isFetching}
-              onClick={() => statusQuery.refetch()}
-              className="h-7 px-2 text-xs"
-            >
-              Re-check
-            </AsyncButton>
-          </SubPanel>
+          <ConnectionLine id="openalex" />
 
           <FormField
             control={form.control}
@@ -165,6 +143,7 @@ export function OpenAlexSection({
                   <Input type="email" placeholder="you@example.com" {...field} />
                 </FormControl>
                 <FormDescription>Contact email for OpenAlex API identification.</FormDescription>
+                <ConnectionLine id="contact_email" />
                 <FormMessage />
               </FormItem>
             )}
@@ -190,6 +169,11 @@ export function OpenAlexSection({
                     openalex.org
                   </a>
                 </FormDescription>
+                <FieldStatus
+                  id="openalex"
+                  field="openalex_api_key"
+                  dirty={field.value !== savedKey}
+                />
                 <FormMessage />
               </FormItem>
             )}

@@ -10,18 +10,47 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PluginsSection } from './PluginsSection'
-import type { PluginInfo } from '@/api/client'
+import type { ConnectionRecord, PluginInfo } from '@/api/client'
 
 const listPlugins = vi.fn()
 const getPluginConfig = vi.fn()
 const setPluginEnabled = vi.fn()
+const getConnections = vi.fn()
 
 vi.mock('@/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   listPlugins: () => listPlugins(),
   getPluginConfig: (id: string) => getPluginConfig(id),
   setPluginEnabled: (id: string, enabled: boolean) => setPluginEnabled(id, enabled),
+  getConnections: () => getConnections(),
 }))
+
+function connection(overrides: Partial<ConnectionRecord> = {}): ConnectionRecord {
+  return {
+    id: 'slack',
+    label: 'Slack',
+    section: 'plugins',
+    state: 'off',
+    severity: 'unknown',
+    status_label: 'Off',
+    detail: 'Switched off. What you typed is kept.',
+    action: null,
+    required: true,
+    source: null,
+    checkable: false,
+    checked_at: null,
+    last_worked_at: null,
+    last_used_at: null,
+    used_by: ['Alerts', 'Inbox'],
+    results: [],
+    fields: [],
+    ...overrides,
+  }
+}
+
+function connectionsAre(record: ConnectionRecord) {
+  getConnections.mockResolvedValue({ connections: [record], sections: {} })
+}
 
 function plugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
   return {
@@ -59,6 +88,7 @@ function renderCatalogue() {
 beforeEach(() => {
   vi.clearAllMocks()
   getPluginConfig.mockResolvedValue({ plugin_id: 'slack', config: { bot_token: '' } })
+  connectionsAre(connection())
   setPluginEnabled.mockImplementation(async (id: string, enabled: boolean) =>
     plugin({ id, enabled }),
   )
@@ -70,10 +100,10 @@ describe('PluginsSection', () => {
     renderCatalogue()
 
     expect(await screen.findByText('Slack')).toBeInTheDocument()
-    expect(screen.getByText('Off')).toBeInTheDocument()
+    expect(await screen.findByText('Off')).toBeInTheDocument()
     expect(screen.queryByLabelText('Bot token')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /save plugin settings/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /test connection/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^check$/i })).not.toBeInTheDocument()
     // Configuration of an inactive plugin is not even read.
     expect(getPluginConfig).not.toHaveBeenCalled()
   })
@@ -89,16 +119,19 @@ describe('PluginsSection', () => {
 
   it('reveals setup, and only then reads the configuration, once it is on', async () => {
     listPlugins.mockResolvedValue([plugin({ enabled: true })])
+    connectionsAre(
+      connection({ state: 'working', severity: 'ok', status_label: 'Working', checkable: true }),
+    )
     renderCatalogue()
 
     expect(await screen.findByLabelText('Bot token')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /save plugin settings/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /test connection/i })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /^check$/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /guide/i })).toHaveAttribute(
       'href',
       expect.stringContaining('/plugins/slack/'),
     )
-    expect(screen.getByText('Ready')).toBeInTheDocument()
+    expect(screen.getAllByText('Working').length).toBeGreaterThan(0)
     await waitFor(() => expect(getPluginConfig).toHaveBeenCalledWith('slack'))
   })
 
@@ -106,8 +139,17 @@ describe('PluginsSection', () => {
     listPlugins.mockResolvedValue([
       plugin({ enabled: true, configured: false, can_send: false, can_receive: false }),
     ])
+    connectionsAre(
+      connection({
+        state: 'missing_required',
+        severity: 'warning',
+        status_label: 'Needs setting',
+        detail: 'Needs Bot token.',
+      }),
+    )
     renderCatalogue()
 
-    expect(await screen.findByText('Needs setup')).toBeInTheDocument()
+    expect((await screen.findAllByText('Needs setting')).length).toBeGreaterThan(0)
+    expect(screen.getByText('Needs Bot token.')).toBeInTheDocument()
   })
 })
