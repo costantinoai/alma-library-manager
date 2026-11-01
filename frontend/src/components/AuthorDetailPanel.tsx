@@ -62,7 +62,7 @@ import { ConfirmDialog } from '@/components/library'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { describeJobLaunch } from '@/lib/activity'
 import { reactionFromRating } from '@/lib/reactions'
@@ -300,6 +300,7 @@ export function AuthorDetailPanel({
 }: AuthorDetailPanelProps) {
   const queryClient = useQueryClient()
   const undoMutation = usePaperUndo()
+  const { offerUndo, offerReadingUndo } = useOfferUndo()
   const { toast } = useToast()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
@@ -451,10 +452,10 @@ export function AuthorDetailPanel({
   const paperActionMutation = useMutation({
     mutationFn: ({ paperId, action }: { paperId: string; action: 'add' | 'like' | 'love' }) =>
       applyPaperAction(paperId, action, { surface: 'papers' }),
-    onSuccess: (_data, { action }) => {
+    onSuccess: (_data, { paperId, action }) => {
       void invalidateAfterPaperMutation(queryClient)
       void invalidateQueries(queryClient, ['author-publications', resolved?.id], ['likes'])
-      toast({ title: SAVED_ACTION_LABELS[action] })
+      toast({ title: SAVED_ACTION_LABELS[action], action: offerUndo(paperId) })
     },
     onError: (err) => errorToast('Could not save the paper', getApiErrorMessage(err)),
   })
@@ -472,7 +473,7 @@ export function AuthorDetailPanel({
         openalex_id: work.openalex_id ?? work.id ?? undefined,
         doi: work.doi ?? undefined,
       }),
-    onSuccess: (_data, { action }) => {
+    onSuccess: (data, { action }) => {
       void invalidateAfterPaperMutation(queryClient)
       void invalidateQueries(
         queryClient,
@@ -480,7 +481,10 @@ export function AuthorDetailPanel({
         ['author-publications', resolved?.id],
         ['likes'],
       )
-      toast({ title: SAVED_ACTION_LABELS[action] })
+      toast({
+        title: SAVED_ACTION_LABELS[action],
+        action: data.paper_id ? offerUndo(data.paper_id) : undefined,
+      })
     },
     onError: () => errorToast('Error', 'Failed to save from OpenAlex.'),
   })
@@ -492,10 +496,12 @@ export function AuthorDetailPanel({
     }: {
       paperId: string
       status: 'reading' | 'done' | 'excluded' | null
+      previous: string | null
     }) => updateReadingStatus(paperId, status),
-    onSuccess: () => {
+    onSuccess: (_data, { paperId, previous }) => {
       void invalidateAfterPaperMutation(queryClient)
       void invalidateQueries(queryClient, ['author-publications', resolved?.id])
+      toast({ title: 'Reading status updated', action: offerReadingUndo(paperId, previous) })
     },
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })
@@ -819,7 +825,9 @@ export function AuthorDetailPanel({
                     key={pub.id}
                     publication={pub}
                     onAction={(paperId, action) => paperActionMutation.mutate({ paperId, action })}
-                    onReading={(paperId, status) => readingMutation.mutate({ paperId, status })}
+                    onReading={(paperId, status) =>
+                      readingMutation.mutate({ paperId, status, previous: pub.reading_status ?? null })
+                    }
                     onUndo={(paperId, aspect) => undoMutation.mutate({ paperId, aspect })}
                   />
                 ))}

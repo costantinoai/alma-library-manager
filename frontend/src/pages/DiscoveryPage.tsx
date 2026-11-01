@@ -82,7 +82,7 @@ import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { useDiscoveryImpressions } from '@/hooks/useDiscoveryImpressions'
 import { describeJobLaunch } from '@/lib/activity'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
@@ -467,6 +467,7 @@ export function DiscoveryPage() {
   }
 
   const undoMutation = usePaperUndo(selectedLensId)
+  const { offerUndo, offerReadingUndo } = useOfferUndo(selectedLensId)
   const reconcileReactionObservers = () => {
     // Reconciliation is deliberately background work. Returning these
     // promises from a mutation callback kept the clicked card disabled while
@@ -496,13 +497,33 @@ export function DiscoveryPage() {
       collectionIds,
     })
 
+  // Dismiss settles one lens row, so its Undo goes through that row.
+  const undoDismissMutation = useMutation({
+    mutationFn: ({ paperId, recId }: RecAction) =>
+      applyPaperAction(paperId, 'undo', { surface: 'discovery', scopeRef: recId }),
+    onSuccess: (_result, { recId }) => {
+      setDismissedIds((previous) => {
+        const next = new Set(previous)
+        next.delete(recId)
+        return next
+      })
+      toast({ title: 'Undone' })
+      void invalidateQueries(queryClient, ['lens-recommendations', selectedLensId])
+    },
+    onError: (error) => errorToast('Could not undo', getApiErrorMessage(error)),
+  })
+
   const dismissMutation = useMutation({
     mutationFn: (vars: RecAction) => recAction(vars, 'dismiss'),
     onMutate: ({ recId }: RecAction) => {
       markDismissed(recId)
     },
-    onSuccess: () => {
-      toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
+    onSuccess: (_result, vars) => {
+      toast({
+        title: 'Dismissed',
+        description: 'Paper hidden from Discovery.',
+        action: { label: 'Undo', onClick: () => undoDismissMutation.mutate(vars) },
+      })
       void Promise.all([
         invalidateQueries(
           queryClient,
@@ -528,8 +549,8 @@ export function DiscoveryPage() {
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 4 }),
       ),
-    onSuccess: () => {
-      toast({ title: 'Rated', description: 'Paper rated 4 stars.' })
+    onSuccess: (_result, { paperId }) => {
+      toast({ title: 'Rated', description: 'Paper rated 4 stars.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
@@ -556,7 +577,7 @@ export function DiscoveryPage() {
           { in_library: true, user_action: 'save' },
         ),
       ),
-    onSuccess: () => {
+    onSuccess: (_result, { paperId }) => {
       // Card stays visible (it flips to a checked "Saved" state); only Dismiss
       // removes a card from Discovery. The refetch below re-reads the rec with
       // its now-'library' paper status so the button reflects the save.
@@ -565,6 +586,7 @@ export function DiscoveryPage() {
         description: selectedLensCollectionId
           ? "Paper added to this lens's collection."
           : 'Paper saved to library.',
+        action: offerUndo(paperId),
       })
       void Promise.all([
         invalidateAfterPaperMutation(queryClient, selectedLensId),
@@ -617,8 +639,8 @@ export function DiscoveryPage() {
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 5 }),
       ),
-    onSuccess: () => {
-      toast({ title: 'Rated', description: 'Paper rated 5 stars.' })
+    onSuccess: (_result, { paperId }) => {
+      toast({ title: 'Rated', description: 'Paper rated 5 stars.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
@@ -635,8 +657,8 @@ export function DiscoveryPage() {
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 1 }),
       ),
-    onSuccess: () => {
-      toast({ title: 'Rated', description: 'Paper rated 1 star.' })
+    onSuccess: (_result, { paperId }) => {
+      toast({ title: 'Rated', description: 'Paper rated 1 star.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
@@ -660,8 +682,12 @@ export function DiscoveryPage() {
           { user_action: 'read' },
         ),
       ),
-    onSuccess: () => {
-      toast({ title: 'Added to reading list', description: 'Marked as Reading.' })
+    onSuccess: (_result, { paperId }) => {
+      toast({
+        title: 'Added to reading list',
+        description: 'Marked as Reading.',
+        action: offerReadingUndo(paperId, null),
+      })
       void invalidateQueries(queryClient,
         ['lens-recommendations', selectedLensId], ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
       )

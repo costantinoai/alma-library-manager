@@ -383,7 +383,7 @@ remaining steps rendered as children inside one envelope.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/papers/{id}/details` | Paper detail |
-| `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
+| `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. `undo` takes `undo_aspect`: `membership`, `rating`, `reading`, `all`, `last` (reverse the newest action, what every toast's Undo sends) or `inbox` (undo of `defer`, no valence); with `surface=feed\|discovery` it reverses that row's Dismiss. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |

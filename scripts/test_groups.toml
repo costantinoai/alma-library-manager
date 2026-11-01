@@ -23,7 +23,7 @@ tests = ["test_core_control_inventory_contract.py", "test_feed_*.py", "test_venu
 sources = ["src/alma/application/feed*.py", "src/alma/application/paper_actions.py", "src/alma/api/routes/feed.py", "src/alma/services/feed*.py"]
 
 [groups.library]
-tests = ["test_core_control_inventory_contract.py", "test_undo_save_rating.py", "test_undo_save_replaces_dislike.py", "test_library_*.py", "test_paper_collection_*.py", "test_collection_*.py", "test_reading_status_*.py", "test_hide_library_*.py", "test_rating_contract_*.py"]
+tests = ["test_core_control_inventory_contract.py", "test_undo_save_rating.py", "test_undo_save_replaces_dislike.py", "test_undo_last_action.py", "test_library_*.py", "test_paper_collection_*.py", "test_collection_*.py", "test_reading_status_*.py", "test_hide_library_*.py", "test_rating_contract_*.py"]
 sources = ["src/alma/application/library*.py", "src/alma/application/paper_actions.py", "src/alma/api/routes/library.py", "src/alma/library/**"]
 
 [groups.imports]

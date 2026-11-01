@@ -69,8 +69,9 @@ class PaperActionRequest(BaseModel):
     #: globally; ignored elsewhere.
     scope_ref: str | None = None
     collection_ids: list[str] | None = None
-    #: Which dimension `undo` reverses (membership / rating / reading / all).
-    undo_aspect: Literal["membership", "rating", "reading", "all"] = "all"
+    #: Which dimension `undo` reverses (membership / rating / reading / all), or
+    #: `last` (the newest action, the toast's Undo) / `inbox` (undo of `defer`).
+    undo_aspect: Literal["membership", "rating", "reading", "all", "last", "inbox"] = "all"
 
 
 class PaperActionResponse(BaseModel):

@@ -90,6 +90,7 @@ from .lens_crud import (
     list_lenses,
     mark_lens_seen,
     mark_recommendation_action,
+    undo_recommendation_dismiss,
     read_settings,
     reorder_lenses,
     reset_settings_to_defaults,

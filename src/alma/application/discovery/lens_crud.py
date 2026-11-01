@@ -321,6 +321,26 @@ def reset_settings_to_defaults(db: sqlite3.Connection) -> None:
         upsert_setting(db, key, value)
 
 
+def undo_recommendation_dismiss(db: sqlite3.Connection, rec_id: str) -> dict | None:
+    """Reverse a lens Dismiss: the card returns to this lens.
+
+    Dismiss writes no rating and no event (D6), so undo clears the row's stamp
+    and nothing else. Returns ``None`` when the recommendation no longer exists.
+    """
+    row = db.execute(
+        "SELECT paper_id FROM recommendations WHERE id = ?", (rec_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    db.execute(
+        "UPDATE recommendations SET user_action = NULL, action_at = NULL "
+        "WHERE id = ? AND user_action = 'dismiss'",
+        (rec_id,),
+    )
+    commit_unless_gated(db, label="discovery_undo_dismiss")
+    return {"id": rec_id, "paper_id": row["paper_id"], "action": "undo"}
+
+
 def mark_recommendation_action(
     db: sqlite3.Connection,
     rec_id: str,
@@ -349,12 +369,8 @@ def mark_recommendation_action(
             "UPDATE recommendations SET paper_id = ? WHERE id = ?",
             (paper_id, rec_id),
         )
-    current_rating_row = db.execute(
-        "SELECT rating, added_at FROM papers WHERE id = ?",
-        (paper_id,),
-    ).fetchone() if paper_id else None
-    current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
-    current_added_at = current_rating_row["added_at"] if current_rating_row else None
+    previous = paper_actions.state_before_action(db, paper_id) if paper_id else None
+    current_rating = previous["rating"] if previous else 0
 
     effective_rating = current_rating
     feedback_action: str | None = None
@@ -478,8 +494,7 @@ def mark_recommendation_action(
                     "rank": int(row["rank"] or 0),
                     "ranking_candidate_id": str(snapshot["id"]) if snapshot else "",
                 },
-                previous_rating=current_rating if feedback_action == "save" else None,
-                previous_added_at=current_added_at if feedback_action == "save" else None,
+                previous=previous,
             )
 
     # Shared write helper: reachable standalone (its own route) AND nested inside

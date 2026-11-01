@@ -4583,7 +4583,7 @@ export function sweepInboxNow(): Promise<InboxSweepResult> {
   return api.post<InboxSweepResult>('/inbox/sweep')
 }
 
-export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all'
+export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all' | 'last' | 'inbox'
 
 /**
  * Per-aspect toggle-off: each PaperCard action button undoes only its own

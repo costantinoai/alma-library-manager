@@ -1,17 +1,19 @@
+import { useMemo } from 'react'
 import {
   useMutation,
   useQueryClient,
   type QueryKey,
 } from '@tanstack/react-query'
 import {
+  applyPaperAction,
   getApiErrorMessage,
-  undoPaperFeedback,
+  updateReadingStatus,
   type LensRecommendation,
   type Publication,
   type UndoAspect,
 } from '@/api/client'
 import { invalidateAfterPaperMutation, invalidateQueryRoots } from '@/lib/queryHelpers'
-import { errorToast } from '@/hooks/useToast'
+import { errorToast, toast } from '@/hooks/useToast'
 
 interface UndoCacheSnapshot {
   recommendations: Array<[QueryKey, LensRecommendation[] | undefined]>
@@ -27,12 +29,14 @@ interface UndoCacheSnapshot {
  * every surface that observes the paper so the card reconciles.
  *
  * Pass the current `lensId` on Discovery so the lens recompute keys invalidate.
+ * Goes through the one action route. `announce` confirms an undo the user asked
+ * for from a toast; a toggle-off shows its result on the button itself.
  */
 export function usePaperUndo(lensId?: string | null) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ paperId, aspect }: { paperId: string; aspect: UndoAspect }) =>
-      undoPaperFeedback(paperId, aspect),
+    mutationFn: ({ paperId, aspect }: { paperId: string; aspect: UndoAspect; announce?: boolean }) =>
+      applyPaperAction(paperId, 'undo', { surface: 'papers', undoAspect: aspect }),
     onMutate: ({ paperId, aspect }): UndoCacheSnapshot => {
       const recommendations =
         qc.getQueriesData<LensRecommendation[]>({
@@ -89,7 +93,8 @@ export function usePaperUndo(lensId?: string | null) {
 
       return { recommendations, popupPapers }
     },
-    onSuccess: () => {
+    onSuccess: (_result, { announce }) => {
+      if (announce) toast({ title: 'Undone' })
       void invalidateAfterPaperMutation(qc, lensId ?? undefined)
       void invalidateQueryRoots(
         qc,
@@ -99,6 +104,7 @@ export function usePaperUndo(lensId?: string | null) {
         'bootstrap',
         'author-publications',
         'author-detail',
+        'home-brief',
       )
     },
     onError: (error, _variables, snapshots) => {
@@ -112,3 +118,42 @@ export function usePaperUndo(lensId?: string | null) {
     },
   })
 }
+
+/**
+ * The Undo button for an action's toast. `offerUndo(paperId)` takes back the
+ * paper's newest action, `offerUndo(paperId, 'inbox')` undoes an Inbox Clear,
+ * and `offerReadingUndo(paperId, previous)` restores a reading state, which
+ * writes no event and so has no action to take back.
+ */
+export function useOfferUndo(lensId?: string | null) {
+  const qc = useQueryClient()
+  const undo = usePaperUndo(lensId)
+  const restoreReading = useMutation({
+    mutationFn: ({ paperId, previous }: { paperId: string; previous: ReadingState }) =>
+      updateReadingStatus(paperId, (previous || null) as Parameters<typeof updateReadingStatus>[1]),
+    onSuccess: () => {
+      toast({ title: 'Undone' })
+      void invalidateAfterPaperMutation(qc, lensId ?? undefined)
+      void invalidateQueryRoots(qc, 'lens-recommendations', 'feed-inbox', 'author-publications')
+    },
+    onError: (error) => errorToast('Could not undo', getApiErrorMessage(error)),
+  })
+  const undoPaper = undo.mutate
+  const restore = restoreReading.mutate
+  return useMemo(
+    () => ({
+      offerUndo: (paperId: string, aspect: 'last' | 'inbox' = 'last') => ({
+        label: 'Undo',
+        onClick: () => undoPaper({ paperId, aspect, announce: true }),
+      }),
+      offerReadingUndo: (paperId: string, previous: ReadingState) => ({
+        label: 'Undo',
+        onClick: () => restore({ paperId, previous }),
+      }),
+    }),
+    [undoPaper, restore],
+  )
+}
+
+/** A reading state as cards hold it; empty means not on the reading list. */
+type ReadingState = string | null | undefined

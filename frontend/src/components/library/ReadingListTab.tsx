@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useOfferUndo } from '@/hooks/usePaperUndo'
 import { BookOpen, Search, XCircle } from 'lucide-react'
 
 import {
@@ -82,11 +83,17 @@ export function ReadingListTab() {
     retry: 1,
   })
 
+  const { offerUndo, offerReadingUndo } = useOfferUndo()
+
   const updateReadingMutation = useMutation({
-    mutationFn: ({ paperId, nextStatus }: { paperId: string; nextStatus: Exclude<ReadingStatusValue, 'clear'> | null }) =>
-      updateReadingStatus(paperId, nextStatus),
-    onSuccess: async () => {
+    mutationFn: ({ paperId, nextStatus }: {
+      paperId: string
+      nextStatus: Exclude<ReadingStatusValue, 'clear'> | null
+      previous: string | null
+    }) => updateReadingStatus(paperId, nextStatus),
+    onSuccess: async (_data, { paperId, previous }) => {
       await invalidateAfterPaperMutation(queryClient)
+      toast({ title: 'Reading status updated', action: offerReadingUndo(paperId, previous) })
     },
     onError: () => {
       errorToast('Error', 'Failed to update reading status.')
@@ -97,9 +104,13 @@ export function ReadingListTab() {
     // "Save" is the `add` action on the one paper-action route: 3★ and a save
     // event, as everywhere else. It used `POST /library/saved` at 0★.
     mutationFn: (paperId: string) => applyPaperAction(paperId, 'add', { surface: 'library' }),
-    onSuccess: async () => {
+    onSuccess: async (_data, paperId) => {
       await invalidateAfterPaperMutation(queryClient)
-      toast({ title: 'Saved', description: 'Paper added to the saved library.' })
+      toast({
+        title: 'Saved',
+        description: 'Paper added to the saved library.',
+        action: offerUndo(paperId),
+      })
     },
     onError: () => {
       errorToast('Error', 'Failed to save this paper to the library.')
@@ -236,7 +247,7 @@ export function ReadingListTab() {
                           value={(paper.reading_status as ReadingStatusValue | null) ?? 'clear'}
                           onValueChange={(value) => {
                             const nextStatus = value === 'clear' ? null : (value as Exclude<ReadingStatusValue, 'clear'>)
-                            updateReadingMutation.mutate({ paperId: paper.id, nextStatus })
+                            updateReadingMutation.mutate({ paperId: paper.id, nextStatus, previous: paper.reading_status ?? null })
                           }}
                         >
                           <SelectTrigger className="h-8 w-40 text-xs">
@@ -264,7 +275,7 @@ export function ReadingListTab() {
                           size="sm"
                           variant="ghost"
                           className="text-slate-500 hover:text-slate-700"
-                          onClick={() => updateReadingMutation.mutate({ paperId: paper.id, nextStatus: null })}
+                          onClick={() => updateReadingMutation.mutate({ paperId: paper.id, nextStatus: null, previous: paper.reading_status ?? null })}
                           disabled={updateReadingMutation.isPending}
                         >
                           <XCircle className="mr-1 h-4 w-4" />

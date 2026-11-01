@@ -940,6 +940,7 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
     if not paper_id:
         return False
     now = utcnow().isoformat()
+    previous = paper_actions.state_before_action(db, paper_id)
     cursor = db.execute(
         """
         UPDATE papers
@@ -957,6 +958,7 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
             action="remove",
             rating=DISLIKE_RATING,
             source_surface="library",
+            previous=previous,
         )
         # Same cascade logic as `dismiss_paper`: any co-author whose
         # only live attachment was this paper is now orphan and
@@ -979,18 +981,19 @@ def rating_signal_value(rating: int | None) -> int:
     return 0
 
 
-def save_undo_fields(
-    previous_rating: int | None, previous_added_at: str | None
-) -> dict[str, int | str]:
-    """What a Save event records so that undoing it gives the old state back.
+def undo_fields(previous: dict | None) -> dict[str, int | str | None]:
+    """What an action's event records so that undoing it gives the old state back.
 
-    Empty for an event that is not a Save, which passes no rating. A row with no
-    date is stored as ``""``, because an event from before this field has no
-    ``previous_added_at`` at all and must leave the date alone on undo.
+    A row with no date is stored as ``""``, because an event from before this
+    field has no ``previous_added_at`` at all and must leave the date alone.
     """
-    if previous_rating is None:
+    if previous is None:
         return {}
-    return {"previous_rating": previous_rating, "previous_added_at": previous_added_at or ""}
+    return {
+        "previous_rating": previous["rating"],
+        "previous_added_at": previous["added_at"] or "",
+        "previous_status": previous["status"],
+    }
 
 
 def record_paper_feedback(
@@ -1002,8 +1005,7 @@ def record_paper_feedback(
     source_surface: str,
     recommendation_id: str | None = None,
     discovery_provenance: dict[str, str | int] | None = None,
-    previous_rating: int | None = None,
-    previous_added_at: str | None = None,
+    previous: dict | None = None,
 ) -> str | None:
     """Record a paper feedback event through the one feedback engine.
 
@@ -1020,8 +1022,9 @@ def record_paper_feedback(
     inside a ``run_write_unit``). Returns the event id, or None when nothing
     was recorded.
 
-    A Save passes ``previous_rating`` and ``previous_added_at``, the rating and
-    date it replaced, so that ``undo_paper_feedback`` can restore them.
+    An action passes ``previous``, the state it replaced
+    (``paper_actions.state_before_action``), so that ``undo_paper_feedback`` can
+    restore it.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id or not _table_exists(db, "feedback_events"):
@@ -1039,7 +1042,7 @@ def record_paper_feedback(
             "action": action,
             "rating": rating,
             "signal_value": rating_signal_value(rating),
-            **save_undo_fields(previous_rating, previous_added_at),
+            **undo_fields(previous),
         },
         context={
             "surface": source_surface,
@@ -1140,7 +1143,7 @@ _LEAVE_ACTIONS = ("remove", "dismiss")
 _MEMBERSHIP_ACTIONS = (*_SAVE_ACTIONS, *_LEAVE_ACTIONS)
 _RATING_ACTIONS = ("like", "love", "dislike", "rate")
 _RATING_VERDICTS = ("like", "love", "dislike")
-UNDO_ASPECTS = ("membership", "rating", "reading", "all")
+UNDO_ASPECTS = ("membership", "rating", "reading", "all", "last", "inbox")
 
 
 def _delete_feedback_actions(
@@ -1258,6 +1261,70 @@ def _withdraw_surface_verdicts(db: sqlite3.Connection, paper_id: str) -> None:
         )
 
 
+def _undo_last_action(db: sqlite3.Connection, paper_id: str) -> None:
+    """Reverse the paper's newest Save, verdict or Remove: the toast's Undo.
+
+    The toggle aspects each clear one thing, which is not "take that back": a
+    Like on a tracked paper also saved it, and an Inbox paper must return to the
+    Inbox. The event records the state it replaced, so this restores exactly
+    that, deletes the event and settles the surfaces to the restored state.
+    """
+    actions = (*_MEMBERSHIP_ACTIONS, *_RATING_ACTIONS)
+    placeholders = ", ".join("?" for _ in actions)
+    event = db.execute(
+        f"""
+        SELECT id, lower(json_extract(value, '$.action')) AS action,
+               json_extract(value, '$.previous_rating') AS previous_rating,
+               json_extract(value, '$.previous_added_at') AS previous_added_at,
+               json_extract(value, '$.previous_status') AS previous_status
+        FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+          AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+        """,
+        (paper_id, *actions),
+    ).fetchone()
+    if event is None or event["previous_status"] is None:
+        raise ValueError("This paper has no action that can be undone")
+
+    from alma.services.feedback_substrate import reinstate_dislikes_ended_by_save
+
+    if event["action"] in _SAVE_ACTIONS:
+        reinstate_dislikes_ended_by_save(db, paper_id)
+    status = str(event["previous_status"])
+    rating = int(event["previous_rating"] or 0)
+    db.execute(
+        "UPDATE papers SET status = ?, rating = ?, added_at = NULLIF(?, ''), updated_at = ? WHERE id = ?",
+        (status, rating, event["previous_added_at"], utcnow().isoformat(), paper_id),
+    )
+    db.execute("DELETE FROM feedback_events WHERE id = ?", (event["id"],))
+
+    _withdraw_surface_verdicts(db, paper_id)
+    in_library = status == LIBRARY_STATUS
+    if _table_exists(db, "feed_items"):
+        resting = {5: "love", 4: "like", 2: "dislike", 1: "dislike"}.get(
+            rating, "add" if in_library else "new"
+        )
+        db.execute(
+            "UPDATE feed_items SET status = ? WHERE paper_id = ? "
+            "AND COALESCE(status, 'new') IN ('new', 'add', 'like', 'love', 'dislike')",
+            (resting, paper_id),
+        )
+    if _table_exists(db, "recommendations") and not in_library:
+        db.execute(
+            "UPDATE recommendations SET user_action = NULL, action_at = NULL "
+            "WHERE paper_id = ? AND user_action = 'save'",
+            (paper_id,),
+        )
+    if event["action"] == "remove":
+        # The Remove's cascade collected co-authors left with no live paper. The
+        # paper is live again, so they have their reason back.
+        from alma.application.author_lifecycle import restore_authors_of_paper
+
+        restore_authors_of_paper(db, paper_id)
+
+
 def undo_paper_feedback(
     db: sqlite3.Connection, paper_id: str, aspect: str = "all"
 ) -> dict:
@@ -1275,6 +1342,9 @@ def undo_paper_feedback(
       like/love/dislike/rate signal events. Membership and reading are kept.
     - ``reading`` — Queue/Queued: clear ``papers.reading_status`` only.
     - ``all`` — full neutral (used by onboarding's full-clear path).
+    - ``last`` — the toast's Undo: reverse the newest action, whatever it was
+      (see ``_undo_last_action``).
+    - ``inbox`` — the toast's Undo of ``defer``: back in the Inbox, no valence.
 
     A paper has ONE signal (Feed / Discovery / Library / onboarding all write
     ``feedback_events``, read back with no surface filter), so deleting the
@@ -1288,6 +1358,11 @@ def undo_paper_feedback(
         raise ValueError("Paper is subordinate and has no actionable root")
     aspect = aspect if aspect in UNDO_ASPECTS else "all"
     now = utcnow().isoformat()
+
+    if aspect == "last":
+        _undo_last_action(db, paper_id)
+    elif aspect == "inbox":
+        paper_actions.restore_to_inbox(db, paper_id)
 
     if aspect in ("membership", "all"):
         status_row = db.execute("SELECT status FROM papers WHERE id = ?", (paper_id,)).fetchone()
@@ -1435,8 +1510,7 @@ def apply_corpus_paper_feedback(
             action=normalized_action,
             rating=applied["rating"],
             source_surface=source_surface,
-            previous_rating=applied["previous_rating"] if normalized_action == "add" else None,
-            previous_added_at=applied["previous_added_at"] if normalized_action == "add" else None,
+            previous=applied["previous"],
         )
     else:
         dismiss_paper(db, root_id)

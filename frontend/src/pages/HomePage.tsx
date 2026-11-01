@@ -54,6 +54,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Surface } from '@/components/ui/surface'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { errorToast, toast } from '@/hooks/useToast'
+import { useOfferUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   CAPTURE_CHANNEL_LABEL,
@@ -408,11 +409,16 @@ export function HomePage() {
   // `POST /papers/{id}/action`, with `surface: 'inbox'` so feedback provenance
   // says where the user actually acted. Refetching the brief is what makes the
   // tile leave the section: every action moves the paper off `status='inbox'`.
+  const { offerUndo } = useOfferUndo()
   const triage = useMutation({
     mutationFn: ({ paperId, action }: { paperId: string; action: OnboardingPaperAction }) =>
       applyPaperAction(paperId, action, { surface: 'inbox' }),
-    onSuccess: (_result, { action }) => {
-      toast({ title: TRIAGE_CONFIRMATION[action] ?? 'Done' })
+    onSuccess: (_result, { paperId, action }) => {
+      // Clear writes no event (D6), so its Undo is a move back, valence-free.
+      toast({
+        title: TRIAGE_CONFIRMATION[action] ?? 'Done',
+        action: offerUndo(paperId, action === 'defer' ? 'inbox' : 'last'),
+      })
     },
     // Without this, a rejected write (a 503 while a background job holds the
     // writer gate is the realistic one) leaves the tile sitting exactly where

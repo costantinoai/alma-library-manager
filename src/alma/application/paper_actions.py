@@ -68,6 +68,18 @@ ACTION_SIGNAL_VALUES: dict[str, int] = {"add": 0, "like": 1, "love": 2, "dislike
 VALENCE_ACTIONS: frozenset[str] = frozenset(ACTION_RATINGS)
 
 
+def state_before_action(db: sqlite3.Connection, paper_id: str) -> dict:
+    """What an action is about to replace. Read it before the write."""
+    row = db.execute(
+        "SELECT rating, added_at, status FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    return {
+        "rating": int((row["rating"] if row else 0) or 0),
+        "added_at": row["added_at"] if row else None,
+        "status": row["status"] if row else None,
+    }
+
+
 def apply_valence(
     db: sqlite3.Connection,
     paper_id: str,
@@ -90,10 +102,10 @@ def apply_valence(
     new opinion, sets rating 1, and deliberately leaves membership alone so a
     disliked paper stays visible where it was.
 
-    Returns ``{"rating", "status", "previous_rating", "previous_added_at"}`` —
-    the paper's state AFTER the write, so callers report the truth rather than
-    what they intended, plus the rating and date it replaced, which a Save
-    records so that undoing the Save can give them back.
+    Returns ``{"rating", "status", "previous"}`` — the paper's state AFTER the
+    write, so callers report the truth rather than what they intended, plus the
+    state it replaced (see ``state_before_action``), which the event records so
+    that undoing the action can give it back.
 
     Caller owns the transaction.
     """
@@ -110,9 +122,7 @@ def apply_valence(
     if not paper_id:
         raise ValueError("paper_id is required")
 
-    before = db.execute(
-        "SELECT rating, added_at FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()
+    before = state_before_action(db, paper_id)
 
     if normalized == "dislike":
         # Preference only: rating 1, membership untouched (D6).
@@ -134,8 +144,7 @@ def apply_valence(
     return {
         "rating": int((row["rating"] if row else 0) or 0),
         "status": str(row["status"]) if row and row["status"] else None,
-        "previous_rating": int((before["rating"] if before else 0) or 0),
-        "previous_added_at": before["added_at"] if before else None,
+        "previous": before,
     }
 
 
@@ -217,6 +226,23 @@ def defer_from_inbox(db: sqlite3.Connection, paper_id: str) -> bool:
     cursor = db.execute(
         "UPDATE papers SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
         (TRACKED_STATUS, now, paper_id, INBOX_STATUS),
+    )
+    return cursor.rowcount > 0
+
+
+def restore_to_inbox(db: sqlite3.Connection, paper_id: str) -> bool:
+    """Undo of ``defer``: the paper goes back in the Inbox.
+
+    The same valence-free transition in reverse (D6): membership only, no
+    rating and no event. Only a `tracked` row moves, so a paper the user saved
+    or hid since then stays where they put it. The caller owns the transaction.
+    """
+    paper_id = str(paper_id or "").strip()
+    if not paper_id:
+        return False
+    cursor = db.execute(
+        "UPDATE papers SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+        (INBOX_STATUS, utcnow().isoformat(), paper_id, TRACKED_STATUS),
     )
     return cursor.rowcount > 0
 
@@ -359,13 +385,19 @@ def apply_paper_action(
             raise LookupError("Feed item not found")
 
     elif surface == "discovery":
-        from alma.application.discovery import mark_recommendation_action
-
-        # Discovery keeps `save` as its stored `user_action` vocabulary.
-        rec_action = "save" if normalized == "add" else normalized
-        surface_result = mark_recommendation_action(
-            db, str(scope_ref), rec_action, collection_ids=collection_ids
+        from alma.application.discovery import (
+            mark_recommendation_action,
+            undo_recommendation_dismiss,
         )
+
+        if normalized == "undo":
+            surface_result = undo_recommendation_dismiss(db, str(scope_ref))
+        else:
+            # Discovery keeps `save` as its stored `user_action` vocabulary.
+            rec_action = "save" if normalized == "add" else normalized
+            surface_result = mark_recommendation_action(
+                db, str(scope_ref), rec_action, collection_ids=collection_ids
+            )
         if surface_result is None:
             raise LookupError("Recommendation not found")
 

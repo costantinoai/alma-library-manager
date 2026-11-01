@@ -58,7 +58,7 @@ import { MetaLine, PageIntro } from '@/components/ui/page-intro'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { describeJobLaunch } from '@/lib/activity'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
@@ -427,6 +427,7 @@ export function FeedPage() {
   })
 
   const undoMutation = usePaperUndo()
+  const { offerUndo, offerReadingUndo } = useOfferUndo()
 
   const actionMutation = useMutation({
     // One route for every Feed action. `scopeRef` is the feed item id: Feed
@@ -450,8 +451,8 @@ export function FeedPage() {
       }),
     onSuccess: async (_data, vars) => {
       await invalidateFeedAction()
-      // Dismiss is the one "forever" action, so it carries a transient Undo
-      // affordance; everything else gets the plain confirmation toast.
+      // Dismiss settles the Feed row, so its Undo goes through the row; every
+      // other action takes back the paper's newest action.
       if (vars.action === 'dismiss') {
         toast({
           title: 'Dismissed from Feed',
@@ -460,7 +461,11 @@ export function FeedPage() {
         })
         return
       }
-      toast({ title: 'Feed updated', description: actionLabel(vars.action) })
+      toast({
+        title: 'Feed updated',
+        description: actionLabel(vars.action),
+        action: offerUndo(vars.paperId),
+      })
     },
     onError: (err) => {
       errorToast('Action failed', getApiErrorMessage(err))
@@ -480,6 +485,7 @@ export function FeedPage() {
         description: vars.nextQueued
           ? 'Parked for later — save, like, or love it once you’ve read it.'
           : 'The paper is no longer on your reading list.',
+        action: offerReadingUndo(vars.paperId, vars.nextQueued ? null : 'reading'),
       })
     },
     onError: (err) => errorToast('Reading list update failed', getApiErrorMessage(err)),
@@ -491,9 +497,13 @@ export function FeedPage() {
   // carries — same as removing elsewhere).
   const removeFromLibraryMutation = useMutation({
     mutationFn: ({ paperId }: { paperId: string }) => removeFromLibrary(paperId),
-    onSuccess: async () => {
+    onSuccess: async (_data, { paperId }) => {
       await invalidateFeedAction()
-      toast({ title: 'Removed from library', description: 'The paper is no longer in your Library.' })
+      toast({
+        title: 'Removed from library',
+        description: 'The paper is no longer in your Library.',
+        action: offerUndo(paperId),
+      })
     },
     onError: (err) => errorToast('Remove failed', getApiErrorMessage(err)),
   })

@@ -1254,6 +1254,7 @@ def apply_feed_action(
         # path (record_feedback used to commit, then this function committed
         # again). `add_to_library` defers its enrichment scheduling past the
         # gate, and `record_feedback` (the shared engine) no longer commits.
+        applied = None
         if action in {"add", "like", "love", "dislike"}:
             # Membership + rating go through the ONE owner of the rating
             # contract, so a Feed like and a Discovery like cannot drift apart.
@@ -1296,13 +1297,7 @@ def apply_feed_action(
                         "action": action,
                         "rating": paper_actions.ACTION_RATINGS.get(action),
                         "signal_value": paper_actions.ACTION_SIGNAL_VALUES.get(action, 0),
-                        **(
-                            library_app.save_undo_fields(
-                                applied["previous_rating"], applied["previous_added_at"]
-                            )
-                            if action == "add"
-                            else {}
-                        ),
+                        **library_app.undo_fields(applied["previous"] if applied else None),
                     },
                     context={
                         "mode": "feed",

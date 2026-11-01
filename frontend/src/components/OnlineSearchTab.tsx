@@ -57,7 +57,7 @@ import { byWeightedDesc } from '@/lib/sort'
 import { PaperCard, type PaperCardPaper, SkeletonPaperCard } from '@/components/shared'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import {
   invalidateAfterPaperMutation,
@@ -450,6 +450,7 @@ export function OnlineSearchTab({
     void handleSearch(seed)
   }, [autoRun, initialQuery, handleSearch])
 
+  const { offerUndo } = useOfferUndo()
   const handleAction = useCallback(
     async (
       item: OnlineSearchItem,
@@ -477,6 +478,7 @@ export function OnlineSearchTab({
           collection_name: collectionName.trim() || undefined,
           collection_ids: collectionIds,
         })
+        const before = rowStates[key] ?? IDLE
         setRowStates((prev) => ({
           ...prev,
           [key]: rowStateFromResponse(resp.status, action, resp.paper_id),
@@ -489,6 +491,15 @@ export function OnlineSearchTab({
                 : 'Dismissed'
               : 'Saved to Library',
           description: resp.title || item.title,
+          action: resp.paper_id
+            ? {
+                label: 'Undo',
+                onClick: () => {
+                  offerUndo(resp.paper_id!).onClick()
+                  setRowStates((prev) => ({ ...prev, [key]: before }))
+                },
+              }
+            : undefined,
         })
         await Promise.all([
           invalidateAfterPaperMutation(queryClient),
@@ -503,7 +514,7 @@ export function OnlineSearchTab({
         errorToast('Action failed')
       }
     },
-    [onImportComplete, queryClient, collectionName],
+    [onImportComplete, offerUndo, queryClient, collectionName, rowStates],
   )
 
   const undoMutation = usePaperUndo()

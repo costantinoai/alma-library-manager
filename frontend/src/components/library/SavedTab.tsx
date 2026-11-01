@@ -60,7 +60,7 @@ import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { reactionFromRating } from '@/lib/reactions'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
@@ -283,12 +283,18 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const visibleLikes = likes
   const hasMore = likesQuery.hasNextPage ?? false
 
+  const { offerUndo, offerReadingUndo } = useOfferUndo()
+
   const unlikeMutation = useMutation({
     mutationFn: (pubKey: string) => removeFromLibrary(pubKey),
-    onSuccess: () => {
+    onSuccess: (_data, pubKey) => {
       void invalidateAfterPaperMutation(queryClient)
       setDeleteKey(null)
-      toast({ title: 'Removed', description: 'Publication removed from the saved library.' })
+      toast({
+        title: 'Removed',
+        description: 'Publication removed from the saved library.',
+        action: offerUndo(pubKey),
+      })
     },
     onError: () => {
       errorToast('Error', 'Failed to remove from the saved library.')
@@ -323,9 +329,13 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const reactMutation = useMutation({
     mutationFn: ({ paperId, action }: { paperId: string; action: 'like' | 'love' }) =>
       applyPaperAction(paperId, action, { surface: 'library' }),
-    onSuccess: (_data, { action }) => {
+    onSuccess: (_data, { paperId, action }) => {
       void invalidateAfterPaperMutation(queryClient)
-      toast({ title: action === 'love' ? 'Loved' : 'Liked', description: 'Saved paper updated successfully.' })
+      toast({
+        title: action === 'love' ? 'Loved' : 'Liked',
+        description: 'Saved paper updated successfully.',
+        action: offerUndo(paperId),
+      })
     },
     onError: (err: unknown, { action }) => {
       errorToast(`Could not ${action} the paper`, getApiErrorMessage(err))
@@ -384,8 +394,10 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const readingStatusMutation = useMutation({
     mutationFn: ({ paperId, readingStatus }: { paperId: string; readingStatus: '' | 'reading' | 'done' | 'excluded' }) =>
       updateReadingStatus(paperId, readingStatus || null),
-    onSuccess: () => {
+    onSuccess: (_data, { paperId }) => {
       void invalidateAfterPaperMutation(queryClient)
+      const previous = likes.find((like) => like.id === paperId)?.reading_status
+      toast({ title: 'Reading status updated', action: offerReadingUndo(paperId, previous) })
     },
     onError: () => errorToast('Error', 'Failed to update reading status.'),
   })
@@ -431,13 +443,18 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     const save = item.paper_id
       ? applyPaperAction(item.paper_id, 'like', { surface: 'library' })
       : onlineImportSave({ action: 'like', doi: item.doi, link: item.url, title: item.title })
-    save.then(() => {
+    save.then((result) => {
       void invalidateAfterPaperMutation(queryClient)
-      toast({ title: 'Liked', description: `"${item.title}" added to the library.` })
+      const paperId = item.paper_id ?? result.paper_id
+      toast({
+        title: 'Liked',
+        description: `"${item.title}" added to the library.`,
+        action: paperId ? offerUndo(paperId) : undefined,
+      })
     }).catch((err: unknown) => {
       errorToast('Could not like the paper', getApiErrorMessage(err))
     })
-  }, [queryClient, toast])
+  }, [offerUndo, queryClient, toast])
 
   useEffect(() => {
     setSelectedKeys((prev) => {
@@ -845,7 +862,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           if (!open) setDeleteKey(null)
         }}
         title="Remove from Library"
-        description="Are you sure you want to remove this publication from your saved library? This action cannot be undone."
+        description="Are you sure you want to remove this publication from your saved library?"
         onConfirm={() => deleteKey && unlikeMutation.mutate(deleteKey)}
         isPending={unlikeMutation.isPending}
       />

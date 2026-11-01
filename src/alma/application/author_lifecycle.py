@@ -377,6 +377,17 @@ def cascade_gc_for_paper(
     return gc_authors_if_orphan(db, affected, reason=reason, job_id=job_id)
 
 
+def restore_authors_of_paper(db: sqlite3.Connection, paper_id: str) -> int:
+    """Flip the paper's soft-removed authors back to active: the paper is live again."""
+    restored = 0
+    for author_id in set(find_authors_for_paper(db, paper_id)):
+        restored += db.execute(
+            "UPDATE authors SET status = 'active' WHERE id = ? AND status = 'removed'",
+            (author_id,),
+        ).rowcount
+    return restored
+
+
 def garbage_collect_orphan_authors(
     db: sqlite3.Connection,
     *,

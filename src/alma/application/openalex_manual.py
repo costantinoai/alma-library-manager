@@ -1162,11 +1162,9 @@ def save_online_search_result(
 
         target_rating = _ONLINE_SEARCH_ACTION_RATINGS[action]
         now = utcnow().isoformat()
-        current = db.execute(
-            "SELECT status, rating, added_at FROM papers WHERE id = ?", (pid,)
-        ).fetchone()
-        current_status = str((current["status"] if current else "") or "").strip().lower()
-        current_rating = int((current["rating"] if current else 0) or 0)
+        previous = paper_actions.state_before_action(db, pid)
+        current_status = str(previous["status"] or "").strip().lower()
+        current_rating = previous["rating"]
         eff = target_rating
 
         if action in {"add", "like", "love"}:
@@ -1207,8 +1205,7 @@ def save_online_search_result(
             action=action,
             rating=eff,
             source_surface=added_from,
-            previous_rating=current_rating if action == "add" else None,
-            previous_added_at=(current["added_at"] if current else None) if action == "add" else None,
+            previous=previous,
         )
 
         # NB: `publication_references` rows were already written by

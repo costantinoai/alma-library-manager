@@ -66,7 +66,7 @@ import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { PaperPdfSection } from '@/components/pdf/PaperPdfSection'
 import type { PaperPdfState } from '@/api/client'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { reactionFromRating } from '@/lib/reactions'
 import {
@@ -74,6 +74,11 @@ import {
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { cn, formatPublicationDate } from '@/lib/utils'
+
+/** The reading select's "none" option is `__none__`, the API's is null. */
+function readingFromSelect(value: string): 'reading' | 'done' | 'excluded' | null {
+  return value === '__none__' ? null : (value as 'reading' | 'done' | 'excluded')
+}
 
 interface PaperTopic {
   term: string
@@ -257,12 +262,18 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
     onError: () => errorToast('Error', 'Could not save edits.'),
   })
 
+  const { offerUndo } = useOfferUndo()
+
   const removeMutation = useMutation({
     mutationFn: () => removeFromLibrary(p!.id),
     onSuccess: () => {
       void invalidateAfterPaperMutation(queryClient)
       void invalidateQueries(queryClient, ['library-info'])
-      toast({ title: 'Removed', description: 'Paper soft-removed from Library.' })
+      toast({
+        title: 'Removed',
+        description: 'Paper soft-removed from Library.',
+        action: offerUndo(p!.id),
+      })
       setRemoveConfirmOpen(false)
       onOpenChange(false)
     },
@@ -1056,6 +1067,8 @@ function RelatedWorkRow({
     status: isSaved ? 'library' : undefined,
   }
 
+  const { offerUndo, offerReadingUndo } = useOfferUndo()
+
   const actionMutation = useMutation({
     mutationFn: (action: 'add' | 'like' | 'love' | 'dislike') =>
       onlineImportSave({
@@ -1065,6 +1078,8 @@ function RelatedWorkRow({
         title: work.title,
       }),
     onSuccess: (resp, action) => {
+      const wasSaved = isSaved
+      const wasReaction = reaction
       setIsSaved(resp.status === 'library')
       setReaction(action === 'add' ? null : action)
       void invalidateAfterPaperMutation(queryClient)
@@ -1077,6 +1092,16 @@ function RelatedWorkRow({
               : 'Dismissed'
             : 'Saved to Library',
         description: resp.title || work.title,
+        action: resp.paper_id
+          ? {
+              label: 'Undo',
+              onClick: () => {
+                offerUndo(resp.paper_id!).onClick()
+                setIsSaved(wasSaved)
+                setReaction(wasReaction)
+              },
+            }
+          : undefined,
       })
     },
     onError: () => errorToast('Error', 'Action failed'),
@@ -1085,13 +1110,20 @@ function RelatedWorkRow({
   const undoMutation = usePaperUndo()
 
   const readingMutation = useMutation({
-    mutationFn: (status: string) =>
-      updateReadingStatus(
-        work.paper_id!,
-        status === '__none__' ? null : (status as 'reading' | 'done' | 'excluded'),
-      ),
-    onSuccess: () => {
+    mutationFn: ({ status }: { status: string; previous: string }) =>
+      updateReadingStatus(work.paper_id!, readingFromSelect(status)),
+    onSuccess: (_data, { previous }) => {
       void invalidateAfterPaperMutation(queryClient)
+      toast({
+        title: 'Reading status updated',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            offerReadingUndo(work.paper_id!, readingFromSelect(previous)).onClick()
+            setReadingStatus(previous)
+          },
+        },
+      })
     },
     onError: () => errorToast('Error', 'Could not update reading status'),
   })
@@ -1100,8 +1132,8 @@ function RelatedWorkRow({
     <Select
       value={readingStatus}
       onValueChange={(v) => {
+        readingMutation.mutate({ status: v, previous: readingStatus })
         setReadingStatus(v)
-        readingMutation.mutate(v)
       }}
     >
       <SelectTrigger className="h-7 w-[120px] text-xs">
