@@ -153,8 +153,6 @@ interface PaperCardProps {
   savedClickRemoves?: boolean
   /** Whether the paper is already on the reading list (controls Queue button). */
   isQueued?: boolean
-  /** When true, the abstract is expanded by default (Feed extended view). */
-  forceShowAbstract?: boolean
   /** When true, the TLDR line and the abstract toggle are both hidden,
    *  even at the `default` size. Used by Discovery's normal view to keep
    *  cards dense — the user opens the detail panel for the full text. */
@@ -163,8 +161,8 @@ interface PaperCardProps {
    *  shorter-height) form even at the `default` card size. Lets surfaces
    *  keep dense triage buttons without flipping the whole card to compact. */
   compactActions?: boolean
-  /** Explicit override for action-bar label visibility. */
-  showActionLabels?: boolean
+  /** Extra detail behind the Why toggle, below the score breakdown. */
+  whyDetail?: React.ReactNode
   /** Optional bulk-selection affordance — renders a hover-revealed checkbox
    * in the card header's leading column so it never overlaps the title.
    * The checkbox stays visible while the row is checked. Pass a stable
@@ -280,10 +278,9 @@ export function PaperCard({
   isSaved = false,
   savedClickRemoves = false,
   isQueued = false,
-  forceShowAbstract = false,
   suppressSummaries = false,
   compactActions = false,
-  showActionLabels,
+  whyDetail,
   selection,
 }: PaperCardProps) {
   // Resolve the effective size: explicit `size` wins; legacy `compact` prop
@@ -291,7 +288,7 @@ export function PaperCard({
   const effectiveSize: PaperCardSize = size ?? (compact ? 'compact' : 'default')
   const isCompact = effectiveSize === 'compact'
   const isDetailed = effectiveSize === 'detailed'
-  const showAbstractByDefault = forceShowAbstract || isDetailed
+  const showAbstractByDefault = isDetailed
   const [showBreakdown, setShowBreakdown] = useState(isDetailed)
   const [showAbstract, setShowAbstract] = useState(showAbstractByDefault)
   const [authorsExpanded, setAuthorsExpanded] = useState(false)
@@ -832,12 +829,11 @@ export function PaperCard({
                 isSaved={isSaved}
                 savedClickRemoves={savedClickRemoves}
                 isQueued={isQueued}
-                showLabels={showActionLabels}
                 collectionAction={collectionConfirm ? (
                   <AddToCollectionMenu
                     onConfirm={collectionConfirm}
                     disabled={actionDisabled}
-                    compact={(isCompact || compactActions) && showActionLabels !== true}
+                    compact={isCompact || compactActions}
                     defaultSelectedIds={defaultCollectionIds}
                     isSaved={isSaved}
                   />
@@ -912,6 +908,7 @@ export function PaperCard({
             <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
           </SubPanel>
         )}
+        {showBreakdown && whyDetail}
       </div>
     </Card>
   )

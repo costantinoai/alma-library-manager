@@ -66,7 +66,6 @@ try {
   restore = { url: response.url(), status: oldStatus }
   assert.ok((await page.request.patch(restore.url, { data: { reading_status: restore.status } })).ok())
   restore = undefined
-  await page.locator('[title="Compact table view"]').click()
   await page.getByRole('row').nth(1).getByRole('checkbox').click()
   assert.equal(await page.getByRole('button', { name: 'Clear Rating', exact: true }).isVisible(), false)
   await page.locator('summary', { hasText: 'Maintain selected papers' }).click()
