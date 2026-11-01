@@ -249,7 +249,9 @@ rest.
 | `POST` | `/authors/follow-from-paper` | Follow author seen on a paper card |
 | `GET` | `/authors/needs-attention` | Authors needing manual triage |
 | `POST` | `/authors/{id}/merge-profiles` | Merge duplicate author rows into this canonical author. Body requires `alt_author_ids`; optional `field_choices` maps each alt author id to per-field winners (`primary` / `alt`) for metadata discrepancies. |
-| `POST` | `/authors/{id}/not-same-person` | Permanently record that authors sharing a name are different people |
+| `POST` | `/authors/{id}/not-same-person` | Record that authors sharing a name are different people |
+| `GET` | `/authors/{id}/not-same-person` | The authors this one was marked as different from |
+| `DELETE` | `/authors/{id}/not-same-person/{alt_id}` | Undo that verdict |
 | `DELETE` | `/authors/{id}/accept-unidentified` | Undo "can't identify": the identity gap is open again |
 | `POST` | `/authors/{id}/discover-aliases` | Read-only ORCID lookup for additional OpenAlex profiles that may represent the same person |
 | `POST` | `/authors/conflicts/{id}/resolve` | Resolve a hard-identifier conflict recorded during merge |
