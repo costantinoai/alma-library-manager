@@ -364,7 +364,7 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings/openalex/usage` | Live OpenAlex quota state |
 | `GET` | `/settings/openalex/status` | OpenAlex connection status |
 | `GET` | `/settings/semantic-scholar/status` | Semantic Scholar connection status |
-| `GET` | `/settings/export` | Export the settings document |
+| `GET` | `/settings/export` | Export settings and core tables as JSON, without Activity history. Nothing imports it; `/backup/export` is the restorable snapshot |
 
 ### Onboarding and walkthroughs
 
