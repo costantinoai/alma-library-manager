@@ -28,12 +28,12 @@ import { SubPanel } from '@/components/ui/sub-panel'
 /** The card header's small round icon controls (PDF link, Discover similar).
  *  Local PDF access is independent of fetch plugins. */
 const HEADER_ICON_BUTTON = cn(
-  buttonVariants({ variant: 'outline', size: 'icon-sm' }),
-  'size-7 text-slate-600 hover:text-alma-900 data-[state=open]:border-control-edge-strong data-[state=open]:bg-control-quiet-hover',
+  buttonVariants({ variant: 'muted', size: 'icon-sm' }),
+  'size-7 data-[state=open]:bg-control-quiet-hover data-[state=open]:text-alma-900',
 )
-/** Same object as the action row's pressed Save: this paper is already yours. */
+/** The one coloured mark in the corner: a state, not an action. */
 const HEADER_PDF_HELD =
-  'border-accent-edge bg-accent-soft text-alma-folio hover:border-alma-folio hover:bg-accent-soft hover:text-alma-folio-700'
+  'bg-alma-folio/10 text-alma-folio hover:bg-alma-folio/[0.16] hover:text-alma-folio-700'
 
 export interface PaperCardPaper {
   id: string
