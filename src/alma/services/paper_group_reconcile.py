@@ -250,6 +250,7 @@ def reconcile_paper_groups(
     section: Callable[[str], AbstractContextManager[Any]] | None = None,
     on_phase: Callable[[str, dict[str, Any]], None] | None = None,
     dry_run: bool = False,
+    same_work: bool = True,
 ) -> dict[str, Any]:
     """Repair through one plan, with independently atomic group writes.
 
@@ -337,7 +338,7 @@ def reconcile_paper_groups(
     report("match", {"message": "Checking complete title-match groups before merging."})
     plan = plan_same_work(conn)
     ambiguous = plan["ambiguous"]
-    budget = int(plan["merges"]) if limit is None else limit
+    budget = 0 if not same_work else int(plan["merges"]) if limit is None else limit
     selected: list = []
     for group in plan["groups"]:
         if budget <= 0:
