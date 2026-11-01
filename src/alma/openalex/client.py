@@ -636,10 +636,17 @@ def _upsert_authorships(
     try:
         conn.execute("DELETE FROM publication_authors WHERE paper_id = ?", (paper_id,))
         inserted = 0
+        from alma.core.author_identity import canonical_author_oid, merged_author_redirects
         from alma.core.utils import normalize_orcid, repair_display_text
 
+        # A merged-away id comes back on every refresh of its papers.
+        redirects = merged_author_redirects(conn)
+        written: set[str] = set()
         for a in authorships or []:
-            oaid = (a.get("openalex_id") or "").strip()
+            oaid = canonical_author_oid(conn, a.get("openalex_id"), redirects=redirects)
+            # A paper listing both profiles of one person keeps the first.
+            if oaid.lower() in written:
+                continue
             dname = repair_display_text((a.get("display_name") or "").strip())
             orcid = normalize_orcid(a.get("orcid")) or ""
             position = (a.get("position") or "").strip()
@@ -656,6 +663,7 @@ def _upsert_authorships(
                     (paper_id, oaid, dname, orcid, position, is_corr, inst_name),
                 )
                 inserted += 1
+                written.add(oaid.lower())
         return inserted
     except sqlite3.OperationalError as e:
         logger.warning("Failed to upsert authorships for paper %s: %s", paper_id, e)

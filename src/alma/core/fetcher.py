@@ -17,6 +17,7 @@ from concurrent.futures import as_completed
 from scholarly import scholarly
 from tqdm import tqdm
 
+from alma.core.author_identity import canonical_author_oid
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.database import (
     clean_pubs,
@@ -503,7 +504,7 @@ def save_updated_cache(
             conn.execute(
                 """INSERT OR IGNORE INTO publication_authors (paper_id, openalex_id, display_name)
                    VALUES (?, ?, '')""",
-                (paper_id, author_id),
+                (paper_id, canonical_author_oid(conn, author_id)),
             )
             hydration_ids.add(paper_id)
 

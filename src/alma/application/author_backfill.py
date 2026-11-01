@@ -46,6 +46,7 @@ from time import monotonic
 from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+from alma.core.author_identity import canonical_author_oid
 from alma.core.db_write import commit_unless_gated, write_section
 from alma.core.operations.batch_outcome import batch_outcome
 from alma.core.paper_groups import is_standalone_paper
@@ -1413,7 +1414,7 @@ def _ensure_authorship_row(
 ) -> None:
     """Insert a `publication_authors` row linking this paper to the author."""
 
-    oid = str(openalex_id or "").strip()
+    oid = canonical_author_oid(conn, openalex_id)
     if not oid or not is_standalone_paper(conn, paper_id):
         return
     # Prefer the structured authorships entry (it carries the correct
