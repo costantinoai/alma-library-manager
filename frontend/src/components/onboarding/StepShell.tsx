@@ -32,7 +32,7 @@ export function StepShell({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-6 pt-5 sm:px-8">
         {eyebrow ? <EyebrowLabel className="mb-2">{eyebrow}</EyebrowLabel> : null}
-        <h2 className="font-brand text-2xl font-semibold leading-tight text-alma-800 sm:text-[28px]">
+        <h2 className="font-brand text-2xl font-semibold leading-tight text-alma-800 sm:text-figure-sm">
           {title}
         </h2>
         {lead ? (
@@ -43,7 +43,7 @@ export function StepShell({
         {children}
       </div>
       {footer ? (
-        <div className="shrink-0 border-t border-[var(--color-border)] px-6 py-4 sm:px-8">
+        <div className="shrink-0 border-t border-divider px-6 py-4 sm:px-8">
           {footer}
         </div>
       ) : null}

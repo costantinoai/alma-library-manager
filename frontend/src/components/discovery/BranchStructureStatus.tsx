@@ -123,7 +123,7 @@ export function BranchStructureStatus({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => rebuild.mutate()}>Rebuild</AlertDialogAction>
+            <AlertDialogAction variant="default" onClick={() => rebuild.mutate()}>Rebuild</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

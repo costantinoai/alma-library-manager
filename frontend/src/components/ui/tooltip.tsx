@@ -13,7 +13,7 @@ const TooltipTrigger = TooltipPrimitive.Trigger
  * - `paper`: a small card for tooltips with a list or a breakdown inside.
  */
 const TOOLTIP_TONES = {
-  ink: 'tooltip-ink bg-alma-800 text-alma-cream shadow-md',
+  ink: 'tooltip-ink bg-alma-800 text-alma-cream shadow-paper-md',
   paper: 'border border-edge-3 bg-surface-3 text-slate-700 shadow-paper-md',
 } as const
 
@@ -31,7 +31,7 @@ const TooltipContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        'z-[1000] overflow-hidden rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
+        'z-tooltip overflow-hidden rounded-control px-2.5 py-1.5 text-xs font-medium data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
         TOOLTIP_TONES[tone],
         className,
       )}

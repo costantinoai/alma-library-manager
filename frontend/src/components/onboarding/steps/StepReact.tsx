@@ -17,6 +17,7 @@ import {
 } from '@/api/client'
 import { StepShell, StepNav, GoalMeter } from '../StepShell'
 import type { StepContext } from '../types'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const TARGET = 10
 type Reaction = 'like' | 'love' | 'dislike' | null
@@ -162,10 +163,10 @@ export function StepReact({ next, back }: StepContext) {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading your authors' papers…
           </div>
         ) : papers.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-10 text-center text-sm text-slate-500">
+          <SubPanel variant="flat" padded={false}  className="flex items-center justify-center gap-2 px-4 py-10 text-center text-sm text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin" />
             We're still gathering papers from the authors you follow. This updates automatically.
-          </div>
+          </SubPanel>
         ) : (
           <RevealList className="space-y-3">
             {papers.map((p: Publication, i) => (

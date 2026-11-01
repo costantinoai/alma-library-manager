@@ -74,6 +74,7 @@ import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // ---------------------------------------------------------------------------
 // Form schema — only fields the user can edit live here. Display-only state
@@ -118,13 +119,11 @@ function TierHint({ items }: { items: string[] }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center text-slate-400 transition-colors hover:text-slate-600"
+        <Button variant="muted" size="inline"
           aria-label="What does this enable?"
         >
           <Info className="h-3 w-3" />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="top" tone="paper" className="max-w-xs p-2.5">
         <p className="mb-1 text-xs font-semibold text-slate-700">Enables:</p>
@@ -150,7 +149,7 @@ function TierHint({ items }: { items: string[] }) {
 // while the section is collapsed.
 // ---------------------------------------------------------------------------
 
-type EnvVerdictTone = 'success' | 'warning' | 'destructive' | 'info'
+type EnvVerdictTone = 'success' | 'warning' | 'negative' | 'info'
 
 interface EnvVerdict {
   tone: EnvVerdictTone
@@ -170,7 +169,7 @@ function computeEnvVerdict(
 ): EnvVerdict {
   if (missingCount > 0) {
     return {
-      tone: 'destructive',
+      tone: 'negative',
       badgeTone: 'negative',
       badgeLabel: `${missingCount} missing`,
       icon: AlertCircle,
@@ -279,10 +278,10 @@ function ResolutionStep({
   return (
     <div
       className={cn(
-        'rounded-sm border p-3',
+        'rounded-card border p-3',
         muted
-          ? 'border-[var(--color-border)] bg-surface-2/60'
-          : 'border-[var(--color-border)] bg-surface-1 shadow-paper-sm',
+          ? 'border-divider bg-surface-2/60'
+          : 'border-divider bg-surface-1 shadow-paper-sm',
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -293,7 +292,7 @@ function ResolutionStep({
               muted ? 'text-slate-400' : 'text-slate-500',
             )}
           />
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+          <span className="text-2xs font-bold uppercase tracking-[0.14em] text-slate-500">
             {eyebrow}
           </span>
         </div>
@@ -302,21 +301,21 @@ function ResolutionStep({
         </StatusBadge>
       </div>
       <div className="mt-2 space-y-1">
-        <p className="text-[10px] uppercase tracking-wide text-slate-400">{pathLabel}</p>
+        <p className="text-2xs uppercase tracking-wide text-slate-400">{pathLabel}</p>
         <p
           className={cn(
-            'break-all font-mono text-[11px] leading-snug',
+            'break-all font-mono text-caption leading-snug',
             path ? 'text-slate-700' : 'italic text-slate-400',
           )}
         >
           {path ?? 'not set'}
         </p>
         {version ? (
-          <p className="text-[11px] text-slate-500">
+          <p className="text-caption text-slate-500">
             Python <span className="font-mono">{version}</span>
           </p>
         ) : null}
-        {note ? <p className="text-[11px] text-slate-500">{note}</p> : null}
+        {note ? <p className="text-caption text-slate-500">{note}</p> : null}
       </div>
     </div>
   )
@@ -558,7 +557,7 @@ export function AIConfigCard() {
           <SettingsSections>
             {/* Capability tier */}
             <SettingsSection title="Capability" defaultOpen>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+              <SubPanel variant="flat" padded={false}  className="p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-semibold text-slate-700">
@@ -578,7 +577,7 @@ export function AIConfigCard() {
                 <p className="mt-1 text-xs text-slate-500">
                   Provider: {tier1?.active_provider ?? 'none'}
                 </p>
-              </div>
+              </SubPanel>
             </SettingsSection>
 
             {/* AI feature map */}
@@ -595,7 +594,7 @@ export function AIConfigCard() {
             >
               <div className="grid gap-2 lg:grid-cols-2">
                 {(status.features?.groups ?? []).map((group) => (
-                  <div key={group.id} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 shadow-paper-sm">
+                  <SubPanel variant="flat" padded={false} key={group.id} className="p-3 shadow-paper-sm">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       {group.label}
                     </p>
@@ -614,7 +613,7 @@ export function AIConfigCard() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </SubPanel>
                 ))}
               </div>
             </SettingsSection>
@@ -726,13 +725,11 @@ export function AIConfigCard() {
                   <AlertDescription className="text-xs">
                     Missing S2 vectors, unresolved identity, and uncomputed embeddings are repaired
                     from{' '}
-                    <button
-                      type="button"
+                    <Button variant="link-ink" size="inline"
                       onClick={() => navigateTo('health', { tab: 'repairs' })}
-                      className="font-medium text-alma-700 underline-offset-2 hover:underline"
                     >
                       Health → Repairs
-                    </button>
+                    </Button>
                     , where each repair shows an ETA and a daily cap. This card only configures the
                     provider and shows read-only coverage.
                   </AlertDescription>
@@ -762,18 +759,18 @@ export function AIConfigCard() {
                   <StatTile label="Stale" value={status.embeddings.stale ?? 0} />
                 </div>
                 {status.embeddings.coverage_by_status?.library ? (
-                  <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-2 py-1.5 text-xs text-slate-600">
+                  <SubPanel variant="flat" padded={false}  className="px-2 py-1.5 text-xs text-slate-600">
                     Library: {status.embeddings.coverage_by_status.library.up_to_date}/
                     {status.embeddings.coverage_by_status.library.total} active-model vectors (
                     {status.embeddings.coverage_by_status.library.missing} missing)
-                  </div>
+                  </SubPanel>
                 ) : null}
                 {(status.embeddings.models ?? []).length > 0 ? (
                   <div className="space-y-1">
                     {(status.embeddings.models ?? []).map((row) => (
                       <div
                         key={row.model}
-                        className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-md border border-[var(--color-border)] px-2 py-1.5 text-xs"
+                        className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-control border border-divider px-2 py-1.5 text-xs"
                       >
                         <span className="truncate font-mono text-slate-700">{row.model}</span>
                         <span className="text-slate-600">{row.vectors} vectors</span>
@@ -816,7 +813,7 @@ export function AIConfigCard() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => deleteInactiveEmbeddingsMutation.mutate()}
-                          className="bg-critical-600 text-on-fill hover:bg-critical-700"
+                          variant="destructive"
                         >
                           Delete inactive
                         </AlertDialogAction>
@@ -852,15 +849,15 @@ export function AIConfigCard() {
                 >
                   <p>
                     ALMa needs a Python environment with packages like{' '}
-                    <code className="font-mono text-[11px]">torch</code>,{' '}
-                    <code className="font-mono text-[11px]">transformers</code>, and{' '}
-                    <code className="font-mono text-[11px]">hdbscan</code> to run SPECTER2,
+                    <code className="font-mono text-caption">torch</code>,{' '}
+                    <code className="font-mono text-caption">transformers</code>, and{' '}
+                    <code className="font-mono text-caption">hdbscan</code> to run SPECTER2,
                     compute embeddings, and build clusters.
                   </p>
                   <p>
                     By default, it uses whichever environment the backend itself was started in.
                     You can also point it at a different env (a local{' '}
-                    <code className="font-mono text-[11px]">.venv</code>, a conda env, or a
+                    <code className="font-mono text-caption">.venv</code>, a conda env, or a
                     specific Python executable) — but{' '}
                     <strong>if that path can't be found or doesn't have the right packages</strong>
                     , ALMa falls back to the backend's own Python so AI features still work.
@@ -952,7 +949,7 @@ export function AIConfigCard() {
 
                 <div className="space-y-1.5">
                   <div className="flex items-baseline justify-between gap-2">
-                    <h5 className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                    <h5 className="text-2xs font-bold uppercase tracking-[0.14em] text-slate-500">
                       Packages in active runtime
                     </h5>
                     <span className="text-xs text-slate-500">
@@ -997,9 +994,9 @@ export function AIConfigCard() {
                   )}
                   {status.dependency_setup_suggestions &&
                     status.dependency_setup_suggestions.length > 0 && (
-                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-lg border border-control-edge bg-control-well p-3 text-xs text-alma-900">
+                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-card border border-control-edge bg-control-well p-3 text-xs text-alma-900">
                         {status.dependency_setup_suggestions.map((step, idx) => (
-                          <li key={`${idx}-${step}`} className="font-mono text-[11px]">
+                          <li key={`${idx}-${step}`} className="font-mono text-caption">
                             {step}
                           </li>
                         ))}
@@ -1008,11 +1005,11 @@ export function AIConfigCard() {
                 </div>
 
                 {dependencyEnv && (
-                  <Collapsible className="rounded-sm border border-[var(--color-border)] bg-surface-2/60">
+                  <Collapsible className="rounded-control border border-divider bg-surface-2/60">
                     <CollapsibleTrigger
                       className={cn(
-                        'group flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left',
-                        'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+                        'group flex w-full items-center justify-between gap-3 rounded-card px-3 py-2 text-left',
+                        'hover:bg-control-quiet focus-ring',
                       )}
                     >
                       <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
@@ -1022,7 +1019,7 @@ export function AIConfigCard() {
                       <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-data-[state=open]:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <div className="space-y-1 border-t border-[var(--color-border)] px-3 py-2 text-xs">
+                      <div className="space-y-1 border-t border-divider px-3 py-2 text-xs">
                         <KeyValueRow
                           label="Configured type"
                           value={dependencyEnv.type || 'system'}
@@ -1037,7 +1034,7 @@ export function AIConfigCard() {
                           <KeyValueRow
                             label="Resolved path"
                             value={
-                              <span className="font-mono text-[11px]">
+                              <span className="font-mono text-caption">
                                 {dependencyEnv.resolved_path}
                               </span>
                             }
@@ -1047,7 +1044,7 @@ export function AIConfigCard() {
                           <KeyValueRow
                             label="Backend executable"
                             value={
-                              <span className="font-mono text-[11px]">
+                              <span className="font-mono text-caption">
                                 {dependencyEnv.backend_python_executable}
                               </span>
                             }
@@ -1064,7 +1061,7 @@ export function AIConfigCard() {
                             <KeyValueRow
                               label="Configured executable"
                               value={
-                                <span className="font-mono text-[11px]">
+                                <span className="font-mono text-caption">
                                   {dependencyEnv.selected_python_executable}
                                 </span>
                               }
@@ -1125,12 +1122,12 @@ function LocalModelTier({
   if (models.length <= 1) {
     const onlyModel = models[0]
     return (
-      <div className="ml-6 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 text-xs text-slate-600">
+      <SubPanel variant="flat" padded={false}  className="ml-6 p-3 text-xs text-slate-600">
         Local model:{' '}
         <span className="font-medium text-slate-800">
           {onlyModel?.display_name ?? 'SPECTER2 Base'}
         </span>
-      </div>
+      </SubPanel>
     )
   }
   return (

@@ -18,6 +18,7 @@ import {
   dismissTagSuggestion,
   getTagSuggestions,
 } from './api'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /** Generate tag suggestions, then accept or dismiss them one paper at a time. */
 export function TagSuggestionsPanel() {
@@ -148,7 +149,7 @@ export function TagSuggestionsPanel() {
           )}
 
           {suggestionPaperId && (
-            <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+            <SubPanel variant="flat" padded={false}  className="p-3">
               <p className="mb-2 text-xs text-slate-600">
                 Paper: <span className="font-medium text-slate-800">{selectedPaper?.title ?? suggestionPaperId}</span>
               </p>
@@ -164,9 +165,8 @@ export function TagSuggestionsPanel() {
               ) : (
                 <div className="space-y-2">
                   {suggestionsQuery.data?.suggestions.map((item) => (
-                    <div
-                      key={`${item.paper_id}:${item.tag}`}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-3 py-2"
+                    <SubPanel variant="flat" padded={false}
+                      key={`${item.paper_id}:${item.tag}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
                     >
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-800">{item.tag}</p>
@@ -194,11 +194,11 @@ export function TagSuggestionsPanel() {
                           Dismiss
                         </Button>
                       </div>
-                    </div>
+                    </SubPanel>
                   ))}
                 </div>
               )}
-            </div>
+            </SubPanel>
           )}
         </CardContent>
       </Card>

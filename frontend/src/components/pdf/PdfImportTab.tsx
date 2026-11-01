@@ -89,7 +89,7 @@ export function PdfImportTab({ onImportComplete }: { onImportComplete?: () => vo
         </p>
       )}
       {queue.rows.length > 0 && (
-        <ul className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)]">
+        <ul className="divide-y divide-divider rounded-control border border-divider">
           {queue.rows.map((row) => (
             <ImportRow key={row.key} row={row} />
           ))}

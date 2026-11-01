@@ -28,6 +28,7 @@ import {
   AUTHOR_SUGGESTION_FETCH_COUNT,
   authorSuggestionsQueryOptions,
 } from '@/components/authors/authorSuggestionQueries'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // Expanded view shows up to this many rows of the measured grid.
 const EXPANDED_ROWS = 5
@@ -440,7 +441,7 @@ export function SuggestedAuthorsRail({
       {isLoading ? (
         <div className="grid gap-3" style={gridStyle}>
           {Array.from({ length: collapsedCap }).map((_, i) => (
-            <Skeleton key={i} className="h-52 rounded-lg" />
+            <Skeleton key={i} className="h-52 rounded-card" />
           ))}
         </div>
       ) : hasError ? (
@@ -507,7 +508,7 @@ export function SuggestedAuthorsRail({
             size="sm"
             variant="ghost"
             onClick={() => setExpanded((v) => !v)}
-            className="text-xs text-alma-700 hover:text-alma-800"
+            className="text-xs"
           >
             {expanded ? (
               <>
@@ -528,7 +529,7 @@ export function SuggestedAuthorsRail({
           already follow. Offered for MERGE (fold it into the existing author),
           not as a new follow. ✕ dismisses it like any suggestion. */}
       {duplicateSuggestions.length > 0 ? (
-        <div className="space-y-1.5 rounded-sm border border-edge-2 bg-surface-2 p-3">
+        <SubPanel variant="flat" padded={false}  className="space-y-1.5 p-3">
           <div className="flex items-center gap-2">
             <GitMerge className="h-4 w-4 text-alma-600" aria-hidden />
             <h3 className="text-xs font-semibold text-alma-800">
@@ -545,7 +546,7 @@ export function SuggestedAuthorsRail({
               return (
                 <li
                   key={s.openalex_id || s.key}
-                  className="flex items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-sm"
+                  className="flex items-center justify-between gap-3 rounded-control px-2 py-1.5 text-sm"
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <StatusBadge
@@ -566,7 +567,7 @@ export function SuggestedAuthorsRail({
                       size="sm"
                       variant="outline"
                       disabled={busy || !s.openalex_id}
-                      className="h-7 gap-1 border-control-edge text-alma-700 hover:bg-control-quiet"
+                      className="h-7 gap-1"
                       onClick={() => mergeMutation.mutate(s)}
                     >
                       <GitMerge className="h-3.5 w-3.5" aria-hidden />
@@ -574,10 +575,10 @@ export function SuggestedAuthorsRail({
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="muted"
                       title="Different person — show as a new author to follow"
                       disabled={busy}
-                      className="h-7 gap-1 text-slate-600 hover:bg-control-quiet"
+                      className="h-7 gap-1"
                       onClick={() => notDuplicateMutation.mutate(s)}
                     >
                       <X className="h-3.5 w-3.5" aria-hidden />
@@ -588,7 +589,7 @@ export function SuggestedAuthorsRail({
               )
             })}
           </ul>
-        </div>
+        </SubPanel>
       ) : null}
     </section>
   )

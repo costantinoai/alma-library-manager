@@ -19,7 +19,6 @@ import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -39,6 +38,8 @@ import { type CollectionItemData, PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { CollectionIntelligenceCard } from './CollectionIntelligenceCard'
 import { ColorPicker } from './ColorPicker'
+import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface CollectionsTabProps {
   /** Deep-link target (global search → `#/library?collection=<id>`): expand
@@ -269,18 +270,18 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
           {collections.map((coll) => {
             const isExpanded = expandedId === coll.id
             return (
-              <Card key={coll.id} className="overflow-hidden transition-shadow hover:shadow-md">
+              <Card key={coll.id} className="overflow-hidden transition-shadow hover:shadow-paper-sheet-hover">
                 <CardContent className="p-0">
                   {/* Collection header */}
                   <div className="flex items-center gap-4 p-5">
                     <div
-                      className="h-4 w-4 rounded-full shrink-0 shadow-sm"
+                      className="h-4 w-4 rounded-full shrink-0 shadow-paper-sm"
                       style={{ backgroundColor: coll.color }}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-medium text-alma-800">{coll.name}</h3>
-                        <Badge variant="secondary">{coll.item_count} papers</Badge>
+                        <StatusBadge tone="neutral">{coll.item_count} papers</StatusBadge>
                       </div>
                       {coll.description && (
                         <p className="mt-0.5 text-xs text-slate-500">
@@ -369,7 +370,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
 
                   {/* Expanded items */}
                   {isExpanded && (
-                    <div className="border-t border-slate-100 bg-surface-2 px-5 py-4">
+                    <SubPanel variant="flat" padded={false}  className="border-t px-5 py-4">
                       {collectionItemsQuery.isLoading ? (
                         <div className="flex items-center justify-center py-4">
                           <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
@@ -422,7 +423,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                           })}
                         </div>
                       )}
-                    </div>
+                    </SubPanel>
                   )}
                 </CardContent>
               </Card>
@@ -442,10 +443,10 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
           </DialogHeader>
           {formContent}
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <Alert variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to create collection. The name may already exist.</span>
-            </div>
+            </Alert>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -481,10 +482,10 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
           </DialogHeader>
           {formContent}
           {updateMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <Alert variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to update collection.</span>
-            </div>
+            </Alert>
           )}
           <DialogFooter>
             <Button

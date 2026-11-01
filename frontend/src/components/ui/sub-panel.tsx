@@ -47,7 +47,7 @@ const SubPanel = React.forwardRef<HTMLDivElement, SubPanelProps>(
         <div
           ref={ref}
           className={cn(
-            'rounded-sm border border-[var(--color-border-cool)] bg-surface-cool-2',
+            'rounded-card border border-divider-cool bg-surface-cool-2',
             padded && 'p-4',
             !isFlat && 'shadow-paper-inset-cool',
             className,
@@ -66,7 +66,7 @@ const SubPanel = React.forwardRef<HTMLDivElement, SubPanelProps>(
         filled={!isAccent}
         bordered={!isAccent}
         className={cn(
-          'rounded-sm',
+          'rounded-card',
           padded && 'p-4',
           !isFlat && !isAccent && 'shadow-paper-inset',
           isAccent && 'border border-accent-edge bg-accent-soft',

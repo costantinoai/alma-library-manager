@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 
 import { api } from '@/api/client'
 import { isBackgroundTriggerSource } from '@/lib/activity'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface ActivityOp {
   job_id: string
@@ -54,16 +55,15 @@ export function RefreshRunningBanner({
     'Running in the background — this can take about a minute. You’ll get a notification when it finishes.'
 
   return (
-    <div
+    <SubPanel variant="flat" padded={false}
       role="status"
-      aria-live="polite"
-      className="flex items-start gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3 text-sm"
+      aria-live="polite" className="flex items-start gap-3 px-4 py-3 text-sm"
     >
       <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-alma-folio" aria-hidden />
       <p className="min-w-0 flex-1 leading-snug">
         <span className="font-medium text-alma-900">{label}</span>{' '}
         <span className="text-slate-500">{detail}</span>
       </p>
-    </div>
+    </SubPanel>
   )
 }

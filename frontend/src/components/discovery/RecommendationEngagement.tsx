@@ -142,7 +142,7 @@ export function RecommendationEngagement({
                   {recommendations.dismissed}
                 </span>
               </div>
-              <div className="border-t border-[var(--color-border)] pt-2">
+              <div className="border-t border-divider pt-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Engagement</span>
                   <span className="font-brand font-semibold tabular-nums text-alma-800">
@@ -151,7 +151,7 @@ export function RecommendationEngagement({
                 </div>
               </div>
               {byLens.length > 0 && (
-                <div className="space-y-1 border-t border-[var(--color-border)] pt-2">
+                <div className="space-y-1 border-t border-divider pt-2">
                   {byLens.map((s) => (
                     <div key={s.lens_id} className="flex min-w-0 items-center gap-2 text-xs">
                       <span className="min-w-0 flex-1 truncate text-slate-500">

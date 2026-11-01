@@ -35,7 +35,6 @@ import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { PageSection } from '@/components/ui/page-section'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
@@ -54,6 +53,8 @@ import { describeJobLaunch } from '@/lib/activity'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn, formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type FeedMonitorCreateType = 'query' | 'topic' | 'venue'
 
@@ -181,9 +182,9 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{formatMonitorTypeLabel(monitor.monitor_type)} Monitor</Badge>
+            <StatusBadge tone="outline">{formatMonitorTypeLabel(monitor.monitor_type)} Monitor</StatusBadge>
             <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
-            <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
+            <label className="inline-flex items-center gap-2 rounded-full border border-divider px-2.5 py-1 text-caption font-medium text-slate-700">
               <Checkbox
                 checked={enabled}
                 disabled={busy}
@@ -217,7 +218,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
               />
             </div>
           ) : (
-            <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-sm text-slate-700">
+            <SubPanel variant="flat" padded={false}  className="px-3 py-2 text-sm text-slate-700">
               <div className="flex flex-wrap items-center gap-2 font-medium text-alma-800">
                 <UserRound className="h-4 w-4 text-slate-500" />
                 <span>{monitor.author_name || monitor.label}</span>
@@ -232,7 +233,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
                   </span>
                 )}
               </div>
-            </div>
+            </SubPanel>
           )}
         </div>
 
@@ -313,7 +314,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
   const sortableStyle = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 10 : undefined,
+    zIndex: isDragging ? 'var(--z-index-local)' : undefined,
   }
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -399,7 +400,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
           {draggable && (
             <button
               type="button"
-              className="mt-0.5 shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+              className="mt-0.5 shrink-0 cursor-grab text-slate-300 hover:text-slate-500 focus-ring active:cursor-grabbing"
               aria-label={`Reorder ${config.query || monitor.label}`}
               {...attributes}
               {...listeners}
@@ -421,16 +422,16 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
         <div className="flex min-w-0 flex-1 items-start gap-2">
           <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
+            <StatusBadge tone="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
               <BookOpen className="mr-1 h-3 w-3" /> Journal
-            </Badge>
+            </StatusBadge>
             {needsResolution ? (
               <StatusBadge tone="warning">needs re-linking</StatusBadge>
             ) : (
               <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
             )}
             {!needsResolution && (
-              <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
+              <label className="inline-flex items-center gap-2 rounded-full border border-divider px-2.5 py-1 text-caption font-medium text-slate-700">
                 <Checkbox
                   checked={enabled}
                   disabled={busy}
@@ -653,7 +654,7 @@ export function FeedMonitorTermsCard() {
           {newType === 'venue' ? (
             <div className="space-y-2">
               {selectedVenue ? (
-                <div className="flex items-center gap-2 rounded-sm border border-accent-edge bg-accent-soft px-3 py-2 text-sm">
+                <div className="flex items-center gap-2 rounded-card border border-accent-edge bg-accent-soft px-3 py-2 text-sm">
                   <BookOpen className="h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                   <span className="min-w-0 flex-1 truncate font-medium text-alma-folio">
                     {selectedVenue.display_name}
@@ -661,14 +662,13 @@ export function FeedMonitorTermsCard() {
                   <span className="shrink-0 text-xs tabular-nums text-slate-500">
                     {selectedVenue.works_count.toLocaleString()} works
                   </span>
-                  <button
-                    type="button"
+                  <Button variant="muted" size="inline"
                     onClick={() => setSelectedVenue(null)}
-                    className="shrink-0 text-slate-400 hover:text-slate-600"
+                    className="shrink-0"
                     aria-label="Clear selected journal"
                   >
                     <X className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <VenueAutocomplete onSelect={setSelectedVenue} disabled={createMutation.isPending} />

@@ -127,7 +127,7 @@ export function AddToCollectionMenu({
           disabled={disabled}
           title="Save to Library and add to collections"
           aria-label={compact ? 'Collections' : undefined}
-          className="gap-1.5 rounded-sm border border-control-edge bg-control-well text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
+          className="gap-1.5 border border-control-edge bg-control-well text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
           onClick={(e) => e.stopPropagation()}
         >
           <FolderPlus className="h-4 w-4" />
@@ -152,7 +152,7 @@ export function AddToCollectionMenu({
               {collections.map((c) => (
                 <label
                   key={c.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-sm hover:bg-accent-soft"
+                  className="flex cursor-pointer items-center gap-2 rounded-control px-1.5 py-1 text-sm hover:bg-accent-soft"
                 >
                   <Checkbox
                     checked={selected.has(c.id)}

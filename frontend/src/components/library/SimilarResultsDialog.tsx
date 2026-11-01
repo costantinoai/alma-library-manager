@@ -10,7 +10,7 @@ import {
 import { DiscoverIcon } from '@/components/ui/brand-icons'
 import { type SimilarityResultItem, type SimilarityResponse } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import {
   Dialog,
   DialogContent,
@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
 import { ScoreBreakdownPanel } from '@/components/ScoreBreakdownPanel'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -51,15 +52,15 @@ export function SimilarResultsDialog({
             <Sparkles className="h-5 w-5 text-accent" />
             Similar Papers
             {data && (
-              <Badge variant="secondary" className="ml-2">
+              <StatusBadge tone="neutral" className="ml-2">
                 {data.results.length} found
-              </Badge>
+              </StatusBadge>
             )}
             {data?.cached && (
-              <Badge variant="outline" className="ml-1 text-xs">
+              <StatusBadge tone="outline" className="ml-1 text-xs">
                 <Database className="mr-1 h-3 w-3" />
                 Cached
-              </Badge>
+              </StatusBadge>
             )}
           </DialogTitle>
           <DialogDescription>
@@ -81,9 +82,8 @@ export function SimilarResultsDialog({
               const itemKey = `${item.source_type}-${item.title}-${idx}`
               const isExpanded = expandedId === itemKey
               return (
-                <div
-                  key={itemKey}
-                  className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm transition-shadow hover:shadow-sm"
+                <SubPanel variant="flat" padded={false}
+                  key={itemKey} className="p-4 shadow-paper-sm transition-shadow hover:shadow-paper-md"
                 >
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">
@@ -101,21 +101,20 @@ export function SimilarResultsDialog({
                         <span className="text-xs font-mono text-slate-500">
                           {Math.round(item.score)}%
                         </span>
-                        <Badge variant="outline" className="text-xs">
+                        <StatusBadge tone="outline" className="text-xs">
                           {item.source_type}
-                        </Badge>
+                        </StatusBadge>
                         {item.year && (
                           <span className="text-xs text-slate-400">{item.year}</span>
                         )}
                       </div>
                       {item.score_breakdown && (
-                        <button
-                          type="button"
+                        <Button variant="link-ink" size="inline"
                           onClick={() => setExpandedId(isExpanded ? null : itemKey)}
-                          className="mt-2 text-xs text-alma-600 hover:text-alma-800"
+                          className="mt-2 text-xs"
                         >
                           {isExpanded ? 'Hide details' : 'Why this paper?'}
-                        </button>
+                        </Button>
                       )}
                       {isExpanded && item.score_breakdown && (
                         <ScoreBreakdownPanel
@@ -130,23 +129,21 @@ export function SimilarResultsDialog({
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-control-quiet hover:text-slate-700"
+                          className="inline-flex items-center justify-center rounded-control p-2 text-slate-500 hover:bg-control-quiet hover:text-slate-700"
                           title="Open paper"
                         >
                           <ExternalLink className="h-4 w-4" />
                         </a>
                       )}
-                      <button
-                        type="button"
+                      <Button variant="muted" size="icon-sm"
                         onClick={() => onLike(item)}
-                        className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-accent-soft hover:text-accent"
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
-                </div>
+                </SubPanel>
               )
             })
           )}

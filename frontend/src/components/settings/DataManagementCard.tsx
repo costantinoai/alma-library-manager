@@ -10,6 +10,7 @@ import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { downloadFromUrl, downloadJson } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 export function DataManagementCard() {
   const queryClient = useQueryClient()
@@ -129,7 +130,7 @@ export function DataManagementCard() {
         </div>
       </div>
 
-      <div className="space-y-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+      <SubPanel variant="flat" padded={false}  className="space-y-2 p-3">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-semibold text-slate-700">OpenAlex Resolution Queue</h4>
           <AsyncButton
@@ -161,7 +162,7 @@ export function DataManagementCard() {
             ))}
           </>
         )}
-      </div>
+      </SubPanel>
     </SettingsCard>
   )
 }

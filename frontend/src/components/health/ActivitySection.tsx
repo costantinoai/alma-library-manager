@@ -74,7 +74,7 @@ function RefreshEntryRow({
   detail: string
 }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] p-3 text-sm">
+    <div className="rounded-card border border-divider p-3 text-sm">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium text-alma-800">{status}</span>
         <span className="text-xs text-slate-500">{formatTimestamp(finishedAt)}</span>
@@ -136,7 +136,7 @@ function FailedOperationsCard({
               const anyExpandable = rows.some(rowHasDetail)
               return (
                 <div className="space-y-3">
-                  <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                  <SubPanel variant="flat" padded={false}  className="divide-y divide-divider">
                     {rows.map((op) => {
                       const summaryLine = op.error || op.message
                       const tail = op.log_tail ?? []
@@ -191,7 +191,7 @@ function FailedOperationsCard({
                                       {tail.map((line, i) => (
                                         <li
                                           key={i}
-                                          className="flex items-baseline gap-2 text-[11px] leading-relaxed"
+                                          className="flex items-baseline gap-2 text-caption leading-relaxed"
                                         >
                                           <span className="shrink-0 font-mono text-slate-400">
                                             {formatTimestamp(line.timestamp)?.split(', ')[1] ?? ''}
@@ -223,7 +223,7 @@ function FailedOperationsCard({
                         </Collapsible>
                       )
                     })}
-                  </div>
+                  </SubPanel>
                   <p className="text-xs text-slate-500">
                     {anyExpandable ? 'Click a row for its error and step log; complete' : 'Complete'}{' '}
                     run history lives in the Activity panel (top bar).
@@ -265,7 +265,7 @@ export function ActivitySection({ sections }: { sections: InsightsDiagnosticsSec
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
                   {cards.map((card) => (
-                    <div key={card.id} className="rounded-sm border border-[var(--color-border)] p-4">
+                    <div key={card.id} className="rounded-card border border-divider p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium text-alma-800">{card.label}</p>
@@ -284,7 +284,7 @@ export function ActivitySection({ sections }: { sections: InsightsDiagnosticsSec
                       </div>
                       <p className="mt-3 text-sm text-slate-600">{card.detail}</p>
                       {card.measures && card.measures.length > 0 ? (
-                        <dl className="mt-3 space-y-1.5 border-t border-[var(--color-border)] pt-3">
+                        <dl className="mt-3 space-y-1.5 border-t border-divider pt-3">
                           {card.measures.map((m) => (
                             <div
                               key={m.key}

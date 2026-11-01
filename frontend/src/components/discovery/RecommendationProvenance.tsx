@@ -233,7 +233,7 @@ function QueryLine({ query }: { query: string }) {
   const text = (
     <span
       ref={ref}
-      className="block truncate font-mono text-[11px] leading-snug text-slate-600"
+      className="block truncate font-mono text-caption leading-snug text-slate-600"
     >
       {query}
     </span>
@@ -248,7 +248,7 @@ function QueryLine({ query }: { query: string }) {
         <TooltipTrigger asChild>
           <span className="block cursor-help">{text}</span>
         </TooltipTrigger>
-        <TooltipContent side="top" align="start" className="max-w-md break-words font-mono text-[11px]">
+        <TooltipContent side="top" align="start" className="max-w-md break-words font-mono text-caption">
           {query}
         </TooltipContent>
       </Tooltip>
@@ -257,12 +257,12 @@ function QueryLine({ query }: { query: string }) {
 }
 
 /** A small-caps row label ("Query", "Core", "Explore") — matches the
- * typographic voice of `<p className="text-[11px] font-semibold uppercase
+ * typographic voice of `<p className="text-caption font-semibold uppercase
  * tracking-wide text-slate-400">Score Breakdown</p>` used elsewhere in
  * PaperCard so this block reads as part of the same family. */
 function RowLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="shrink-0 pt-[2px] text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+    <span className="shrink-0 pt-[2px] text-2xs font-semibold uppercase tracking-[0.08em] text-slate-400">
       {children}
     </span>
   )
@@ -278,10 +278,10 @@ function TopicPill({
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-[1px] text-[10.5px] font-medium leading-[1.35] tracking-tight',
+        'inline-flex items-center rounded-full px-2 py-[1px] text-2xs font-medium leading-[1.35] tracking-tight',
         variant === 'core'
-          ? 'bg-surface-1 text-slate-700 shadow-[inset_0_0_0_1px_theme(colors.slate.200)]'
-          : 'border border-dashed border-[var(--color-border)] text-slate-500',
+          ? 'bg-surface-1 text-slate-700 ring-1 ring-inset ring-control-edge'
+          : 'border border-dashed border-divider text-slate-500',
       )}
     >
       {label}
@@ -358,13 +358,13 @@ export function RecommendationProvenance({
     <section
       aria-label="Recommendation provenance"
       className={cn(
-        'mt-3 rounded-md border border-slate-100 bg-surface-2/50 px-3 py-2.5',
+        'mt-3 rounded-card border border-slate-100 bg-surface-2/50 px-3 py-2.5',
         className,
       )}
     >
       <header className="flex items-center gap-1.5">
         <Sparkles className="h-3 w-3 text-slate-400" aria-hidden />
-        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+        <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-slate-400">
           Why this surfaced
         </span>
       </header>
@@ -382,7 +382,7 @@ export function RecommendationProvenance({
       {hasDetail && (
         <dl
           className={cn(
-            'mt-2 space-y-1.5 text-[11px] leading-snug text-slate-500',
+            'mt-2 space-y-1.5 text-caption leading-snug text-slate-500',
             chips.length > 0 && 'border-t border-slate-100 pt-2',
           )}
         >

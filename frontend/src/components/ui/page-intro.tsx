@@ -211,7 +211,7 @@ export function PageIntro({
                   // rather than as the page speaking to you. Every other page
                   // keeps ink, hue or not.
                   masthead
-                    ? cn('text-2xl sm:text-[1.75rem]', theme?.masthead ?? 'text-alma-800')
+                    ? cn('text-2xl sm:text-figure-sm', theme?.masthead ?? 'text-alma-800')
                     : 'text-lg text-alma-800',
                 )}
               >
@@ -277,7 +277,7 @@ export function PageIntro({
     <section
       data-tour={dataTour}
       className={cn(
-        'overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet',
+        'overflow-hidden rounded-card border border-divider bg-surface-1 shadow-paper-sheet',
         className,
       )}
     >

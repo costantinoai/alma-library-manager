@@ -9,28 +9,22 @@ import { join, relative, sep } from 'node:path'
  * tokens + primitives, never a raw Tailwind ramp class hand-written in a
  * component. This test scans the source for the banned raw classes and
  * fails if any appear outside the allowlist (the token source lives in
- * index.css, which is not scanned; the primitive *definitions* in
- * components/ui legitimately spell the raw classes the rest of the app
- * must route through; lib/palette.ts owns the data palettes).
+ * index.css, which is not scanned; lib/palette.ts owns the data palettes).
  *
  * The offender list is printed on failure (file:line + the offending class)
  * so any regression is immediately actionable.
  */
 const ROOT = join(process.cwd(), 'src')
 
-/** Files allowed to contain raw classes: the primitive definitions + the
- * one data-driven color palette. Everything else must use the ladder /
- * semantic tokens / primitives. Paths are relative to src/, posix-style. */
+/** Files allowed to contain raw classes: the one data-driven colour palette.
+ * Primitives are scanned like everything else. Paths are relative to src/,
+ * posix-style. */
 function isAllowlisted(rel: string): boolean {
-  // All primitive definitions live under components/ui/.
-  if (rel.startsWith('components/ui/')) return true
   // This guard file names the banned classes in its own patterns.
   if (rel === 'test/surface-guard.test.ts') return true
-  // Categorical data palettes (signal dots, source chips, category icons) now
-  // live in the single `lib/palette.ts` module (44.5) — a `.ts` file, which
-  // this `.tsx`-only walk never scans. No component may spell a raw hue: they
-  // import the named maps from that one source instead.
-  return false
+  // Categorical data palettes (signal dots, source chips, category icons) live
+  // in the single `lib/palette.ts` module. No component may spell a raw hue.
+  return rel === 'lib/palette.ts'
 }
 
 const BANNED: Array<{ name: string; re: RegExp }> = [
@@ -47,9 +41,11 @@ const BANNED: Array<{ name: string; re: RegExp }> = [
   // TEXT ramp); genuine data-category palettes are exempted per-file above.
   {
     name: 'raw semantic color',
-    re: /\b(bg|text|border|ring|fill|stroke|divide)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g,
+    re: /\b(bg|text|border|ring|fill|stroke|divide|from|to|via|outline|shadow|accent|decoration)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|stone|zinc|gray|neutral)-\d{2,3}\b/g,
   },
   // Arbitrary hex in a utility — must be a token.
+  // Ramps deleted from index.css, and the `Alert` variant that went with them.
+  { name: 'deleted ramp', re: /\b(bg|text|border|ring)-(parchment|pale)-\d+\b|var\(--color-(parchment|pale|muted)\b/g },
   { name: 'arbitrary hex', re: /\b(bg|text|border|ring|fill|stroke)-\[#[0-9a-fA-F]{3,8}\]/g },
 ]
 
@@ -57,7 +53,7 @@ function walk(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry)
     if (statSync(full).isDirectory()) walk(full, acc)
-    else if (full.endsWith('.tsx')) acc.push(full)
+    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) acc.push(full)
   }
   return acc
 }
@@ -69,8 +65,7 @@ function scan(): string[] {
     if (isAllowlisted(rel)) continue
     const lines = readFileSync(file, 'utf8').split('\n')
     lines.forEach((line, i) => {
-      // Skip data-driven inline styles (style={{ backgroundColor: ... }}).
-      if (/style=\{\{/.test(line)) return
+      if (/^\s*(\/\/|\/\*|\*)/.test(line)) return
       for (const { re } of BANNED) {
         for (const m of line.matchAll(re)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
       }
@@ -114,6 +109,7 @@ const CONTROL_PRIMITIVES = [
   'components/ui/switch.tsx',
   'components/ui/tabs.tsx',
   'components/ui/textarea.tsx',
+  'components/ui/toggle-group.tsx',
   'components/ui/toggle-variants.ts',
 ]
 
@@ -281,5 +277,203 @@ function scanColours(): string[] {
 describe('colour-guard', () => {
   it('every colour outside lib/palette.ts is a token', () => {
     expect(scanColours()).toEqual([])
+  })
+})
+
+/* ───────────────────────────────────────
+ * layer-guard — one z-index scale, `--z-index-*` in index.css, one shadow scale,
+ * `shadow-paper-*`, and two radii plus the pill: `rounded-card`,
+ * `rounded-control`, `rounded-full`.
+ * ─────────────────────────────────────── */
+const RADIUS_BANNED = /(?<![\w-])rounded(?:-[tblr]{1,2})?(?:-(?:xs|sm|md|lg|xl|2xl|3xl|\[[^\]]*\]))?(?![\w-])(?!\/)/g
+// Sizes and hairlines are tokens: `text-caption`, `border-divider`.
+const TOKEN_BANNED = /\btext-\[[\d.]+(?:px|rem)\]|-\[(?:color:)?var\(--color-border/g
+const SHADOW_BANNED = /(?<![\w-])shadow-(?:sm|md|lg|xl|2xl|inner|\[)/g
+const LAYER_BANNED = /(?<![\w-])-?z-(\d+|\[\d+\])(?![\w-])|\bzIndex:\s*(\S+\s*\?\s*)?\d/g
+
+function scanLayers(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      const code = line.trim()
+      if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//') || code.startsWith('{/*')) return
+      for (const m of line.matchAll(LAYER_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      for (const m of line.matchAll(TOKEN_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      for (const m of line.matchAll(SHADOW_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      // InflowStrip's 1 px caps are chart marks, not rectangles.
+      if (rel === 'components/home/InflowStrip.tsx') return
+      for (const m of line.matchAll(RADIUS_BANNED)) {
+        if (m[0] !== 'rounded-[inherit]') hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('layer-guard', () => {
+  it('no numeric z-index, shadow or radius outside the scales in index.css', () => {
+    expect(scanLayers()).toEqual([])
+  })
+})
+
+/* ───────────────────────────────────────
+ * button-guard — a pressable thing is a primitive.
+ *
+ * `BUTTON_OWNERS` may write a bare `<button>`: the primitives, and chrome that
+ * is a primitive in all but name. `GOING` names two grips that G3.2 and G5.1
+ * delete; drop them from the list when those stages land.
+ * ─────────────────────────────────────── */
+const BUTTON_OWNERS = new Set([
+  'components/ui/button.tsx',
+  'components/ui/row-button.tsx',
+  'components/ui/chip-button.tsx',
+  'components/ui/data-table/DataTable.tsx', // sortable header cell, and GOING
+  'components/discovery/LensManager.tsx', // GOING, reorder grip
+  'components/StarRating.tsx',
+  'components/library/ColorPicker.tsx',
+  'components/layout/Sidebar.tsx',
+  'components/settings/FeedMonitorTermsCard.tsx', // drag handle
+  'components/shared/EtaHint.tsx',
+  'components/shared/JargonHint.tsx',
+  'components/shared/PaperCard.tsx',
+  'components/shared/PaperTile.tsx',
+  'components/shared/StatusChip.tsx',
+  'components/shared/StatusRow.tsx',
+])
+
+/** A `Button` gets its colour, radius and shadow from `variant`, never by hand.
+ *  The paper-card action bar is the one named exception: its tone map is the
+ *  action contract in CLAUDE.md, valence per verb, and the collection menu sits
+ *  in that bar. */
+const BUTTON_REPAINT_OWNERS = new Set([
+  'components/discovery/PaperActionBar.tsx',
+  'components/discovery/AddToCollectionMenu.tsx',
+])
+const BUTTON_TAG = /<(Button|AlertDialogAction|AlertDialogCancel)\b(?:[^>"'{]|"[^"]*"|'[^']*'|\{(?:[^{}]|\{[^{}]*\})*\})*>/g
+const BUTTON_PAINT =
+  /(?<![\w:-])(?:[a-z-]+:)*(?:text-(?:slate|alma|critical|warning|success|info|accent|gold)|bg-|border-(?!0\b)|rounded|shadow-)[\w/[\].-]*/
+
+function scanButtons(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    const source = readFileSync(file, 'utf8')
+    source.split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) return
+      if (!BUTTON_OWNERS.has(rel) && /<button\b/.test(line)) hits.push(`${rel}:${i + 1}  <button>`)
+    })
+    // Filled accent is onboarding's alone: everywhere else, navy is the one fill.
+    if (!rel.startsWith('components/onboarding/') && !rel.startsWith('components/ui/')) {
+      for (const m of source.matchAll(/<Button\b[^>]*\bvariant=(?:"accent"|\{[^}]*'accent')/g)) {
+        hits.push(`${rel}:${source.slice(0, m.index).split('\n').length}  filled accent`)
+      }
+    }
+    if (BUTTON_REPAINT_OWNERS.has(rel)) continue
+    for (const m of source.matchAll(BUTTON_TAG)) {
+      const cls = /className=(?:"([^"]*)"|\{([\s\S]*)\})/.exec(m[0])
+      const paint = cls && BUTTON_PAINT.exec(cls[1] ?? cls[2])
+      if (paint) hits.push(`${rel}:${source.slice(0, m.index).split('\n').length}  ${paint[0]}`)
+    }
+  }
+  return hits
+}
+
+describe('button-guard', () => {
+  it('no bare <button> outside its owners, and no repainted Button', () => {
+    expect(scanButtons()).toEqual([])
+  })
+})
+
+/* ───────────────────────────────────────
+ * primitive-guard — a state box is an Alert, a pill is a StatusBadge, a fold is
+ * a DisclosurePanel. The Activity family keeps its own quiet log tints, on the
+ * one documented exception. `BranchExplorerPanel` loses its raw fold in G3.6.
+ * ─────────────────────────────────────── */
+const ACTIVITY = 'components/ActivityPanel.tsx'
+/** May name a paper step: chrome, portals with no surface context (tour, toast,
+ *  chart tooltip, autocomplete), shared tiles, list rows that must stay an `<li>`
+ *  or a conditional state, and the three files G3 removes or rewrites. */
+const PAPER_OWNERS = new Set([
+  'components/layout/Sidebar.tsx',
+  'components/layout/TopBar.tsx',
+  'components/onboarding/OnboardingTour.tsx',
+  'components/onboarding/steps/StepKeywords.tsx',
+  'components/onboarding/steps/StepVision.tsx',
+  'components/onboarding/steps/StepWelcome.tsx',
+  'components/connector/ConnectorToastCard.tsx',
+  'components/insights/InsightsOverviewTab.tsx',
+  'components/shared/VenueAutocomplete.tsx',
+  'components/shared/MetricTile.tsx',
+  'components/settings/primitives.tsx',
+  'components/settings/AIConfigCard.tsx',
+  'components/health/RepairCard.tsx',
+  'components/health/RepairConfirmDialog.tsx',
+  'components/authors/AuthorsNeedsAttentionSection.tsx',
+  'components/discovery/PaperDetailPanel.tsx',
+  'components/discovery/RecommendationProvenance.tsx',
+  'components/discovery/BranchExplorerPanel.tsx',
+  'components/discovery/LensManager.tsx',
+  'components/discovery/LensWeightsPanel.tsx',
+])
+const FOLD_OWNERS = new Set(['components/ui/disclosure-panel.tsx', ACTIVITY, 'components/discovery/BranchExplorerPanel.tsx'])
+
+function scanPrimitives(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) return
+      const at = `${rel}:${i + 1}`
+      if (/\bbg-surface-[0-3]\b/.test(line) && !rel.startsWith('components/ui/') && !PAPER_OWNERS.has(rel)) {
+        hits.push(`${at}  paper step, use Card or SubPanel`)
+      }
+      if (/<Badge\b/.test(line)) hits.push(`${at}  <Badge>, use StatusBadge`)
+      if (/<details\b/.test(line) && !FOLD_OWNERS.has(rel)) hits.push(`${at}  <details>, use DisclosurePanel`)
+      if (/\bbg-(critical|warning|success|info)-(50|100)\b/.test(line) && !rel.startsWith('components/ui/') && rel !== ACTIVITY) {
+        hits.push(`${at}  state box, use Alert`)
+      }
+      if (/rounded-full.*\bbg-(critical|warning|success|info|alma|alma-folio)-\d+\/.*\bpx-/.test(line) && !rel.startsWith('components/ui/')) {
+        hits.push(`${at}  hand pill, use StatusBadge or SignalChip`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('primitive-guard', () => {
+  it('state boxes, pills and folds go through their primitives', () => {
+    expect(scanPrimitives()).toEqual([])
+  })
+})
+
+/* ───────────────────────────────────────
+ * class-guard — a colour class must compile. Tailwind drops a class with no
+ * token in silence, which is how `text-accent-700` shipped as inherited colour.
+ * ─────────────────────────────────────── */
+function scanUnknownColours(): string[] {
+  const css = readFileSync(join(ROOT, 'index.css'), 'utf8')
+  const ramps = new Set([...css.matchAll(/--color-([a-z-]+?)-\d+:/g)].map((m) => m[1]))
+  ramps.add('slate') // Tailwind's own, the neutral text ramp
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts' || rel === 'lib/palette.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
+      for (const m of line.matchAll(/\b(?:bg|text|border(?:-[lrtbxy])?|ring|fill|stroke|divide)-([a-z]+(?:-[a-z]+)?)-(\d{2,3})\b/g)) {
+        if (!ramps.has(m[1])) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      }
+    })
+  }
+  return hits
+}
+
+describe('class-guard', () => {
+  it('every ramp colour class has a token behind it', () => {
+    expect(scanUnknownColours()).toEqual([])
   })
 })

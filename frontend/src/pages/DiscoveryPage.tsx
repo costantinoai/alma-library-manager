@@ -72,7 +72,6 @@ import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
 import { PageSection } from '@/components/ui/page-section'
@@ -91,7 +90,8 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
 
 // List view state — mirrors the Feed page so Discovery and Feed feel
 // like the same product. `relevance` keeps the lens's ranked order;
@@ -817,7 +817,7 @@ export function DiscoveryPage() {
     const sorted = [...items].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
     return (
       <div key={title} className="space-y-1">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+        <p className="text-2xs font-semibold uppercase tracking-[0.1em] text-slate-400">
           {title}
         </p>
         <div className="flex flex-wrap gap-1">
@@ -961,9 +961,9 @@ export function DiscoveryPage() {
         }) : undefined}
       >
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <Badge variant="outline" size="sm">
+          <StatusBadge tone="outline" size="sm">
             {sourceType.replace(/_/g, ' ')}
-          </Badge>
+          </StatusBadge>
         </div>
       </PaperCard>
     )
@@ -1257,9 +1257,9 @@ export function DiscoveryPage() {
                   </p>
                 </div>
                 {selectedLensSummary?.recommendation_mode ? (
-                  <Badge variant="outline" size="sm">
+                  <StatusBadge tone="outline" size="sm">
                     {String(selectedLensSummary.recommendation_mode)}
-                  </Badge>
+                  </StatusBadge>
                 ) : null}
               </div>
 
@@ -1311,7 +1311,7 @@ export function DiscoveryPage() {
                       {pullGroups.some(Boolean) ? (
                         pullGroups
                       ) : (
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-caption text-slate-500">
                           No taste summary is recorded for this refresh.
                         </p>
                       )}
@@ -1325,7 +1325,7 @@ export function DiscoveryPage() {
                       {pushGroups.some(Boolean) ? (
                         pushGroups
                       ) : (
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-caption text-slate-500">
                           No taste summary is recorded for this refresh.
                         </p>
                       )}
@@ -1398,25 +1398,20 @@ export function DiscoveryPage() {
         <ListControlBar
           leading={
             <>
-              <button
-                type="button"
-                onClick={() => setHideLibrary((v) => !v)}
-                aria-pressed={hideLibrary}
-                title={
+              <Toggle
+              size="chip"
+              pressed={hideLibrary}
+              onPressedChange={setHideLibrary}
+              title={
                   hideLibrary
                     ? 'Showing only papers you have not saved or queued'
                     : 'Hide papers already in your Library or reading list'
                 }
-                className={cn(
-                  'inline-flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs font-medium transition-colors',
-                  hideLibrary
-                    ? 'bg-accent-soft text-alma-folio'
-                    : 'text-slate-600 hover:bg-control-quiet-hover hover:text-alma-800',
-                )}
-              >
+              className="text-slate-600"
+            >
                 {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 Unsaved only
-              </button>
+              </Toggle>
               <div className="h-5 w-px bg-control-edge" aria-hidden />
             </>
           }
@@ -1521,7 +1516,7 @@ export function DiscoveryPage() {
                   key={rec.id}
                   ref={(element) => observeCardImpression(element, rec.id, recIdx + 1)}
                   id={`rec-card-${rec.paper_id}`}
-                  className="rounded-lg transition-shadow"
+                  className="rounded-card transition-shadow"
                 >
                 <PaperCard
                   // The `compact` viewMode is handled in the earlier

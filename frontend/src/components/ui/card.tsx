@@ -51,7 +51,7 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
         filled={!isFlat}
         bordered
         className={cn(
-          'relative rounded-sm transition-[box-shadow,transform] duration-200 ease-out',
+          'relative rounded-card transition-[box-shadow,transform] duration-200 ease-out',
           !isFlat && !isElevated && 'shadow-paper-sheet',
           isElevated && 'shadow-paper-sheet-lg',
           // Interactive: lifts off the desk on hover, presses back flush on

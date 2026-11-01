@@ -162,7 +162,7 @@ export function OnboardingTour({
     <AnimatePresence>
       {open && step ? (
         <motion.div
-          className="fixed inset-0 z-[55]"
+          className="fixed inset-0 z-tour"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -171,7 +171,7 @@ export function OnboardingTour({
           {/* Dimmer + spotlight. The lit div casts a huge shadow = the dim. */}
           {rect ? (
             <div
-              className="pointer-events-none absolute rounded-md"
+              className="pointer-events-none absolute rounded-control"
               style={{
                 top: rect.top - PAD,
                 left: rect.left - PAD,
@@ -195,7 +195,7 @@ export function OnboardingTour({
               role="dialog"
               aria-label={step.title}
               className={cn(
-                'absolute w-[320px] rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-lg',
+                'absolute w-[320px] rounded-card border border-divider bg-surface-1 p-4 shadow-paper-lg',
               )}
               style={{ top: cardPos?.top ?? -9999, left: cardPos?.left ?? -9999 }}
               initial={{ opacity: 0, y: reduced ? 0 : 6 }}

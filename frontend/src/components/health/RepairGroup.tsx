@@ -13,6 +13,8 @@ import type { HealthDimension, MaintenanceOperation, MaintenanceRunRequest } fro
 import { isOpAttention, sortOpsByAttention } from './healthFormat'
 import { RepairCard } from './RepairCard'
 import { SectionLabel } from './SectionLabel'
+import { ChipButton } from '@/components/ui/chip-button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface RepairGroupProps {
   title: string
@@ -95,25 +97,18 @@ export function RepairGroup({
 
       {allClear.length > 0 ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+          <SubPanel variant="flat" padded={false}  className="flex flex-wrap items-center gap-2 p-3 shadow-paper-sm">
+            <span className="text-caption font-medium uppercase tracking-wide text-slate-400">
               Healthy & routine tools
             </span>
             {allClear.map((op) => {
               const open = expanded.has(op.key)
               const pending = op.candidates_pending ?? 0
               return (
-                <button
+                <ChipButton selected={open}
                   key={op.key}
-                  type="button"
                   onClick={() => toggle(op.key)}
                   aria-expanded={open}
-                  className={
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio ' +
-                    (open
-                      ? 'border-alma-folio bg-accent-soft text-alma-folio'
-                      : 'border-control-edge bg-control-well text-alma-700 hover:border-control-edge-strong')
-                  }
                 >
                   {pending > 0 ? (
                     <Clock3 className="h-3.5 w-3.5 text-info-600" />
@@ -123,10 +118,10 @@ export function RepairGroup({
                   {op.label}
                   {pending > 0 ? <span className="text-slate-400">{pending.toLocaleString()} queued</span> : null}
                   <span className="text-slate-400">{open ? '−' : '+'}</span>
-                </button>
+                </ChipButton>
               )
             })}
-          </div>
+          </SubPanel>
           {/* Expanded all-clear cards (still runnable / configurable). */}
           {allClear.filter((op) => expanded.has(op.key)).map(card)}
         </div>

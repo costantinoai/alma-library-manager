@@ -40,6 +40,7 @@ import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttent
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 interface AuthorsNeedsAttentionSectionProps {
   rows: AuthorNeedsAttentionRow[]
@@ -192,7 +193,7 @@ function NeedsAttentionRow({
     )
 
   return (
-    <li className="rounded-sm border border-edge-1 bg-surface-1 p-3 shadow-paper-sm">
+    <li className="rounded-card border border-edge-1 bg-surface-1 p-3 shadow-paper-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -200,16 +201,15 @@ function NeedsAttentionRow({
               <spec.icon className="h-3 w-3" aria-hidden />
               <span>{spec.label}</span>
             </StatusBadge>
-            <button
-              type="button"
-              className="truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
+            <RowButton
+              className="block w-auto truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
               onClick={onOpenAuthor}
             >
               {row.author_name}
-            </button>
+            </RowButton>
           </div>
           {row.updated_at ? (
-            <p className="mt-1 text-[10px] text-slate-400">Last seen {formatTimestamp(row.updated_at)}</p>
+            <p className="mt-1 text-2xs text-slate-400">Last seen {formatTimestamp(row.updated_at)}</p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -381,7 +381,7 @@ export function ReviewProfilesDialog({
               size="sm"
               onClick={() => discoverMutation.mutate()}
               disabled={discoverMutation.isPending || !row}
-              className="ml-auto h-7 px-2 text-[11px]"
+              className="ml-auto h-7 px-2 text-caption"
               title="Looks up the primary's ORCID on OpenAlex and queries every profile sharing it. ORCID is person-level — same ORCID = same human, with very high confidence."
             >
               {discoverMutation.isPending ? (
@@ -425,7 +425,7 @@ function ProfileChip({
     tone === 'primary'
       ? 'border-accent bg-accent-soft text-alma-800'
       : tone === 'orcid'
-        ? 'border-warning-100 bg-warning-50/70 text-alma-800'
+        ? 'border-warning-700/20 bg-warning-700/[0.06] text-alma-800'
         : 'border-edge-2 bg-surface-2 text-alma-800'
   const dotTone =
     tone === 'primary' ? 'bg-accent' : tone === 'orcid' ? 'bg-warning-500' : 'bg-slate-400'
@@ -435,11 +435,11 @@ function ProfileChip({
       target="_blank"
       rel="noopener noreferrer"
       title={title}
-      className={`group inline-flex max-w-[260px] items-center gap-1.5 rounded-sm border px-2 py-1 text-xs transition hover:shadow-paper-sm ${palette}`}
+      className={`group inline-flex max-w-[260px] items-center gap-1.5 rounded-control border px-2 py-1 text-xs transition hover:shadow-paper-sm ${palette}`}
     >
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotTone}`} />
       <span className="truncate font-medium">{label}</span>
-      <span className="hidden font-mono text-[10px] text-slate-500 sm:inline">
+      <span className="hidden font-mono text-2xs text-slate-500 sm:inline">
         {openalexId}
       </span>
       <ExternalLink className="h-3 w-3 shrink-0 opacity-50 transition group-hover:opacity-100" />
@@ -465,13 +465,13 @@ function ProfileRow({
           {label}
         </StatusBadge>
         <p className="mt-1 truncate text-sm font-medium text-alma-800">{displayName}</p>
-        <p className="truncate font-mono text-[11px] text-slate-500">{openalexId}</p>
+        <p className="truncate font-mono text-caption text-slate-500">{openalexId}</p>
       </div>
       <a
         href={`https://openalex.org/${openalexId}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 rounded-sm border border-control-edge bg-control-well px-2 py-1 text-[11px] text-alma-700 hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-800"
+        className="inline-flex items-center gap-1 rounded-control border border-control-edge bg-control-well px-2 py-1 text-caption text-alma-700 hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-800"
       >
         Open
         <ExternalLink className="h-3 w-3" />
@@ -639,8 +639,7 @@ export function AddIdentifierDialog({
               nagging, or remove them from the corpus altogether. */}
           <div className="flex items-center gap-1">
             <Button
-              variant="ghost"
-              className="text-slate-500 hover:text-slate-700"
+              variant="muted"
               onClick={() => acceptMutation.mutate()}
               disabled={busy}
             >

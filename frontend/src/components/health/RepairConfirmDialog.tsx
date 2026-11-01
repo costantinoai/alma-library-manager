@@ -36,6 +36,7 @@ import {
   type MaintenanceOperation,
   type MaintenanceRunRequest,
 } from '@/api/client'
+import { Alert } from '@/components/ui/alert'
 
 /** Source/confidence badge so the user knows how much to trust each pair:
  *  ORCID is authoritative; a name match is a heuristic to review (the weaker the
@@ -127,7 +128,7 @@ export function RepairConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-surface-1">
+      <DialogContent>
         <DialogHeader>
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 shrink-0 text-warning-600" aria-hidden />
@@ -136,7 +137,7 @@ export function RepairConfirmDialog({
           <DialogDescription className="text-slate-600">{op.description}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2 rounded-sm border border-warning-100 bg-warning-50 p-3 text-sm text-warning-800">
+        <Alert variant="warning" layout="row" className="block space-y-2 text-sm">
           <p className="font-medium">
             This is a destructive operation — it merges or removes rows and is not
             reversed automatically.
@@ -153,7 +154,7 @@ export function RepairConfirmDialog({
             <p>{planQuery.error?.message ?? "Couldn't compute the plan. Close this dialog and try again."}</p>
           )}
           {plan?.eta ? <EtaHint eta={plan.eta} /> : null}
-        </div>
+        </Alert>
 
         {/* Merge review: the exact pairs (primary ← duplicate · source/confidence ·
             papers reassigned). Merge or REJECT each individually; reject is
@@ -168,14 +169,14 @@ export function RepairConfirmDialog({
             ) : candidates.length === 0 ? (
               <p className="text-sm text-slate-500">No pending merges — run a scan first.</p>
             ) : (
-              <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-sm border border-[var(--color-border)] bg-surface-2 p-2">
+              <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-card border border-divider bg-surface-2 p-2">
                 {candidates.map((c) => {
                   const badge = sourceBadge(c)
                   const busy = rowBusy(c.id)
                   return (
                     <li
                       key={c.id}
-                      className="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm"
+                      className="flex items-center justify-between gap-2 rounded-control px-2 py-1.5 text-sm"
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <StatusBadge tone={badge.tone} size="sm" className="shrink-0">
@@ -192,23 +193,21 @@ export function RepairConfirmDialog({
                           {c.papers_estimate} paper{c.papers_estimate === 1 ? '' : 's'}
                         </span>
                         <Button
-                          variant="ghost"
+                          variant="success-quiet"
                           size="icon-sm"
                           aria-label={`Merge ${c.alt_name} into ${c.primary_name}`}
                           title="Merge this pair"
                           disabled={busy}
-                          className="text-success-700 hover:bg-success-700/10"
                           onClick={() => mergeMutation.mutate(c.id)}
                         >
                           <Check className="h-4 w-4" aria-hidden />
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="danger-quiet"
                           size="icon-sm"
                           aria-label={`Reject — ${c.primary_name} and ${c.alt_name} are not the same person`}
                           title="Not the same person — reject permanently"
                           disabled={busy}
-                          className="text-critical-700 hover:bg-critical-700/10"
                           onClick={() => rejectMutation.mutate(c.id)}
                         >
                           <X className="h-4 w-4" aria-hidden />

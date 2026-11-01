@@ -3,12 +3,13 @@ import { AlertTriangle, BellRing, FolderOpen, GitBranch, Loader2, Rss, UserRound
 
 import { applyAlertTemplate, getAlertTemplates, type AlertAutomationTemplate } from './api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { CATEGORY_ICON_COLORS, CATEGORY_ICON_FALLBACK_COLOR } from '@/lib/palette'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 function templateIcon(category: string) {
   // Icon shape is per-category; color comes from the centralized palette (44.5).
@@ -81,7 +82,7 @@ export function AlertTemplatesSection() {
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
             {templates.map((template) => (
-              <div key={template.key} className="rounded-sm border border-[var(--color-border)] p-4">
+              <div key={template.key} className="rounded-card border border-divider p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -90,16 +91,16 @@ export function AlertTemplatesSection() {
                     </div>
                     <p className="text-sm text-slate-500">{template.description}</p>
                   </div>
-                  <Badge variant="secondary">{template.category.replace(/_/g, ' ')}</Badge>
+                  <StatusBadge tone="neutral">{template.category.replace(/_/g, ' ')}</StatusBadge>
                 </div>
                 {template.rationale && (
-                  <p className="mt-3 rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">{template.rationale}</p>
+                  <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2 text-xs text-slate-600">{template.rationale}</SubPanel>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.entries(template.metrics).map(([key, value]) => (
-                    <Badge key={`${template.key}-${key}`} variant="outline" className="text-[11px]">
+                    <StatusBadge key={`${template.key}-${key}`} tone="outline" className="text-caption">
                       {key.replace(/_/g, ' ')}: {String(value)}
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
                 <div className="mt-4 flex items-center justify-between gap-3">

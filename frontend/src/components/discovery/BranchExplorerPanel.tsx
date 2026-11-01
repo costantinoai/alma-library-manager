@@ -15,7 +15,6 @@ import {
 
 import { getApiErrorMessage, type Lens, type LensBranchItem } from '@/api/client'
 import { useBranchPreview } from '@/hooks/useBranchPreview'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConceptCallout } from '@/components/ui/concept-callout'
@@ -73,8 +72,8 @@ function branchTone(state: 'normal' | 'pinned' | 'boosted' | 'muted') {
   if (state === 'boosted')
     return 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_10%,_var(--color-surface-2))]'
   if (state === 'muted')
-    return 'border-[var(--color-border-cool)] bg-surface-0 opacity-75'
-  return 'border-[var(--color-border-cool)] bg-surface-2'
+    return 'border-divider-cool bg-surface-0 opacity-75'
+  return 'border-divider-cool bg-surface-2'
 }
 
 function closestPreset(temperature: number) {
@@ -220,7 +219,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
     >
       <CardHeader
         className={cn(
-          'border-b border-[var(--color-border)]',
+          'border-b border-divider',
           bare ? 'px-4 py-3' : 'bg-surface-2',
         )}
       >
@@ -235,9 +234,9 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 />
               </div>
               {coldStart?.state ? (
-                <Badge variant="outline" className="capitalize">
+                <StatusBadge tone="outline" className="capitalize">
                   Topic cold start: {String(coldStart.state).replace(/_/g, ' ')}
-                </Badge>
+                </StatusBadge>
               ) : null}
             </div>
             {!bare && (
@@ -386,7 +385,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
         <BranchStructureStatus lensId={lens.id} preview={branchQuery.data} branches={branches} />
 
         <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+          <div className="rounded-card border border-divider bg-surface-1 p-4 shadow-paper-sm">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-1.5">
@@ -407,7 +406,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">Low keeps refresh tight around core continuity. High pushes more lateral search and exploratory query variants.</p>
               </div>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
+              <div className="rounded-control border border-divider bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
                 {temperature.toFixed(2)}
               </div>
             </div>
@@ -421,7 +420,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 onChange={(e) => setTemperature(Number(e.target.value))}
                 className="w-full accent-alma-folio"
               />
-              <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              <div className="flex items-center justify-between text-caption font-medium uppercase tracking-wide text-slate-500">
                 <span>Focused continuity</span>
                 <span>Exploratory expansion</span>
               </div>
@@ -450,7 +449,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
           {/* Cluster detail — branch granularity. Same shared clustering engine
               as the Insights graph's "Cluster detail" knob (temperature is
               orthogonal: it steers topic spread, this steers branch COUNT). */}
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+          <div className="rounded-card border border-divider bg-surface-1 p-4 shadow-paper-sm">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-1.5">
@@ -470,7 +469,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">Raise for more, finer branches; lower for fewer, broader ones.</p>
               </div>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
+              <div className="rounded-control border border-divider bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
                 {resolution.toFixed(2)}×
               </div>
             </div>
@@ -484,7 +483,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                 onChange={(e) => setResolution(Number(e.target.value))}
                 className="w-full accent-alma-folio"
               />
-              <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              <div className="flex items-center justify-between text-caption font-medium uppercase tracking-wide text-slate-500">
                 <span>Fewer, broader</span>
                 <span>More, finer</span>
               </div>
@@ -494,7 +493,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
         </div>
 
         {coldStart ? (
-          <div className="rounded-sm border border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_8%,_var(--color-alma-cream))] p-4">
+          <div className="rounded-card border border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_8%,_var(--color-alma-cream))] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="font-brand text-sm font-semibold text-alma-800">Topic Cold-Start Validation</p>
@@ -523,7 +522,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
               {customDirections.map((direction) => (
                 <div
                   key={direction.id}
-                  className="flex items-center justify-between gap-2 rounded-sm border border-[var(--color-border-cool)] bg-surface-2 px-3 py-2"
+                  className="flex items-center justify-between gap-2 rounded-card border border-divider-cool bg-surface-2 px-3 py-2"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
@@ -534,15 +533,15 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         {direction.mode}
                       </StatusBadge>
                     </div>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                    <p className="mt-0.5 truncate text-caption text-slate-500">
                       {direction.member_paper_ids.length} papers
                       {direction.terms.length > 0 ? ` · ${direction.terms.slice(0, 4).join(', ')}` : ''}
                     </p>
                   </div>
                   <Button
-                    variant="ghost"
+                    variant="muted"
                     size="sm"
-                    className="shrink-0 text-slate-500"
+                    className="shrink-0"
                     onClick={() => removeDirectionMutation.mutate(direction.id)}
                     disabled={removeDirectionMutation.isPending}
                   >
@@ -563,7 +562,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
           <p role="status" className="text-sm text-slate-500">Updating preview… Previous result stays visible.</p>
         )}
         {branchQuery.isLoading || (branchQuery.building && !branchQuery.data) ? (
-          <div className="flex items-center justify-center rounded-sm border border-[var(--color-border)] bg-surface-1 py-16 text-sm text-slate-500">
+          <div className="flex items-center justify-center rounded-control border border-divider bg-surface-1 py-16 text-sm text-slate-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Building branch studio...
           </div>
         ) : (branchQuery.buildError || branchQuery.isError) && !branchQuery.data ? null : branches.length === 0 ? (
@@ -587,7 +586,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
               return (
                 <details
                   key={branch.id}
-                  className={`group overflow-hidden rounded-sm border transition-all ${stateClass}`}
+                  className={`group overflow-hidden rounded-card border transition-all ${stateClass}`}
                 >
                   {/* Compact summary row — what's always visible: color
                       dot, label, the first 3 core topics in dim text, a
@@ -595,29 +594,29 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                       to expand for full stats / topics / samples. */}
                   <summary className="grid cursor-pointer select-none items-center gap-3 px-3 py-2.5 [&::-webkit-details-marker]:hidden grid-cols-[auto_1fr_auto]">
                     <span
-                      className="h-2.5 w-2.5 rounded-full ring-1 ring-[var(--color-border)]"
+                      className="h-2.5 w-2.5 rounded-full ring-1 ring-divider"
                       style={{ backgroundColor: color }}
                       aria-hidden
                     />
                     <div className="min-w-0">
                       <p className="truncate font-brand text-sm font-semibold text-alma-900">{branch.label}</p>
                       {corePreview && (
-                        <p className="truncate text-[11px] text-slate-500">{corePreview}</p>
+                        <p className="truncate text-caption text-slate-500">{corePreview}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1.5 text-[11px] tabular-nums text-slate-500">
+                    <div className="flex items-center gap-1.5 text-caption tabular-nums text-slate-500">
                       <span className="hidden sm:inline">{branch.seed_count}s</span>
                       <span className="hidden sm:inline">·</span>
                       <span>{branch.branch_score.toFixed(2)}</span>
                       {localState !== 'normal' && (
-                        <Badge size="sm" className="ml-1 capitalize">{localState}</Badge>
+                        <StatusBadge size="sm" className="ml-1 capitalize">{localState}</StatusBadge>
                       )}
-                      <span className="ml-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 group-open:hidden">+</span>
-                      <span className="ml-1 hidden text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400 group-open:inline">−</span>
+                      <span className="ml-1 text-2xs font-bold uppercase tracking-[0.14em] text-slate-400 group-open:hidden">+</span>
+                      <span className="ml-1 hidden text-2xs font-bold uppercase tracking-[0.14em] text-slate-400 group-open:inline">−</span>
                     </div>
                   </summary>
 
-                  <div className="space-y-3 border-t border-[var(--color-border)] p-3">
+                  <div className="space-y-3 border-t border-divider p-3">
                     {branch.direction_hint && (
                       <p className="text-xs text-slate-500">{branch.direction_hint}</p>
                     )}
@@ -633,20 +632,20 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         ? 'border-alma-folio/40 bg-[color-mix(in_srgb,_var(--color-alma-folio)_8%,_var(--color-surface-0))] text-alma-800'
                         : weight <= 0.95
                           ? 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_8%,_var(--color-surface-0))] text-alma-800'
-                          : 'border-[var(--color-border)] bg-surface-2 text-alma-800'
+                          : 'border-divider bg-surface-2 text-alma-800'
                       return (
-                        <div className={`flex items-center justify-between gap-3 rounded-sm border px-3 py-2 text-xs ${tone}`}>
+                        <div className={`flex items-center justify-between gap-3 rounded-card border px-3 py-2 text-xs ${tone}`}>
                           <span className="truncate">{branch.auto_weight_reason ?? `auto-weight ${weight.toFixed(2)}×`}</span>
                           <span className="shrink-0 font-brand text-sm font-semibold tabular-nums">{weight.toFixed(2)}×</span>
                         </div>
                       )
                     })()}
 
-                    <div className="flex flex-wrap gap-1.5 text-[11px]">
-                      <Badge variant="secondary">{branch.seed_count} seeds</Badge>
-                      <Badge variant="outline">score {branch.branch_score.toFixed(2)}</Badge>
+                    <div className="flex flex-wrap gap-1.5 text-caption">
+                      <StatusBadge tone="neutral">{branch.seed_count} seeds</StatusBadge>
+                      <StatusBadge tone="outline">score {branch.branch_score.toFixed(2)}</StatusBadge>
                       {(branch.recommendation_count ?? 0) > 0 && (
-                        <Badge variant="outline">{branch.recommendation_count} outcomes</Badge>
+                        <StatusBadge tone="outline">{branch.recommendation_count} outcomes</StatusBadge>
                       )}
                     </div>
 
@@ -658,7 +657,7 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                           { label: 'Engaged', value: `${Math.round((branch.engagement_rate ?? 0) * 100)}%` },
                           { label: 'Sources', value: branch.unique_sources ?? 0 },
                         ].map((tile) => (
-                          <div key={tile.label} className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
+                          <div key={tile.label} className="rounded-card border border-divider bg-surface-2 p-2.5 shadow-paper-inset-cool">
                             <EyebrowLabel tone="muted">{tile.label}</EyebrowLabel>
                             <p className="mt-1 font-brand text-base font-semibold text-alma-800">{tile.value}</p>
                           </div>
@@ -667,36 +666,36 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                     )}
 
                     <div className="grid gap-2 md:grid-cols-2">
-                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
-                        <div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-alma-folio">
+                      <div className="rounded-card border border-divider bg-surface-2 p-2.5 shadow-paper-inset-cool">
+                        <div className="mb-1.5 flex items-center gap-2 text-2xs font-bold uppercase tracking-[0.16em] text-alma-folio">
                           <Volume2 className="h-3 w-3" /> Core Pull
                         </div>
                         <div className="flex flex-wrap gap-1">
                           {branch.core_topics.slice(0, 5).map((topic) => (
-                            <Badge key={`${branch.id}-core-${topic}`} className="bg-alma-folio-soft text-alma-800">{topic}</Badge>
+                            <StatusBadge key={`${branch.id}-core-${topic}`} className="bg-alma-folio-soft text-alma-800">{topic}</StatusBadge>
                           ))}
                         </div>
                       </div>
-                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
-                        <div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-gold-600">
+                      <div className="rounded-card border border-divider bg-surface-2 p-2.5 shadow-paper-inset-cool">
+                        <div className="mb-1.5 flex items-center gap-2 text-2xs font-bold uppercase tracking-[0.16em] text-gold-600">
                           <Compass className="h-3 w-3" /> Explore Push
                         </div>
                         <div className="flex flex-wrap gap-1">
                           {branch.explore_topics.slice(0, 5).map((topic) => (
-                            <Badge key={`${branch.id}-explore-${topic}`} className="bg-gold-100 text-gold-700">{topic}</Badge>
+                            <StatusBadge key={`${branch.id}-explore-${topic}`} className="bg-gold-100 text-gold-700">{topic}</StatusBadge>
                           ))}
                         </div>
                       </div>
                     </div>
 
                     {branch.sample_papers.length > 0 && (
-                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
+                      <div className="rounded-card border border-divider bg-surface-2 p-2.5 shadow-paper-inset-cool">
                         <EyebrowLabel tone="muted">Representative seeds</EyebrowLabel>
                         <div className="mt-1.5 space-y-1">
                           {branch.sample_papers.slice(0, 2).map((paper, paperIndex) => (
                             <div key={`${branch.id}-paper-${paper.paper_id ?? paperIndex}`} className="flex items-start justify-between gap-3 text-xs">
                               <span className="line-clamp-2 text-alma-800">{paper.title}</span>
-                              <span className="shrink-0 rounded-sm bg-gold-100 px-1.5 py-0.5 text-[10px] font-medium text-gold-700">{paper.rating.toFixed(1)}★</span>
+                              <span className="shrink-0 rounded-control bg-gold-100 px-1.5 py-0.5 text-2xs font-medium text-gold-700">{paper.rating.toFixed(1)}★</span>
                             </div>
                           ))}
                         </div>
@@ -717,11 +716,11 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                         Clear
                       </Button>
                       {branch.is_active === false ? (
-                        <Badge variant="outline" className="ml-auto text-[10px]">inactive after controls</Badge>
+                        <StatusBadge tone="outline" className="ml-auto text-2xs">inactive after controls</StatusBadge>
                       ) : (
-                        <Badge variant="outline" className="ml-auto text-[10px]">
+                        <StatusBadge tone="outline" className="ml-auto text-2xs">
                           <Flame className="mr-1 h-3 w-3" /> active in refresh
-                        </Badge>
+                        </StatusBadge>
                       )}
                     </div>
                   </div>
