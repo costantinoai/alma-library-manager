@@ -44,7 +44,8 @@ import { Alert } from '@/components/ui/alert'
 function sourceBadge(c: MergeCandidate): { tone: StatusBadgeTone; label: string } {
   if (c.source === 'orcid') return { tone: 'info', label: 'ORCID' }
   const tone: StatusBadgeTone = c.confidence === 'high' ? 'info' : c.confidence === 'medium' ? 'warning' : 'neutral'
-  return { tone, label: `Name · ${c.confidence ?? 'low'}` }
+  const kind = c.source === 'external' ? 'Other profile' : 'Name'
+  return { tone, label: `${kind} · ${c.confidence ?? 'low'}` }
 }
 
 const MERGE_OP_KEY = 'dedup_orcid_merge'

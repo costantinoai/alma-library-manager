@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from alma.core.author_identity import canonical_author_oid
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 
@@ -96,6 +97,8 @@ def resolve_canonical_author_id(
     raw = str(author_ref or "").strip()
     if not raw:
         return None
+    # A merged-away id means its survivor, whatever row it still has.
+    raw = canonical_author_oid(db, raw)
 
     try:
         # OpenAlex author ids are case-insensitive identifiers, and the two

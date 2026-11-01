@@ -2754,6 +2754,54 @@ def merge_author_profiles_route(
     return summary
 
 
+@router.get(
+    "/{author_id}/merges",
+    summary="Profiles merged into this author, newest first",
+)
+def list_author_merges_endpoint(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge_ledger import list_author_merges
+
+    return {"merges": list_author_merges(db, author_id)}
+
+
+@router.post(
+    "/merges/{merge_id}/undo",
+    summary="Take one author merge back",
+    description=(
+        "Returns the papers, Feed rows, follow and evidence the merge moved, removes "
+        "the alias, and records 'not the same person', which can be removed later. "
+        "409 when the survivor was itself merged or removed since. Merges made before "
+        "the ledger have no row here."
+    ),
+)
+def undo_author_merge_endpoint(
+    merge_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import MergeRefused
+    from alma.application.author_merge_ledger import undo_author_merge
+
+    try:
+        result = run_write_unit(db, lambda: undo_author_merge(db, merge_id), label="undo_author_merge")
+    except MergeRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    _log_author_action(
+        db,
+        "merge_undo",
+        f"Undid a merge: {result['papers_returned']} papers returned to {result['alt_openalex_id']}",
+        author_id=result["primary_author_id"],
+        data=result,
+    )
+    return result
+
+
 class ResolveConflictRequest(BaseModel):
     """Body for `POST /authors/conflicts/{conflict_id}/resolve`.
     `choice` = which side wins ('primary' or 'alt'). When 'alt' wins,

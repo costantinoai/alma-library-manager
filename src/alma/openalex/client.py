@@ -636,10 +636,17 @@ def _upsert_authorships(
     try:
         conn.execute("DELETE FROM publication_authors WHERE paper_id = ?", (paper_id,))
         inserted = 0
+        from alma.core.author_identity import canonical_author_oid, merged_author_redirects
         from alma.core.utils import normalize_orcid, repair_display_text
 
+        # A merged-away id comes back on every refresh of its papers.
+        redirects = merged_author_redirects(conn)
+        written: set[str] = set()
         for a in authorships or []:
-            oaid = (a.get("openalex_id") or "").strip()
+            oaid = canonical_author_oid(conn, a.get("openalex_id"), redirects=redirects)
+            # A paper listing both profiles of one person keeps the first.
+            if oaid.lower() in written:
+                continue
             dname = repair_display_text((a.get("display_name") or "").strip())
             orcid = normalize_orcid(a.get("orcid")) or ""
             position = (a.get("position") or "").strip()
@@ -656,6 +663,7 @@ def _upsert_authorships(
                     (paper_id, oaid, dname, orcid, position, is_corr, inst_name),
                 )
                 inserted += 1
+                written.add(oaid.lower())
         return inserted
     except sqlite3.OperationalError as e:
         logger.warning("Failed to upsert authorships for paper %s: %s", paper_id, e)
@@ -739,11 +747,13 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
         doi=doi,
         work_type=work_type,
         relation_parent_doi=w.get("relation_parent_doi"),
+        title=title,
     )
     preprint_source = classify_preprint_source(
         doi,
         preprint_source=w.get("preprint_source"),
         work_type=work_type,
+        journal=journal,
     )
     topics = w.get("topics") or []
     institutions = w.get("institutions") or []
@@ -763,6 +773,7 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
         year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.strip().isdigit()) else None,
     )
 
+    is_new_row = existing_paper_id is None
     # Canonical isoformat (no Z) — matches `core.utils.utcnow_iso` and
     # the rest of the codebase. Avoids the half-Z / half-isoformat split
     # that used to land in `papers.fetched_at` (Z) and `papers.updated_at`
@@ -902,7 +913,7 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
 
     delivered_id = str(paper_id)
     paper_id = settle_new_paper_group(
-        conn, delivered_id, doi=None, reason="openalex_ingest"
+        conn, delivered_id, doi=None, reason="openalex_ingest", is_new=is_new_row
     )
     # A re-delivered preprint describes the preprint: its topics and references
     # must not replace those of the published root it resolved to.

@@ -16,6 +16,7 @@ import time
 import requests
 
 from alma.config import get_api_call_delay
+from alma.core.author_identity import canonical_author_oid, merged_author_redirects
 from alma.core.author_names import first_last_name as _canonical_author_name
 from alma.core.author_names import parse_author_names as _parse_author_names
 from alma.core.db_write import write_section
@@ -1034,11 +1035,16 @@ def _upsert_publication_authorships(
         (paper_id,),
     )
     count = 0
+    # The same rule as `openalex.client._upsert_authorships`: a merged-away id
+    # never comes back through a refresh.
+    redirects = merged_author_redirects(conn)
+    written: set[str] = set()
     for a in authorships:
-        oa_id = (a.get("openalex_id") or "").strip()
+        oa_id = canonical_author_oid(conn, a.get("openalex_id"), redirects=redirects)
         name = (a.get("display_name") or "").strip()
-        if not oa_id or not name:
+        if not oa_id or not name or oa_id.lower() in written:
             continue
+        written.add(oa_id.lower())
         orcid = normalize_orcid(a.get("orcid")) or ""
         position = (a.get("position") or "").strip()
         is_corresponding = 1 if a.get("is_corresponding") else 0

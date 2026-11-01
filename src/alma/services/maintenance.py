@@ -296,6 +296,14 @@ def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, par
     return result
 
 
+def _run_paper_relation_sweep(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Ask bioRxiv and Crossref which published work each preprint became."""
+    from alma.services.paper_relations import run_relation_sweep
+
+    with _maintenance_conn() as conn:
+        return run_relation_sweep(conn, limit=cap)
+
+
 def _run_collapse_duplicate_identity(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Collapse the LEGACY same-openalex_id duplicate backlog (non-destructive)."""
     from alma.api.deps import _db_path
@@ -749,6 +757,12 @@ def _count_preprint_twins(conn: sqlite3.Connection, params=None) -> int:
 
     scope = str((params or {}).get("scope") or "library")
     return count_preprint_twins(conn, scope)
+
+
+def _count_paper_relation_lookups(conn: sqlite3.Connection, params=None) -> int:
+    from alma.services.paper_relations import count_pending_relation_lookups
+
+    return count_pending_relation_lookups(conn)
 
 
 def _count_duplicate_identity(conn: sqlite3.Connection, params=None) -> int:
@@ -1227,6 +1241,33 @@ REGISTRY: dict[str, MaintenanceTask] = {
             max_manual_limit=20_000,
             default_auto_daily_cap=1_000,
             auto_chunk_size=500,
+            destructive=False,
+        ),
+        MaintenanceTask(
+            key="paper_relation_sweep",
+            label="Look up published versions",
+            description=(
+                "Ask bioRxiv and Crossref which published paper each preprint became, "
+                "so a title changed in review still merges. Each preprint is asked once "
+                "a quarter."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="papers.relation_sweep",
+            job_id_prefix="maint_paper_relations",
+            cost=COST_NETWORK,
+            runner=_run_paper_relation_sweep,
+            stage=MaintenanceStage.PAPER_CANONICALIZATION,
+            order=57,
+            unit=MaintenanceUnit.PAPER,
+            target_kind=TargetKind.NONE,
+            supports_targets=False,
+            count_fn=_count_paper_relation_lookups,
+            sources=("crossref", "biorxiv"),
+            default_manual_limit=100,
+            max_manual_limit=2_000,
+            default_auto_daily_cap=100,
+            auto_chunk_size=25,
             destructive=False,
         ),
         MaintenanceTask(

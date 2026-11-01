@@ -27,8 +27,8 @@ Why the alias table — `author_alt_identifiers`:
     to also exclude alt openalex_ids (so they never resurface).
   - Lets the dossier render "this person also has these OpenAlex
     profiles".
-  - Cheap GC if the user ever wants to undo a merge (delete the
-    row + revive the alt's `authors.status`).
+  - `core.author_identity` reads it so a merged-away id never comes
+    back through a paper refresh. Undo lives in `author_merge_ledger`.
 
 Audited via `operation_logs` (step="author_merged") so the Activity
 feed shows what was collapsed and when.
@@ -41,6 +41,14 @@ import sqlite3
 import uuid
 from collections.abc import Iterable, Mapping
 
+from alma.application.author_merge_ledger import (
+    carry_follow,
+    repoint_feed_rows,
+    snapshot_before_merge,
+    transfer_side_tables,
+    write_ledger_row,
+)
+from alma.core.author_identity import AUTHOR_MERGES_DDL, MERGED_ALIAS_SOURCES
 from alma.core.author_names import (
     affiliations_corroborate,
     name_match_confidence,
@@ -73,6 +81,7 @@ def ensure_alt_identifiers_table(db: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_alt_identifiers_alt_oid "
         "ON author_alt_identifiers(lower(alt_openalex_id))"
     )
+    db.execute(AUTHOR_MERGES_DDL)
     # Conflicts surface from the field-union step of merge — when both
     # rows hold a different non-null value for a hard identifier
     # (orcid, scholar_id, semantic_scholar_id), the merge keeps the
@@ -167,6 +176,21 @@ def record_author_alias(
     ``manual_merge`` / ``orcid_discovery`` / ``orcid_sweep``). Caller owns the
     transaction — this does not commit.
     """
+    existing = db.execute(
+        "SELECT id, source FROM author_alt_identifiers "
+        "WHERE primary_author_id = ? AND lower(alt_openalex_id) = lower(?) LIMIT 1",
+        (primary_author_id, alt_openalex_id),
+    ).fetchone()
+    if existing is not None:
+        # A merge outranks an alias that only recorded a shared ORCID: from now
+        # on this id means the primary (`core.author_identity`).
+        if source in MERGED_ALIAS_SOURCES and existing["source"] not in MERGED_ALIAS_SOURCES:
+            db.execute(
+                "UPDATE author_alt_identifiers SET source = ?, alt_author_id = COALESCE(?, alt_author_id) "
+                "WHERE id = ?",
+                (source, alt_author_id, existing["id"]),
+            )
+        return False
     cur = db.execute(
         """
         INSERT OR IGNORE INTO author_alt_identifiers
@@ -559,6 +583,11 @@ def merge_author_profiles(
                 seen.add(rid)
                 alt_ids_clean.append(rid)
             continue
+        if is_pair_rejected(db, primary_id, oid.upper()):
+            raise MergeRefused(
+                f"{primary_row['name']} and {oid} were marked as different people, "
+                "so they cannot be merged."
+            )
         rowless_oids.append(oid)
 
     for alt_id in alt_ids_clean:
@@ -580,6 +609,7 @@ def merge_author_profiles(
         "alt_author_ids": [],
         "fields_unioned": {},
         "conflicts": [],
+        "merge_ids": [],
     }
 
     choices_by_alt = field_choices or {}
@@ -590,6 +620,7 @@ def merge_author_profiles(
     # A follow is the user's intent about the person: it moves to the survivor.
     # Read now, because the loop drops the alts' rows.
     carried_follow = _carried_follow(db, primary_id, alt_ids_clean)
+    snapshots: list[dict] = []
     for alt_id in alt_ids_clean:
         # Pull the FULL alt row so the field-union step has every
         # column to draw from. SELECT * keeps this resilient to
@@ -607,6 +638,10 @@ def merge_author_profiles(
         # the same, or the merge would drop what only that row knew.
         has_own_identity = bool(alt_oid) and alt_oid.lower() != primary_oid.lower()
         reassigned = dropped = 0
+        snapshot = snapshot_before_merge(
+            db, primary_id, primary_oid, alt_row, alt_oid if has_own_identity else ""
+        )
+        snapshots.append(snapshot)
         if has_own_identity:
             # 1. Drop alt's `publication_authors` rows that would collide
             #    with primary's existing rows on the same paper. Without
@@ -615,10 +650,10 @@ def merge_author_profiles(
             drop_cur = db.execute(
                 """
                 DELETE FROM publication_authors
-                WHERE openalex_id = ?
+                WHERE lower(openalex_id) = lower(?)
                   AND paper_id IN (
                       SELECT paper_id FROM publication_authors
-                      WHERE openalex_id = ?
+                      WHERE lower(openalex_id) = lower(?)
                   )
                 """,
                 (alt_oid, primary_oid),
@@ -627,7 +662,7 @@ def merge_author_profiles(
 
             # 2. Reassign the rest of the alt's papers to the primary.
             upd_cur = db.execute(
-                "UPDATE publication_authors SET openalex_id = ? WHERE openalex_id = ?",
+                "UPDATE publication_authors SET openalex_id = ? WHERE lower(openalex_id) = lower(?)",
                 (primary_oid, alt_oid),
             )
             reassigned = upd_cur.rowcount or 0
@@ -690,7 +725,10 @@ def merge_author_profiles(
             for c in conflicts:
                 summary["conflicts"].append({**c, "alt_openalex_id": alt_oid})
 
-        # 4. Drop the alt from followed_authors and soft-remove the row.
+        # 4. Evidence, aliases, verdicts: what only the alt's row held.
+        transfer_side_tables(db, snapshot)
+
+        # 5. Drop the alt from followed_authors and soft-remove the row.
         _drop_follow_and_soft_remove(db, alt_id)
 
         # 5. Record the alias so the rail / dossier knows (one alias writer).
@@ -730,13 +768,14 @@ def merge_author_profiles(
     # no field union — there's nothing local to union from). The alias row
     # is what keeps the suggestion rail from resurfacing this identity.
     for alt_oid in rowless_oids:
+        snapshots.append(snapshot_before_merge(db, primary_id, primary_oid, None, alt_oid))
         drop_cur = db.execute(
             """
             DELETE FROM publication_authors
-            WHERE openalex_id = ?
+            WHERE lower(openalex_id) = lower(?)
               AND paper_id IN (
                   SELECT paper_id FROM publication_authors
-                  WHERE openalex_id = ?
+                  WHERE lower(openalex_id) = lower(?)
               )
             """,
             (alt_oid, primary_oid),
@@ -744,7 +783,7 @@ def merge_author_profiles(
         summary["papers_dropped_as_dup"] += drop_cur.rowcount or 0
 
         upd_cur = db.execute(
-            "UPDATE publication_authors SET openalex_id = ? WHERE openalex_id = ?",
+            "UPDATE publication_authors SET openalex_id = ? WHERE lower(openalex_id) = lower(?)",
             (primary_oid, alt_oid),
         )
         summary["papers_reassigned"] += upd_cur.rowcount or 0
@@ -783,7 +822,12 @@ def merge_author_profiles(
                 db.execute(
                     "UPDATE followed_authors SET is_owner = 1 WHERE author_id = ?", (primary_id,)
                 )
+        # Before the sync: it deletes every row a dropped monitor still owns.
+        for snapshot in snapshots:
+            carry_follow(db, primary_id, snapshot["follow"])
+            repoint_feed_rows(db, snapshot)
         sync_author_monitors(db)
+        summary["merge_ids"] = [write_ledger_row(db, snapshot) for snapshot in snapshots]
 
         # Invalidate the primary's centroid cache so the next centroid
         # recompute picks up the newly attached papers. Cheapest:
@@ -1360,6 +1404,85 @@ def _detect_name_match_candidates(
             )
 
 
+def _detect_external_name_candidates(
+    db: sqlite3.Connection,
+    active_authors: list[dict],
+    *,
+    dry_run: bool,
+    summary: dict,
+) -> None:
+    """Review items for ids with no `authors` row whose name fits a followed author.
+
+    OpenAlex splits people into ids ALMa only meets on authorships, such as a
+    "Chris Baker" beside the followed "Chris I. Baker". Those papers count for
+    nobody, and the name detector never sees them. Never auto-merged (D18): a
+    candidate here is only ever a name. An id already on one of the author's own
+    papers is a co-author, so it is left out.
+    """
+    cleared = {
+        str(row[0]).strip().lower()
+        for row in db.execute("SELECT openalex_id FROM author_suggestion_not_duplicate")
+    }
+    known = cleared | {
+        str(row[0]).strip().lower()
+        for row in db.execute("SELECT openalex_id FROM authors WHERE openalex_id IS NOT NULL")
+    } | list_all_alt_openalex_ids(db)
+    by_surname: dict[str, dict[str, tuple[str, int]]] = {}
+    for row in db.execute(
+        "SELECT lower(openalex_id) AS oid, display_name, COUNT(*) AS n "
+        "FROM publication_authors GROUP BY 1, 2"
+    ):
+        oid = str(row["oid"] or "")
+        parsed = parse_person_name(row["display_name"] or "")
+        if oid and oid not in known and parsed is not None and parsed.surname:
+            bucket = by_surname.setdefault(parsed.surname, {})
+            shown = bucket.get(oid)
+            if shown is None or int(row["n"]) > shown[1]:
+                bucket[oid] = (str(row["display_name"]), int(row["n"]))
+
+    for anchor in active_authors:
+        if not anchor["is_followed"] or not anchor["openalex_id"]:
+            continue
+        parsed = parse_person_name(anchor["name"])
+        if parsed is None or not parsed.surname:
+            continue
+        for oid, (shown_name, papers) in by_surname.get(parsed.surname, {}).items():
+            confidence = name_match_confidence(anchor["name"], shown_name)
+            alt_id = oid.upper()
+            if (
+                not confidence
+                or is_pair_rejected(db, anchor["author_id"], alt_id)
+                or db.execute(
+                    """
+                    SELECT 1 FROM publication_authors mine
+                    JOIN publication_authors other ON other.paper_id = mine.paper_id
+                    WHERE lower(mine.openalex_id) = lower(?) AND lower(other.openalex_id) = ?
+                    LIMIT 1
+                    """,
+                    (anchor["openalex_id"], oid),
+                ).fetchone()
+            ):
+                continue
+            if dry_run:
+                recorded = True
+            else:
+                with write_section(db, label="author_dedup_record_external"):
+                    recorded = _record_merge_candidate(
+                        db,
+                        anchor["author_id"],
+                        alt_id,
+                        alt_openalex_id=alt_id,
+                        alt_name=shown_name,
+                        shared_orcid=None,
+                        papers_estimate=papers,
+                        source="external",
+                        confidence=confidence,
+                    )
+            if recorded:
+                summary["candidates_found"] += 1
+                summary["external_pairs"] = int(summary.get("external_pairs", 0)) + 1
+
+
 def scan_duplicate_candidates(
     db: sqlite3.Connection,
     *,
@@ -1618,6 +1741,10 @@ def scan_duplicate_candidates(
         merged_away=merged_away, job_id=job_id,
     )
 
+    # The same people under ids with no local row: only `publication_authors`
+    # knows them, so the detector above cannot see them.
+    _detect_external_name_candidates(db, active_authors, dry_run=dry_run, summary=summary)
+
     # No final commit: every auto-merge/candidate/alias/swept write was its own
     # gated write_section above (network stayed outside each section).
     auto = summary["auto_merged"]
@@ -1663,6 +1790,7 @@ def _record_merge_candidate(
     papers_estimate: int,
     source: str,
     confidence: str | None = None,
+    alt_name: str | None = None,
 ) -> bool:
     """UPSERT one pending merge pair into ``author_merge_candidates``.
 
@@ -1691,8 +1819,8 @@ def _record_merge_candidate(
     db.execute(
         "INSERT INTO author_merge_candidates "
         "(id, primary_author_id, alt_author_id, alt_openalex_id, shared_orcid, "
-        " papers_estimate, source, confidence, discovered_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        " papers_estimate, source, confidence, alt_name, discovered_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
         (
             uuid.uuid4().hex,
             primary_author_id,
@@ -1702,6 +1830,7 @@ def _record_merge_candidate(
             int(papers_estimate),
             source,
             confidence,
+            alt_name,
         ),
     )
     return True
@@ -1889,7 +2018,7 @@ def count_merge_candidates(db: sqlite3.Connection) -> int:
         SELECT COUNT(*) AS c
         FROM author_merge_candidates c
         JOIN authors p ON p.id = c.primary_author_id
-        JOIN authors a ON a.id = c.alt_author_id
+        LEFT JOIN authors a ON a.id = c.alt_author_id
         WHERE {_CANDIDATE_ACTIVE_SQL}
         """
     ).fetchone()
@@ -1909,13 +2038,13 @@ def list_merge_candidates(
             SELECT
                 c.id,
                 c.primary_author_id, p.name AS primary_name, p.openalex_id AS primary_oid,
-                c.alt_author_id, a.name AS alt_name, c.alt_openalex_id,
+                c.alt_author_id, COALESCE(a.name, c.alt_name) AS alt_name, c.alt_openalex_id,
                 c.shared_orcid, COALESCE(c.papers_estimate, 0) AS papers_estimate,
                 COALESCE(c.source, 'orcid') AS source, c.confidence,
                 c.discovered_at
             FROM author_merge_candidates c
             JOIN authors p ON p.id = c.primary_author_id
-            JOIN authors a ON a.id = c.alt_author_id
+            LEFT JOIN authors a ON a.id = c.alt_author_id
             WHERE {_CANDIDATE_ACTIVE_SQL}
             ORDER BY (CASE WHEN COALESCE(c.source,'orcid') = 'orcid' THEN 0 ELSE 1 END),
                      c.papers_estimate DESC, c.discovered_at DESC
@@ -1936,8 +2065,14 @@ def _apply_one_candidate(
     RAW — the caller owns the write window (``write_section`` in the background
     bulk apply, ``run_write_unit`` in the foreground per-candidate route). Returns
     the ``merge_author_profiles`` result."""
+    primary_id, alt_id = str(cand["primary_author_id"]), str(cand["alt_author_id"])
+    has_row = db.execute("SELECT 1 FROM authors WHERE id = ?", (alt_id,)).fetchone() is not None
     result = merge_author_profiles(
-        db, str(cand["primary_author_id"]), [str(cand["alt_author_id"])], job_id=job_id
+        db,
+        primary_id,
+        [alt_id] if has_row else [],
+        alt_openalex_ids=None if has_row else [alt_id],
+        job_id=job_id,
     )
     db.execute("DELETE FROM author_merge_candidates WHERE id = ?", (str(cand["id"]),))
     return result

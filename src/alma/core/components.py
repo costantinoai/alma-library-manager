@@ -11,6 +11,7 @@ own:
   - ``peer_review``   — a peer-review or author-response document
                         (eLife ``…​.sa0``; OpenAlex ``peer-review``)
   - ``dataset``       — a data / code / stimuli deposit (OpenAlex ``dataset``)
+  - ``correction``    — a correction, erratum or retraction notice about a paper
 
 Components stay in the corpus (provenance + discovery signal) but are hidden
 from the Feed inbox and shown only inside their parent paper's popup. This
@@ -33,6 +34,7 @@ from contextlib import nullcontext
 
 from alma.core.paper_groups import (
     absorb_paper_group,
+    not_component_ids,
     purge_orphan_subordinate_state,
     resolve_paper_root_id,
 )
@@ -40,6 +42,7 @@ from alma.core.utils import (
     clean_display_text,
     is_doi_shaped,
     normalize_doi,
+    normalize_title_key,
     resolve_existing_paper_id,
 )
 
@@ -48,6 +51,7 @@ COMPONENT_FIGURE = "figure"
 COMPONENT_SUPPLEMENTARY = "supplementary"
 COMPONENT_PEER_REVIEW = "peer_review"
 COMPONENT_DATASET = "dataset"
+COMPONENT_CORRECTION = "correction"
 
 
 # Asserted by the bootstrap DDL. `link_orphan_components` runs once per ingested
@@ -84,15 +88,16 @@ _SUFFIX_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # OpenAlex ``type`` values that are never a standalone paper. Used when the DOI
-# suffix doesn't match but the work type HAS been hydrated. ``other`` is
-# included deliberately: PLOS figures/SI without a recognised suffix surface as
-# ``other``, and OpenAlex reserves ``other`` for non-standard outputs.
+# suffix doesn't match but the work type HAS been hydrated. ``other`` is left
+# out on purpose: OpenAlex puts obituaries and real articles there, and an orphan
+# component has no popup to come back from.
 _WORK_TYPE_COMPONENT: dict[str, str] = {
     "dataset": COMPONENT_DATASET,
     "peer-review": COMPONENT_PEER_REVIEW,
     "supplementary-materials": COMPONENT_SUPPLEMENTARY,
     "paratext": COMPONENT_SUPPLEMENTARY,
-    "other": COMPONENT_SUPPLEMENTARY,
+    "erratum": COMPONENT_CORRECTION,
+    "retraction": COMPONENT_CORRECTION,
 }
 
 # eLife reviewed-preprint DOIs carry a trailing version segment
@@ -101,8 +106,22 @@ _WORK_TYPE_COMPONENT: dict[str, str] = {
 _TRAILING_VERSION_RE = re.compile(r"\.\d{1,3}$")
 
 
+# "Correction to: X", "Corrigendum to “X”". The colon or quote is what tells it
+# from a paper about correcting something.
+_CORRECTION_TITLE_RE = re.compile(
+    r"^\W*(?:correction|erratum|corrigendum|retraction(?: notice)?)(?: (?:to|for|of))?\s*[:\"“‘']\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def corrected_title(title: str | None) -> str | None:
+    """The title a correction names, or ``None`` for an ordinary title."""
+    match = _CORRECTION_TITLE_RE.match(str(title or "").strip())
+    return match.group(1).strip(" \"”’'") if match else None
+
+
 def classify_component(
-    doi: str | None, work_type: str | None = None
+    doi: str | None, work_type: str | None = None, title: str | None = None
 ) -> tuple[str | None, str | None]:
     """Classify a work as a paper or a component.
 
@@ -132,6 +151,9 @@ def classify_component(
     if wt in _WORK_TYPE_COMPONENT:
         return _WORK_TYPE_COMPONENT[wt], None
 
+    if corrected_title(title):
+        return COMPONENT_CORRECTION, None
+
     return None, None
 
 
@@ -141,6 +163,7 @@ def resolve_component(
     doi: str | None,
     work_type: str | None = None,
     relation_parent_doi: str | None = None,
+    title: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Classify, then resolve the parent DOI to an existing ``papers.id``.
 
@@ -156,14 +179,16 @@ def resolve_component(
     classified the work — marks it ``supplementary``. This is what links
     standalone datasets (no derivable DOI suffix) to their paper.
     """
-    component_type, parent_doi = classify_component(doi, work_type)
+    component_type, parent_doi = classify_component(doi, work_type, title)
     rel_parent = normalize_doi(relation_parent_doi)
     if component_type is None and rel_parent:
         component_type = COMPONENT_SUPPLEMENTARY
-    if component_type is None:
+    if component_type is None or _kept_as_paper(conn, doi):
         return None, None
     parent_doi = parent_doi or rel_parent
     parent_paper_id: str | None = None
+    if component_type == COMPONENT_CORRECTION:
+        return component_type, _corrected_paper_id(conn, title)
     if parent_doi:
         parent_paper_id = resolve_existing_paper_id(conn, doi=parent_doi)
         if parent_paper_id:
@@ -177,6 +202,38 @@ def resolve_component(
             if parent_row is None or str(parent_row["component_type"] or "").strip():
                 parent_paper_id = None
     return component_type, parent_paper_id
+
+
+def _kept_as_paper(conn: sqlite3.Connection, doi: str | None) -> bool:
+    """The user split this row out as a paper, so no classifier may take it back."""
+    norm = normalize_doi(doi)
+    if not norm:
+        return False
+    try:
+        return conn.execute(
+            "SELECT 1 FROM paper_group_rejections r JOIN papers p ON p.id = r.child_id "
+            "WHERE r.kind = 'not_component' AND lower(p.doi) = lower(?) LIMIT 1",
+            (norm,),
+        ).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
+def _corrected_paper_id(conn: sqlite3.Connection, title: str | None) -> str | None:
+    """The one standalone paper a correction's title names, when it is in the corpus."""
+    from alma.core.sql_helpers import standalone_paper_sql
+
+    target = corrected_title(title)
+    key = normalize_title_key(target)
+    words = re.findall(r"[^\W\d_]{5,}", target or "")
+    if not key or not words:
+        return None
+    rows = conn.execute(
+        f"SELECT p.id, p.title FROM papers p WHERE {standalone_paper_sql('p')} AND p.title LIKE ?",
+        (f"%{max(words, key=len)}%",),
+    ).fetchall()
+    matches = [str(row["id"]) for row in rows if normalize_title_key(row["title"]) == key]
+    return matches[0] if len(matches) == 1 else None
 
 
 def resolve_orphan_component_parent(
@@ -304,14 +361,17 @@ def backfill_components(
     ).fetchall()
     classified = linked = cleaned = 0
     errors = 0
+    kept_as_papers = not_component_ids(conn)
     scope = section or (lambda _name: nullcontext())
     for row in rows:
         sets: list[str] = []
         params: list[object] = []
 
-        if row["component_type"] is None:
+        if str(row["id"]) in kept_as_papers:
+            pass
+        elif row["component_type"] is None:
             component_type, parent_paper_id = resolve_component(
-                conn, doi=row["doi"], work_type=row["work_type"]
+                conn, doi=row["doi"], work_type=row["work_type"], title=row["title"]
             )
             if component_type is not None:
                 sets.append("component_type = ?")

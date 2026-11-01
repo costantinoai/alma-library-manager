@@ -2009,6 +2009,49 @@ def _m_0055_phantom_followed_authors(conn: sqlite3.Connection) -> None:
         logger.info("phantom follows: demoted %d authors", demoted)
 
 
+def _m_0056_author_merges(conn: sqlite3.Connection) -> None:
+    """The ledger an author merge writes, and the name of a row-less candidate."""
+    from alma.core.author_identity import AUTHOR_MERGES_DDL, AUTHOR_MERGES_INDEX_DDL
+
+    conn.execute(AUTHOR_MERGES_DDL)
+    conn.execute(AUTHOR_MERGES_INDEX_DDL)
+    _add_columns(conn, "author_merge_candidates", {"alt_name": "TEXT"})
+
+
+def _m_0057_paper_same_work(conn: sqlite3.Connection) -> None:
+    """Splits that stay split, registered relations, and the widened preprint index."""
+    from alma.core.paper_groups import (
+        PAPER_GROUP_REJECTIONS_DDL,
+        PAPER_RELATIONS_DDL,
+        PAPER_RELATIONS_INDEX_DDL,
+        PREPRINT_YEAR_INDEX_SQL,
+    )
+
+    conn.execute(PAPER_GROUP_REJECTIONS_DDL)
+    conn.execute(PAPER_RELATIONS_DDL)
+    conn.execute(PAPER_RELATIONS_INDEX_DDL)
+    # SQLite uses a partial index only for a query that repeats its predicate.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_papers_preprint_year'"
+    ).fetchone():
+        conn.execute("DROP INDEX idx_papers_preprint_year")
+        conn.execute(PREPRINT_YEAR_INDEX_SQL)
+
+
+def _m_0058_hold_reconcile_for_the_repair(conn: sqlite3.Connection) -> None:
+    """Deploying makes no bulk merge. A stored opt-in would outlive the new default.
+
+    The wider same-work rules find hundreds of merges in an existing corpus. They
+    run once, by hand, from `alma.services.merge_repairs`, after a backup. The
+    Health page can opt back in afterwards.
+    """
+    if _table_exists(conn, "discovery_settings"):
+        conn.execute(
+            "UPDATE discovery_settings SET value = 'false' "
+            "WHERE key = 'maintenance.paper_group_reconcile.auto_enabled'"
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -2065,6 +2108,9 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (53, "followed_authors_are_active", _m_0053_followed_authors_are_active),
     (54, "retire_hosted_embedding_provider", _m_0054_retire_hosted_embedding_provider),
     (55, "phantom_followed_authors", _m_0055_phantom_followed_authors),
+    (56, "author_merges", _m_0056_author_merges),
+    (57, "paper_same_work", _m_0057_paper_same_work),
+    (58, "hold_reconcile_for_the_repair", _m_0058_hold_reconcile_for_the_repair),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

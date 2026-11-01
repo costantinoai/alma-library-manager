@@ -1,6 +1,7 @@
-"""Database deduplication and stable ID assignment.
+"""Paper deduplication and stable author ids.
 
-This module centralizes author/paper deduplication logic for v3 schema.
+Authors are not merged here: `application.author_merge` owns that, with the
+record of who decided what.
 
 v3 Schema Changes:
 - papers table uses UUID `id` as PK (not composite key)
@@ -16,17 +17,25 @@ import logging
 import sqlite3
 from collections.abc import Iterable
 
-from alma.core.author_names import parse_author_names, surname
 from alma.core.db_write import write_section
 from alma.core.paper_groups import (
     PaperGroupIntegrityError,
+    PreprintTitleIndex,
+    _root_rank,
     absorb_paper_group,
+    authors_agree,
     is_component_row,
+    is_preprint_row,
+    rejected_paper_pairs,
+    titles_alike,
 )
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
+    MIN_IDENTIFYING_TITLE_CHARS,
+    bare_openalex_work_id,
     canonical_lookup_doi,
+    doi_work_stem,
     normalize_openalex_id,
     normalize_orcid,
     normalize_title_key,
@@ -123,181 +132,11 @@ def ensure_stable_ids(conn: sqlite3.Connection) -> dict:
     return {"authors_updated": changed_authors}
 
 
-def _merge_author_metadata(conn: sqlite3.Connection, keeper_id: str, dup_id: str) -> None:
-    k = conn.execute("SELECT * FROM authors WHERE id = ?", (keeper_id,)).fetchone()
-    d = conn.execute("SELECT * FROM authors WHERE id = ?", (dup_id,)).fetchone()
-    if not k or not d:
-        return
-    updates: dict[str, object] = {}
-    for col in ("openalex_id", "orcid", "affiliation", "interests", "url_picture", "institutions", "email_domain"):
-        if not (k[col] or "").strip() and (d[col] or "").strip():
-            updates[col] = d[col]
-    updates["citedby"] = max(int(k["citedby"] or 0), int(d["citedby"] or 0))
-    updates["h_index"] = max(int(k["h_index"] or 0), int(d["h_index"] or 0))
-    updates["works_count"] = max(int(k["works_count"] or 0), int(d["works_count"] or 0))
-    if updates:
-        sets = ", ".join(f"{c} = ?" for c in updates.keys())
-        conn.execute(f"UPDATE authors SET {sets} WHERE id = ?", (*updates.values(), keeper_id))
-
-
-def _update_publication_authors_for_merge(conn: sqlite3.Connection, old_author_id: str, new_author_id: str) -> int:
-    """Update publication_authors junction table when merging authors (v3 schema).
-
-    v3 schema: papers don't have author_id column. Author associations are in
-    the publication_authors junction table.
-    """
-    moved = 0
-    try:
-        # Move all authorship records from old author to new author
-        rows = conn.execute(
-            "SELECT * FROM publication_authors WHERE openalex_id IN "
-            "(SELECT openalex_id FROM authors WHERE id = ?)",
-            (old_author_id,),
-        ).fetchall()
-
-        for row in rows:
-            # Try to insert into new author (may already exist)
-            conn.execute(
-                """INSERT OR IGNORE INTO publication_authors
-                   (paper_id, openalex_id, display_name, orcid, position, is_corresponding, institution)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    row["paper_id"],
-                    row["openalex_id"],
-                    row["display_name"],
-                    row["orcid"],
-                    row["position"],
-                    row["is_corresponding"],
-                    row["institution"],
-                ),
-            )
-            moved += 1
-    except Exception as exc:
-        # publication_authors is the only authorship link we have for
-        # papers in v3 schema. Silently dropping a failure here means
-        # papers lose their author attribution after a merge — log it
-        # so a re-run or manual re-link can recover.
-        logger.warning(
-            "Failed to move publication_authors rows for author %s → %s: %s",
-            old_author_id,
-            new_author_id,
-            exc,
-        )
-
-    return moved
-
-
-def _merge_author_publications(conn: sqlite3.Connection, dup_id: str, keeper_id: str) -> int:
-    """Merge author associations when deduplicating authors (v3 schema).
-
-    v3 schema: papers don't have author_id column. Author associations are in
-    publication_authors junction table. We need to update that table.
-    """
-    moved = _update_publication_authors_for_merge(conn, dup_id, keeper_id)
-    return moved
-
-
-def deduplicate_authors(conn: sqlite3.Connection) -> dict:
-    """Deduplicate authors by OpenAlex ID, ORCID, or normalized name (v3 schema)."""
-    rows = conn.execute("SELECT * FROM authors ORDER BY id").fetchall()
-    if not rows:
-        return {"groups": 0, "merged_authors": 0, "moved_authorship_records": 0}
-
-    groups: dict[str, list[str]] = {}
-    by_id: dict[str, sqlite3.Row] = {r["id"]: r for r in rows}
-    for r in rows:
-        keys: list[str] = []
-        oa = _norm_openalex_author(r["openalex_id"])
-        oc = _norm_orcid(r["orcid"])
-        nm = _norm_text(r["name"])
-        if oa:
-            keys.append(f"oa:{oa}")
-        if oc:
-            keys.append(f"orcid:{oc}")
-        if nm:
-            keys.append(f"name:{nm}")
-        key = keys[0] if keys else f"id:{r['id']}"
-        groups.setdefault(key, []).append(r["id"])
-
-    merged_authors = 0
-    moved_authorship_records = 0
-    merged_groups = 0
-
-    for _, ids in groups.items():
-        # Exact duplicate IDs from multiple keys are not expected here.
-        uniq = []
-        seen = set()
-        for i in ids:
-            if i not in seen:
-                uniq.append(i)
-                seen.add(i)
-        if len(uniq) <= 1:
-            continue
-
-        merged_groups += 1
-        # Prefer rows with OA/ORCID + richer metadata.
-        def _score(aid: str) -> int:
-            r = by_id[aid]
-            return (
-                (1 if _norm_openalex_author(r["openalex_id"]) else 0) * 1000
-                + (1 if _norm_orcid(r["orcid"]) else 0) * 900
-                + int(r["works_count"] or 0)
-                + int(r["citedby"] or 0)
-            )
-
-        keeper = sorted(uniq, key=_score, reverse=True)[0]
-        for dup in uniq:
-            if dup == keeper:
-                continue
-            # One gated write window per merged author (commit-per-unit-of-work;
-            # all-local, no network — the gate releases between merges so a
-            # concurrent foreground write isn't starved for the whole sweep).
-            with write_section(conn, label="dedup author merge"):
-                _merge_author_metadata(conn, keeper, dup)
-                moved_authorship_records += _merge_author_publications(conn, dup, keeper)
-
-                # followed_authors should keep one row.
-                try:
-                    row = conn.execute(
-                        "SELECT followed_at, notify_new_papers FROM followed_authors WHERE author_id = ?",
-                        (dup,),
-                    ).fetchone()
-                    if row:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO followed_authors (author_id, followed_at, notify_new_papers) VALUES (?, ?, ?)",
-                            (keeper, row["followed_at"], row["notify_new_papers"]),
-                        )
-                        conn.execute("DELETE FROM followed_authors WHERE author_id = ?", (dup,))
-                except Exception:
-                    pass
-
-                conn.execute("DELETE FROM authors WHERE id = ?", (dup,))
-            merged_authors += 1
-
-    return {
-        "groups": merged_groups,
-        "merged_authors": merged_authors,
-        "moved_authorship_records": moved_authorship_records,
-    }
-
-
-# A title key shorter than this ("Introduction", "Theory of mind") names many works.
-_MIN_TITLE_KEY_CHARS = 20
-# Below this share of the title's characters the key is noise: it keeps only
-# a-z0-9, so a Chinese title with "fMRI" in it would reduce to "fmri".
-_MIN_TITLE_KEY_SHARE = 0.5
 _REVIEW_SAMPLE = 20
 
 
-def _author_surnames(authors: str | None) -> set[str]:
-    return {surname(name).casefold() for name in parse_author_names(authors or "")}
-
-
 def _same_authors(a: sqlite3.Row, b: sqlite3.Row) -> bool:
-    """Both rows list authors, and at least half of the shorter list is shared."""
-    first, second = _author_surnames(a["authors"]), _author_surnames(b["authors"])
-    shared = first & second
-    return bool(shared) and len(shared) * 2 >= min(len(first), len(second))
+    return authors_agree(a["authors"], b["authors"])
 
 
 def _title_key(row: sqlite3.Row) -> tuple[str, int] | None:
@@ -307,10 +146,7 @@ def _title_key(row: sqlite3.Row) -> tuple[str, int] | None:
 
 
 def _title_identifies_a_work(row: sqlite3.Row) -> bool:
-    title = row["title"] or ""
-    key = normalize_title_key(title)
-    letters = sum(ch.isalnum() for ch in title)
-    return len(key) >= _MIN_TITLE_KEY_CHARS and len(key) >= letters * _MIN_TITLE_KEY_SHARE
+    return len(normalize_title_key(row["title"] or "")) >= MIN_IDENTIFYING_TITLE_CHARS
 
 
 def _duplicate_groups(
@@ -371,10 +207,181 @@ def _keeper_score(row: sqlite3.Row) -> tuple[int, int]:
         int(bool((row["doi"] or "").strip())) * 1000
         + int(bool((row["openalex_id"] or "").strip())) * 500
         + int(bool((row["url"] or "").strip())) * 100
-        + int(bool((row["abstract"] or "").strip())) * 50
+        + int(bool(row["has_abstract"])) * 50
         + int(row["cited_by_count"] or 0)
     )
     return (int(row["status"] == "library"), richness)
+
+
+_PLAN_COLUMNS = (
+    "p.id, p.title, p.year, p.doi, p.journal, p.authors, p.url, p.openalex_id, p.work_type, "
+    "p.preprint_source, p.component_type, p.status, p.cited_by_count, p.semantic_scholar_id, "
+    "COALESCE(p.abstract, '') <> '' AS has_abstract"
+)
+
+
+class _WorkGroups:
+    """Union-find over standalone rows that refuses to join a pair the user split."""
+
+    def __init__(self, rejected: set[tuple[str, str]]) -> None:
+        self._parent: dict[str, str] = {}
+        self._members: dict[str, set[str]] = {}
+        self._rejected = rejected
+        self.levels: dict[str, int] = {}
+        #: The strongest evidence that tied each row in. The ladder runs strongest first.
+        self.reasons: dict[str, str] = {}
+
+    def _find(self, paper_id: str) -> str:
+        self._parent.setdefault(paper_id, paper_id)
+        self._members.setdefault(paper_id, {paper_id})
+        while self._parent[paper_id] != paper_id:
+            self._parent[paper_id] = self._parent[self._parent[paper_id]]
+            paper_id = self._parent[paper_id]
+        return paper_id
+
+    def _split_between(self, first: set[str], second: set[str]) -> bool:
+        return any(
+            (a, b) in self._rejected or (b, a) in self._rejected for a in first for b in second
+        )
+
+    def join(self, first: str, second: str, level: str) -> None:
+        one, two = self._find(first), self._find(second)
+        if one == two or self._split_between(self._members[one], self._members[two]):
+            return
+        self._parent[two] = one
+        self._members[one] |= self._members.pop(two)
+        self.levels[level] = self.levels.get(level, 0) + 1
+        self.reasons.setdefault(first, level)
+        self.reasons.setdefault(second, level)
+
+    def groups(self) -> list[set[str]]:
+        return [members for members in self._members.values() if len(members) > 1]
+
+
+def _same_key(groups: _WorkGroups, rows: Iterable[sqlite3.Row], key, level: str) -> None:
+    seen: dict[str, str] = {}
+    for row in rows:
+        value = key(row)
+        if value:
+            groups.join(seen.setdefault(value, row["id"]), row["id"], level)
+
+
+def _join_lesser_copies(groups: _WorkGroups, rows: list[sqlite3.Row]) -> None:
+    """Same title and authors: a deposit or meeting abstract joins its one paper,
+    and a preprint or deposit joins its copy on another server."""
+    buckets: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        if not is_component_row(row) and _title_identifies_a_work(row):
+            buckets.setdefault(normalize_title_key(row["title"]), []).append(row)
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        papers = [row for row in bucket if _root_rank(row) == 300]
+        if len({doi_work_stem(row["doi"]) or row["id"] for row in papers}) == 1:
+            for row in bucket:
+                if 100 < _root_rank(row) < 300 and _same_authors(row, papers[0]):
+                    groups.join(papers[0]["id"], row["id"], "deposit_or_abstract")
+        copies = [row for row in bucket if is_preprint_row(row) or _root_rank(row) == 200]
+        for index, first in enumerate(copies):
+            for second in copies[index + 1:]:
+                near = first["year"] and second["year"] and abs(first["year"] - second["year"]) <= 2
+                if near and _same_authors(first, second):
+                    groups.join(first["id"], second["id"], "server_copy")
+
+
+def _year_spread(group: list[sqlite3.Row]) -> int:
+    years = [int(row["year"]) for row in group if row["year"]]
+    return max(years) - min(years) if years else 0
+
+
+def plan_same_work(conn: sqlite3.Connection) -> dict:
+    """Every group of standalone rows that are one work, strongest evidence first.
+
+    The one corpus-wide ladder, read by the preview, the repair and the job, so
+    they cannot disagree: same DOI, same OpenAlex id, one DOI's versions, a
+    registered relation, a Semantic Scholar id confirmed by title and authors, a
+    journal paper's preprints, then the same title and authors. Writes nothing.
+    A preprint that fits two published works is reported and left alone.
+    """
+    rows = conn.execute(
+        f"SELECT {_PLAN_COLUMNS} FROM papers p WHERE {standalone_paper_sql('p')}"
+    ).fetchall()
+    rejected = rejected_paper_pairs(conn)
+    groups = _WorkGroups(rejected)
+    papers = [row for row in rows if not is_component_row(row)]
+
+    _same_key(groups, papers, lambda r: _norm_doi(r["doi"]), "doi")
+    _same_key(groups, papers, lambda r: bare_openalex_work_id(r["openalex_id"]).upper(), "openalex")
+    _same_key(groups, papers, lambda r: doi_work_stem(r["doi"]), "version")
+
+    by_stem: dict[str, str] = {}
+    for row in papers:
+        stem = doi_work_stem(row["doi"])
+        if stem:
+            by_stem.setdefault(stem, row["id"])
+    known = {row["id"] for row in papers}
+    try:
+        for relation in conn.execute("SELECT paper_id, related_doi FROM paper_relations"):
+            other = by_stem.get(doi_work_stem(relation[1]))
+            if other and relation[0] in known:
+                groups.join(relation[0], other, "relation")
+    except sqlite3.OperationalError:
+        pass
+
+    by_s2: dict[str, sqlite3.Row] = {}
+    for row in papers:
+        s2_id = str(row["semantic_scholar_id"] or "").strip()
+        if not s2_id:
+            continue
+        first = by_s2.setdefault(s2_id, row)
+        if first is not row and titles_alike(first["title"], row["title"]) and _same_authors(first, row):
+            groups.join(first["id"], row["id"], "semantic_scholar")
+
+    index = PreprintTitleIndex(list(papers), rejected)
+    pairs = index.pairs(require_doi=True)
+    for pair in pairs:
+        if not pair["ambiguous"]:
+            groups.join(pair["preprint_id"], pair["canonical_id"], "preprint_title")
+
+    titled, review = _duplicate_groups(papers)
+    for group in titled:
+        for row in group[1:]:
+            groups.join(group[0]["id"], row["id"], "title_and_authors")
+    _join_lesser_copies(groups, papers)
+
+    by_id = {row["id"]: row for row in rows}
+    planned = [[by_id[paper_id] for paper_id in sorted(members)] for members in groups.groups()]
+    # A capped run spends its budget on the closest matches first.
+    planned.sort(key=lambda group: (_year_spread(group), group[0]["id"]))
+    return {
+        "groups": planned,
+        "merges": sum(len(group) - 1 for group in planned),
+        "levels": groups.levels,
+        "reasons": groups.reasons,
+        "ambiguous": [pair for pair in pairs if pair["ambiguous"]],
+        "review": review,
+    }
+
+
+def merge_planned_group(conn: sqlite3.Connection, group: list[sqlite3.Row], *, unit) -> dict:
+    """Absorb one planned group, each merge in its own ``unit``. Local, no network."""
+    keeper_id = max(group, key=_keeper_score)["id"]
+    merged = rewired = failed = 0
+    for row in group:
+        if row["id"] == keeper_id:
+            continue
+        try:
+            with unit():
+                result = absorb_paper_group(conn, row["id"], keeper_id, reason="same_work")
+        except PaperGroupIntegrityError as exc:
+            # A broken pointer chain is Health's repair; the rest of the pass goes on.
+            logger.warning("Dedup skipped %s → %s: %s", row["id"], keeper_id, exc)
+            failed += 1
+            continue
+        if not result.get("skipped"):
+            merged += 1
+            rewired += sum(result.get("fk_migrated", {}).values())
+    return {"merged": merged, "rewired": rewired, "failed": failed}
 
 
 def deduplicate_papers(conn: sqlite3.Connection) -> dict:
@@ -384,38 +391,22 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
     feedback, Feed and Discovery state, collections and tags move there
     (`absorb_paper_group`). Rows already in a group are not looked at.
     """
-    rows = conn.execute(f"SELECT * FROM papers p WHERE {standalone_paper_sql('p')}").fetchall()
-    groups, review = _duplicate_groups(rows)
-
-    merged = 0
-    rewired = 0
-    failed = 0
-    for group in groups:
-        keeper_id = max(group, key=_keeper_score)["id"]
-        for dup in group:
-            if dup["id"] == keeper_id:
-                continue
-            try:
-                # One gated write window per merged paper (commit-per-unit-of-work,
-                # all-local).
-                with write_section(conn, label="dedup paper merge"):
-                    result = absorb_paper_group(conn, dup["id"], keeper_id, reason="library_dedup")
-            except PaperGroupIntegrityError as exc:
-                # A broken pointer chain is Health's repair; the rest of the pass goes on.
-                logger.warning("Dedup skipped %s → %s: %s", dup["id"], keeper_id, exc)
-                failed += 1
-                continue
-            if result.get("skipped"):
-                continue
-            merged += 1
-            rewired += sum(result.get("fk_migrated", {}).values())
-
+    plan = plan_same_work(conn)
+    merged = rewired = failed = 0
+    for group in plan["groups"]:
+        counts = merge_planned_group(
+            conn, group, unit=lambda: write_section(conn, label="dedup paper merge")
+        )
+        merged += counts["merged"]
+        rewired += counts["rewired"]
+        failed += counts["failed"]
     return {
         "merged_papers": merged,
         "rewired_references": rewired,
         "failed": failed,
-        "needs_review": len(review),
-        "review_sample": review[:_REVIEW_SAMPLE],
+        "levels": plan["levels"],
+        "needs_review": len(plan["review"]),
+        "review_sample": plan["review"][:_REVIEW_SAMPLE],
     }
 
 
@@ -428,16 +419,6 @@ def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> di
             from alma.api.scheduler import add_job_log
 
             add_job_log(job_id, "Starting deduplication", step="dedup_start")
-        except Exception:
-            pass
-
-    # deduplicate_authors commits each merge in its own write_section.
-    author_summary = deduplicate_authors(conn)
-    if job_id:
-        try:
-            from alma.api.scheduler import add_job_log
-
-            add_job_log(job_id, f"Author dedup complete: {author_summary}", step="dedup_authors")
         except Exception:
             pass
 
@@ -469,7 +450,6 @@ def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> di
     summary = {
         "started_at": started,
         "finished_at": utcnow().isoformat(),
-        "authors": author_summary,
         "papers": paper_summary,
         "stable_ids": id_summary,
     }

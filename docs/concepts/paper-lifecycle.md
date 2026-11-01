@@ -184,10 +184,19 @@ its preprint's saved state, reading state, ratings and notes; the preprint remai
 as a version pointer. Components donate no user state. Child records cannot
 independently affect Library counts, calibration or recommendation evaluation.
 
-Title/year matches merge automatically only when each side has one plausible
-partner **and both carry a DOI** — a shared title and year alone is how two
-different papers become one. Ambiguous matches remain separate and are listed in
-Activity with the relevant paper IDs.
+Two rows are one work on evidence, strongest first: the same DOI, the same
+OpenAlex id, versions of one DOI (`_v2`, `.v2`, eLife `.2`), a relation bioRxiv or
+Crossref registered, a Semantic Scholar id confirmed by title and authors, a
+journal paper's preprints, then the same title and authors. Several preprints of
+one paper merge; a preprint that fits two published works stays separate and is
+listed in Activity. A repository copy or meeting abstract joins its paper. The
+newest version shows when nothing is published. Merges at ingest appear in
+Activity.
+
+**A split holds.** "Not a duplicate" and "Not a child" record a verdict that every
+repair honours, shown under "Kept separate" with Allow merge to take it back. The
+user's own state stays on the paper it moved to. "Same paper as" joins two rows
+nothing links.
 
 **Preview before you repair.** Health and Settings both offer a preview: it
 reads exactly what a pass would act on — relationships to repair, components to
@@ -206,3 +215,8 @@ component of that paper like any other. The repair reports actual merges, failur
 title matches. Its limit applies to new title matches; existing relationship
 repair scans the corpus. Each group commits independently, so Library actions
 remain available and a failed group does not undo successful repairs.
+
+**Existing rows wait for a hand-run repair.** Only a row that did not exist before
+merges at ingest. A re-delivered row merges nothing, and Reconcile stays off for
+automatic runs in this release. The merges an existing corpus is owed run from
+`python -m alma.services.merge_repairs`, after a backup and after reading `--list`.

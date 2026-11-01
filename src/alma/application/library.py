@@ -14,6 +14,8 @@ from alma.application import paper_actions
 from alma.core.components import resolve_component
 from alma.core.paper_groups import (
     absorb_paper_group,
+    record_paper_split,
+    remove_paper_split,
     resolve_action_paper_id,
     resolve_paper_root_id,
     settle_new_paper_group,
@@ -406,6 +408,7 @@ def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> dict | No
     )
     if not (was_duplicate or was_component):
         return {"detached": False, "was_duplicate": False, "was_component": False}
+    root_id = resolve_paper_root_id(db, paper_id, strict=False)
     db.execute(
         """
         UPDATE papers
@@ -417,11 +420,51 @@ def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> dict | No
         """,
         (utcnow().isoformat(), paper_id),
     )
+    # The verdict is what makes the split hold: the next repair would find the
+    # same DOI, title or suffix and undo it. State stays on the root (P8).
+    record_paper_split(db, paper_id, root_id, kind="not_component" if was_component else "not_same")
     return {
         "detached": True,
         "was_duplicate": was_duplicate,
         "was_component": was_component,
+        "root_id": root_id,
     }
+
+
+def join_papers(db: sqlite3.Connection, paper_id: str, other_id: str) -> dict | None:
+    """The user says these two are one work. ``None`` when either is missing.
+
+    A verdict against the pair is taken back first. The group owner still picks
+    the survivor, so a journal row wins over a preprint whichever was opened.
+    """
+    first = resolve_paper_root_id(db, paper_id, strict=False)
+    second = resolve_paper_root_id(db, other_id, strict=False)
+    if not get_paper(db, first) or not get_paper(db, second):
+        return None
+    if first == second:
+        return {"joined": False, "root_id": first}
+    remove_paper_split(db, first, second)
+    remove_paper_split(db, paper_id, other_id)
+    result = absorb_paper_group(db, second, first, reason="user_join")
+    return {"joined": not result.get("skipped"), "root_id": str(result.get("root_id") or first)}
+
+
+def list_paper_splits(db: sqlite3.Connection, paper_id: str) -> list[dict]:
+    """Papers the user said are not this one. Pure read."""
+    try:
+        rows = db.execute(
+            """
+            SELECT p.id, p.title, p.doi, r.kind, r.created_at
+            FROM paper_group_rejections r
+            JOIN papers p ON p.id = CASE WHEN r.paper_id_lo = ? THEN r.paper_id_hi ELSE r.paper_id_lo END
+            WHERE (r.paper_id_lo = ? OR r.paper_id_hi = ?) AND r.paper_id_lo <> r.paper_id_hi
+            ORDER BY r.created_at DESC
+            """,
+            (paper_id, paper_id, paper_id),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(row) for row in rows]
 
 
 def resolve_library_save_target(db: sqlite3.Connection, paper_id: str) -> tuple[str, bool]:
@@ -462,6 +505,7 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
             doi=kwargs.get("doi"),
             work_type=kwargs.get("work_type"),
             relation_parent_doi=relation_parent_doi,
+            title=kwargs.get("title"),
         )
         if component_type:
             kwargs["component_type"] = component_type
@@ -491,6 +535,7 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
         parent_paper_id=str(parent_paper_id) if parent_paper_id else None,
         doi=kwargs.get("doi"),
         reason="paper_create_component",
+        is_new=True,
     )
     return paper_id
 
@@ -535,6 +580,7 @@ def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True
             doi=kwargs.get("doi"),
             work_type=kwargs.get("work_type"),
             relation_parent_doi=relation_parent_doi,
+            title=kwargs.get("title"),
         )
         if component_type:
             kwargs["component_type"] = component_type

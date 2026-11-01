@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from alma.api.deps import get_current_user, get_db
 from alma.core.db_write import run_write_unit
 from alma.core.time import utcnow
+from alma.core.paper_groups import resolve_paper_root_id
 from alma.core.utils import resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -293,6 +294,7 @@ def save_from_extension(
             year=req.year,
         )
         if existing_id:
+            existing_id = resolve_paper_root_id(db, existing_id, strict=False)
             prow = db.execute(
                 "SELECT status, rating, reading_status, added_from, added_at "
                 "FROM papers WHERE id = ?",
@@ -440,6 +442,8 @@ def lookup_from_extension(
     )
 
     if paper_id:
+        # A merged preprint answers for the paper it became.
+        paper_id = resolve_paper_root_id(db, paper_id, strict=False)
         row = db.execute(
             "SELECT status, rating, reading_status, title, authors, year, journal "
             "FROM papers WHERE id = ?",

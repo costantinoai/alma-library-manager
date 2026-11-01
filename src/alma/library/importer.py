@@ -1765,7 +1765,7 @@ def _import_or_stage_paper(
     ``skipped`` (already saved Library row).
     """
     component_type, parent_paper_id = resolve_component(
-        conn, doi=doi, work_type=work_type
+        conn, doi=doi, work_type=work_type, title=title
     )
     existing_id = find_existing_paper(conn, doi, openalex_id, title, year)
     if component_type:
@@ -1957,6 +1957,7 @@ def settle_imported_paper_groups(conn: sqlite3.Connection, paper_ids: list[str])
                 parent_paper_id=parent_paper_id,
                 doi=row["doi"],
                 reason="import_enrichment",
+                is_new=True,
             )
             settled += 1
             components += int(component_type is not None)
