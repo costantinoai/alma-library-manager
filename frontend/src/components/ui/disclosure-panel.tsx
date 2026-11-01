@@ -2,6 +2,7 @@ import { forwardRef, useState, type ComponentType, type ReactNode } from 'react'
 
 import { usePageTheme } from '@/components/ui/page-theme-context'
 import { Surface } from '@/components/ui/surface'
+import { useSurfaceLevel } from '@/components/ui/surface-level'
 import { cn } from '@/lib/utils'
 
 export interface DisclosurePanelProps {
@@ -79,12 +80,15 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
     const [internalOpen, setInternalOpen] = useState(defaultOpen)
     const isOpen = open ?? internalOpen
     const danger = tone === 'danger'
+    const host = useSurfaceLevel()
 
     return (
       <Surface
         ref={ref}
         className={cn(
-          'overflow-hidden rounded-card shadow-paper-sm',
+          'overflow-hidden rounded-card',
+          // On the desk it is a sheet; inside a card it is a well, and casts nothing.
+          host === 0 && 'shadow-paper-sm',
           danger && 'border-critical-700/30 bg-state-critical',
           className,
         )}
