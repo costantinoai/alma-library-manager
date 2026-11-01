@@ -21,8 +21,6 @@ export const buttonVariants = cva(
           'bg-critical-600 text-on-fill shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
         success:
           'bg-success-600 text-on-fill shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
-        gold:
-          'bg-gold-400 text-alma-900 shadow-paper-sm hover:bg-gold-500 hover:text-alma-cream hover:shadow-paper-md',
         // Unfilled variants fill from the CONTROL INK ladder, never from the
         // paper ramps: an outline button on a cream card used to wear the
         // desk's own cream, and inside a near-white popover the same button

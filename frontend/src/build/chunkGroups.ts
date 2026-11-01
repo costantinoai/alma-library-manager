@@ -39,7 +39,7 @@ const GROUPS: ReadonlyArray<readonly [chunk: string, packages: readonly string[]
   ['vendor-query', ['@tanstack/react-query', '@tanstack/query-core']],
   [
     'vendor-ui',
-    ['@radix-ui', 'cmdk', 'lucide-react', 'next-themes', 'sonner', 'vaul'],
+    ['@radix-ui', 'cmdk', 'lucide-react', 'sonner', 'vaul'],
   ],
   ['vendor-forms', ['@hookform/resolvers', 'react-hook-form', 'zod']],
   ['vendor-dnd', ['@dnd-kit']],

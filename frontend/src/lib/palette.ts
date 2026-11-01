@@ -197,10 +197,11 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
     medallion: 'bg-violet-700/10',
     chip: HOME_SECTION_THEMES.reading.chip,
   },
+  // Neutral ink: Health is operations, and green on it would read as a verdict.
   health: {
-    icon: 'text-emerald-700',
-    medallion: 'bg-emerald-700/10',
-    chip: 'border-emerald-700/10 bg-emerald-700/10 text-emerald-800',
+    icon: 'text-alma-700',
+    medallion: 'bg-alma-700/10',
+    chip: 'border-alma-700/10 bg-alma-700/10 text-alma-800',
   },
   insights: {
     icon: 'text-sky-700',
