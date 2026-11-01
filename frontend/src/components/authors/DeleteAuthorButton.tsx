@@ -66,8 +66,7 @@ export function DeleteAuthorButton({
       {variant === 'icon' ? (
         <Button
           size="sm"
-          variant="ghost"
-          className="text-slate-400 hover:text-critical-700"
+          variant="danger-muted"
           disabled={disabled || mutation.isPending}
           title={`Delete ${authorName} from the corpus`}
           aria-label={`Delete ${authorName}`}
@@ -77,8 +76,7 @@ export function DeleteAuthorButton({
         </Button>
       ) : (
         <Button
-          variant="ghost"
-          className="text-slate-500 hover:text-critical-700"
+          variant="danger-muted"
           disabled={disabled || mutation.isPending}
           onClick={() => setConfirming(true)}
         >

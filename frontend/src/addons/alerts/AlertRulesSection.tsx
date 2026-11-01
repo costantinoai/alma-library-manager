@@ -63,6 +63,7 @@ import {
   type RuleFormValues,
   type RuleType,
 } from './ruleFormLogic'
+import { RowButton } from '@/components/ui/row-button'
 
 /** Sentinel for the "type an ID by hand" entry in the author Select —
  * Radix forbids empty-string item values. */
@@ -689,17 +690,16 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <RuleTypeBadge type={rule.rule_type} />
                       {orphanIds.has(rule.id) && (
-                        <button
-                          type="button"
+                        <RowButton
                           onClick={onGoToDigests}
                           title="Rules only run inside a digest. Click to open Digests and assign it."
-                          className="cursor-pointer"
+                          className="w-auto"
                         >
                           <Badge variant="warning">
                             <AlertCircle className="mr-1 h-3 w-3" />
                             Not in any digest
                           </Badge>
-                        </button>
+                        </RowButton>
                       )}
                     </div>
                     <p className="mt-1.5 text-sm text-slate-600">

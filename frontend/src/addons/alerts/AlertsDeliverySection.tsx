@@ -38,6 +38,7 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate } from '@/lib/utils'
 import { StatusBadge } from './AlertBadges'
+import { RowButton } from '@/components/ui/row-button'
 
 interface AlertsDeliverySectionProps {
   /** Open the History tab pre-filtered to one digest. */
@@ -418,22 +419,21 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                         <div className="mt-2 flex flex-wrap items-center gap-1">
                           <span className="text-xs text-slate-400">Rules:</span>
                           {alert.rules.map((rule) => (
-                            <button
+                            <RowButton
                               key={rule.id}
-                              type="button"
                               aria-label={`Unassign ${rule.name}`}
                               title="Click to unassign"
                               onClick={() =>
                                 unassignRuleMutation.mutate({ alertId: alert.id, ruleId: rule.id })
                               }
                               disabled={unassignRuleMutation.isPending}
-                              className="cursor-pointer"
+                              className="w-auto"
                             >
                               <Badge variant="default">
                                 {rule.name}
                                 <X className="ml-1 h-3 w-3" />
                               </Badge>
-                            </button>
+                            </RowButton>
                           ))}
                         </div>
                       )}
@@ -465,15 +465,14 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                           <span className="flex items-center gap-1.5 text-xs text-slate-400">
                             Last evaluated: {formatDate(alert.last_evaluated_at)}
                             {alert.last_outcome && (
-                              <button
-                                type="button"
+                              <RowButton
                                 onClick={() => onShowHistory?.(alert.id)}
                                 title="View this digest's history"
                                 aria-label={`View history for ${alert.name}`}
-                                className="cursor-pointer"
+                                className="w-auto"
                               >
                                 <StatusBadge status={alert.last_outcome} />
-                              </button>
+                              </RowButton>
                             )}
                           </span>
                         )}

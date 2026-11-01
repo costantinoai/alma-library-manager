@@ -192,23 +192,21 @@ export function RepairConfirmDialog({
                           {c.papers_estimate} paper{c.papers_estimate === 1 ? '' : 's'}
                         </span>
                         <Button
-                          variant="ghost"
+                          variant="success-quiet"
                           size="icon-sm"
                           aria-label={`Merge ${c.alt_name} into ${c.primary_name}`}
                           title="Merge this pair"
                           disabled={busy}
-                          className="text-success-700 hover:bg-success-700/10"
                           onClick={() => mergeMutation.mutate(c.id)}
                         >
                           <Check className="h-4 w-4" aria-hidden />
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="danger-quiet"
                           size="icon-sm"
                           aria-label={`Reject — ${c.primary_name} and ${c.alt_name} are not the same person`}
                           title="Not the same person — reject permanently"
                           disabled={busy}
-                          className="text-critical-700 hover:bg-critical-700/10"
                           onClick={() => rejectMutation.mutate(c.id)}
                         >
                           <X className="h-4 w-4" aria-hidden />

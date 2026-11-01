@@ -38,6 +38,8 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 import { PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'
+import { RowButton } from '@/components/ui/row-button'
+import { cn } from '@/lib/utils'
 
 export function TagsTab() {
   const [tuneOpen, setTuneOpen] = useState(false)
@@ -334,14 +336,10 @@ export function TagsTab() {
             ) : (
               <div className="max-h-64 space-y-2 overflow-y-auto">
                 {likes.map((like) => (
-                  <button
+                  <RowButton selected={assignPubKey === like.id}
                     key={like.id}
                     onClick={() => setAssignPubKey(like.id)}
-                    className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      assignPubKey === like.id
-                        ? 'border-alma-folio bg-accent-soft'
-                        : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet'
-                    }`}
+                    className={cn('gap-3 rounded-lg border px-3 py-2.5', assignPubKey === like.id ? 'border-alma-folio text-inherit' : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet')}
                   >
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">
@@ -353,7 +351,7 @@ export function TagsTab() {
                         <Star key={i} className="h-3 w-3 fill-warning-500 text-warning-500" />
                       ))}
                     </div>
-                  </button>
+                  </RowButton>
                 ))}
               </div>
             )}

@@ -28,6 +28,7 @@ import { WALKTHROUGHS_QUERY_KEY } from '@/components/onboarding'
 import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 /**
  * Settings page — two-column layout (sticky TOC + scroll-spy on the left,
@@ -246,18 +247,17 @@ export function SettingsPage() {
                       const active = activeAnchor === entry.id
                       return (
                         <li key={entry.id}>
-                          <button
-                            type="button"
+                          <RowButton
                             onClick={() => jumpTo(entry.id)}
                             className={cn(
-                              '-ml-[calc(0.5rem+1px)] flex w-full items-center rounded-r-md border-l-2 py-1 pl-3 pr-2 text-left text-sm transition-colors',
+                              '-ml-[calc(0.5rem+1px)] gap-0 rounded-r-md border-l-2 py-1 pl-3 pr-2 text-sm',
                               active
                                 ? 'border-alma-folio bg-accent-soft font-medium text-alma-folio'
                                 : 'border-transparent text-slate-600 hover:border-[var(--color-border)] hover:text-alma-800',
                             )}
                           >
                             {entry.label}
-                          </button>
+                          </RowButton>
                         </li>
                       )
                     })}

@@ -540,9 +540,9 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
                     </p>
                   </div>
                   <Button
-                    variant="ghost"
+                    variant="muted"
                     size="sm"
-                    className="shrink-0 text-slate-500"
+                    className="shrink-0"
                     onClick={() => removeDirectionMutation.mutate(direction.id)}
                     disabled={removeDirectionMutation.isPending}
                   >

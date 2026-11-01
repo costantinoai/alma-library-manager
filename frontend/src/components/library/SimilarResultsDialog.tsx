@@ -109,13 +109,12 @@ export function SimilarResultsDialog({
                         )}
                       </div>
                       {item.score_breakdown && (
-                        <button
-                          type="button"
+                        <Button variant="link-ink" size="inline"
                           onClick={() => setExpandedId(isExpanded ? null : itemKey)}
-                          className="mt-2 text-xs text-alma-600 hover:text-alma-800"
+                          className="mt-2 text-xs"
                         >
                           {isExpanded ? 'Hide details' : 'Why this paper?'}
-                        </button>
+                        </Button>
                       )}
                       {isExpanded && item.score_breakdown && (
                         <ScoreBreakdownPanel
@@ -136,14 +135,12 @@ export function SimilarResultsDialog({
                           <ExternalLink className="h-4 w-4" />
                         </a>
                       )}
-                      <button
-                        type="button"
+                      <Button variant="muted" size="icon-sm"
                         onClick={() => onLike(item)}
-                        className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-accent-soft hover:text-accent"
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>

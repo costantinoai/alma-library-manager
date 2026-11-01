@@ -20,6 +20,7 @@ import {
   SOURCE_TYPE_LABELS,
 } from '@/lib/signals'
 import { cn } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 /**
  * ScoreBreakdownPanel — THE explanation of a paper's score, on every surface.
@@ -120,8 +121,7 @@ function FamilyRow({
 
   return (
     <div>
-      <button
-        type="button"
+      <RowButton
         onClick={
           expandable
             ? (event) => {
@@ -136,7 +136,7 @@ function FamilyRow({
         disabled={!expandable}
         title={family.description}
         className={cn(
-          'flex w-full items-center gap-2 rounded-sm px-1.5 py-1 text-left',
+          'rounded-sm px-1.5 py-1',
           expandable && 'hover:bg-control-quiet-hover',
         )}
       >
@@ -179,7 +179,7 @@ function FamilyRow({
         <span className="w-9 shrink-0 text-right font-mono text-xs font-semibold tabular-nums text-slate-800">
           {points(family.points)}
         </span>
-      </button>
+      </RowButton>
       {open && (
         <div className="mb-1 ml-6 border-l border-edge-2 pl-3">
           {family.atoms.map((atom) => (
@@ -236,8 +236,7 @@ function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {
 
   return (
     <div>
-      <button
-        type="button"
+      <RowButton
         onClick={
           expandable
             ? (event) => {
@@ -252,7 +251,7 @@ function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {
         disabled={!expandable}
         title={adjustment.description}
         className={cn(
-          'flex w-full items-center gap-2 rounded-sm px-1.5 py-0.5 text-left text-xs',
+          'rounded-sm px-1.5 py-0.5 text-xs',
           expandable && 'hover:bg-control-quiet-hover',
         )}
       >
@@ -268,7 +267,7 @@ function AdjustmentRow({ adjustment }: { adjustment: ScoreAdjustment }) {
         <span className={cn('w-9 shrink-0 text-right font-mono font-semibold tabular-nums', tone)}>
           {signedPoints(adjustment.points)}
         </span>
-      </button>
+      </RowButton>
       {open && (
         <div className="mb-1 ml-6 border-l border-edge-2 pl-3">
           {atoms.map((atom) => (

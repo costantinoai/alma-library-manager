@@ -122,12 +122,12 @@ export function AddToCollectionMenu({
     >
       <PopoverTrigger asChild>
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           disabled={disabled}
           title="Save to Library and add to collections"
           aria-label={compact ? 'Collections' : undefined}
-          className="gap-1.5 rounded-sm border border-control-edge bg-control-well text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
+          className="gap-1.5"
           onClick={(e) => e.stopPropagation()}
         >
           <FolderPlus className="h-4 w-4" />

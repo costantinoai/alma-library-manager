@@ -19,6 +19,7 @@ import {
 } from '@/api/client'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 type Mode = 'id' | 'name'
 
@@ -243,28 +244,22 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       footer={<StepNav onBack={back} onSkip={next} skipLabel="I'll do this later" />}
     >
       <div className="space-y-5">
-        <div className="inline-flex rounded-sm border border-[var(--color-border)] bg-surface-2 p-1">
-          <button
-            type="button"
-            onClick={() => setMode('id')}
-            className={
-              'flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ' +
-              (mode === 'id' ? 'bg-alma-folio-soft text-alma-folio' : 'text-slate-500 hover:text-alma-800')
-            }
-          >
+        <ToggleGroup
+          type="single"
+          variant="segment"
+          value={mode}
+          onValueChange={(next) => {
+            if (next) setMode(next as typeof mode)
+          }}
+          className="inline-flex"
+        >
+          <ToggleGroupItem value="id" className="h-8 gap-1.5 px-3">
             <IdCard className="h-4 w-4" /> ORCID / OpenAlex
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('name')}
-            className={
-              'flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ' +
-              (mode === 'name' ? 'bg-alma-folio-soft text-alma-folio' : 'text-slate-500 hover:text-alma-800')
-            }
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="name" className="h-8 gap-1.5 px-3">
             <Search className="h-4 w-4" /> Search by name
-          </button>
-        </div>
+          </ToggleGroupItem>
+        </ToggleGroup>
 
         {mode === 'id' ? (
           <div className="space-y-3">

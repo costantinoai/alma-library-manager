@@ -745,9 +745,9 @@ export function AuthorDetailPanel({
                     <Button
                       key={value}
                       size="sm"
-                      // Selected filter = accent (the contract's one "active /
-                      // selected / on" colour); the rest are neutral outlines.
-                      variant={scope === value ? 'accent' : 'outline'}
+                      // Selected filter = accent (the one active or
+                      // selected colour); the rest are neutral outlines.
+                      variant={scope === value ? 'default' : 'outline'}
                       onClick={() => setScope(value)}
                       disabled={disabled}
                       title={disabled ? 'Not in your DB yet — follow first, or use OpenAlex' : undefined}
@@ -886,10 +886,9 @@ export function AuthorDetailPanel({
           <div className="ml-auto">
             <Button
               size="sm"
-              variant="ghost"
+              variant="danger-quiet"
               onClick={() => setConfirmingDelete(true)}
               disabled={deleteMutation.isPending}
-              className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

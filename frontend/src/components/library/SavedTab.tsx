@@ -74,6 +74,7 @@ import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
+import { RowButton } from '@/components/ui/row-button'
 
 type ViewMode = 'cards' | 'compact'
 type CompactSortKey =
@@ -694,8 +695,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           </Button>
           <Button
             size="sm"
-            variant="outline"
-            className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
+            variant="danger-quiet"
             onClick={() => setBulkDeleteOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -784,7 +784,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
               </p>
             ) : (
               collections.map((coll) => (
-                <button
+                <RowButton
                   key={coll.id}
                   onClick={() => {
                     if (addToCollectionKey) {
@@ -795,7 +795,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     }
                   }}
                   disabled={addToCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-sm border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div
                     className="h-3 w-3 rounded-full shrink-0"
@@ -808,7 +808,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     )}
                   </div>
                   <Badge variant="secondary">{coll.item_count} items</Badge>
-                </button>
+                </RowButton>
               ))
             )}
           </div>
@@ -834,18 +834,18 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
               </p>
             ) : (
               collections.map((coll) => (
-                <button
+                <RowButton
                   key={coll.id}
                   onClick={() => bulkCollectionMutation.mutate({ ids: Array.from(selectedKeys), collectionId: coll.id })}
                   disabled={bulkCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-sm border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: coll.color }} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-alma-800">{coll.name}</p>
                   </div>
                   <Badge variant="secondary">{coll.item_count} items</Badge>
-                </button>
+                </RowButton>
               ))
             )}
           </div>

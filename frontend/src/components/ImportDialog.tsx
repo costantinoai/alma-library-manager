@@ -46,6 +46,8 @@ import {
 } from '@/api/client'
 import { CollectionNameField } from '@/components/shared/CollectionNameField'
 import { describeJobLaunch } from '@/lib/activity'
+import { RowButton } from '@/components/ui/row-button'
+import { cn } from '@/lib/utils'
 
 type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -451,39 +453,31 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
             Zotero Collection (optional)
           </label>
           <div className="max-h-48 overflow-y-auto rounded-sm border border-[var(--color-border)]">
-            <button
+            <RowButton selected={selectedCollectionKey === null}
               onClick={() => {
                 setSelectedCollectionKey(null)
                 setPreflight(null)
               }}
-              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                selectedCollectionKey === null
-                  ? 'bg-accent-soft text-alma-folio'
-                  : 'text-slate-600 hover:bg-control-quiet'
-              }`}
+              className={cn('px-3 py-2 text-sm', selectedCollectionKey !== null && 'text-slate-600 hover:bg-control-quiet')}
             >
               <FolderOpen className="h-4 w-4" />
               All items
-            </button>
+            </RowButton>
             {collections.map((c) => (
-              <button
+              <RowButton selected={selectedCollectionKey === c.key}
                 key={c.key}
                 onClick={() => {
                   setSelectedCollectionKey(c.key)
                   setPreflight(null)
                 }}
-                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
-                  selectedCollectionKey === c.key
-                    ? 'bg-accent-soft text-alma-folio'
-                    : 'text-slate-600 hover:bg-control-quiet'
-                }`}
+                className={cn('justify-between gap-0 px-3 py-2 text-sm', selectedCollectionKey !== c.key && 'text-slate-600 hover:bg-control-quiet')}
               >
                 <span className="flex items-center gap-2">
                   <FolderOpen className="h-4 w-4" />
                   {c.name}
                 </span>
                 <Badge variant="secondary">{c.num_items}</Badge>
-              </button>
+              </RowButton>
             ))}
             {collections.length === 0 && (
               <p className="px-3 py-2 text-sm text-slate-400">No collections found</p>

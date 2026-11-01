@@ -33,6 +33,10 @@ export const buttonVariants = cva(
         muted: 'text-slate-500 hover:bg-control-quiet hover:text-slate-700',
         // The quiet way to say something destructive: a row's Remove, a Dismiss.
         'danger-quiet': 'text-critical-600 hover:bg-critical-700/10 hover:text-critical-700',
+        // Grey until you reach for it, so a list of rows is not a list of red.
+        'danger-muted': 'text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
+        'warning-quiet': 'text-warning-600 hover:bg-warning-700/12 hover:text-warning-800',
+        'success-quiet': 'text-success-700 hover:bg-success-700/10',
         link:
           'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-alma-folio-600',
         // A link inside running text or a status line, in ink.
@@ -45,7 +49,7 @@ export const buttonVariants = cva(
         lg: 'h-11 px-6 text-base gap-2.5',
         icon: 'size-9',
         'icon-sm': 'size-8',
-        'icon-xs': 'size-6',
+        'icon-xs': 'size-5',
         // No box: the button takes its size from the text around it.
         inline: 'h-auto gap-1 whitespace-normal p-0 text-[length:inherit]',
       },

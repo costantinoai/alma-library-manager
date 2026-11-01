@@ -40,6 +40,7 @@ import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttent
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 interface AuthorsNeedsAttentionSectionProps {
   rows: AuthorNeedsAttentionRow[]
@@ -200,13 +201,12 @@ function NeedsAttentionRow({
               <spec.icon className="h-3 w-3" aria-hidden />
               <span>{spec.label}</span>
             </StatusBadge>
-            <button
-              type="button"
-              className="truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
+            <RowButton
+              className="block w-auto truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
               onClick={onOpenAuthor}
             >
               {row.author_name}
-            </button>
+            </RowButton>
           </div>
           {row.updated_at ? (
             <p className="mt-1 text-[10px] text-slate-400">Last seen {formatTimestamp(row.updated_at)}</p>
@@ -639,8 +639,7 @@ export function AddIdentifierDialog({
               nagging, or remove them from the corpus altogether. */}
           <div className="flex items-center gap-1">
             <Button
-              variant="ghost"
-              className="text-slate-500 hover:text-slate-700"
+              variant="muted"
               onClick={() => acceptMutation.mutate()}
               disabled={busy}
             >

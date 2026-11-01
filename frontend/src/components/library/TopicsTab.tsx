@@ -30,6 +30,7 @@ import {
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { ConfirmDialog } from './ConfirmDialog'
+import { RowButton } from '@/components/ui/row-button'
 
 interface TopicsTabProps {
   /** Deep-link target (global search → `#/library?topic=<term>`): filter the
@@ -258,24 +259,22 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                 return (
                   <div key={domain.name} className="text-sm">
                     <div className="flex items-center gap-2 py-1">
-                      <button
+                      <RowButton
                         onClick={() => toggleDomain(domain.name)}
-                        className="flex items-center gap-1 hover:text-alma-600"
+                        className="w-auto gap-1 hover:text-alma-600"
                       >
                         {isDomainExpanded ? (
                           <ChevronDown className="h-4 w-4" />
                         ) : (
                           <ChevronRight className="h-4 w-4" />
                         )}
-                      </button>
-                      <button
+                      </RowButton>
+                      <RowButton
                         onClick={() => selectHierarchyNode(domain.name)}
-                        className={`flex-1 text-left font-medium hover:text-alma-600 ${
-                          hierarchyFilter === domain.name ? 'text-alma-700' : 'text-slate-800'
-                        }`}
+                        className={`block flex-1 font-medium hover:text-alma-600 ${hierarchyFilter === domain.name ? 'text-alma-700' : 'text-slate-800'}`}
                       >
                         {domain.name}
-                      </button>
+                      </RowButton>
                       <Badge variant="secondary" className="text-xs">
                         {domain.paper_count}
                       </Badge>
@@ -288,24 +287,22 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                           return (
                             <div key={fieldKey}>
                               <div className="flex items-center gap-2 py-0.5">
-                                <button
+                                <RowButton
                                   onClick={() => toggleField(fieldKey)}
-                                  className="flex items-center gap-1 hover:text-alma-600"
+                                  className="w-auto gap-1 hover:text-alma-600"
                                 >
                                   {isFieldExpanded ? (
                                     <ChevronDown className="h-3.5 w-3.5" />
                                   ) : (
                                     <ChevronRight className="h-3.5 w-3.5" />
                                   )}
-                                </button>
-                                <button
+                                </RowButton>
+                                <RowButton
                                   onClick={() => selectHierarchyNode(field.name)}
-                                  className={`flex-1 text-left hover:text-alma-600 ${
-                                    hierarchyFilter === field.name ? 'text-alma-700' : 'text-slate-700'
-                                  }`}
+                                  className={`block flex-1 hover:text-alma-600 ${hierarchyFilter === field.name ? 'text-alma-700' : 'text-slate-700'}`}
                                 >
                                   {field.name}
-                                </button>
+                                </RowButton>
                                 <Badge variant="outline" className="text-xs">
                                   {field.paper_count}
                                 </Badge>
@@ -314,14 +311,12 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                                 <div className="ml-6 space-y-0.5 border-l border-slate-100 pl-3">
                                   {field.subfields.map((subfield) => (
                                     <div key={subfield.name} className="flex items-center gap-2 py-0.5">
-                                      <button
+                                      <RowButton
                                         onClick={() => selectHierarchyNode(subfield.name)}
-                                        className={`flex-1 text-left text-xs hover:text-alma-600 ${
-                                          hierarchyFilter === subfield.name ? 'text-alma-700' : 'text-slate-600'
-                                        }`}
+                                        className={`block flex-1 text-xs hover:text-alma-600 ${hierarchyFilter === subfield.name ? 'text-alma-700' : 'text-slate-600'}`}
                                       >
                                         {subfield.name}
-                                      </button>
+                                      </RowButton>
                                       <Badge variant="outline" className="text-xs">
                                         {subfield.paper_count}
                                       </Badge>
@@ -388,14 +383,13 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                         topic.aliases.map((alias) => (
                           <Badge key={alias} variant="outline" className="text-xs pr-1">
                             <span>{alias}</span>
-                            <button
-                              type="button"
-                              className="ml-1 rounded-sm text-slate-500 hover:text-critical-600"
+                            <Button variant="danger-muted" size="inline"
+                              className="ml-1"
                               onClick={() => setDeleteAlias(alias)}
                               title="Delete alias"
                             >
                               <X className="h-3 w-3" />
-                            </button>
+                            </Button>
                           </Badge>
                         ))
                       )}

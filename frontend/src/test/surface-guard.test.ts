@@ -311,3 +311,68 @@ describe('layer-guard', () => {
     expect(scanLayers()).toEqual([])
   })
 })
+
+/* ───────────────────────────────────────
+ * button-guard — a pressable thing is a primitive.
+ *
+ * `BUTTON_OWNERS` may write a bare `<button>`: the primitives, and chrome that
+ * is a primitive in all but name. `GOING` names two grips that G3.2 and G5.1
+ * delete; drop them from the list when those stages land.
+ * ─────────────────────────────────────── */
+const BUTTON_OWNERS = new Set([
+  'components/ui/button.tsx',
+  'components/ui/row-button.tsx',
+  'components/ui/chip-button.tsx',
+  'components/ui/data-table/DataTable.tsx', // sortable header cell, and GOING
+  'components/discovery/LensManager.tsx', // GOING, reorder grip
+  'components/StarRating.tsx',
+  'components/library/ColorPicker.tsx',
+  'components/layout/Sidebar.tsx',
+  'components/settings/FeedMonitorTermsCard.tsx', // drag handle
+  'components/shared/EtaHint.tsx',
+  'components/shared/JargonHint.tsx',
+  'components/shared/PaperCard.tsx',
+  'components/shared/PaperTile.tsx',
+  'components/shared/StatusChip.tsx',
+  'components/shared/StatusRow.tsx',
+])
+
+/** A `Button` gets its colour, radius and shadow from `variant`, never by hand.
+ *  `PaperActionBar` is the one named exception: its tone map is the action
+ *  contract in CLAUDE.md, valence per verb. */
+const BUTTON_REPAINT_OWNERS = new Set(['components/discovery/PaperActionBar.tsx'])
+const BUTTON_TAG = /<(Button|AlertDialogAction|AlertDialogCancel)\b(?:[^>"'{]|"[^"]*"|'[^']*'|\{(?:[^{}]|\{[^{}]*\})*\})*>/g
+const BUTTON_PAINT =
+  /(?<![\w:-])(?:[a-z-]+:)*(?:text-(?:slate|alma|critical|warning|success|info|accent|gold)|bg-|border-(?!0\b)|rounded|shadow-)[\w/[\].-]*/
+
+function scanButtons(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    const source = readFileSync(file, 'utf8')
+    source.split('\n').forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line)) return
+      if (!BUTTON_OWNERS.has(rel) && /<button\b/.test(line)) hits.push(`${rel}:${i + 1}  <button>`)
+    })
+    // Filled accent is onboarding's alone: everywhere else, navy is the one fill.
+    if (!rel.startsWith('components/onboarding/') && !rel.startsWith('components/ui/')) {
+      for (const m of source.matchAll(/<Button\b[^>]*\bvariant=(?:"accent"|\{[^}]*'accent')/g)) {
+        hits.push(`${rel}:${source.slice(0, m.index).split('\n').length}  filled accent`)
+      }
+    }
+    if (BUTTON_REPAINT_OWNERS.has(rel)) continue
+    for (const m of source.matchAll(BUTTON_TAG)) {
+      const cls = /className=(?:"([^"]*)"|\{([\s\S]*)\})/.exec(m[0])
+      const paint = cls && BUTTON_PAINT.exec(cls[1] ?? cls[2])
+      if (paint) hits.push(`${rel}:${source.slice(0, m.index).split('\n').length}  ${paint[0]}`)
+    }
+  }
+  return hits
+}
+
+describe('button-guard', () => {
+  it('no bare <button> outside its owners, and no repainted Button', () => {
+    expect(scanButtons()).toEqual([])
+  })
+})

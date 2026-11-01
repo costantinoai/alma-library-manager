@@ -49,6 +49,7 @@ import {
 } from './healthFormat'
 import { DimensionStatusRow } from './DimensionStatusRow'
 import { RepairConfirmDialog } from './RepairConfirmDialog'
+import { Button } from '@/components/ui/button'
 
 interface RepairCardProps {
   op: MaintenanceOperation
@@ -324,13 +325,12 @@ export function RepairCard({
           {pausedUntil ? (
             <span className="inline-flex items-center gap-1 text-xs text-warning-700">
               Paused by you until {formatTimestamp(pausedUntil)}
-              <button
-                type="button"
-                className="rounded px-1.5 py-0.5 font-medium text-alma-folio-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
+              <Button variant="link-ink" size="inline"
+                className=""
                 onClick={() => onResume(op.key)}
               >
                 Resume
-              </button>
+              </Button>
             </span>
           ) : null}
           {/* H-11: config write in flight — the controls will snap to server

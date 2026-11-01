@@ -91,7 +91,8 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { Toggle } from '@/components/ui/toggle'
 
 // List view state — mirrors the Feed page so Discovery and Feed feel
 // like the same product. `relevance` keeps the lens's ranked order;
@@ -1398,25 +1399,20 @@ export function DiscoveryPage() {
         <ListControlBar
           leading={
             <>
-              <button
-                type="button"
-                onClick={() => setHideLibrary((v) => !v)}
-                aria-pressed={hideLibrary}
-                title={
+              <Toggle
+              size="chip"
+              pressed={hideLibrary}
+              onPressedChange={setHideLibrary}
+              title={
                   hideLibrary
                     ? 'Showing only papers you have not saved or queued'
                     : 'Hide papers already in your Library or reading list'
                 }
-                className={cn(
-                  'inline-flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs font-medium transition-colors',
-                  hideLibrary
-                    ? 'bg-accent-soft text-alma-folio'
-                    : 'text-slate-600 hover:bg-control-quiet-hover hover:text-alma-800',
-                )}
-              >
+              className="text-slate-600"
+            >
                 {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 Unsaved only
-              </button>
+              </Toggle>
               <div className="h-5 w-px bg-control-edge" aria-hidden />
             </>
           }

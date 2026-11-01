@@ -732,7 +732,6 @@ export function OnlineSearchTab({
             onClick={() => setShowFilters((s) => !s)}
             aria-expanded={showFilters}
             aria-controls="online-search-filters"
-            className={filtersActive ? 'text-alma-700' : ''}
           >
             <SlidersHorizontal className="size-3.5" />
             Filters{filtersActive ? ` · ${[yearMin, yearMax].filter(Boolean).join('–')}` : ''}
@@ -1044,7 +1043,7 @@ export function OnlineSearchTab({
                     Math.min(prev + PAGE_SIZE, sortedItems.length),
                   )
                 }
-                className="text-xs text-alma-700 hover:text-alma-800"
+                className="text-xs"
               >
                 + {Math.min(PAGE_SIZE, sortedItems.length - visibleCount)} more
               </Button>

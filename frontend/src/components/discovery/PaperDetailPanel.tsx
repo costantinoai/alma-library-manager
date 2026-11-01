@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { RowButton } from '@/components/ui/row-button'
 import { Card } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -346,9 +347,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <Button
                     type="button"
                     size="icon-sm"
-                    variant="ghost"
+                    variant="muted"
                     aria-label="More actions"
-                    className="shrink-0 text-slate-500 hover:text-alma-700"
+                    className="shrink-0"
                   >
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
@@ -638,9 +639,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                                   <span className="min-w-0 truncate text-slate-600">{label}</span>
                                 )}
                                 <Button
-                                  variant="ghost"
+                                  variant="muted"
                                   size="sm"
-                                  className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                                  className="h-6 shrink-0 px-1.5 text-caption"
                                   disabled={detachMutation.isPending}
                                   onClick={() => detachMutation.mutate(c.id)}
                                   title="This is not a part of this paper — make it a standalone paper"
@@ -697,9 +698,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                           </span>
                         </span>
                         <Button
-                          variant="ghost"
+                          variant="muted"
                           size="sm"
-                          className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                          className="h-6 shrink-0 px-1.5 text-caption"
                           disabled={detachMutation.isPending}
                           onClick={() => detachMutation.mutate(pre.id)}
                           title="This is a different paper, not a duplicate — split it back out as its own item"
@@ -959,10 +960,7 @@ function RelatedWorksSection({
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className="group/rel flex h-auto w-full items-center justify-between gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left font-normal shadow-none hover:border-control-edge-strong hover:bg-control-quiet"
+        <RowButton className="group/rel justify-between rounded-sm border border-control-edge bg-control-well px-3 py-2 hover:border-control-edge-strong hover:bg-control-quiet"
         >
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -985,7 +983,7 @@ function RelatedWorksSection({
               open && 'rotate-180',
             )}
           />
-        </Button>
+        </RowButton>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2 space-y-2">
         {isLoading ? (

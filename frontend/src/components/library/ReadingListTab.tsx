@@ -273,8 +273,7 @@ export function ReadingListTab() {
                         )}
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="text-slate-500 hover:text-slate-700"
+                          variant="muted"
                           onClick={() => updateReadingMutation.mutate({ paperId: paper.id, nextStatus: null, previous: paper.reading_status ?? null })}
                           disabled={updateReadingMutation.isPending}
                         >

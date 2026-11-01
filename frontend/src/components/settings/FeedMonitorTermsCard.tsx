@@ -54,6 +54,7 @@ import { describeJobLaunch } from '@/lib/activity'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn, formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 type FeedMonitorCreateType = 'query' | 'topic' | 'venue'
 
@@ -399,7 +400,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
           {draggable && (
             <button
               type="button"
-              className="mt-0.5 shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+              className="mt-0.5 shrink-0 cursor-grab text-slate-300 hover:text-slate-500 focus-ring active:cursor-grabbing"
               aria-label={`Reorder ${config.query || monitor.label}`}
               {...attributes}
               {...listeners}
@@ -661,14 +662,13 @@ export function FeedMonitorTermsCard() {
                   <span className="shrink-0 text-xs tabular-nums text-slate-500">
                     {selectedVenue.works_count.toLocaleString()} works
                   </span>
-                  <button
-                    type="button"
+                  <Button variant="muted" size="inline"
                     onClick={() => setSelectedVenue(null)}
-                    className="shrink-0 text-slate-400 hover:text-slate-600"
+                    className="shrink-0"
                     aria-label="Clear selected journal"
                   >
                     <X className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <VenueAutocomplete onSelect={setSelectedVenue} disabled={createMutation.isPending} />

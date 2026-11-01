@@ -4,6 +4,7 @@ import { BookOpen, Loader2 } from 'lucide-react'
 
 import { venueSearch, type VenueSearchResult } from '@/api/client'
 import { Input } from '@/components/ui/input'
+import { RowButton } from '@/components/ui/row-button'
 
 function formatWorks(value: number): string {
   if (!value) return '—'
@@ -75,23 +76,22 @@ export function VenueAutocomplete({ onSelect, placeholder, disabled, autoFocus }
             <div className="px-3 py-2 text-xs text-slate-400">No journals matched “{debounced}”.</div>
           )}
           {results.map((venue) => (
-            <button
+            <RowButton
               key={venue.source_id}
-              type="button"
               onClick={() => {
                 onSelect(venue)
                 setQuery('')
                 setDebounced('')
                 setOpen(false)
               }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 transition-colors hover:bg-accent-soft hover:text-alma-folio"
+              className="px-3 py-2 text-sm text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
             >
               <BookOpen className="h-3.5 w-3.5 shrink-0 text-alma-folio" aria-hidden />
               <span className="min-w-0 flex-1 truncate font-medium">{venue.display_name}</span>
               <span className="shrink-0 text-xs tabular-nums text-slate-400">
                 {formatWorks(venue.works_count)}
               </span>
-            </button>
+            </RowButton>
           ))}
         </div>
       )}

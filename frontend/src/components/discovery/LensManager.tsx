@@ -37,6 +37,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 interface LensManagerProps {
   lenses: Lens[]
@@ -106,11 +107,10 @@ function SortableLensChip({
           <GripVertical className="h-3.5 w-3.5" />
         </button>
       )}
-      <button
-        type="button"
+      <RowButton
         onClick={onSelect}
         className={cn(
-          'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium',
+          'w-auto gap-1.5 px-3 py-1.5 text-sm font-medium',
           isActive ? 'text-alma-folio' : 'text-alma-800',
         )}
         aria-pressed={isActive}
@@ -122,12 +122,11 @@ function SortableLensChip({
       >
         {isActive && <Check className="h-3.5 w-3.5" aria-hidden />}
         {lens.name}
-      </button>
-      <button
-        type="button"
+      </RowButton>
+      <RowButton
         onClick={onDelete}
         className={cn(
-          'inline-flex items-center justify-center border-l px-2 transition-colors',
+          'w-auto justify-center border-l px-2',
           isActive
             ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-700/10 hover:text-critical-700'
             : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
@@ -136,7 +135,7 @@ function SortableLensChip({
         title={`Delete ${lens.name}`}
       >
         <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      </RowButton>
     </div>
   )
 }

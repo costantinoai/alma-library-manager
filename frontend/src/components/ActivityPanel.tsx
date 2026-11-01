@@ -31,6 +31,8 @@ import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { SCRIM } from '@/components/ui/scrim'
 import { api } from '@/api/client'
+import { RowButton } from '@/components/ui/row-button'
+import { Button } from '@/components/ui/button'
 
 // ── Types ──
 
@@ -425,21 +427,19 @@ function OperationsView({
     const duration = terminal ? formatDuration(op.started_at, op.finished_at) : null
 
     return (
-      <button
+      <RowButton
         key={op.job_id}
-        type="button"
         onClick={() => onSelect(op.job_id)}
         className={cn(
-          'flex w-full min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
+          'min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 hover:bg-surface-cool-2',
           statusAccent(runDisplayStatus(op.status, op.result?.batch)),
           isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
         )}
       >
         {isExpandableParent ? (
-          <button
-            type="button"
-            className="mt-0.5 rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
+          <Button variant="muted" size="icon-xs"
+            className="mt-0.5"
             onClick={(e) => {
               e.stopPropagation()
               setExpandedParents((prev) => ({
@@ -450,7 +450,7 @@ function OperationsView({
             title={isExpanded ? 'Collapse subtasks' : 'Expand subtasks'}
           >
             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          </button>
+          </Button>
         ) : (
           <span className={cn('mt-1 w-4 shrink-0', isChild && 'w-2')} />
         )}
@@ -486,9 +486,7 @@ function OperationsView({
                   "cancelling", the graceful button disables; the hard X stays
                   live as an escalation. */}
               {terminal ? (
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
+                <Button variant="muted" size="icon-xs"
                   title="Dismiss operation"
                   aria-label="Dismiss operation"
                   onClick={(e) => {
@@ -497,12 +495,10 @@ function OperationsView({
                   }}
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-warning-600 hover:bg-warning-700/12 hover:text-warning-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  <Button variant="warning-quiet" size="icon-xs"
                     title={
                       op.status === 'cancelling'
                         ? 'Stopping — finishing current batch'
@@ -516,10 +512,8 @@ function OperationsView({
                     }}
                   >
                     <Square className="h-3.5 w-3.5" strokeWidth={2.5} />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-critical-500 hover:bg-critical-700/10 hover:text-critical-700"
+                  </Button>
+                  <Button variant="danger-quiet" size="icon-xs"
                     title="Kill now (interrupts worker thread; in-flight batch may be lost)"
                     aria-label="Kill operation"
                     onClick={(e) => {
@@ -528,7 +522,7 @@ function OperationsView({
                     }}
                   >
                     <X className="h-3.5 w-3.5" strokeWidth={2.5} />
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
@@ -608,7 +602,7 @@ function OperationsView({
             <p className="text-[11px] text-slate-400">Started {formatTimestamp(op.started_at)}</p>
           )}
         </div>
-      </button>
+      </RowButton>
     )
   }
 
@@ -644,10 +638,9 @@ function OperationsView({
           operations the user actually started. */}
       {backgroundParents.length > 0 && (
         <div className="bg-surface-cool-1">
-          <button
-            type="button"
+          <RowButton
             onClick={() => setShowBackground((v) => !v)}
-            className="flex w-full min-w-0 items-center gap-2 px-4 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-surface-cool-2 hover:text-slate-600"
+            className="min-w-0 px-4 py-2 text-xs font-medium text-slate-400 hover:bg-surface-cool-2 hover:text-slate-600"
             title={showBackground ? 'Hide background activity' : 'Show background activity'}
           >
             {showBackground ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -656,7 +649,7 @@ function OperationsView({
               {backgroundParents.length}
             </span>
             <span className="ml-1 min-w-0 truncate font-normal text-slate-400">cache &amp; maintenance — runs on its own</span>
-          </button>
+          </RowButton>
           {showBackground && (
             <div className="divide-y divide-slate-100 opacity-60">
               {backgroundParents.map(renderParentBlock)}
@@ -1391,9 +1384,9 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             visually detaching it from the warm cream/parchment reading
             surfaces. The dev/utility tone reads as a separate "console"
             inside the same shell. */}
-        <button
+        <RowButton
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-sm hover:bg-surface-cool-1"
+          className="justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-sm hover:bg-surface-cool-1"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />
@@ -1409,7 +1402,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
           ) : (
             <ChevronUp className="h-4 w-4 text-slate-400" />
           )}
-        </button>
+        </RowButton>
 
         {/* Expanded panel.
             On mobile we cap at 75vh so the bottom bar + drawer never clip the page's

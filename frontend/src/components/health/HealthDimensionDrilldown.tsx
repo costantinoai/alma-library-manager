@@ -452,7 +452,6 @@ export function HealthDimensionDrilldown({
                             <Button
                               size="sm"
                               variant="outline"
-                              className="border-control-edge text-alma-700 hover:bg-control-quiet"
                               onClick={() => {
                                 setEditingId(item.paper_id)
                                 setDraft(editField === 'authors' ? (item.authors ?? '') : '')

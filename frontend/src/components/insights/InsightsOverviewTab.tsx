@@ -50,7 +50,9 @@ import { CHART_FRAME, COLORS } from '@/components/insights/chartTheme'
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { Meter } from '@/components/ui/meter'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
-import { cn, formatNumber, truncate } from '@/lib/utils'
+import { formatNumber, truncate } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 interface Palette {
   blue: string
@@ -326,23 +328,21 @@ export function InsightsOverviewTab({
             accent="text-alma-folio"
             title="Provenance"
             action={
-              <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
+              <ToggleGroup
+                type="single"
+                variant="segment"
+                size="chip"
+                value={provenanceMode}
+                onValueChange={(mode) => {
+                  if (mode) setProvenanceMode(mode as typeof provenanceMode)
+                }}
+              >
                 {(['countries', 'institutions'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setProvenanceMode(mode)}
-                    className={cn(
-                      'px-2 py-1 text-xs font-medium capitalize transition-colors',
-                      provenanceMode === mode
-                        ? 'bg-accent-soft text-alma-folio'
-                        : 'bg-control-well text-slate-600 hover:bg-control-quiet',
-                    )}
-                  >
+                  <ToggleGroupItem key={mode} value={mode} className="capitalize">
                     {mode}
-                  </button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             }
           />
           <CardContent>
@@ -472,12 +472,11 @@ export function InsightsOverviewTab({
                   const followed = venueFollow.isVenueFollowed(j.journal)
                   return (
                     <li key={j.journal} className="group relative">
-                      <button
-                        type="button"
+                      <RowButton
                         onClick={() =>
                           openDrilldown('journal', j.journal, `Papers in journal: ${j.journal}`)
                         }
-                        className="flex w-full items-center gap-3 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-control-quiet"
+                        className="gap-3 rounded-sm px-2 py-1.5 hover:bg-control-quiet"
                       >
                         <span className="min-w-0 flex-1">
                           <span className="flex items-baseline justify-between gap-2">
@@ -521,7 +520,7 @@ export function InsightsOverviewTab({
                             </StatusBadge>
                           )
                         )}
-                      </button>
+                      </RowButton>
                     </li>
                   )
                 })}

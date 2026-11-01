@@ -27,6 +27,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { RowButton } from '@/components/ui/row-button'
 
 type MergeFieldKey =
   | 'name'
@@ -321,9 +322,8 @@ export function AuthorMergeDialog({
                 mergeCandidates.map((candidate) => {
                   const isSelected = candidate.id === mergeTargetId
                   return (
-                    <button
+                    <RowButton
                       key={candidate.id}
-                      type="button"
                       onClick={() => {
                         setMergeTargetId(candidate.id)
                         // Recompute defaults survivor-vs-absorbed for the new pick.
@@ -331,7 +331,7 @@ export function AuthorMergeDialog({
                         const a = absorbMode ? fixed : candidate
                         if (p && a) setMergeChoices(defaultMergeChoices(p, a))
                       }}
-                      className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
+                      className={`block rounded-sm border p-3 shadow-paper-sm ${
                         isSelected
                           ? 'border-accent bg-accent-soft'
                           : 'border-control-edge bg-control-well hover:border-control-edge-strong'
@@ -350,7 +350,7 @@ export function AuthorMergeDialog({
                       <p className="mt-1 line-clamp-1 text-xs text-slate-500">
                         {candidate.affiliation || candidate.openalex_id || 'No affiliation on record'}
                       </p>
-                    </button>
+                    </RowButton>
                   )
                 })
               )}

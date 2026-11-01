@@ -118,13 +118,11 @@ function TierHint({ items }: { items: string[] }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center text-slate-400 transition-colors hover:text-slate-600"
+        <Button variant="muted" size="inline"
           aria-label="What does this enable?"
         >
           <Info className="h-3 w-3" />
-        </button>
+        </Button>
       </TooltipTrigger>
       <TooltipContent side="top" tone="paper" className="max-w-xs p-2.5">
         <p className="mb-1 text-xs font-semibold text-slate-700">Enables:</p>
@@ -726,13 +724,11 @@ export function AIConfigCard() {
                   <AlertDescription className="text-xs">
                     Missing S2 vectors, unresolved identity, and uncomputed embeddings are repaired
                     from{' '}
-                    <button
-                      type="button"
+                    <Button variant="link-ink" size="inline"
                       onClick={() => navigateTo('health', { tab: 'repairs' })}
-                      className="font-medium text-alma-700 underline-offset-2 hover:underline"
                     >
                       Health → Repairs
-                    </button>
+                    </Button>
                     , where each repair shows an ETA and a daily cap. This card only configures the
                     provider and shows read-only coverage.
                   </AlertDescription>

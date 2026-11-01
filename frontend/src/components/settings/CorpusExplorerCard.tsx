@@ -498,12 +498,12 @@ function CorpusExplorerBody() {
               ) : null}
               <Button
                 type="button"
-                variant="ghost"
+                variant="danger-muted"
                 onClick={(e) => {
                   e.stopPropagation()
                   setRemoveTarget(p)
                 }}
-                className="inline-flex h-auto rounded-sm p-1 text-slate-400 shadow-none hover:bg-critical-700/10 hover:text-critical-700"
+                className="h-auto p-1"
                 aria-label="Remove paper (soft delete)"
                 title="Remove paper (status → removed, row stays in DB)"
               >

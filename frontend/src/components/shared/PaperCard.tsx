@@ -18,6 +18,7 @@ import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
+import { Button } from '@/components/ui/button'
 
 /** The card header's small round icon controls (PDF link, Discover similar).
  *  Local PDF access is independent of fetch plugins. */
@@ -523,7 +524,7 @@ export function PaperCard({
                       {canFollowAuthors && !isFollowed && (
                         <button
                           type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-control-edge-strong hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-control-edge-strong focus-ring hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
@@ -667,22 +668,21 @@ export function PaperCard({
                 {(hasBreakdown || hasExplanation) && (
                   <HoverCard openDelay={200} closeDelay={100}>
                     <HoverCardTrigger asChild>
-                      <button
-                        type="button"
+                      <Button variant="muted" size="inline"
                         onClick={(e) => {
                           e.stopPropagation()
                           const next = !showBreakdown
                           setShowBreakdown(next)
                           if (next && onExpandBreakdown) onExpandBreakdown()
                         }}
-                        className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-control-quiet hover:text-slate-600"
+                        className="gap-0.5 px-1.5 py-0.5 text-caption"
                         title="Show score breakdown"
                       >
                         Why
                         <ChevronDown
                           className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
                         />
-                      </button>
+                      </Button>
                     </HoverCardTrigger>
                     <HoverCardContent
                       side="top"
@@ -724,16 +724,15 @@ export function PaperCard({
             )}
 
             {!suppressSummaries && !showAbstractByDefault && paper.abstract && (
-              <button
-                type="button"
+              <Button variant="muted" size="inline"
                 onClick={(e) => { e.stopPropagation(); handleAbstractToggle() }}
-                className="mt-1.5 inline-flex items-center gap-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:text-slate-600"
+                className="mt-1.5 gap-0.5 text-caption"
               >
                 Abstract
                 <ChevronDown
                   className={`h-3 w-3 transition-transform duration-200 ${showAbstract ? 'rotate-180' : ''}`}
                 />
-              </button>
+              </Button>
             )}
             {!suppressSummaries && ((showAbstractByDefault || showAbstract) && paper.abstract) && (
               <div className="mt-1.5 rounded-md border border-slate-100 bg-surface-1 px-3 py-2 text-xs leading-relaxed text-slate-600">

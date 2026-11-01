@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { ArrowDownWideNarrow, type LucideIcon } from 'lucide-react'
 
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Button } from '@/components/ui/button'
 
 export interface ListViewOption {
   value: string
@@ -93,16 +94,15 @@ export function ListControlBar({
       {'options' in sort ? (
         <SegmentedChoice segment={sort} />
       ) : (
-        <button
-          type="button"
+        <Button variant="outline" size="xs"
           onClick={sort.onToggle}
           title={sort.title}
           aria-label={sort.ariaLabel}
-          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-3 text-xs font-medium text-alma-800 transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+          className="gap-1.5 px-3"
         >
           <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
           {sort.label}
-        </button>
+        </Button>
       )}
 
       {/* Right cluster: counter with inline select-all, then view mode. */}
@@ -113,13 +113,12 @@ export function ListControlBar({
           {selectAll?.show && (
             <>
               <span className="text-slate-300" aria-hidden>·</span>
-              <button
-                type="button"
+              <Button variant="link-ink" size="inline"
                 onClick={selectAll.onToggle}
-                className="text-alma-700 underline-offset-2 transition-colors hover:text-alma-800 hover:underline"
+                className=""
               >
                 {selectAll.allSelected ? 'Clear selection' : 'Select all'}
-              </button>
+              </Button>
             </>
           )}
         </div>

@@ -248,8 +248,8 @@ export function SuggestedAuthorCard({
         </Button>
         <Button
           size="sm"
-          variant="ghost"
-          className="shrink-0 text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
+          variant="danger-quiet"
+          className="shrink-0"
           onClick={(e) => {
             e.stopPropagation()
             if (!alreadyFollowed) onReject()

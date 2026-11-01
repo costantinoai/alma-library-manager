@@ -81,13 +81,13 @@ export function OnboardingShell({
                 {onClose ? (
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="muted"
                     size="icon-sm"
                     onClick={onClose}
                     disabled={closeDisabled}
                     aria-label="Close onboarding"
                     title="Close onboarding"
-                    className="shrink-0 text-slate-500 hover:text-alma-900"
+                    className="shrink-0"
                   >
                     <X className="h-4 w-4" aria-hidden />
                   </Button>

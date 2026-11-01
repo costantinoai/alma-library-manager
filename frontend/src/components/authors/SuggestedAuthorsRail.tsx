@@ -507,7 +507,7 @@ export function SuggestedAuthorsRail({
             size="sm"
             variant="ghost"
             onClick={() => setExpanded((v) => !v)}
-            className="text-xs text-alma-700 hover:text-alma-800"
+            className="text-xs"
           >
             {expanded ? (
               <>
@@ -566,7 +566,7 @@ export function SuggestedAuthorsRail({
                       size="sm"
                       variant="outline"
                       disabled={busy || !s.openalex_id}
-                      className="h-7 gap-1 border-control-edge text-alma-700 hover:bg-control-quiet"
+                      className="h-7 gap-1"
                       onClick={() => mergeMutation.mutate(s)}
                     >
                       <GitMerge className="h-3.5 w-3.5" aria-hidden />
@@ -574,10 +574,10 @@ export function SuggestedAuthorsRail({
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="muted"
                       title="Different person — show as a new author to follow"
                       disabled={busy}
-                      className="h-7 gap-1 text-slate-600 hover:bg-control-quiet"
+                      className="h-7 gap-1"
                       onClick={() => notDuplicateMutation.mutate(s)}
                     >
                       <X className="h-3.5 w-3.5" aria-hidden />

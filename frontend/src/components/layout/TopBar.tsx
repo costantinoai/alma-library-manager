@@ -45,13 +45,13 @@ export function TopBar({
   return (
     <header className="sticky top-0 z-chrome flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
       <div className="flex items-center gap-4">
-        <button
+        <Button variant="ghost" size="icon"
           onClick={onMenuClick}
-          className="rounded-sm p-2 text-alma-700 hover:bg-control-quiet hover:text-alma-900 lg:hidden"
+          className="lg:hidden"
           aria-label="Open navigation"
         >
           <Menu className="h-5 w-5" />
-        </button>
+        </Button>
         {/* Page title with editorial gold rule + diamond underline,
             mirroring the wordmark's separator pattern. Width-capped to
             the title text via inline-block so the rule reads as
@@ -66,10 +66,9 @@ export function TopBar({
 
       <div className="flex items-center gap-2">
         {onOpenCommandPalette && (
-          <button
-            type="button"
+          <Button variant="outline" size="sm"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-900 focus-ring sm:flex"
+            className="hidden px-2.5 sm:flex"
             aria-label="Open command palette"
             title="Open command palette"
           >
@@ -78,7 +77,7 @@ export function TopBar({
             <kbd className="ml-1 rounded border border-[var(--color-border)] bg-surface-2 px-1.5 font-sans text-[10px] font-medium text-alma-700">
               {shortcutKey}
             </kbd>
-          </button>
+          </Button>
         )}
         {onRefresh && (
           <Button

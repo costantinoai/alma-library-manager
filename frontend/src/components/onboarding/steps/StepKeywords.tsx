@@ -13,6 +13,7 @@ import {
 import { toast, errorToast } from '@/hooks/useToast'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
+import { ChipButton } from '@/components/ui/chip-button'
 
 const EXAMPLES = [
   'universality AND representations',
@@ -127,14 +128,13 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Try an example</p>
           <div className="flex flex-wrap gap-2">
             {EXAMPLES.map((ex) => (
-              <button
+              <ChipButton
                 key={ex}
-                type="button"
                 onClick={() => setValue(ex)}
-                className="rounded-full border border-alma-800/10 bg-alma-800/[0.06] px-3 py-1 text-xs text-slate-700 transition-colors hover:border-alma-folio hover:text-alma-folio"
+                className="px-3 hover:border-alma-folio hover:text-alma-folio"
               >
                 {ex}
-              </button>
+              </ChipButton>
             ))}
           </div>
         </div>
@@ -161,14 +161,13 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
                 className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2"
               >
                 <code className="truncate text-sm text-alma-800">{m.query}</code>
-                <button
-                  type="button"
+                <Button variant="danger-muted" size="icon-xs"
                   onClick={() => remove(m)}
-                  className="shrink-0 rounded-sm p-1 text-slate-400 transition-colors hover:bg-control-quiet hover:text-critical-600"
+                  className="shrink-0"
                   aria-label={`Remove monitor ${m.query}`}
                 >
                   <X className="h-4 w-4" />
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

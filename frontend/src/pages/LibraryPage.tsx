@@ -34,6 +34,7 @@ import { type TabId, type TabDefinition } from '@/components/library/types'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Analytics is lazy — Library pays nothing for the charts/graph stack until
 // the tab is opened (task 47 Phase 4; absorbs the retired Insights page).
@@ -300,35 +301,30 @@ export function LibraryPage() {
           Segmented-chip strip (matches the Feed control-bar pattern) so
           the Library and Feed surfaces read as the same product.
       ─────────────────────────────────────────────────────────────────── */}
-      <div
-        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm bg-control-track p-1"
-        role="tablist"
-        aria-label="Library sections"
+      <Tabs
+        value={activeTab === 'analytics' || activeTab === 'imports' ? 'saved' : activeTab}
+        onValueChange={(value) => {
+          setActiveTab(value as typeof activeTab)
+          window.location.hash = buildHashRoute('library', { tab: value })
+        }}
       >
-        {TABS.map((tab) => {
-          const isActive = (activeTab === 'analytics' || activeTab === 'imports' ? 'saved' : activeTab) === tab.id
-          return (
-            <button
+        <TabsList
+          className="flex h-auto w-full justify-start gap-0.5 overflow-x-auto"
+          aria-label="Library sections"
+        >
+          {TABS.map((tab) => (
+            <TabsTrigger
               key={tab.id}
-              role="tab"
+              value={tab.id}
               data-tour={TAB_TOUR_ANCHOR[tab.id]}
-              aria-selected={isActive}
-              onClick={() => {
-                setActiveTab(tab.id)
-                window.location.hash = buildHashRoute('library', { tab: tab.id })
-              }}
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-surface-4 text-alma-800 shadow-paper-sm'
-                  : 'text-slate-600 hover:bg-control-quiet hover:text-alma-800'
-              }`}
+              className="group shrink-0 text-slate-600 hover:bg-control-quiet hover:text-alma-800 data-[state=active]:hover:bg-surface-4"
             >
-              <tab.icon className={`h-4 w-4 ${isActive ? 'text-alma-folio' : 'text-slate-400'}`} />
+              <tab.icon className="h-4 w-4 text-slate-400 group-data-[state=active]:text-alma-folio" />
               {tab.label}
-            </button>
-          )
-        })}
-      </div>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       {workflowQuery.isError && <ErrorState message="Library summary is unavailable." actionLabel="Retry" onAction={() => { void workflowQuery.refetch() }} />}
 
