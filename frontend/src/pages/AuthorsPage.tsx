@@ -367,7 +367,7 @@ export function AuthorsPage() {
             description="Follow a suggestion above or add an author by OpenAlex / ORCID."
           />
         ) : (
-          <RevealList className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <RevealList className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {followedAuthors.map((author, i) => (
               <RevealItem
                 key={author.id}

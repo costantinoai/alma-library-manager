@@ -355,8 +355,8 @@ export function LibraryManagementCard() {
                   Destructive actions here are queued in Activity so you can track the job, but they
                   rewrite the database in place. Take a fresh backup first if you're not sure.
                 </p>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Reset all feedback learning.</span> Wipes feedback events,
                     lens weights, author dismissals, author centroids, suggestion cache, and
                     recommendation actions. Library, followed authors, lenses, and corpus stay.
@@ -379,8 +379,8 @@ export function LibraryManagementCard() {
                     onConfirm={() => resetFeedbackLearningMutation.mutate()}
                   />
                 </div>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Delete saved embeddings.</span> Wipes cached
                     paper vectors, author centroids, and per-paper vector fetch markers only.
                     Papers, Library state, feedback, tags, collections, monitors, and sources stay.
@@ -403,8 +403,8 @@ export function LibraryManagementCard() {
                     onConfirm={() => resetEmbeddingsMutation.mutate()}
                   />
                 </div>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Reset publications database.</span> Deletes every
                     paper, author, and feed item. Saved collections, tags, and topics are kept.
                     Backups are not touched. Optional: also reset learned feedback in the same step.

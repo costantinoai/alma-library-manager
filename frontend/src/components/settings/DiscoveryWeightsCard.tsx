@@ -632,7 +632,7 @@ export function DiscoveryWeightsCard() {
             <p className="text-sm text-slate-500">
               Discovery settings affect Discovery refresh and Feed monitor intake.
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <AsyncButton
                 type="button"
                 variant="outline"

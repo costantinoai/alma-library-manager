@@ -349,7 +349,7 @@ export function SettingsPage() {
           {/* -- Intelligence -- */}
           <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. Each card has its own Save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
-            <Anchor id="feed-monitors"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
+            <Anchor id="feed-monitors"><Button variant="outline" className="h-auto whitespace-normal py-2" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
             <Anchor id="feed-auto-refresh"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Set the Feed refresh schedule</Button></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
           </SettingsSection>
