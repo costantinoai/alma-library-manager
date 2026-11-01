@@ -181,9 +181,9 @@ Concretely:
   in **both** the Inbox and the Journals tab (one `feed_items` row per
   monitor). They *coexist* as views.
 * Any action settles **every** `feed_items` row for that paper together
-  (`apply_feed_action` writes `WHERE paper_id = ?`). **Save / Like / Love**
-  add the shared paper to Library; **Dismiss** hides the paper from **both**
-  surfaces at once; **Dislike** down-weights it but keeps it visible. There is
+  (`apply_feed_action` writes `WHERE paper_id = ?`). **Save** adds the shared
+  paper to Library; **Like / Love** rate it where it stands; **Dismiss** hides
+  the paper from **both** surfaces at once; **Dislike** down-weights it but keeps it visible. There is
   no per-surface rating or per-surface dismiss.
 
 In short: journal items are not an independent stream with their own state —

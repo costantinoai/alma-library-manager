@@ -269,7 +269,7 @@ GET    /api/v1/alerts/templates             # one-click suggestions
 
 # Channel tests
 POST   /api/v1/plugins/slack/test           # returns JobEnvelope
-POST   /api/v1/plugins/email/test           # sends a test email (SMTP)
+POST   /api/v1/plugins/email/test           # logs in to the SMTP server, sends nothing
 ```
 
 For the request/response shapes see the [API reference](../reference/api.md).

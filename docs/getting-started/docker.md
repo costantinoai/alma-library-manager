@@ -157,7 +157,7 @@ They do **not** survive `docker volume rm alma-data` — that's the
 only command that wipes your library.
 
 If you ever want a copy on the host filesystem (for backup or
-inspection), use the **Settings → Library Management → Backup** button,
+inspection), use the **Settings → Library maintenance → Backup** button,
 which writes a gzipped SQLite file into the volume's `backups/`
 subdirectory, then [pull that snapshot out](#backups). To download a
 full copy instead, use `curl -o alma-backup.db

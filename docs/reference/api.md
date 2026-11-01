@@ -203,16 +203,11 @@ rest.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/discovery/refresh` | Refresh recs (Activity) |
 | `GET` | `/discovery/status` | Refresh status |
 | `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config; `GET` also serves `effective_weights` (what the ranker uses after rescaling + mode) and `reference_score` (the all-average paper's score) |
 | `GET` | `/discovery/outcome-evaluation` | Stored answer to "does the ranker's order predict what you kept?": `state` (`not_built` / `not_ready` / `ready`), AUC + 95% interval + verdict for kept-vs-rejected and kept-vs-random-corpus, `current` (false when weights / Library / calibration moved since), and `rebuilding`. Pure read; never computes |
 | `POST` | `/discovery/outcome-evaluation/refresh[?force=true]` | 202 + `job_id`; queues the background evaluation when its inputs moved (always with `force`). Also requested by a weights save / reset and by the periodic scoring tick |
-| `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
-| `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
-| `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |
-| `POST` | `/discovery/recommendations/{id}/dislike` | Rate 1 + negative signal; stays visible |
-| `POST` | `/discovery/recommendations/{id}/dismiss` | Hide this lens suggestion; no preference signal |
+| — | *(single-item actions)* | Use `POST /papers/{id}/action` with `surface=discovery`, `scope_ref=<recommendation id>`. |
 | `GET` | `/discovery/recommendations/{id}/explain` | Score breakdown |
 | `POST` | `/discovery/similar` | "Find papers like these" |
 | `POST` | `/discovery/manual-search` | Cross-source paper search |
@@ -253,6 +248,8 @@ rest.
 | `GET` | `/authors/{id}/not-same-person` | The authors this one was marked as different from |
 | `DELETE` | `/authors/{id}/not-same-person/{alt_id}` | Undo that verdict |
 | `DELETE` | `/authors/{id}/accept-unidentified` | Undo "can't identify": the identity gap is open again |
+| `GET` | `/authors/{id}/merges` | Merge history of this author |
+| `POST` | `/authors/merges/{merge_id}/undo` | Undo one merge |
 | `POST` | `/authors/{id}/discover-aliases` | Read-only ORCID lookup for additional OpenAlex profiles that may represent the same person |
 | `POST` | `/authors/conflicts/{id}/resolve` | Resolve a hard-identifier conflict recorded during merge |
 | `GET` | `/authors/lookup` | Look up by display name |
@@ -385,6 +382,8 @@ remaining steps rendered as children inside one envelope.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/papers/{id}/details` | Paper detail |
+| `POST` | `/papers/{id}/same-as` | Join two rows as one work, from the paper popup |
+| `DELETE` | `/papers/{id}/kept-separate/{other_id}` | Lift a split, so the two rows may merge again |
 | `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. `undo` takes `undo_aspect`: `membership`, `rating`, `reading`, `all`, `last` (reverse the newest action, what every toast's Undo sends) or `inbox` (undo of `defer`, no valence); with `surface=feed\|discovery` it reverses that row's Dismiss. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
@@ -412,7 +411,7 @@ canonical path, `POST /extension/save`.
 |---|---|---|
 | `GET` | `/extension/ping` | Handshake + instance identity (`{profile, db_fingerprint}`); pure read |
 | `POST` | `/extension/lookup` | Membership check + metadata preview (read-only) |
-| `POST` | `/extension/save` | Save the open paper (add/like/love → 3/4/5 stars) |
+| `POST` | `/extension/save` | `add` saves the open paper at 3 stars; `like` and `love` rate it 4 or 5 and save nothing. A connector older than contract 2 gets `400` on `like` and `love` |
 | `POST` | `/extension/undo` | Reverse a connector save |
 
 ## OpenAPI artefact

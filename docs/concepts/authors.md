@@ -160,10 +160,9 @@ the same person.
 | `s2_related` | Semantic Scholar's related-authors graph, same pattern. Independent second opinion to OpenAlex. |
 
 The first four buckets read your local data; the last two read
-from a cache (`author_suggestion_cache`) that's refreshed
-asynchronously by **Refresh network** (Authors → ⋯ → Refresh
-network buckets) so the rail never makes blocking external API
-calls.
+from a cache (`author_suggestion_cache`) that a scheduled job
+(`authors.suggestions_periodic`) refreshes when it is stale, so the
+rail never makes blocking external API calls.
 
 ### Seeding a suggestion's evidence
 
@@ -173,7 +172,7 @@ show everywhere at once: **"No sample title"** on the card, and no score. The sa
 titles are read from *your* corpus, so a blank card meant a missing
 paper, not missing metadata.
 
-**Refresh network** now also seeds them: for each suggestion under two
+That job also seeds them: for each suggestion under two
 local papers, ALMa fetches their most-cited **first-author** works —
 topped up by citations in any position if they don't have two, so a
 senior author who always publishes last still lands something — and
@@ -291,10 +290,10 @@ events accumulate.
 | **Like / Love / Dislike / remove a paper** | Projects a signed ranking signal to the paper's authors, topics, venue, keywords, and tags. Paper Dismiss changes visibility only. |
 | **Follow an author** | Removes them from suggestions; their followed status seeds the network buckets on next refresh and adds positive author-profile signal to Discovery ranking. |
 | **Dismiss / remove a suggested author** | (a) Suppresses that author for 250+ days. (b) Adds their topic / venue / coauthor / institution profile to the dismissal cluster — future similar candidates lose up to 30 points. (c) Adds negative author-profile signal to Discovery ranking. |
-| **Refresh network buckets** | Fetches fresh `openalex_related` and `s2_related` candidates from OpenAlex / S2 and writes them to the cache. The next rail visit reads them. |
+| **The scheduled refresh** | Fetches fresh `openalex_related` and `s2_related` candidates from OpenAlex / S2 and writes them to the cache. The next rail visit reads them. |
 
-Each bucket has its own weight in the final merge (configurable
-in **Settings → Discovery → Author suggestion weights**). By
+Each bucket has its own weight in the final merge, stored under
+`author_suggestion_weights.*` with no control in Settings. By
 default, `library_core` = 1.0, `cited_by_high_signal` = 0.9,
 `semantic_similar` = 0.8, `adjacent` = 0.7, `openalex_related` /
 `s2_related` = 0.9 each.

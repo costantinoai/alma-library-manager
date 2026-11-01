@@ -36,7 +36,7 @@ ALMa's canonical paper embedding is **SPECTER2** —
 reads from the `publication_embeddings` table; every write to that
 table is a SPECTER2 vector for a paper.
 
-Three provider modes exist in the Settings UI:
+Two provider modes exist in the Settings UI:
 
 | Provider | What it means | Best use |
 |---|---|---|

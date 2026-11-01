@@ -107,8 +107,8 @@ walkthrough shows again, once.
 
 ### Re-running it later
 
-You can replay the whole flow at any time from **Settings → First-run
-setup → Restart onboarding**. This marks the wizard and every page tour
+You can replay the whole flow at any time from **Settings → Data & system →
+First-run setup → Restart onboarding**. This marks the wizard and every page tour
 as requested (via `/onboarding/reset`), so they all show again.
 **Nothing is deleted** — your identity, follows, monitors, lens, and
 saved papers are all kept; it simply lets you revisit or adjust anything

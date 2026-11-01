@@ -139,7 +139,7 @@ exactly; any hand-tuned value is left alone.
 scores about a thousand papers, so no request computes it:
 
 * **Read** — `GET /discovery/outcome-evaluation` → `load_outcome_summary`, a
-  row read. Settings → Discovery prints it as one sentence above the sliders.
+  row read. Settings → Discovery weights prints it as one sentence above the sliders.
 * **Refresh** — `request_outcome_eval_refresh` is the one entry point, called
   by a weights save or reset, by the periodic scoring tick (after the
   calibration is settled: the evaluation reads the ranker through it) and by
@@ -244,7 +244,7 @@ ceiling and squeezed the median to 0.05. The curve is now
 `0.5 + 0.5 · log10(fwci) / 2`, so the field average sits at 0.5, two decades
 either side reach the ends, 1% saturate and the median lands at 0.30.
 
-Weights come from `discovery_settings.weights.*` (Settings → Discovery). One
+Weights come from `discovery_settings.weights.*` (Settings → Discovery weights). One
 slider, `weights.text_similarity`, drives two families — `semantic` takes 87%
 of it and `lexical` 13% (`TEXT_SIMILARITY_SEMANTIC_SHARE`, fitted with the
 weights) — which is why the defaults above are 0.444 / 0.066 for a slider set
@@ -500,7 +500,7 @@ accumulate.
 
 Three knobs change the balance:
 
-* **Per-family weights** — Settings → Discovery. The sliders are normalised to
+* **Per-family weights** — Settings → Discovery weights. The sliders are normalised to
   sum to 1, so halving `weights.text_similarity` from 0.51 to 0.25 drops the
   semantic + lexical families from 51% to about a third of the budget.
 * **Recommendation mode** — see above.
