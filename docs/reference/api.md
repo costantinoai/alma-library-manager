@@ -351,8 +351,6 @@ carry two grouping fields:
 The Activity panel groups all rows sharing a `chain_id` under the
 member with the lowest `chain_step` rank (the starter), with the
 remaining steps rendered as children inside one envelope.
-| `GET` | `/scheduler/status` | Scheduler health + next runs |
-| `POST` | `/scheduler/trigger/{job_id}` | Manually trigger a scheduled job |
 | `GET` | `/logs` | Application log ring buffer |
 
 ### Settings

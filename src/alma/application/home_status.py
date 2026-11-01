@@ -198,15 +198,9 @@ def scalar(db: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
 def _automation(db: sqlite3.Connection) -> dict[str, Any]:
     """The master switch. When it is off, every other pill is frozen and every
     number on the page is a historical record rather than today's state."""
-    from alma.api.scheduler import _scheduler, list_jobs
+    from alma.api.scheduler import _scheduler, _scheduler_enabled, list_jobs
 
-    try:
-        from alma.api.routes.scheduler import _scheduler_enabled
-
-        enabled = bool(_scheduler_enabled())
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Scheduler enablement unreadable: %s", exc)
-        enabled = True
+    enabled = _scheduler_enabled()
 
     running = bool(_scheduler is not None and getattr(_scheduler, "running", False))
     job_count = 0

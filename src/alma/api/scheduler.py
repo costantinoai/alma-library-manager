@@ -2664,31 +2664,6 @@ def list_jobs() -> list[dict]:
     return jobs
 
 
-def run_job(job_id: str) -> bool:
-    """Trigger a job to run immediately."""
-    sched = get_scheduler()
-    job = sched.get_job(job_id)
-    if not job:
-        return False
-    try:
-        sched.modify_job(job_id, next_run_time=datetime.now())
-        logger.info("Triggered job %s to run immediately", job_id)
-        return True
-    except Exception as exc:
-        logger.warning("Failed to run job %s immediately: %s", job_id, exc)
-        # Fallback: execute synchronously
-        try:
-            func = getattr(job, "func", None)
-            args = getattr(job, "args", ()) or ()
-            kwargs = getattr(job, "kwargs", {}) or {}
-            if callable(func):
-                func(*args, **kwargs)
-                logger.info("Executed job %s synchronously as fallback", job_id)
-                return True
-        except Exception as exc2:
-            logger.error("Fallback run failed for job %s: %s", job_id, exc2)
-        return False
-
 
 def get_job_status(job_id: str) -> dict | None:
     """Get the latest in-memory OR durable status dict for a job.

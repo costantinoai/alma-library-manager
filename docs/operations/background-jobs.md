@@ -275,8 +275,12 @@ Some jobs run on a schedule, not just on demand:
 | Feed refresh (per-monitor) | per-monitor interval | UI |
 | Inbox capture sweep | every 5 minutes | `INBOX_SWEEP_INTERVAL_MINUTES` |
 
-Scheduler health is at `GET /api/v1/scheduler/status` — shows next-run
-timestamps for each job and whether the scheduler is alive.
+Whether the scheduler is alive is the `scheduler` field of `GET /api/v1/health`
+(`running`, `disabled` or `failed`), and the Automation line on Home. Nothing
+lists next-run times, and there is no generic way to trigger a scheduled job:
+`/scheduler/trigger` is gone and nothing replaces it. To run work now, use the
+action that owns it: Refresh on Feed or a lens, a repair on the Health page, the
+compute and fetch buttons in Settings, or the route those buttons call.
 
 ### Scheduled network work: one admission gate
 
@@ -350,8 +354,8 @@ curl -X POST http://localhost:8000/api/v1/activity/f3b2a4e8-…/cancel
 # lift the cooldown a manual stop left on a maintenance task
 curl -X POST http://localhost:8000/api/v1/health/operations/title_resolution/resume
 
-# scheduler health
-curl http://localhost:8000/api/v1/scheduler
+# scheduler health: the `scheduler` field
+curl http://localhost:8000/api/v1/health
 ```
 
 The same data is in the UI **Activity panel** (Operations + Logs
