@@ -53,6 +53,10 @@ Consequences worth knowing:
   two verbs, composed deliberately.
 * **`defer` is not a verdict**, it is the absence of one — which is why the
   Inbox X button cannot reuse `dismiss`.
+* **"Added" is when you saved it.** Saving stamps `added_at`, replacing any
+  ingest date on the row. A paper already saved keeps its date through a
+  re-save, a Like or a repeat import; removing it and saving it again is a new
+  save. Rows saved before this rule keep the date they have.
 
 ## Reading axis
 

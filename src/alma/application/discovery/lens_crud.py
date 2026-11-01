@@ -349,10 +349,11 @@ def mark_recommendation_action(
             (paper_id, rec_id),
         )
     current_rating_row = db.execute(
-        "SELECT rating FROM papers WHERE id = ?",
+        "SELECT rating, added_at FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone() if paper_id else None
     current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
+    current_added_at = current_rating_row["added_at"] if current_rating_row else None
 
     effective_rating = current_rating
     feedback_action: str | None = None
@@ -477,6 +478,7 @@ def mark_recommendation_action(
                     "ranking_candidate_id": str(snapshot["id"]) if snapshot else "",
                 },
                 previous_rating=current_rating if feedback_action == "save" else None,
+                previous_added_at=current_added_at if feedback_action == "save" else None,
             )
 
     # Shared write helper: reachable standalone (its own route) AND nested inside

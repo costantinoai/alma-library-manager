@@ -498,6 +498,9 @@ def _upgrade_root_scalars(
                 int(_value(loser, field) or 0),
             )
     if "status" in columns and str(_value(loser, "status") or "") == "library":
+        # The saved row's date is the save; the root's own date is an ingest date.
+        if str(_value(live_root, "status") or "") != "library" and _value(loser, "added_at"):
+            updates["added_at"] = _value(loser, "added_at")
         updates["status"] = "library"
     if not updates:
         return

@@ -1296,7 +1296,13 @@ def apply_feed_action(
                         "action": action,
                         "rating": paper_actions.ACTION_RATINGS.get(action),
                         "signal_value": paper_actions.ACTION_SIGNAL_VALUES.get(action, 0),
-                        **({"previous_rating": applied["previous_rating"]} if action == "add" else {}),
+                        **(
+                            library_app.save_undo_fields(
+                                applied["previous_rating"], applied["previous_added_at"]
+                            )
+                            if action == "add"
+                            else {}
+                        ),
                     },
                     context={
                         "mode": "feed",

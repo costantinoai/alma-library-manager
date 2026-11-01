@@ -829,6 +829,11 @@ def add_to_library(
     when the current call represents a stronger user signal and should win —
     the canonical case is a BibTeX/Zotero import promoting a row that was
     previously auto-tracked from feed or discovery.
+
+    ``added_at`` means when the paper was saved. The transition into the Library
+    stamps this moment, replacing any ingest date Feed or an upsert left on the
+    row; a paper already saved keeps its date, so a re-save, a Like or an import
+    of a saved paper does not move it. Removing and saving again is a new save.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
@@ -843,7 +848,8 @@ def add_to_library(
         f"status = '{LIBRARY_STATUS}'",
         "rating = CASE WHEN COALESCE(rating, 0) > ? THEN rating ELSE ? END",
         "notes = COALESCE(?, notes)",
-        "added_at = COALESCE(added_at, ?)",
+        f"added_at = CASE WHEN status = '{LIBRARY_STATUS}' "
+        "AND COALESCE(TRIM(added_at), '') <> '' THEN added_at ELSE ? END",
         added_from_clause,
         "updated_at = ?",
     ]
@@ -973,6 +979,20 @@ def rating_signal_value(rating: int | None) -> int:
     return 0
 
 
+def save_undo_fields(
+    previous_rating: int | None, previous_added_at: str | None
+) -> dict[str, int | str]:
+    """What a Save event records so that undoing it gives the old state back.
+
+    Empty for an event that is not a Save, which passes no rating. A row with no
+    date is stored as ``""``, because an event from before this field has no
+    ``previous_added_at`` at all and must leave the date alone on undo.
+    """
+    if previous_rating is None:
+        return {}
+    return {"previous_rating": previous_rating, "previous_added_at": previous_added_at or ""}
+
+
 def record_paper_feedback(
     db: sqlite3.Connection,
     paper_id: str,
@@ -983,6 +1003,7 @@ def record_paper_feedback(
     recommendation_id: str | None = None,
     discovery_provenance: dict[str, str | int] | None = None,
     previous_rating: int | None = None,
+    previous_added_at: str | None = None,
 ) -> str | None:
     """Record a paper feedback event through the one feedback engine.
 
@@ -999,8 +1020,8 @@ def record_paper_feedback(
     inside a ``run_write_unit``). Returns the event id, or None when nothing
     was recorded.
 
-    A Save passes ``previous_rating``, the rating it replaced, so that
-    ``undo_paper_feedback`` can restore it.
+    A Save passes ``previous_rating`` and ``previous_added_at``, the rating and
+    date it replaced, so that ``undo_paper_feedback`` can restore them.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id or not _table_exists(db, "feedback_events"):
@@ -1018,7 +1039,7 @@ def record_paper_feedback(
             "action": action,
             "rating": rating,
             "signal_value": rating_signal_value(rating),
-            **({"previous_rating": previous_rating} if previous_rating is not None else {}),
+            **save_undo_fields(previous_rating, previous_added_at),
         },
         context={
             "surface": source_surface,
@@ -1171,6 +1192,36 @@ def _rating_before_save(db: sqlite3.Connection, paper_id: str) -> int | None:
     return int(events[saves[0]]["previous_rating"])
 
 
+def _added_at_before_save(db: sqlite3.Connection, paper_id: str) -> str | None:
+    """The date the current save cycle's first Save replaced, or None if unknown.
+
+    Same cycle rule as ``_rating_before_save``: a Remove or Dismiss ends a cycle,
+    and the first Save after it holds the date from before saving. ``""`` means
+    the row had no date. Read before the events are deleted.
+    """
+    if not _table_exists(db, "feedback_events"):
+        return None
+    actions = (*_SAVE_ACTIONS, *_LEAVE_ACTIONS)
+    placeholders = ", ".join("?" for _ in actions)
+    events = db.execute(
+        f"""
+        SELECT lower(json_extract(value, '$.action')) AS action,
+               json_extract(value, '$.previous_added_at') AS previous_added_at
+        FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+          AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        ORDER BY rowid
+        """,
+        (paper_id, *actions),
+    ).fetchall()
+    cycle_start = max(
+        (i + 1 for i, event in enumerate(events) if event["action"] in _LEAVE_ACTIONS),
+        default=0,
+    )
+    cycle = events[cycle_start:]
+    return cycle[0]["previous_added_at"] if cycle else None
+
+
 def _withdraw_surface_verdicts(db: sqlite3.Connection, paper_id: str) -> None:
     """Take a withdrawn Like/Love/Dislike off the rows that show it.
 
@@ -1207,8 +1258,8 @@ def undo_paper_feedback(
 
     - ``membership`` — Save/Saved/hidden: row back to ``tracked`` + delete
       membership events + reset feed/recommendation resolution. The rating
-      goes back to what it was before the Save (see ``_rating_before_save``);
-      a rating the user set separately and reading state are left untouched.
+      goes back to what it was before the Save (see ``_rating_before_save``),
+      and so does ``added_at``; a rating the user set separately and reading state are left untouched.
     - ``rating`` — Like / Love / Dislike: clear ``papers.rating`` + delete the
       like/love/dislike/rate signal events. Membership and reading are kept.
     - ``reading`` — Queue/Queued: clear ``papers.reading_status`` only.
@@ -1233,6 +1284,12 @@ def undo_paper_feedback(
             db.execute(
                 "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
                 (rating_before_save, now, paper_id),
+            )
+        added_at_before_save = _added_at_before_save(db, paper_id)
+        if added_at_before_save is not None:
+            db.execute(
+                "UPDATE papers SET added_at = NULLIF(?, '') WHERE id = ? AND status = ?",
+                (added_at_before_save, paper_id, LIBRARY_STATUS),
             )
         db.execute(
             f"UPDATE papers SET status = '{TRACKED_STATUS}', updated_at = ? "
@@ -1361,6 +1418,7 @@ def apply_corpus_paper_feedback(
             rating=applied["rating"],
             source_surface=source_surface,
             previous_rating=applied["previous_rating"] if normalized_action == "add" else None,
+            previous_added_at=applied["previous_added_at"] if normalized_action == "add" else None,
         )
     else:
         dismiss_paper(db, root_id)

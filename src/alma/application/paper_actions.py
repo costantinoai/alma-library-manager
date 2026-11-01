@@ -90,10 +90,10 @@ def apply_valence(
     new opinion, sets rating 1, and deliberately leaves membership alone so a
     disliked paper stays visible where it was.
 
-    Returns ``{"rating": int, "status": str | None, "previous_rating": int}`` —
+    Returns ``{"rating", "status", "previous_rating", "previous_added_at"}`` —
     the paper's state AFTER the write, so callers report the truth rather than
-    what they intended, plus the rating it replaced, which a Save records so
-    that undoing the Save can give it back.
+    what they intended, plus the rating and date it replaced, which a Save
+    records so that undoing the Save can give them back.
 
     Caller owns the transaction.
     """
@@ -110,7 +110,9 @@ def apply_valence(
     if not paper_id:
         raise ValueError("paper_id is required")
 
-    before = db.execute("SELECT rating FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    before = db.execute(
+        "SELECT rating, added_at FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
 
     if normalized == "dislike":
         # Preference only: rating 1, membership untouched (D6).
@@ -133,6 +135,7 @@ def apply_valence(
         "rating": int((row["rating"] if row else 0) or 0),
         "status": str(row["status"]) if row and row["status"] else None,
         "previous_rating": int((before["rating"] if before else 0) or 0),
+        "previous_added_at": before["added_at"] if before else None,
     }
 
 
