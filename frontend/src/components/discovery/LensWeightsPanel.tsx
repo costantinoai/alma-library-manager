@@ -68,7 +68,7 @@ export function LensWeightsPanel({ lens, onSave, enabled = true }: LensWeightsPa
   }
 
   return (
-    <div className="space-y-4 rounded-card border border-divider bg-surface-2 p-4">
+    <div className="space-y-4 ">
       <div className="font-brand text-sm font-semibold text-alma-800">
         Lens Weights
       </div>

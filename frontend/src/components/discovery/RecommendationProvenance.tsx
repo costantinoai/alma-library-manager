@@ -358,7 +358,7 @@ export function RecommendationProvenance({
     <section
       aria-label="Recommendation provenance"
       className={cn(
-        'mt-3 rounded-card border border-slate-100 bg-surface-2/50 px-3 py-2.5',
+        'mt-3 ',
         className,
       )}
     >

@@ -286,7 +286,7 @@ export function LensManager({
     <section
       className={cn(
         'space-y-3',
-        !bare && 'rounded-card border border-divider bg-surface-1 p-4 shadow-paper-sheet',
+        !bare && ' ',
       )}
     >
       {/* A host that frames this (the Discovery "Lenses" band) has already
