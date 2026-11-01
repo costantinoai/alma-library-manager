@@ -407,8 +407,6 @@ const PAPER_OWNERS = new Set([
   'components/insights/InsightsOverviewTab.tsx',
   'components/shared/VenueAutocomplete.tsx',
   'components/shared/MetricTile.tsx',
-  'components/settings/primitives.tsx',
-  'components/settings/AIConfigCard.tsx',
   'components/health/RepairCard.tsx',
   'components/health/RepairConfirmDialog.tsx',
   'components/authors/AuthorsNeedsAttentionSection.tsx',
@@ -430,6 +428,10 @@ function scanPrimitives(): string[] {
       const at = `${rel}:${i + 1}`
       if (/\bbg-surface-[0-3]\b/.test(line) && !rel.startsWith('components/ui/') && !PAPER_OWNERS.has(rel)) {
         hits.push(`${at}  paper step, use Card or SubPanel`)
+      }
+      // A bordered box with no fill takes its host's cream: cream on cream.
+      if (rel.startsWith('components/settings/') && /rounded-card\b.*\bborder\b/.test(line) && !/\bbg-/.test(line) && !/\$\{|'\s*,?\s*$/.test(line)) {
+        hits.push(`${at}  unfilled box in Settings`)
       }
       if (/<Badge\b/.test(line)) hits.push(`${at}  <Badge>, use StatusBadge`)
       if (/<details\b/.test(line) && !FOLD_OWNERS.has(rel)) hits.push(`${at}  <details>, use DisclosurePanel`)

@@ -12,7 +12,7 @@ export type MetricTileTone =
 const VALUE_TONE_CLASS: Record<MetricTileTone, string> = {
   neutral: 'text-alma-800',
   success: 'text-success-700',
-  warning: 'text-warning-700',
+  warning: 'text-warning-800',
   critical: 'text-critical-700',
   info: 'text-info-600',
   accent: 'text-alma-folio',
@@ -154,7 +154,7 @@ export function MetricTile({
         // brighter than its host. min-w-0 + truncate guards against the
         // narrow-column overflow that the v2 tiles suffered from on
         // sub-400px grids.
-        !isBare && 'rounded-card border border-divider bg-surface-2 p-3 shadow-paper-sm',
+        !isBare && 'rounded-card border border-divider bg-surface-2 p-3',
         // Interactive (drilldown) tiles get the folio accent on hover/focus —
         // the single interactive identity (no new color). A bare tile has no
         // border to tint, so it moves its numeral instead.

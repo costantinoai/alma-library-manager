@@ -25,6 +25,8 @@ import { Input } from '@/components/ui/input'
 import { RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { MetricTile, type MetricTileTone } from '@/components/shared/MetricTile'
+import { SurfaceProvider } from '@/components/ui/surface'
+import { nextLevel, SURFACE_BG, SURFACE_BORDER, useSurfaceLevel } from '@/components/ui/surface-level'
 import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
@@ -96,6 +98,41 @@ export function SettingsCard({
         <CardFooter className="border-t border-edge-1 pt-4">{footer}</CardFooter>
       ) : null}
     </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// SettingsActionRow — one action: what it does on the left, its button on the
+// right. Stacked rows share a hairline, so a list of maintenance actions reads
+// as a list instead of a heap of same-weight buttons.
+// ---------------------------------------------------------------------------
+
+export function SettingsActionRow({
+  title,
+  description,
+  tone = 'default',
+  action,
+}: {
+  title: React.ReactNode
+  description?: React.ReactNode
+  tone?: 'default' | 'danger'
+  action: React.ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        'flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t py-3 first:border-t-0 first:pt-0 last:pb-0',
+        tone === 'danger' ? 'border-critical-700/15' : 'border-divider',
+      )}
+    >
+      <div className="min-w-56 flex-1 space-y-0.5">
+        <p className={cn('text-sm font-medium', tone === 'danger' ? 'text-critical-800' : 'text-slate-800')}>
+          {title}
+        </p>
+        {description ? <p className="text-xs leading-relaxed text-slate-600">{description}</p> : null}
+      </div>
+      <div className="shrink-0">{action}</div>
+    </div>
   )
 }
 
@@ -179,7 +216,7 @@ export function ToggleRow({
     <label
       className={cn(
         'flex items-center justify-between gap-3 rounded-card border px-3 py-2',
-        isWarning ? 'border-warning-500/40 bg-warning-700/[0.06]' : 'border-divider',
+        isWarning ? 'border-warning-500/40 bg-state-warning' : 'border-divider bg-control-well',
         disabled && 'opacity-70',
         className,
       )}
@@ -188,13 +225,13 @@ export function ToggleRow({
         <p
           className={cn(
             'text-sm font-medium',
-            isWarning ? 'text-warning-700' : 'text-slate-700',
+            isWarning ? 'text-warning-800' : 'text-slate-700',
           )}
         >
           {title}
         </p>
         {description ? (
-          <p className={cn('text-xs', isWarning ? 'text-warning-700' : 'text-slate-500')}>
+          <p className={cn('text-xs', isWarning ? 'text-warning-800' : 'text-slate-500')}>
             {description}
           </p>
         ) : null}
@@ -255,10 +292,10 @@ export function OptionCard({
       className={cn(
         'flex items-start gap-3 rounded-card border p-3 transition-colors',
         disabled
-          ? 'cursor-not-allowed border-divider bg-surface-2 opacity-70'
+          ? 'cursor-not-allowed border-divider bg-control-quiet opacity-70'
           : selected
             ? 'cursor-pointer border-alma-folio bg-accent-soft'
-            : 'cursor-pointer border-control-edge hover:bg-control-quiet',
+            : 'cursor-pointer border-control-edge bg-control-well hover:bg-control-well-hover',
         className,
       )}
     >
@@ -496,14 +533,17 @@ export function SettingsSection({
   className,
   children,
 }: SettingsSectionProps) {
+  // Climbs the ladder from its real host and tells its children, so a panel
+  // inside this section lands one step on instead of at this section's level.
+  const level = nextLevel(useSurfaceLevel())
   return (
+    <SurfaceProvider level={level}>
     <Collapsible
       defaultOpen={defaultOpen}
-      // Recessed group inside the SettingsCard — panel level (surface-2)
-      // with an inset shadow so the nesting reads as visible depth, not a
-      // flat cream-on-cream sandwich.
       className={cn(
-        'rounded-card border border-edge-2 bg-surface-2 shadow-paper-inset',
+        'rounded-card border shadow-paper-inset',
+        SURFACE_BG[level],
+        SURFACE_BORDER[level],
         className,
       )}
     >
@@ -527,6 +567,7 @@ export function SettingsSection({
         {children}
       </CollapsibleContent>
     </Collapsible>
+    </SurfaceProvider>
   )
 }
 

@@ -6,7 +6,7 @@ import {
   listUnresolvedImportedPublications,
   resolveImportedPublicationsOpenAlex,
 } from '@/api/client'
-import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
+import { AsyncButton, SettingsCard, SettingsActionRow, SettingsSection } from '@/components/settings/primitives'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { downloadFromUrl, downloadJson } from '@/lib/utils'
@@ -78,59 +78,66 @@ export function DataManagementCard() {
       title="Data Management"
       description="Manage your data: imports, backup, and export."
     >
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold text-slate-700">Operations</h4>
-        <div className="flex flex-wrap items-start gap-3">
+      <SettingsSection title="Backup and export">
+        <SettingsActionRow title="Whole database" description="Downloads a copy of the database file." action={
           <AsyncButton
             variant="outline"
-            icon={<Download className="h-4 w-4" />}
-            pending={exportMutation.isPending}
-            onClick={() => exportMutation.mutate()}
-          >
-            Export All Data
-          </AsyncButton>
-          <AsyncButton
-            variant="outline"
-            icon={<Zap className="h-4 w-4" />}
-            pending={resolveUnresolvedImportsMutation.isPending}
-            onClick={() => resolveUnresolvedImportsMutation.mutate()}
-          >
-            Resolve Unresolved Imports (OpenAlex)
-          </AsyncButton>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold text-slate-700">Backup & Export</h4>
-        <div className="flex flex-wrap gap-3">
-          <AsyncButton
-            variant="outline"
+            size="sm"
             icon={<Database className="h-4 w-4" />}
             pending={backupDatabaseMutation.isPending}
             onClick={() => backupDatabaseMutation.mutate()}
           >
             Download Database
           </AsyncButton>
+        } />
+        <SettingsActionRow title="Library as BibTeX" description="Downloads a .bib file." action={
           <AsyncButton
             variant="outline"
+            size="sm"
             icon={<FileText className="h-4 w-4" />}
             pending={exportBibtexMutation.isPending}
             onClick={() => exportBibtexMutation.mutate()}
           >
             Export BibTeX
           </AsyncButton>
+        } />
+        <SettingsActionRow title="Library as JSON" description="Downloads a .json file." action={
           <AsyncButton
             variant="outline"
+            size="sm"
             icon={<FileJson className="h-4 w-4" />}
             pending={exportJsonMutation.isPending}
             onClick={() => exportJsonMutation.mutate()}
           >
             Export JSON
           </AsyncButton>
-        </div>
-      </div>
+        } />
+        <SettingsActionRow title="All data" action={
+          <AsyncButton
+            variant="outline"
+            size="sm"
+            icon={<Download className="h-4 w-4" />}
+            pending={exportMutation.isPending}
+            onClick={() => exportMutation.mutate()}
+          >
+            Export All Data
+          </AsyncButton>
+        } />
+      </SettingsSection>
 
-      <SubPanel variant="flat" padded={false}  className="space-y-2 p-3">
+      <SettingsSection title="Unresolved imports">
+        <SettingsActionRow title="Resolve with OpenAlex" description="Looks up imported papers that have no OpenAlex match yet." action={
+          <AsyncButton
+            variant="outline"
+            size="sm"
+            icon={<Zap className="h-4 w-4" />}
+            pending={resolveUnresolvedImportsMutation.isPending}
+            onClick={() => resolveUnresolvedImportsMutation.mutate()}
+          >
+            Resolve Unresolved Imports (OpenAlex)
+          </AsyncButton>
+        } />
+        <SubPanel variant="flat" padded={false} className="mt-3 space-y-2 p-3">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-semibold text-slate-700">OpenAlex Resolution Queue</h4>
           <AsyncButton
@@ -163,6 +170,7 @@ export function DataManagementCard() {
           </>
         )}
       </SubPanel>
+      </SettingsSection>
     </SettingsCard>
   )
 }
