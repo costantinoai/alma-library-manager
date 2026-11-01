@@ -3062,7 +3062,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 status="failed",
                 finished_at=utcnow().isoformat(),
                 error=str(exc),
-                message=f"Failed: {job_id}",
+                message=f"Failed: {str(exc)[:300]}",
             )
             raise
         finally:

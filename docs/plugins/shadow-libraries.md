@@ -59,11 +59,11 @@ tried only when every official address has failed.
    [member key](#annas-archive-member-key): without one, its paper pages sit
    behind a browser check that ALMa cannot pass, and every fetch would spend a
    few seconds being refused.
-4. **Save plugin settings**, then press **Test connection**.
+4. **Save plugin settings**, then press **Check**.
 
-## Test connection
+## Check
 
-**Test connection** fetches one well-known paywalled paper (LeCun, Bengio &
+**Check** fetches one well-known paywalled paper (LeCun, Bengio &
 Hinton, *Deep learning*, Nature 2015) through every address, exactly as a real
 fetch would, and lists each one:
 

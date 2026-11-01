@@ -368,6 +368,7 @@ SCHEDULING_MODULES: frozenset[str] = frozenset(
         "api/routes/library_mgmt.py",
         "api/routes/operations.py",
         "api/routes/plugins.py",
+        "application/connection_status.py",
         "api/routes/publications.py",
         "api/routes/onboarding.py",
         "application/followed_authors.py",

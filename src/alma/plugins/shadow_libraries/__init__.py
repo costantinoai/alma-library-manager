@@ -48,7 +48,11 @@ class ShadowLibrariesConfig(StrictPluginConfig):
             "https://sci-net.xyz. Sci-Net is Sci-Hub's own site for papers it lacks, "
             "newer ones especially. Mirrors come and go; press Test after saving."
         ),
-        json_schema_extra={"x-alma-order": 10, "x-alma-links": _SCIHUB_LINKS},
+        json_schema_extra={
+            "x-alma-order": 10,
+            "x-alma-links": _SCIHUB_LINKS,
+            "x-alma-adds": "Sci-Hub as a last PDF source",
+        },
     )
     annas_archive_domains: str = Field(
         "",
@@ -57,7 +61,11 @@ class ShadowLibrariesConfig(StrictPluginConfig):
             "Addresses tried in order, comma-separated — for example https://annas-archive.gl. "
             "Its paper pages sit behind a browser check that only a member key gets past."
         ),
-        json_schema_extra={"x-alma-order": 20, "x-alma-links": _ANNAS_LINKS},
+        json_schema_extra={
+            "x-alma-order": 20,
+            "x-alma-links": _ANNAS_LINKS,
+            "x-alma-adds": "Anna's Archive as a last PDF source",
+        },
     )
     member_key: str = Field(
         "",
@@ -71,6 +79,7 @@ class ShadowLibrariesConfig(StrictPluginConfig):
             "x-alma-order": 30,
             "x-alma-advanced": True,
             "x-alma-links": _MEMBER_KEY_LINKS,
+            "x-alma-adds": "direct downloads from Anna's Archive",
         },
     )
 
@@ -120,6 +129,10 @@ def status(_db: sqlite3.Connection | None) -> dict:
         "member_key": bool(key),
         "curl_cffi": curl,
         "notes": notes,
+        "missing": "Add at least one mirror address.",
+        "blocked": "curl_cffi is not installed, and these mirrors refuse plain requests."
+        if configured and not curl
+        else None,
     }
 
 
@@ -196,7 +209,18 @@ async def test_connection() -> dict:
         message = f"{len(working)} of {len(results)} addresses serve PDFs: {', '.join(working)}"
     else:
         message = f"None of {len(results)} addresses served the test paper — see each one below"
-    return {"ok": bool(working), "working": working, "results": results, "message": message}
+    # A dead mirror list is a verdict; a network that reached no address is not.
+    unanswered = bool(results) and all(r["state"].startswith("unreachable") for r in results)
+    return {
+        "ok": None if unanswered else bool(working),
+        "working": working,
+        "results": results,
+        "message": message,
+    }
+
+
+def secret_values() -> tuple[str, ...]:
+    return (_settings()[2],)
 
 
 SHADOW_LIBRARIES_PLUGIN = PluginManifest(
@@ -218,6 +242,7 @@ SHADOW_LIBRARIES_PLUGIN = PluginManifest(
     connection_tester=test_connection,
     pdf_source_factory=_sources,
     action_ids=("test",),
+    secret_values=secret_values,
 )
 
 __all__ = ["SHADOW_LIBRARIES_PLUGIN", "ShadowLibrariesConfig"]

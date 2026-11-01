@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GitMerge, Loader2, Search, UserX } from 'lucide-react'
+import { ArrowLeftRight, GitMerge, Loader2, Search, Undo2, UserX } from 'lucide-react'
 
 import {
   api,
-  getApiErrorMessage,
+  listRejectedAuthors,
   mergeAuthorProfiles,
   rejectAuthorPair,
+  undoRejectAuthorPair,
   type Author,
   type AuthorMergeFieldChoice,
 } from '@/api/client'
@@ -27,7 +28,8 @@ import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge } from '@/components/ui/status-badge'
-import { useToast, errorToast } from '@/hooks/useToast'
+import { useToast } from '@/hooks/useToast'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 import { RowButton } from '@/components/ui/row-button'
 import { SubPanel } from '@/components/ui/sub-panel'
@@ -161,6 +163,7 @@ export function AuthorMergeDialog({
   const [mergeTargetId, setMergeTargetId] = useState<string | null>(null)
   const [mergeChoices, setMergeChoices] = useState<Record<string, AuthorMergeFieldChoice>>({})
   const [confirmingNotSame, setConfirmingNotSame] = useState(false)
+  const [swapped, setSwapped] = useState(false)
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -188,8 +191,24 @@ export function AuthorMergeDialog({
     ? allAuthors.find((candidate) => candidate.id === fixedProp.id) ?? fixedProp
     : null
   const selected = allAuthors.find((candidate) => candidate.id === mergeTargetId) ?? null
-  const primary = absorbMode ? selected : fixed
-  const alt = absorbMode ? fixed : selected
+  // Who survives. Absorb mode starts with the picked author, normal mode with the
+  // opened one. Swap turns that around; an author with no OpenAlex id can never
+  // survive, because the merged papers need one, so the other side is taken.
+  const startPrimary = absorbMode ? selected : fixed
+  const startAlt = absorbMode ? fixed : selected
+  const forcedSwap = !!startAlt?.openalex_id && !!startPrimary && !startPrimary.openalex_id
+  const canSwap = !absorbOpenAlexOnly && !!startPrimary && !!startAlt && !!startPrimary.openalex_id && !!startAlt.openalex_id
+  const isSwapped = forcedSwap || (swapped && canSwap)
+  const primary = isSwapped ? startAlt : startPrimary
+  const alt = isSwapped ? startPrimary : startAlt
+
+  const rejectionsQuery = useQuery({
+    queryKey: ['author-rejections', fixed?.id],
+    queryFn: () => listRejectedAuthors(fixed!.id),
+    enabled: open && !!fixed?.id && !absorbOpenAlexOnly,
+  })
+  const rejectedIds = useMemo(() => new Set(rejectionsQuery.data?.rejected ?? []), [rejectionsQuery.data])
+  const pairRejected = !!selected && rejectedIds.has(selected.id)
 
   const mergeCandidates = useMemo(() => {
     const needle = mergeSearch.trim().toLowerCase()
@@ -222,14 +241,17 @@ export function AuthorMergeDialog({
       setMergeSearch('')
       setMergeTargetId(null)
       setMergeChoices({})
+      setSwapped(false)
     }
   }, [open])
 
   useEffect(() => {
-    if (open && initialTargetId && !mergeTargetId) {
-      setMergeTargetId(initialTargetId)
-    }
-  }, [initialTargetId, mergeTargetId, open])
+    if (!open || !initialTargetId || mergeTargetId || rejectionsQuery.isFetching) return
+    // Start on the first candidate still in question: a row read a moment ago
+    // can still name one the user just rejected.
+    const firstOpen = [initialTargetId, ...(allowedTargetIds ?? [])].find((id) => !rejectedIds.has(id))
+    setMergeTargetId(firstOpen ?? initialTargetId)
+  }, [allowedTargetIds, initialTargetId, mergeTargetId, open, rejectedIds, rejectionsQuery.isFetching])
 
   useEffect(() => {
     if (open && primary && alt && Object.keys(mergeChoices).length === 0) {
@@ -257,7 +279,7 @@ export function AuthorMergeDialog({
     },
     onSuccess: (data) => {
       void invalidateAfterAuthorChange(queryClient, primary?.id)
-      void invalidateQueries(queryClient, ['author-suggestions'])
+      void invalidateQueries(queryClient, ['author-suggestions'], ['author-rejections'])
       toast({
         title: 'Authors merged',
         description:
@@ -267,25 +289,46 @@ export function AuthorMergeDialog({
       onOpenChange(false)
       onMerged?.()
     },
-    onError: (err) => errorToast('Failed to merge authors', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Failed to merge authors', err),
   })
 
   const notSameMutation = useMutation({
     mutationFn: () => rejectAuthorPair(primary!.id, [alt!.id]),
     onSuccess: () => {
-      void invalidateAfterAuthorChange(queryClient, primary?.id)
+      const [first, second] = [primary!.id, alt!.id]
+      void invalidateAfterAuthorChange(queryClient, first)
+      void invalidateQueries(queryClient, ['author-rejections'])
       toast({
         title: 'Kept as different people',
         description: `${primary?.name} and this profile won't be flagged again.`,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            undoRejectAuthorPair(first, second)
+              .then(() => invalidateAfterAuthorChange(queryClient, first))
+              .then(() => invalidateQueries(queryClient, ['author-rejections']))
+              .catch((err) => authorActionFailed(queryClient, 'Could not undo', err))
+          },
+        },
       })
       setConfirmingNotSame(false)
       onOpenChange(false)
       onMerged?.()
     },
-    onError: (err) => errorToast('Could not save that', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not save that', err),
   })
 
-  const busy = mergeMutation.isPending || notSameMutation.isPending
+  const undoRejectionMutation = useMutation({
+    mutationFn: () => undoRejectAuthorPair(fixed!.id, selected!.id),
+    onSuccess: () => {
+      void invalidateAfterAuthorChange(queryClient, fixed?.id)
+      void invalidateQueries(queryClient, ['author-rejections'])
+      toast({ title: 'Verdict undone', description: 'These two can be merged again.' })
+    },
+    onError: (err) => authorActionFailed(queryClient, 'Could not undo that', err),
+  })
+
+  const busy = mergeMutation.isPending || notSameMutation.isPending || undoRejectionMutation.isPending
 
   const effectiveTitle =
     title ?? (absorbMode ? 'Merge this author into another' : 'Merge author profiles')
@@ -359,7 +402,11 @@ export function AuthorMergeDialog({
                         <span className="text-sm font-medium text-alma-800">
                           {candidate.name}
                         </span>
-                        {candidate.author_type === 'followed' ? (
+                        {rejectedIds.has(candidate.id) ? (
+                          <StatusBadge tone="neutral" size="sm">
+                            Different person
+                          </StatusBadge>
+                        ) : candidate.author_type === 'followed' ? (
                           <StatusBadge tone="positive" size="sm">
                             Followed
                           </StatusBadge>
@@ -384,6 +431,48 @@ export function AuthorMergeDialog({
                 <span className="truncate text-2xs text-slate-400">← {selected.name}</span>
               ) : null}
             </div>
+            {primary && alt && !absorbOpenAlexOnly ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="min-w-0 text-xs text-slate-500">
+                  <span className="font-medium text-alma-800">{primary.name}</span> survives
+                  {primary.openalex_id ? ` (${primary.openalex_id})` : ''}: its id, ratings and
+                  follow stay.
+                  {forcedSwap ? ' The other author has no OpenAlex ID, so it cannot survive.' : ''}
+                </p>
+                {canSwap ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSwapped((value) => !value)
+                      setMergeChoices({})
+                    }}
+                    disabled={busy}
+                  >
+                    <ArrowLeftRight className="h-3.5 w-3.5" />
+                    Swap survivor
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            {pairRejected ? (
+              <Alert variant="info" className="px-3 py-2">
+                <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="min-w-0">
+                    You marked these two as different people, so they cannot be merged.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => undoRejectionMutation.mutate()}
+                    disabled={busy}
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                    Undo that
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
             {primary && alt && absorbOpenAlexOnly ? (
               // Row-less absorb: no local row → no metadata to union, so no
               // field choices. Explain exactly what will happen instead.
@@ -482,8 +571,8 @@ export function AuthorMergeDialog({
               variant="ghost"
               className="sm:mr-auto"
               onClick={() => setConfirmingNotSame(true)}
-              disabled={!primary || !alt || busy}
-              title="These are two different people. The warning goes away for good."
+              disabled={!primary || !alt || busy || pairRejected}
+              title="These are two different people. The warning goes away until you undo it."
             >
               <UserX className="h-4 w-4" />
               Not the same person
@@ -498,11 +587,17 @@ export function AuthorMergeDialog({
               !primary ||
               !alt ||
               (absorbOpenAlexOnly && !alt.openalex_id) ||
+              !primary.openalex_id ||
+              pairRejected ||
               busy
             }
             title={
               primary && alt
-                ? `Merge ${alt.name} into ${primary.name}.`
+                ? pairRejected
+                  ? 'Marked as different people. Undo that first.'
+                  : !primary.openalex_id
+                    ? 'Neither author has an OpenAlex ID, so there is nothing to merge into.'
+                    : `Merge ${alt.name} into ${primary.name}.`
                 : absorbMode
                   ? 'Choose the surviving author first.'
                   : 'Choose an author to merge first.'
@@ -523,7 +618,7 @@ export function AuthorMergeDialog({
       onOpenChange={setConfirmingNotSame}
       variant="default"
       title="Not the same person?"
-      description={`${alt?.affiliation || alt?.openalex_id || 'This profile'} stays a separate author from ${primary?.name ?? 'this one'}. This pair is never suggested for merging again, and there is no undo.`}
+      description={`${alt?.affiliation || alt?.openalex_id || 'This profile'} stays a separate author from ${primary?.name ?? 'this one'}. This pair is not suggested for merging again. You can undo this from the author's Merge dialog.`}
       isPending={notSameMutation.isPending}
       onConfirm={() => notSameMutation.mutate()}
     />

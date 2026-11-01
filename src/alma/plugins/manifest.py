@@ -77,6 +77,10 @@ class PluginManifest:
     connection_tester: ConnectionTester | None = None
     pdf_source_factory: PdfSourceFactory | None = None
     action_ids: tuple[str, ...] = field(default_factory=tuple)
+    #: The real secrets in use. `config()` masks them, so a change in anything but
+    #: the last four characters would otherwise look like the same value to
+    #: `connection_status`, which keeps verdicts only for the value they tested.
+    secret_values: Callable[[], tuple[str, ...]] | None = None
 
     def can(self, capability: Capability) -> bool:
         return capability in self.capabilities

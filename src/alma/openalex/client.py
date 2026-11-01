@@ -350,6 +350,32 @@ def fetch_author_profile(
         return None
 
 
+def openalex_reachable() -> bool:
+    """Whether OpenAlex answers at all, to tell "found nothing" from "could not ask"."""
+    try:
+        return get_client().get("/authors", params={"per-page": 1, "select": "id"}, timeout=10).status_code == 200
+    except Exception as exc:
+        logger.warning("OpenAlex reachability check failed: %s", exc)
+        return False
+
+
+def openalex_author_exists(author_openalex_id: str) -> bool | None:
+    """Whether OpenAlex knows this author id. ``None`` when it could not say.
+
+    Only a 404 is a "no": a rate limit or an outage says nothing about the id,
+    and a retired id that redirects to its survivor still answers 200.
+    """
+    try:
+        aid = _normalize_openalex_author_id(author_openalex_id)
+        resp = get_client().get(f"/authors/{aid}", params={"select": "id"}, timeout=20)
+    except Exception as exc:
+        logger.warning("OpenAlex existence check failed for '%s': %s", author_openalex_id, exc)
+        return None
+    if resp.status_code == 404:
+        return False
+    return True if resp.status_code == 200 else None
+
+
 def batch_get_author_profiles(
     openalex_author_ids: list[str],
     batch_size: int = 50,

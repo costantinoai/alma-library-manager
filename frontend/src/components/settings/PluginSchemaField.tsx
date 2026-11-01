@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -16,11 +18,14 @@ export function SchemaField({
   schema,
   value,
   onChange,
+  status,
 }: {
   name: string
   schema: PluginSchemaProperty
   value: ConfigValue
   onChange: (value: ConfigValue) => void
+  /** This field's own state, under its input (`FieldStatus`). */
+  status?: ReactNode
 }) {
   const id = `plugin-field-${name}`
   if (schema.type === 'boolean') {
@@ -58,6 +63,7 @@ export function SchemaField({
         }}
       />
       <FieldHelp schema={schema} />
+      {status}
     </div>
   )
 }

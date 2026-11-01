@@ -486,12 +486,11 @@ class OpenAlexClient:
         so the OpenAlex card can render the same connection pill:
 
           - ``configured=False`` — no API key set.
-          - ``valid=True``       — OpenAlex accepted the key (200, or 429,
-                                   which still proves the key authenticated
-                                   before the rate limiter kicked in).
+          - ``valid=True``       — OpenAlex accepted the key (200).
           - ``valid=False``      — OpenAlex rejected the key (401 / 403).
-          - ``valid=None``       — probe could not complete or returned an
-                                   unexpected status; validity unknown.
+          - ``valid=None``       — probe could not complete, was rate limited
+                                   (429 says nothing about the key) or
+                                   returned an unexpected status.
 
         Probes ``/rate-limit`` directly (bypasses the response cache, like
         :meth:`get_rate_limit_status`) so a manual re-check always re-probes
@@ -514,14 +513,14 @@ class OpenAlexClient:
         if resp.status_code == 429:
             return {
                 "configured": True,
-                "valid": True,
-                "detail": "Key accepted (rate-limited right now).",
+                "valid": None,
+                "detail": "OpenAlex is rate limiting, so it said nothing about the key.",
             }
         if resp.status_code in (401, 403):
             return {
                 "configured": True,
                 "valid": False,
-                "detail": "OpenAlex rejected the key (invalid or unauthorized).",
+                "detail": f"OpenAlex refused the key (HTTP {resp.status_code}).",
             }
         return {
             "configured": True,
