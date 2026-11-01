@@ -1355,7 +1355,7 @@ def import_zotero_rdf(
                 # collections produces 1 papers row + N collection_items rows
                 # (never N papers rows).
                 for coll_path in item.get("zotero_collections") or []:
-                    if not coll_path:
+                    if not coll_path or outcome == "component":
                         continue
                     mirror_coll_id = _find_or_create_collection(
                         conn, coll_path, color="#8B5CF6"

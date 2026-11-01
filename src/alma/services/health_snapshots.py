@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 HEALTH_OPERATIONS_VIEW_KEY = "health:operations"
 HEALTH_REFRESH_OPERATION_KEY = "materialize.health.snapshots"
 HEALTH_REFRESH_JOB_ID = "health_snapshot_refresh"
+
+# A refresh requested while one runs would be skipped by the scheduler with a
+# "maximum instances" warning per request, and the state it wanted to see would
+# wait for the periodic floor. It asks for one more run after this one instead.
+_rebuild_state_lock = threading.Lock()
+_rebuild_running = False
+_rebuild_requested_again = False
 
 _PURE_POST_PREFIXES = (
     "/api/v1/library/import/preflight/",
@@ -170,6 +178,23 @@ def refresh_in_flight() -> bool:
 
 
 def rebuild_all() -> dict[str, Any]:
+    """Rebuild every snapshot, then once more if a refresh was asked for meanwhile."""
+    global _rebuild_running, _rebuild_requested_again
+
+    with _rebuild_state_lock:
+        _rebuild_running = True
+    try:
+        return _rebuild_snapshots()
+    finally:
+        with _rebuild_state_lock:
+            _rebuild_running = False
+            run_again = _rebuild_requested_again
+            _rebuild_requested_again = False
+        if run_again:
+            request_refresh()
+
+
+def _rebuild_snapshots() -> dict[str, Any]:
     """Rebuild corpus → authors → operation plan in dependency order."""
 
     from alma.api.deps import open_db_connection
@@ -190,7 +215,12 @@ def rebuild_all() -> dict[str, Any]:
 
 def request_refresh(*, delay_seconds: int = 2) -> None:
     """Debounce a non-Activity refresh after relevant state changes."""
+    global _rebuild_requested_again
 
+    with _rebuild_state_lock:
+        if _rebuild_running:
+            _rebuild_requested_again = True
+            return
     try:
         from apscheduler.triggers.date import DateTrigger
 
