@@ -69,6 +69,18 @@ Canonical, app-wide primitives — reach for these before hand-rolling:
 * `Card` / `SubPanel` / `Surface` (`components/ui/`) — the surface
   primitives that drive the elevation ladder (`Card` lifts one level,
   `SubPanel` lifts + recesses). Never hand-write a surface background.
+* `Button` — colour, radius and shadow come from `variant` and `size`,
+  never from `className`. `danger-quiet`, `danger-muted`, `warning-quiet`,
+  `success-quiet`, `muted` and `link-ink` cover the quiet cases, `icon-xs`
+  and `inline` the small ones. Filled `accent` is onboarding's alone. The
+  paper-card action bar keeps its own tone map.
+* `RowButton` — a whole row you press. `ChipButton` — a pill you press.
+  `AlertDialogAction` takes a `variant`, so a destructive confirm stays
+  red when pressed.
+* `Alert` — every state box. `layout="row"` for the one-line form.
+* `DisclosurePanel` — the one fold, `tone="danger"` for irreversible
+  actions.
+* `Tabs` — `TabsList variant="underline"` for the quiet strip.
 
 Settings-scoped helpers the rest of the app also re-uses:
 
@@ -143,6 +155,15 @@ landing page. Rules of thumb:
   one heavy navy fill, `success / warning / critical / info`,
   `gold` = trim only); `slate-*` is the text ramp, never a surface.
   The `surface-guard` test fails CI on raw surface/semantic classes.
+* Scales live in `index.css`, and `surface-guard.test.ts` keeps them true:
+  layers (`z-popover`; popovers sit above dialogs and onboarding), one
+  `bg-scrim` through `SCRIM`, `shadow-paper-*`, `rounded-card` 8 px,
+  `rounded-control` 6 px, `rounded-check` 4 px, `rounded-full` for pills,
+  `text-2xs` and `text-caption` below `text-xs`, `border-divider` for the
+  paper hairline, `focus-ring` for anything pressable that is not a
+  `Button`.
+* Light only. Gold is trim, never a button. Activity's cool ladder is the
+  one documented exception to the surface rule.
 * Tabular numerics where it matters (counts, scores, citations).
 * Tooltips and HoverCards over modals when surfacing detail.
 * Empty states are explicit ("No suggestions — refresh this
