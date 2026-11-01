@@ -17,6 +17,7 @@ import csv
 import difflib
 import json
 import logging
+import os
 import re
 import sqlite3
 import sys
@@ -45,9 +46,10 @@ logger = logging.getLogger(__name__)
 
 #: Merging fills a title or a DOI, which can reveal one more twin.
 _MERGE_PASSES = 3
-#: The user's own profile, merged both ways on 2026-06-17 and 2026-07-29 (A4).
-OWNER_SURVIVOR = "A5042972527"
-OWNER_MERGED_ROW = "A5114957962"
+#: An owner profile whose two ids were merged into each other. Named by the operator
+#: for the one run that needs it: this repair is not specific to any install's data.
+OWNER_SURVIVOR = os.environ.get("ALMA_REPAIR_OWNER_ID", "").strip()
+OWNER_MERGED_ROW = os.environ.get("ALMA_REPAIR_OWNER_MERGED_ID", "").strip()
 
 
 def _stale_dois(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -111,6 +113,8 @@ def _alias_case_duplicates(conn: sqlite3.Connection) -> list[str]:
 
 
 def _owner_needs_repair(conn: sqlite3.Connection) -> bool:
+    if not (OWNER_SURVIVOR and OWNER_MERGED_ROW):
+        return False
     row = conn.execute(
         "SELECT status FROM authors WHERE id = ?", (OWNER_SURVIVOR,)
     ).fetchone()
@@ -328,7 +332,7 @@ def write_list(conn: sqlite3.Connection, path: Path, *, source: Path) -> dict[st
 
 
 def _repair_owner(conn: sqlite3.Connection) -> None:
-    """A5042972527 survives; the cycle goes; the follow it already has becomes the owner's."""
+    """The named id survives; the cycle goes; the follow it already has becomes the owner's."""
     if not _owner_needs_repair(conn):
         return
     conn.execute(
