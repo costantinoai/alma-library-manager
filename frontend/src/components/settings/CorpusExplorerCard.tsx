@@ -681,6 +681,7 @@ function CorpusExplorerBody() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removeMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               disabled={removeMutation.isPending}
               onClick={() => {
                 if (removeTarget) removeMutation.mutate(removeTarget.id)

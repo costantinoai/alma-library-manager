@@ -901,6 +901,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
           <AlertDialogFooter>
             <AlertDialogCancel disabled={refetchMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="default"
               onClick={(e) => {
                 e.preventDefault()
                 refetchMutation.mutate()

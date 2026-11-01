@@ -2,7 +2,7 @@ import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
-import { buttonVariants, type ButtonVariantProps } from "@/components/ui/button-variants"
+import { buttonVariants } from "@/components/ui/button-variants"
 import { SCRIM } from "@/components/ui/scrim"
 import { SurfaceProvider } from "@/components/ui/surface"
 
@@ -103,8 +103,10 @@ AlertDialogDescription.displayName =
 
 const AlertDialogAction = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Action>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> &
-    Pick<ButtonVariantProps, "variant">
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> & {
+    /** Required, so a confirm cannot fall into navy by forgetting what it does. */
+    variant: "destructive" | "default"
+  }
 >(({ className, variant, ...props }, ref) => (
   <AlertDialogPrimitive.Action
     ref={ref}
