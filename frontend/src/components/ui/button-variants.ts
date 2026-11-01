@@ -20,7 +20,7 @@ export const buttonVariants = cva(
         destructive:
           'bg-critical-600 text-on-fill shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
         success:
-          'bg-success-600 text-on-fill shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
+          'bg-success-700 text-on-fill shadow-paper-sm hover:bg-success-800 hover:shadow-paper-md active:bg-success-800',
         // Unfilled variants fill from the CONTROL INK ladder, never from the
         // paper ramps: an outline button on a cream card used to wear the
         // desk's own cream, and inside a near-white popover the same button
@@ -32,11 +32,11 @@ export const buttonVariants = cva(
         // Ghost at text-slate weight: the quiet icon or label beside content.
         muted: 'text-slate-500 hover:bg-control-quiet hover:text-slate-700',
         // The quiet way to say something destructive: a row's Remove, a Dismiss.
-        'danger-quiet': 'text-critical-600 hover:bg-critical-700/10 hover:text-critical-700',
+        'danger-quiet': 'text-critical-700 hover:bg-critical-700/10 hover:text-critical-800',
         // Grey until you reach for it, so a list of rows is not a list of red.
-        'danger-muted': 'text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
-        'warning-quiet': 'text-warning-600 hover:bg-warning-700/12 hover:text-warning-800',
-        'success-quiet': 'text-success-700 hover:bg-success-700/10',
+        'danger-muted': 'text-slate-400 hover:bg-critical-700/10 hover:text-critical-800',
+        'warning-quiet': 'text-warning-700 hover:bg-warning-700/12 hover:text-warning-800',
+        'success-quiet': 'text-success-700 hover:bg-success-700/10 hover:text-success-800',
         link:
           'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-alma-folio-600',
         // A link inside running text or a status line, in ink.
