@@ -17,9 +17,9 @@ import { cn } from '@/lib/utils'
  *   (`shadow-paper-sm`) and lift slightly on hover (`shadow-paper-md`).
  *   No colored-glow halo, no inset white ring, no gradient. The fill
  *   does the work; the shadow just suggests paper resting on paper.
- * - **Outline / secondary / ghost** fill from the CONTROL INK ladder
+ * - **Outline / secondary / ghost** fill from the control ladder
  *   (`control-well` / `control-quiet`), not from the paper ramps — see
- *   "controls are ink, surfaces are paper" in index.css. That keeps an
+ *   the control ladder in index.css. That keeps an
  *   unfilled button reading as the same object whether it sits on a card,
  *   a panel, or inside a near-white popover, instead of borrowing (and
  *   dissolving into) whatever cream is under it.
