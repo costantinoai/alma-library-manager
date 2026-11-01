@@ -280,7 +280,7 @@ function TopicPill({
       className={cn(
         'inline-flex items-center rounded-full px-2 py-[1px] text-[10.5px] font-medium leading-[1.35] tracking-tight',
         variant === 'core'
-          ? 'bg-surface-1 text-slate-700 shadow-[inset_0_0_0_1px_theme(colors.slate.200)]'
+          ? 'bg-surface-1 text-slate-700 ring-1 ring-inset ring-control-edge'
           : 'border border-dashed border-[var(--color-border)] text-slate-500',
       )}
     >

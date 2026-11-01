@@ -797,7 +797,7 @@ function StatBox({
     red: 'text-critical-700',
   }
   return (
-    <div className="rounded-md bg-surface-1 p-2 text-center shadow-sm">
+    <div className="rounded-md bg-surface-1 p-2 text-center shadow-paper-sm">
       <div className={`text-lg font-bold ${color ? colorMap[color] : 'text-alma-800'}`}>
         {value}
       </div>

@@ -86,7 +86,7 @@ export function ListControlBar({
   view,
 }: ListControlBarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
+    <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-paper-sm">
       {leading}
 
       {/* Sort: a pill for two orders, a segmented control for more. */}

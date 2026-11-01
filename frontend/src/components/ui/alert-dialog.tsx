@@ -3,6 +3,7 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants, type ButtonVariantProps } from "@/components/ui/button-variants"
+import { SCRIM } from "@/components/ui/scrim"
 import { SurfaceProvider } from "@/components/ui/surface"
 
 const AlertDialog = AlertDialogPrimitive.Root
@@ -17,7 +18,8 @@ const AlertDialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-scrim bg-scrim  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      SCRIM,
+      "z-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}

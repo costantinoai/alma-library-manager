@@ -285,8 +285,10 @@ describe('colour-guard', () => {
 })
 
 /* ───────────────────────────────────────
- * layer-guard — one z-index scale, `--z-index-*` in index.css.
+ * layer-guard — one z-index scale, `--z-index-*` in index.css, and one shadow
+ * scale, `shadow-paper-*`.
  * ─────────────────────────────────────── */
+const SHADOW_BANNED = /(?<![\w-])shadow-(?:sm|md|lg|xl|2xl|inner|\[)/g
 const LAYER_BANNED = /(?<![\w-])-?z-(\d+|\[\d+\])(?![\w-])|\bzIndex:\s*(\S+\s*\?\s*)?\d/g
 
 function scanLayers(): string[] {
@@ -298,13 +300,14 @@ function scanLayers(): string[] {
       const code = line.trim()
       if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//') || code.startsWith('{/*')) return
       for (const m of line.matchAll(LAYER_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+      for (const m of line.matchAll(SHADOW_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
     })
   }
   return hits
 }
 
 describe('layer-guard', () => {
-  it('no numeric z-index outside the scale in index.css', () => {
+  it('no numeric z-index and no shadow outside the scales in index.css', () => {
     expect(scanLayers()).toEqual([])
   })
 })

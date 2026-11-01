@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { BrandRule } from '@/components/ui/brand-rule'
+import { SCRIM } from '@/components/ui/scrim'
 import { SurfaceProvider } from '@/components/ui/surface'
+import { cn } from '@/lib/utils'
 
 const EASE = [0.22, 0.61, 0.36, 1] as const
 
@@ -35,7 +37,7 @@ export function OnboardingShell({
 
   return (
     <motion.div
-      className="fixed inset-0 z-onboarding grid place-items-center overflow-y-auto bg-scrim p-4 backdrop-blur-sm"
+      className={cn(SCRIM, 'z-onboarding grid place-items-center overflow-y-auto p-4 backdrop-blur-sm')}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

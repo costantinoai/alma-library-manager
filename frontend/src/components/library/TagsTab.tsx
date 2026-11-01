@@ -236,12 +236,12 @@ export function TagsTab() {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {tags.map((tag) => (
-            <Card key={tag.id} className="transition-shadow hover:shadow-md">
+            <Card key={tag.id} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex items-center gap-2.5">
                     <div
-                      className="h-3.5 w-3.5 shrink-0 rounded-full shadow-sm"
+                      className="h-3.5 w-3.5 shrink-0 rounded-full shadow-paper-sm"
                       style={{ backgroundColor: tag.color }}
                     />
                     <span className="truncate font-medium text-alma-800">{tag.name}</span>

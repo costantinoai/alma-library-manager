@@ -13,7 +13,7 @@ const TooltipTrigger = TooltipPrimitive.Trigger
  * - `paper`: a small card for tooltips with a list or a breakdown inside.
  */
 const TOOLTIP_TONES = {
-  ink: 'tooltip-ink bg-alma-800 text-alma-cream shadow-md',
+  ink: 'tooltip-ink bg-alma-800 text-alma-cream shadow-paper-md',
   paper: 'border border-edge-3 bg-surface-3 text-slate-700 shadow-paper-md',
 } as const
 

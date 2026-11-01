@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { ADDON_PAGES, type AddonUi } from '@/addons/registry'
 import { useBootstrap } from '@/hooks/useBootstrap'
+import { SCRIM } from '@/components/ui/scrim'
 import { cn } from '@/lib/utils'
 import { BrandRule } from '@/components/ui/brand-rule'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
@@ -198,7 +199,7 @@ export function Sidebar({
       {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-nav-scrim bg-scrim lg:hidden"
+          className={cn(SCRIM, 'z-nav-scrim lg:hidden')}
           onClick={onClose}
         />
       )}

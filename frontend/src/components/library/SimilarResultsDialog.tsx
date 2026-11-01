@@ -83,7 +83,7 @@ export function SimilarResultsDialog({
               return (
                 <div
                   key={itemKey}
-                  className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm transition-shadow hover:shadow-sm"
+                  className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm transition-shadow hover:shadow-paper-md"
                 >
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">

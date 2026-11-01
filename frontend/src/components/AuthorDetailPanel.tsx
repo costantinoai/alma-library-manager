@@ -207,7 +207,7 @@ function OpenAlexWorkRow({
   const savedInLibrary = work.already_in_db && work.local_status === 'library'
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-100 bg-surface-2 p-3 shadow-sm">
+    <div className="space-y-2 rounded-lg border border-slate-100 bg-surface-2 p-3 shadow-paper-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-alma-800">

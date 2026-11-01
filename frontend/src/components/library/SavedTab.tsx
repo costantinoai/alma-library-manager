@@ -663,14 +663,14 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
+        <div className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-paper-md">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>
           <Button size="sm" variant="outline" onClick={selectAll}>
             Select Loaded
           </Button>
-          <Button size="sm" variant="gold" onClick={() => handleDiscoverSimilar()}>
+          <Button size="sm" variant="outline" onClick={() => handleDiscoverSimilar()}>
             <Sparkles className="h-4 w-4" />
             Similar
           </Button>

@@ -269,12 +269,12 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
           {collections.map((coll) => {
             const isExpanded = expandedId === coll.id
             return (
-              <Card key={coll.id} className="overflow-hidden transition-shadow hover:shadow-md">
+              <Card key={coll.id} className="overflow-hidden transition-shadow hover:shadow-paper-sheet-hover">
                 <CardContent className="p-0">
                   {/* Collection header */}
                   <div className="flex items-center gap-4 p-5">
                     <div
-                      className="h-4 w-4 rounded-full shrink-0 shadow-sm"
+                      className="h-4 w-4 rounded-full shrink-0 shadow-paper-sm"
                       style={{ backgroundColor: coll.color }}
                     />
                     <div className="min-w-0 flex-1">

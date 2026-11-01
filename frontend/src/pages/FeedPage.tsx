@@ -971,10 +971,10 @@ export function FeedPage() {
         <section
           role="region"
           aria-label="Bulk actions"
-          className="flex flex-wrap items-center gap-3 rounded-sm border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-sm"
+          className="flex flex-wrap items-center gap-3 rounded-sm border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-paper-sm"
         >
           <div className="flex items-center gap-2.5 text-sm">
-            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-[11px] font-semibold tabular-nums text-on-fill shadow-sm">
+            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-[11px] font-semibold tabular-nums text-on-fill shadow-paper-sm">
               {selectedIds.size}
             </span>
             <span className="text-slate-700">

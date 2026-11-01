@@ -373,7 +373,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
               )
             })
             .map((topic) => (
-            <Card key={topic.canonical} className="transition-shadow hover:shadow-md">
+            <Card key={topic.canonical} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">

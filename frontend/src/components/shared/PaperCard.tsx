@@ -22,7 +22,7 @@ import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBre
 /** The card header's small round icon controls (PDF link, Discover similar).
  *  Local PDF access is independent of fetch plugins. */
 const HEADER_ICON_BUTTON = cn(
-  'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-sm transition-colors duration-150',
+  'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-paper-sm transition-colors duration-150',
   'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
   'focus-ring',
 )
@@ -370,7 +370,7 @@ export function PaperCard({
       // A PaperCard lifts one level off whatever surface it sits on; the
       // relational ladder handles the contrast, so no manual tone is needed.
       className={cn(
-        'group/paper-card relative overflow-hidden transition-all duration-150 hover:shadow-md',
+        'group/paper-card relative overflow-hidden transition-all duration-150 hover:shadow-paper-sheet-hover',
         rootClickable && 'cursor-pointer',
         className,
       )}

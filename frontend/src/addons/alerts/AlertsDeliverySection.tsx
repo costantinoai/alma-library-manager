@@ -383,7 +383,7 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
             const assignedRuleIds = (alert.rules ?? []).map((r) => r.id)
             const availableRules = allRules.filter((r) => !assignedRuleIds.includes(r.id))
             return (
-              <Card key={alert.id} className="transition-shadow hover:shadow-md">
+              <Card key={alert.id} className="transition-shadow hover:shadow-paper-sheet-hover">
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">

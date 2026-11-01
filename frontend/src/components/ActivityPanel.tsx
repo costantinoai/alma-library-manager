@@ -29,6 +29,7 @@ import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
 import { formatDayTime } from '@/lib/format'
 import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { SCRIM } from '@/components/ui/scrim'
 import { api } from '@/api/client'
 
 // ── Types ──
@@ -1370,7 +1371,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
       {isOpen && (
         <div
           onClick={() => setIsOpen(false)}
-          className="fixed inset-0 z-dock-scrim bg-scrim lg:hidden"
+          className={cn(SCRIM, 'z-dock-scrim lg:hidden')}
           aria-hidden
         />
       )}
@@ -1392,7 +1393,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             inside the same shell. */}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-sm hover:bg-surface-cool-1"
+          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-sm hover:bg-surface-cool-1"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />
@@ -1415,7 +1416,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             top area; on desktop we respect the user-resizable panelHeight. */}
         {isOpen && (
           <div
-            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-0 shadow-2xl lg:max-h-none"
+            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-0 shadow-paper-lg lg:max-h-none"
             style={{ height: `${panelHeight}px` }}
           >
           {/* Resize handle */}
