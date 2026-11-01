@@ -471,6 +471,41 @@ def _resolve_feed_from_year(settings: dict[str, str]) -> int:
         return recent_floor
 
 
+def _fetch_monitor_works(
+    db: sqlite3.Connection,
+    openalex_ids: list[str],
+    *,
+    from_year: int | None,
+    per_author_limit: int,
+) -> dict[str, list[dict]]:
+    """Recent works per monitored author, profiles merged into them included.
+
+    OpenAlex keeps delivering new works under a merged-away id, so a monitor
+    that asks only for the survivor misses them. Results come back under the
+    monitored id, one entry per work.
+    """
+    from alma.core.author_identity import merged_ids_of
+    from alma.openalex.client import batch_fetch_recent_works_for_authors
+
+    merged = {oid: merged_ids_of(db, oid) for oid in openalex_ids}
+    fetched = batch_fetch_recent_works_for_authors(
+        [*openalex_ids, *(alt for alts in merged.values() for alt in alts)],
+        from_year=from_year,
+        per_author_limit=per_author_limit,
+    )
+    for oid, alts in merged.items():
+        works = list(fetched.get(oid) or [])
+        seen = {str(work.get("id") or work.get("openalex_id") or "") for work in works}
+        for alt in alts:
+            for work in fetched.pop(alt, None) or []:
+                key = str(work.get("id") or work.get("openalex_id") or "")
+                if not key or key not in seen:
+                    seen.add(key)
+                    works.append(work)
+        fetched[oid] = works
+    return fetched
+
+
 def _upsert_candidate_paper(
     db: sqlite3.Connection,
     candidate: dict,
@@ -1779,7 +1814,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     Authors reads don't queue behind an implicit transaction.
     """
     from alma.application.discovery import read_settings as read_discovery_settings
-    from alma.openalex.client import _normalize_work, batch_fetch_recent_works_for_authors
+    from alma.openalex.client import _normalize_work
     from alma.openalex.http import get_client as get_openalex_client
 
     monitors_total = 0
@@ -1892,7 +1927,8 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
             # network round-trip.
             _commit_if_pending(db)
             try:
-                author_works = batch_fetch_recent_works_for_authors(
+                author_works = _fetch_monitor_works(
+                    db,
                     openalex_ids,
                     from_year=from_year,
                     per_author_limit=author_per_refresh,
@@ -2297,7 +2333,7 @@ def refresh_feed_monitor(
 ) -> dict | None:
     """Refresh one feed monitor and return a monitor-scoped summary."""
     from alma.application.discovery import read_settings as read_discovery_settings
-    from alma.openalex.client import _normalize_work, batch_fetch_recent_works_for_authors
+    from alma.openalex.client import _normalize_work
 
     def _log(step: str, message: str, **kwargs) -> None:
         if ctx is not None:
@@ -2382,7 +2418,8 @@ def refresh_feed_monitor(
             openalex_id = str(monitor.get("openalex_id") or "").strip()
             _log("refresh_author_monitor", f"Refreshing author monitor '{monitor['label']}'", data={"monitor_id": monitor["id"]})
             try:
-                works = batch_fetch_recent_works_for_authors(
+                works = _fetch_monitor_works(
+                    db,
                     [openalex_id],
                     from_year=from_year,
                     per_author_limit=author_per_refresh,
