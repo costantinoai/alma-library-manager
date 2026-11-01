@@ -349,6 +349,7 @@ export function PaperCard({
   const padding = isCompact ? 'p-3' : 'p-4'
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
+  const canToggleAbstract = !suppressSummaries && !showAbstractByDefault && !!paper.abstract
   const authorNames = parseAuthorNames(paper.authors)
   const authorRuns: AuthorRun[] = authorNames.length > 0
     ? (authorsExpanded
@@ -679,59 +680,46 @@ export function PaperCard({
               </div>
             )}
 
-            {/* Signal row — one dense line with bullet separators (T15,
-                2026-04-24). Reading left to right: the surface's own why-chips
-                (`metaSlot` — Feed's matched authors/monitors, Discovery's
-                provenance), citations (with the S2 influential count when
-                > 0), the paper_signal rank and the user's star rating — all of
-                them short inline facts. The score bar used to close this row
-                and now has its own line below it. Every field is
-                optional (sparse-field policy); the row hides entirely when
-                there is nothing to show. The year lives in the authors row
-                above, never here. */}
+            {/* Signal row. The surface's why on the left; the paper's own facts
+                on the right, under the date, so they stay in one column however
+                many chips the left side wraps to. Every field is optional
+                (sparse-field policy); the row hides when there is nothing. */}
             {(hasMetaLead || metaSlot) && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 text-xs text-slate-500">
                 {metaSlot && (
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                     {metaSlot}
                   </span>
                 )}
-                {citationsLabel && (
-                  <>
-                    {metaSlot && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums"
-                      title={
-                        (paper.influential_citation_count ?? 0) > 0
-                          ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
-                          : `${paper.cited_by_count} citations`
-                      }
-                    >
-                      {citationsLabel}
-                    </span>
-                  </>
-                )}
-                {rankDisplay != null && (
-                  <>
-                    {(metaSlot || citationsLabel) && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums text-slate-600"
-                      title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
-                    >
-                      Rank {rankDisplay}
-                    </span>
-                  </>
-                )}
-                {starDisplay && (
-                  <>
-                    {(metaSlot || citationsLabel || rankDisplay != null) && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums text-gold-500"
-                      title={`Your rating: ${paper.rating}/5`}
-                    >
-                      {starDisplay}
-                    </span>
-                  </>
+                {hasMetaLead && (
+                  <span className="ml-auto flex shrink-0 items-center gap-x-1.5 tabular-nums max-sm:ml-0">
+                    {citationsLabel && (
+                      <span
+                        title={
+                          (paper.influential_citation_count ?? 0) > 0
+                            ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
+                            : `${paper.cited_by_count} citations`
+                        }
+                      >
+                        {citationsLabel}
+                      </span>
+                    )}
+                    {citationsLabel && rankDisplay != null && <span className="text-slate-300">·</span>}
+                    {rankDisplay != null && (
+                      <span
+                        className="text-slate-600"
+                        title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
+                      >
+                        Rank {rankDisplay}
+                      </span>
+                    )}
+                    {(citationsLabel || rankDisplay != null) && starDisplay && <span className="text-slate-300">·</span>}
+                    {starDisplay && (
+                      <span className="text-gold-500" title={`Your rating: ${paper.rating}/5`}>
+                        {starDisplay}
+                      </span>
+                    )}
+                  </span>
                 )}
               </div>
             )}
@@ -752,55 +740,6 @@ export function PaperCard({
                     {source.replace(/_/g, ' ')}
                   </SignalChip>
                 ))}
-              </div>
-            )}
-
-            {/* Score row — the bar and its Why toggle, on a line of their own
-                below every chip row and above the actions.
-
-                They used to be the last item of the dense signal row, sharing a
-                line with "very close topic", the citation count and the star
-                rating. A measured bar is not a chip: it has its own baseline,
-                its own width and a number welded to it, so wrapped in among
-                pills it was the one element the eye could never find twice in
-                the same place. On its own line the reading is fixed — what this
-                paper is about, then how well it scored, then what you can do
-                about it. */}
-            {score != null && (
-              <div className="mt-2 flex items-center gap-2">
-                <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
-                {(hasBreakdown || hasExplanation) && (
-                  <HoverCard openDelay={200} closeDelay={100}>
-                    <HoverCardTrigger asChild>
-                      <Button variant="muted" size="inline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          const next = !showBreakdown
-                          setShowBreakdown(next)
-                          if (next && onExpandBreakdown) onExpandBreakdown()
-                        }}
-                        className="gap-0.5 px-1.5 py-0.5 text-caption"
-                        title="Show score breakdown"
-                      >
-                        Why
-                        <ChevronDown
-                          className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
-                        />
-                      </Button>
-                    </HoverCardTrigger>
-                    <HoverCardContent
-                      side="top"
-                      align="start"
-                      className="w-72 p-3"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ScoreBreakdownTeaser
-                        breakdown={scoreBreakdown}
-                        explanation={explanation}
-                      />
-                    </HoverCardContent>
-                  </HoverCard>
-                )}
               </div>
             )}
 
@@ -827,19 +766,8 @@ export function PaperCard({
               </p>
             )}
 
-            {!suppressSummaries && !showAbstractByDefault && paper.abstract && (
-              <Button variant="muted" size="inline"
-                onClick={(e) => { e.stopPropagation(); handleAbstractToggle() }}
-                className="mt-1.5 gap-0.5 text-caption"
-              >
-                Abstract
-                <ChevronDown
-                  className={`h-3 w-3 transition-transform duration-200 ${showAbstract ? 'rotate-180' : ''}`}
-                />
-              </Button>
-            )}
-            {!suppressSummaries && ((showAbstractByDefault || showAbstract) && paper.abstract) && (
-              <SubPanel variant="flat" padded={false}  className="mt-1.5 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            {!suppressSummaries && showAbstractByDefault && paper.abstract && (
+              <SubPanel variant="flat" padded={false} className="mt-1.5 px-3 py-2 text-xs leading-relaxed text-slate-600">
                 {paper.abstract}
               </SubPanel>
             )}
@@ -862,16 +790,6 @@ export function PaperCard({
 
         </div>
 
-        {/* Score breakdown (expandable) */}
-        {showBreakdown && (hasBreakdown || hasExplanation) && (
-          <SubPanel variant="flat" padded={false}  className="mt-3 px-3 py-2.5">
-            <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-slate-400">
-              Score Breakdown
-            </p>
-            <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
-          </SubPanel>
-        )}
-
         {children}
 
         {/* Caller-provided quick actions row. Discover-similar pivot used to
@@ -884,44 +802,121 @@ export function PaperCard({
           </div>
         )}
 
-        {/* Action bar */}
-        {hasActions && (
-          <div className="mt-3 border-t border-slate-100 pt-3" onClick={(e) => e.stopPropagation()}>
-            <PaperActionBar
-              onDismiss={onDismiss}
-              onQueue={onQueue}
-              onAdd={onAdd}
-              onLike={onLike}
-              onLove={onLove}
-              onDislike={onDislike}
-              onUndo={onUndo}
-              disabled={actionDisabled}
-              compact={isCompact || compactActions}
-              dismissLabel={dismissLabel}
-              dismissTitle={dismissTitle}
-              dislikeLabel={dislikeLabel}
-              dislikeTitle={dislikeTitle}
-              savedLabel={savedLabel}
-              savedReadOnly={savedReadOnly}
-              onAddToCollection={onAddToCollection}
-              addToCollectionLabel={addToCollectionLabel}
-              addToCollectionTitle={addToCollectionTitle}
-              reaction={reaction}
-              isSaved={isSaved}
-              savedClickRemoves={savedClickRemoves}
-              isQueued={isQueued}
-              showLabels={showActionLabels}
-              collectionAction={collectionConfirm ? (
-                <AddToCollectionMenu
-                  onConfirm={collectionConfirm}
-                  disabled={actionDisabled}
-                  compact={(isCompact || compactActions) && showActionLabels !== true}
-                  defaultSelectedIds={defaultCollectionIds}
-                  isSaved={isSaved}
-                />
-              ) : undefined}
-            />
+        {/* Footer: what you can do on the left, what you can read on the right.
+            The score ends at the card's right edge on every card and every
+            surface, so a ranked list reads down one column. Both toggles open
+            below this row, so the control you pressed does not move. */}
+        {(hasActions || score != null || canToggleAbstract) && (
+          <div
+            className={cn(
+              'mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-slate-100 pt-3',
+              rank != null && 'sm:pl-10',
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {hasActions && (
+              <PaperActionBar
+                onDismiss={onDismiss}
+                onQueue={onQueue}
+                onAdd={onAdd}
+                onLike={onLike}
+                onLove={onLove}
+                onDislike={onDislike}
+                onUndo={onUndo}
+                disabled={actionDisabled}
+                compact={isCompact || compactActions}
+                dismissLabel={dismissLabel}
+                dismissTitle={dismissTitle}
+                dislikeLabel={dislikeLabel}
+                dislikeTitle={dislikeTitle}
+                savedLabel={savedLabel}
+                savedReadOnly={savedReadOnly}
+                  onAddToCollection={onAddToCollection}
+                addToCollectionLabel={addToCollectionLabel}
+                addToCollectionTitle={addToCollectionTitle}
+                reaction={reaction}
+                isSaved={isSaved}
+                savedClickRemoves={savedClickRemoves}
+                isQueued={isQueued}
+                showLabels={showActionLabels}
+                collectionAction={collectionConfirm ? (
+                  <AddToCollectionMenu
+                    onConfirm={collectionConfirm}
+                    disabled={actionDisabled}
+                    compact={(isCompact || compactActions) && showActionLabels !== true}
+                    defaultSelectedIds={defaultCollectionIds}
+                    isSaved={isSaved}
+                  />
+                ) : undefined}
+              />
+            )}
+            {(canToggleAbstract || score != null) && (
+              <div className="ml-auto flex items-center gap-3 max-sm:ml-0">
+                {canToggleAbstract && (
+                  <Button variant="muted" size="inline"
+                    onClick={handleAbstractToggle}
+                    aria-expanded={showAbstract}
+                    className="gap-0.5 text-caption"
+                  >
+                    Abstract
+                    <ChevronDown
+                      className={`h-3 w-3 transition-transform duration-200 ${showAbstract ? 'rotate-180' : ''}`}
+                    />
+                  </Button>
+                )}
+                {score != null && (hasBreakdown || hasExplanation) && (
+                  <HoverCard openDelay={200} closeDelay={100}>
+                    <HoverCardTrigger asChild>
+                      <Button variant="muted" size="inline"
+                        onClick={() => {
+                          const next = !showBreakdown
+                          setShowBreakdown(next)
+                          if (next && onExpandBreakdown) onExpandBreakdown()
+                        }}
+                        aria-expanded={showBreakdown}
+                        className="gap-0.5 text-caption"
+                        title="Show score breakdown"
+                      >
+                        Why
+                        <ChevronDown
+                          className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
+                        />
+                      </Button>
+                    </HoverCardTrigger>
+                    <HoverCardContent
+                      side="top"
+                      align="end"
+                      className="w-72 p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ScoreBreakdownTeaser
+                        breakdown={scoreBreakdown}
+                        explanation={explanation}
+                      />
+                    </HoverCardContent>
+                  </HoverCard>
+                )}
+                {score != null && (
+                  <ScoreMeter score={score} reference={scoreBreakdown?.explanation?.reference_score} />
+                )}
+              </div>
+            )}
           </div>
+        )}
+
+        {canToggleAbstract && showAbstract && (
+          <SubPanel variant="flat" padded={false} className="mt-2 px-3 py-2 text-xs leading-relaxed text-slate-600">
+            {paper.abstract}
+          </SubPanel>
+        )}
+
+        {showBreakdown && (hasBreakdown || hasExplanation) && (
+          <SubPanel variant="flat" padded={false} className="mt-2 px-3 py-2.5">
+            <p className="mb-2 text-caption font-semibold uppercase tracking-wide text-slate-400">
+              Score Breakdown
+            </p>
+            <ScoreBreakdownPanel breakdown={scoreBreakdown} explanation={explanation} />
+          </SubPanel>
         )}
       </div>
     </Card>
