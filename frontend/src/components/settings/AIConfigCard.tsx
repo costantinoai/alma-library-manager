@@ -816,7 +816,7 @@ export function AIConfigCard() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => deleteInactiveEmbeddingsMutation.mutate()}
-                          className="bg-critical-600 text-on-fill hover:bg-critical-700"
+                          variant="destructive"
                         >
                           Delete inactive
                         </AlertDialogAction>
@@ -1012,7 +1012,7 @@ export function AIConfigCard() {
                     <CollapsibleTrigger
                       className={cn(
                         'group flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left',
-                        'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+                        'hover:bg-control-quiet focus-ring',
                       )}
                     >
                       <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">

@@ -9,8 +9,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { buttonVariants } from '@/components/ui/button-variants'
-import { cn } from '@/lib/utils'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -43,7 +41,7 @@ export function ConfirmDialog({
           <AlertDialogAction
             onClick={onConfirm}
             disabled={isPending}
-            className={cn(buttonVariants({ variant }))}
+            variant={variant}
           >
             {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             Confirm

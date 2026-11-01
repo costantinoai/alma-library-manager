@@ -421,7 +421,7 @@ export function LensManager({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
-              className="bg-critical-600 text-on-fill hover:bg-critical-700"
+              variant="destructive"
             >
               Delete lens
             </AlertDialogAction>
