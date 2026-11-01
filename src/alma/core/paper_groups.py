@@ -74,9 +74,31 @@ _ALL_PAPER_SIDECAR_TABLES = frozenset(
 )
 
 
+# What a duplicate row hands its survivor: the user's own marks on the paper.
+# A duplicate is the same work, so nothing the user did to it may be lost, but
+# unlike a preprint it donates no metadata (D15).
+_DUPLICATE_USER_STATE_TABLES = (
+    "collection_items",
+    "publication_tags",
+    "recommendations",
+    "feed_items",
+    "lens_signals",
+    "paper_pdf_rejections",
+)
+
+# Strongest first. A merge keeps the strongest state any twin holds.
+_FEED_STATUS_RANK = ("love", "like", "add", "dislike", "dismissed", "new")
+_MEMBERSHIP_RANK = ("library", "inbox", "removed", "dismissed", "tracked")
+
+
 def _migrate_tables() -> tuple[str, ...]:
     """Tables a preprint moves onto its published root, add-ons included."""
     return (*_PREPRINT_TO_PAPER_MIGRATE_TABLES, *addons.paper_tables())
+
+
+def _duplicate_user_state_tables() -> tuple[str, ...]:
+    """Tables a duplicate hands to its survivor, add-ons that follow a merge included."""
+    return (*_DUPLICATE_USER_STATE_TABLES, *addons.paper_tables(follows_merge=True))
 
 
 def _sidecar_tables() -> frozenset[str]:
@@ -362,6 +384,68 @@ def _repoint_table(
         return 0
 
 
+def _strongest(values: Iterable[str], rank: tuple[str, ...]) -> str:
+    return min(values, key=lambda value: rank.index(value) if value in rank else len(rank))
+
+
+def _settle_feed_status_before_repoint(
+    conn: sqlite3.Connection, loser_id: str, root_id: str
+) -> None:
+    """Give the root's Feed rows the strongest verdict of both papers.
+
+    `feed_items` is UNIQUE(paper_id, author_id), so when both twins came from
+    the same monitor the loser's row cannot move and is dropped with its status.
+    Every row of a paper shows one verdict (`apply_feed_action` settles them
+    together), so writing the strongest one onto the root keeps it. Call before
+    the loser's rows are repointed; the rows that do move take it afterwards.
+    """
+    statuses = {
+        str(row[0] or "new")
+        for row in conn.execute(
+            "SELECT status FROM feed_items WHERE paper_id IN (?, ?)", (loser_id, root_id)
+        )
+    }
+    if len(statuses) > 1:
+        conn.execute(
+            "UPDATE feed_items SET status = ? WHERE paper_id IN (?, ?)",
+            (_strongest(statuses, _FEED_STATUS_RANK), loser_id, root_id),
+        )
+
+
+def _carry_recommendation_actions(
+    conn: sqlite3.Connection, loser_id: str, root_id: str
+) -> None:
+    """Keep a verdict on a Discovery card whose row cannot move.
+
+    One suggestion set holds a paper once, so a loser's row colliding with the
+    root's is dropped by the repoint; its action goes to the root's row first.
+    """
+    conn.execute(
+        """
+        UPDATE recommendations AS keep
+        SET user_action = gone.user_action, action_at = gone.action_at
+        FROM recommendations AS gone
+        WHERE keep.paper_id = ? AND gone.paper_id = ?
+          AND keep.lens_id = gone.lens_id
+          AND keep.suggestion_set_id = gone.suggestion_set_id
+          AND COALESCE(TRIM(keep.user_action), '') = ''
+          AND COALESCE(TRIM(gone.user_action), '') <> ''
+        """,
+        (root_id, loser_id),
+    )
+
+
+def _repoint_user_state(
+    conn: sqlite3.Connection, table: str, loser_id: str, root_id: str
+) -> int:
+    """Move one table's rows to the root without losing a verdict on a collision."""
+    if table == "feed_items":
+        _settle_feed_status_before_repoint(conn, loser_id, root_id)
+    elif table == "recommendations":
+        _carry_recommendation_actions(conn, loser_id, root_id)
+    return _repoint_table(conn, table, loser_id, root_id)
+
+
 def _delete_table_rows(conn: sqlite3.Connection, table: str, paper_id: str) -> int:
     if not table_has_paper_id(conn, table):
         return 0
@@ -457,32 +541,21 @@ def _absorbs_into_root(row: Mapping[str, Any] | sqlite3.Row, root: Mapping[str, 
     return is_preprint_row(row) and not is_component_row(row) and not is_preprint_row(root)
 
 
-def _upgrade_root_scalars(
-    conn: sqlite3.Connection, loser: sqlite3.Row, root: sqlite3.Row
-) -> None:
-    """Consolidate preprint evidence/user state into a published root."""
-    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(papers)")}
-    root_id = str(root["id"])
-    live_root = conn.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone() or root
+def _is_duplicate_of_root(row: Mapping[str, Any] | sqlite3.Row, root: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """A second row of the same work: it hands over what the user did to it."""
+    return not is_component_row(row) and not _absorbs_into_root(row, root)
+
+
+def _carry_user_scalars(
+    live_root: Mapping[str, Any] | sqlite3.Row, loser: Mapping[str, Any] | sqlite3.Row
+) -> dict[str, Any]:
+    """What the loser's curation changes on the root.
+
+    Membership takes the stronger of the two. A Library row's date is the save
+    and goes with it, because the root's own date is at best an ingest date.
+    """
     updates: dict[str, Any] = {}
-    if not _absorbs_into_root(loser, root):
-        return
-    fill_fields: list[str] = []
-    fill_fields.extend(
-        [
-            "authors",
-            "abstract",
-            "keywords",
-            "tldr",
-            "notes",
-            "added_at",
-            "added_from",
-            "reading_status",
-        ]
-    )
-    for field in fill_fields:
-        if field not in columns:
-            continue
+    for field in ("notes", "reading_status"):
         root_value = _value(live_root, field)
         loser_value = _value(loser, field)
         if (root_value is None or str(root_value).strip() == "") and loser_value not in (None, ""):
@@ -491,19 +564,37 @@ def _upgrade_root_scalars(
     loser_notes = str(_value(loser, "notes") or "").strip()
     if root_notes and loser_notes and loser_notes not in root_notes:
         updates["notes"] = root_notes + "\n\n" + loser_notes
-    for field in ("cited_by_count", "influential_citation_count", "rating"):
-        if field in columns:
-            updates[field] = max(
-                int(_value(live_root, field) or 0),
-                int(_value(loser, field) or 0),
-            )
-    if "status" in columns and str(_value(loser, "status") or "") == "library":
-        # The saved row's date is the save; the root's own date is an ingest date.
-        if str(_value(live_root, "status") or "") != "library" and _value(loser, "added_at"):
-            updates["added_at"] = _value(loser, "added_at")
-        updates["status"] = "library"
-    if not updates:
+    updates["rating"] = max(int(_value(live_root, "rating") or 0), int(_value(loser, "rating") or 0))
+
+    root_status = str(_value(live_root, "status") or "")
+    loser_status = str(_value(loser, "status") or "")
+    status = _strongest({root_status, loser_status}, _MEMBERSHIP_RANK)
+    if status != root_status:
+        updates["status"] = status
+        for field in ("added_at", "added_from"):
+            if _value(loser, field):
+                updates[field] = _value(loser, field)
+    return updates
+
+
+def _upgrade_root_scalars(
+    conn: sqlite3.Connection, loser: sqlite3.Row, root: sqlite3.Row
+) -> None:
+    """Consolidate a child's user state, and a preprint's evidence, into the root."""
+    root_id = str(root["id"])
+    live_root = conn.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone() or root
+    updates: dict[str, Any] = {}
+    if _absorbs_into_root(loser, root):
+        for field in ("authors", "abstract", "keywords", "tldr", "added_at", "added_from"):
+            root_value = _value(live_root, field)
+            loser_value = _value(loser, field)
+            if (root_value is None or str(root_value).strip() == "") and loser_value not in (None, ""):
+                updates[field] = loser_value
+        for field in ("cited_by_count", "influential_citation_count"):
+            updates[field] = max(int(_value(live_root, field) or 0), int(_value(loser, field) or 0))
+    elif not _is_duplicate_of_root(loser, root):
         return
+    updates.update(_carry_user_scalars(live_root, loser))
     updates["updated_at"] = utcnow().isoformat()
     assignments = ", ".join(f"{field} = ?" for field in updates)
     conn.execute(
@@ -760,14 +851,14 @@ def absorb_paper_group(
     for pid, row in rows.items():
         if pid == root_id:
             continue
-        absorbs = _absorbs_into_root(row, root)
         _upgrade_root_scalars(conn, row, root)
-        if not absorbs:
+        if is_component_row(row):
             cleaned += purge_orphan_subordinate_state(conn, pid)
             continue
-        tables = _migrate_tables()
+        absorbs = _absorbs_into_root(row, root)
+        tables = _migrate_tables() if absorbs else _duplicate_user_state_tables()
         for table in tables:
-            count = _repoint_table(conn, table, pid, root_id)
+            count = _repoint_user_state(conn, table, pid, root_id)
             migrated[table] = migrated.get(table, 0) + count
         feedback_migrated += _merge_feedback(conn, pid, root_id)
         preferences_migrated += _merge_preference_profile(conn, pid, root_id)
