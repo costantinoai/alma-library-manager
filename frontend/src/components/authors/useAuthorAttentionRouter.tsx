@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   api,
+  getApiErrorMessage,
   queueAuthorHistoryBackfill,
   refreshFeedMonitor,
   type Author,
@@ -15,7 +16,7 @@ import {
 } from '@/components/authors/AuthorsNeedsAttentionSection'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { describeJobLaunch } from '@/lib/activity'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 
 export interface AuthorAttentionRouter {
   openForRow: (row: AuthorNeedsAttentionRow) => void
@@ -32,7 +33,8 @@ export interface AuthorAttentionRouter {
 
 interface UseAuthorAttentionRouterOptions {
   authorsById?: Map<string, Author>
-  onOpenDetail?: (author: Author) => void
+  /** `tab` opens the panel on that tab: a review lands on its candidates. */
+  onOpenDetail?: (author: Author, tab?: 'identifiers') => void
 }
 
 export function useAuthorAttentionRouter(
@@ -52,57 +54,61 @@ export function useAuthorAttentionRouter(
         `/authors/${encodeURIComponent(authorId)}/identity-profile-refresh`,
       ),
     onSuccess: (data, authorId) => {
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['activity-operations'],
-        ['author-detail', authorId],
-      )
+      void invalidateAfterAuthorChange(queryClient, authorId)
       toast(describeJobLaunch(data, 'Author refresh'))
     },
-    onError: () => errorToast('Error', 'Could not queue refresh.'),
+    onError: (err) => errorToast('Could not queue the refresh', getApiErrorMessage(err)),
   })
 
   // Operational fixes surfaced by the unified needs-attention feed (the same
   // canonical rows the Health popup shows) — queue the fix directly, no dialog.
   const monitorRefreshMutation = useMutation({
-    mutationFn: (monitorId: string) => refreshFeedMonitor(monitorId),
-    onSuccess: () => {
-      void invalidateQueries(
-        queryClient,
-        ['authors-needs-attention'],
-        ['feed-monitors'],
-        ['feed-inbox'],
-        ['insights-diag'],
-      )
-      toast({ title: 'Monitor refresh queued', description: 'Running in Activity.' })
+    mutationFn: (row: AuthorNeedsAttentionRow) => refreshFeedMonitor(row.monitor_id ?? ''),
+    onSuccess: (data, row) => {
+      void invalidateAfterAuthorChange(queryClient, row.author_id)
+      void invalidateQueries(queryClient, ['feed-inbox'])
+      toast(describeJobLaunch(data, `Monitor refresh of ${row.author_name}`))
     },
-    onError: () => errorToast('Error', 'Monitor refresh failed.'),
+    onError: (err) => errorToast('Monitor refresh failed', getApiErrorMessage(err)),
   })
   const backfillMutation = useMutation({
     mutationFn: (authorId: string) => queueAuthorHistoryBackfill(authorId),
-    onSuccess: () => {
-      void invalidateQueries(
-        queryClient,
-        ['authors-needs-attention'],
-        ['authors'],
-        ['insights-diag'],
-        ['activity-operations'],
-      )
-      toast({ title: 'Historical backfill queued', description: 'Track progress in Activity.' })
+    onSuccess: (data, authorId) => {
+      void invalidateAfterAuthorChange(queryClient, authorId)
+      toast(describeJobLaunch(data, 'Historical backfill'))
     },
-    onError: () => errorToast('Error', 'Historical backfill failed.'),
+    onError: (err) => errorToast('Historical backfill failed', getApiErrorMessage(err)),
   })
+
+  // A row can name an author the loaded list does not hold; the panel loads the
+  // rest of the record from the id.
+  const authorOf = (row: AuthorNeedsAttentionRow): Author =>
+    options.authorsById?.get(row.author_id) ??
+    ({ id: row.author_id, name: row.author_name, author_type: 'background' } as Author)
+  const openAuthor = (row: AuthorNeedsAttentionRow) => options.onOpenDetail?.(authorOf(row))
+  const openIdentifiers = (row: AuthorNeedsAttentionRow) =>
+    options.onOpenDetail?.(authorOf(row), 'identifiers')
+
+  // A double click lands before the button can disable: one job per click-burst.
+  const startedJobs = useRef(new Set<string>())
+  const startOnce = (key: string, start: (onSettled: () => void) => void) => {
+    if (startedJobs.current.has(key)) return
+    startedJobs.current.add(key)
+    start(() => startedJobs.current.delete(key))
+  }
 
   const openForRow = (row: AuthorNeedsAttentionRow) => {
     const code = row.suggested_action.code
     if (code === 'refresh_monitor') {
-      if (row.monitor_id) monitorRefreshMutation.mutate(row.monitor_id)
+      startOnce(`monitor:${row.author_id}`, (onSettled) =>
+        monitorRefreshMutation.mutate(row, { onSettled }),
+      )
       return
     }
     if (code === 'backfill_author') {
-      backfillMutation.mutate(row.author_id)
+      startOnce(`backfill:${row.author_id}`, (onSettled) =>
+        backfillMutation.mutate(row.author_id, { onSettled }),
+      )
       return
     }
     if (code === 'review_profiles') {
@@ -118,15 +124,16 @@ export function useAuthorAttentionRouter(
       return
     }
     if (code === 'review_candidates') {
-      const author = options.authorsById?.get(row.author_id)
-      if (author && options.onOpenDetail) options.onOpenDetail(author)
+      openIdentifiers(row)
       return
     }
     if (code === 'manual_search' || code === 'resolve_now' || code === 'retry_refresh') {
       setIdentifierRow(row)
       return
     }
-    refreshMutation.mutate(row.author_id)
+    startOnce(`refresh:${row.author_id}`, (onSettled) =>
+      refreshMutation.mutate(row.author_id, { onSettled }),
+    )
   }
 
   /**
@@ -184,14 +191,7 @@ export function useAuthorAttentionRouter(
       for (const id of backfillIds) await run(queueAuthorHistoryBackfill(id))
     } finally {
       setFixingAll(false)
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['activity-operations'],
-        ['feed-monitors'],
-        ['insights-diag'],
-      )
+      void invalidateAfterAuthorChange(queryClient)
     }
 
     const parts = [`${queued} fix${queued === 1 ? '' : 'es'} queued`]
@@ -204,27 +204,26 @@ export function useAuthorAttentionRouter(
   const dialogs = (
     <>
       <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
-      <AddIdentifierDialog row={identifierRow} onClose={() => setIdentifierRow(null)} />
+      <AddIdentifierDialog
+        row={identifierRow}
+        onClose={() => setIdentifierRow(null)}
+        onSearchCandidates={(row) => {
+          setIdentifierRow(null)
+          openIdentifiers(row)
+        }}
+      />
       <ResolveConflictDialog row={conflictRow} onClose={() => setConflictRow(null)} />
       <AffiliationPickerDialog row={affiliationRow} onClose={() => setAffiliationRow(null)} />
     </>
   )
-
-  const openAuthor = (row: AuthorNeedsAttentionRow) => {
-    // A row can name an author outside the followed list; the panel loads the
-    // rest of the record from the id.
-    const author =
-      options.authorsById?.get(row.author_id) ??
-      ({ id: row.author_id, name: row.author_name, author_type: 'background' } as Author)
-    options.onOpenDetail?.(author)
-  }
 
   return {
     openForRow,
     openAuthor,
     isRefreshingFor: (authorId) =>
       (refreshMutation.isPending && refreshMutation.variables === authorId) ||
-      (backfillMutation.isPending && backfillMutation.variables === authorId),
+      (backfillMutation.isPending && backfillMutation.variables === authorId) ||
+      (monitorRefreshMutation.isPending && monitorRefreshMutation.variables?.author_id === authorId),
     fixAll: (rows) => void fixAll(rows),
     isFixingAll: fixingAll,
     countAutoFixable: (rows) =>

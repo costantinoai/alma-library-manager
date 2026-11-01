@@ -1,4 +1,4 @@
-import { type ComponentType, useState } from 'react'
+import { useEffect, type ComponentType, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -66,7 +66,11 @@ import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { describeJobLaunch } from '@/lib/activity'
 import { reactionFromRating } from '@/lib/reactions'
-import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterAuthorChange,
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
 import { formatPercent, formatYearMonth } from '@/lib/format'
 
@@ -86,6 +90,8 @@ interface AuthorDetailPanelProps {
    * expected to close the dialog and invalidate its author queries.
    */
   onDeleted?: (author: Author) => void
+  /** The tab to open on. A Needs attention review starts on Identifiers. */
+  initialTab?: 'identifiers'
   /** Marks the user's own author profile (set during onboarding). */
   isOwner?: boolean
 }
@@ -296,6 +302,7 @@ export function AuthorDetailPanel({
   onOpenChange,
   suggestion,
   onDeleted,
+  initialTab,
   isOwner,
 }: AuthorDetailPanelProps) {
   const queryClient = useQueryClient()
@@ -319,7 +326,11 @@ export function AuthorDetailPanel({
   const canMerge = hasAuthorRow || !!suggestion?.openalex_id
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
   const [mergeOpen, setMergeOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'overview')
+  // The panel stays mounted between authors: each opening starts on its own tab.
+  useEffect(() => {
+    if (open) setActiveTab(initialTab ?? 'overview')
+  }, [open, author?.id, initialTab])
 
   const detailQuery = useQuery({
     queryKey: ['author-detail', author?.id],
@@ -399,13 +410,7 @@ export function AuthorDetailPanel({
         `/authors/${encodeURIComponent(resolved.id)}/deep-refresh`,
       ),
     onSuccess: (data) => {
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['author-detail', resolved.id],
-        ['author-publications', resolved.id],
-        ['activity-operations'],
-      )
+      void invalidateAfterAuthorChange(queryClient, resolved.id)
       toast(describeJobLaunch(data, `Refresh of ${resolved.name}`))
     },
     onError: () => errorToast('Error', 'Failed to start author refresh.'),
@@ -425,12 +430,8 @@ export function AuthorDetailPanel({
       }
     },
     onSuccess: () => {
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['library-followed-authors'],
-        ['author-suggestions'],
-      )
+      void invalidateAfterAuthorChange(queryClient)
+      void invalidateQueries(queryClient, ['author-suggestions'])
       toast({
         title: hasAuthorRow ? 'Author removed' : 'Suggestion dismissed',
         description: hasAuthorRow
@@ -836,7 +837,7 @@ export function AuthorDetailPanel({
           </TabsContent>
 
           <TabsContent value="identifiers" className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-            <AuthorIdentifierResolution author={resolved} />
+            <AuthorIdentifierResolution author={resolved} onAccepted={() => onOpenChange(false)} />
           </TabsContent>
         </Tabs>
 

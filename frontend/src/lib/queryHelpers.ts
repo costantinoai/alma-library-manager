@@ -85,6 +85,34 @@ export function invalidateAfterPaperMutation(
   return invalidateQueries(qc, ...keys)
 }
 
+/**
+ * After anything that changes an author's identity, membership or attention
+ * state. Every screen that counts or lists authors refreshes here: the page,
+ * the Needs attention list, Health and Home, so none of them can keep showing a
+ * problem that was just fixed. `author-suggestions` is not one: it is slow, and
+ * only a merge or a removal changes it, so those two add it.
+ */
+export function invalidateAfterAuthorChange(qc: QueryClient, authorId?: string): Promise<void[]> {
+  const keys: unknown[][] = [
+    ['authors'],
+    ['authors-needs-attention'],
+    ['library-followed-authors'],
+    ['feed-monitors'],
+    ['activity-operations'],
+    ['health'],
+    ['insights-diag'],
+    ['home-brief'],
+  ]
+  if (authorId) {
+    keys.push(
+      ['author-detail', authorId],
+      ['author-publications', authorId],
+      ['author-affiliations', authorId],
+    )
+  }
+  return invalidateQueries(qc, ...keys)
+}
+
 /** After archiving or retrying a failed capture record. */
 export function invalidateAfterCaptureMutation(qc: QueryClient): Promise<void[]> {
   return invalidateQueries(

@@ -14,6 +14,7 @@ interface CorpusAuthorsTableProps {
   authors: Author[]
   followedIds: Set<string>
   onSelect: (author: Author) => void
+  isLoading?: boolean
 }
 
 interface CorpusRow extends Author {
@@ -26,7 +27,7 @@ interface CorpusRow extends Author {
  * compact views) so column visibility, resize, and drag-reorder stay
  * consistent across surfaces.
  */
-export function CorpusAuthorsTable({ authors, followedIds, onSelect }: CorpusAuthorsTableProps) {
+export function CorpusAuthorsTable({ authors, followedIds, onSelect, isLoading }: CorpusAuthorsTableProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -130,7 +131,9 @@ export function CorpusAuthorsTable({ authors, followedIds, onSelect }: CorpusAut
           <Database className="h-4 w-4 text-slate-500" />
           <div>
             <h2 className="text-sm font-semibold text-alma-800">Corpus authors</h2>
-            <p className="text-xs text-slate-500">{authors.length} in DB — click to browse</p>
+            <p className="text-xs text-slate-500">
+              {isLoading ? 'Loading…' : `${authors.length} in DB — click to browse`}
+            </p>
           </div>
         </CollapsibleTrigger>
         {open ? (

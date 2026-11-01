@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search } from 'lucide-react'
 
-import { api, type Author } from '@/api/client'
+import { api, getApiErrorMessage, type Author } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useAcceptUnidentified } from '@/components/authors/useAcceptUnidentified'
 import { useToast, errorToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
 
 interface OpenAlexCandidate {
   openalex_id: string
@@ -41,6 +42,8 @@ interface CandidatesResponse {
 
 interface AuthorIdentifierResolutionProps {
   author: Author
+  /** The verdict is in and nothing is left to do here: the panel closes. */
+  onAccepted?: () => void
 }
 
 /**
@@ -49,7 +52,7 @@ interface AuthorIdentifierResolutionProps {
  * on the Authors page as a separate dialog; now it's a tab inside
  * ``AuthorDetailPanel`` per the Authors page rehaul (decision 3).
  */
-export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutionProps) {
+export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentifierResolutionProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [openalexId, setOpenalexId] = useState(author.openalex_id ?? '')
@@ -90,11 +93,18 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
     mutationFn: (payload: { openalex_id?: string; scholar_id?: string; orcid?: string }) =>
       api.post(`/authors/${encodeURIComponent(author.id)}/confirm-identifiers`, payload),
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['authors'], ['author-detail', author.id])
+      void invalidateAfterAuthorChange(queryClient, author.id)
       toast({ title: 'Identifiers updated', description: 'Author identifiers saved.' })
     },
-    onError: () => errorToast('Error', 'Failed to save identifiers.'),
+    onError: (err) => errorToast('Could not save identifiers', getApiErrorMessage(err)),
   })
+
+  // No candidate is right: the same terminal exit the Resolve identity dialog has.
+  const acceptMutation = useAcceptUnidentified(onAccepted)
+  const needsVerdict = ['error', 'no_match', 'needs_manual_review', 'unresolved'].includes(
+    author.id_resolution_status ?? '',
+  )
+  const hasIdentifier = !!(openalexId.trim() || scholarId.trim() || orcid.trim())
 
   return (
     <div className="space-y-4">
@@ -250,7 +260,19 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
         <p className="text-xs text-slate-500">Last reason: {author.id_resolution_reason}</p>
       ) : null}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {needsVerdict ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => acceptMutation.mutate({ id: author.id, name: author.name })}
+            disabled={acceptMutation.isPending || confirmMutation.isPending}
+            title="No candidate is this person. They stay, and stop being flagged."
+          >
+            {acceptMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Can&apos;t identify
+          </Button>
+        ) : null}
         <Button
           size="sm"
           onClick={() =>
@@ -260,7 +282,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
               orcid: orcid.trim() || undefined,
             })
           }
-          disabled={confirmMutation.isPending}
+          disabled={confirmMutation.isPending || acceptMutation.isPending || !hasIdentifier}
         >
           {confirmMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Save identifiers

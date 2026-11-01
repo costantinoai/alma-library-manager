@@ -15,11 +15,11 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 
-import { deleteAuthor } from '@/api/client'
+import { deleteAuthor, getApiErrorMessage } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/library'
 import { errorToast, useToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 
 interface DeleteAuthorButtonProps {
   authorId: string
@@ -46,19 +46,12 @@ export function DeleteAuthorButton({
     mutationFn: () => deleteAuthor(authorId),
     onSuccess: async () => {
       setConfirming(false)
-      await invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['author-detail', authorId],
-        ['author-suggestions'],
-        ['health'],
-        ['papers'],
-      )
+      await invalidateAfterAuthorChange(queryClient, authorId)
+      await invalidateQueries(queryClient, ['papers'], ['author-suggestions'])
       toast({ title: 'Author deleted', description: authorName })
       onDeleted?.()
     },
-    onError: (err) => errorToast('Could not delete author', String(err)),
+    onError: (err) => errorToast('Could not delete author', getApiErrorMessage(err)),
   })
 
   return (
