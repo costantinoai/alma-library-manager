@@ -663,7 +663,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="sticky bottom-3 z-30 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
+        <div className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>

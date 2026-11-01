@@ -386,7 +386,7 @@ export function PaperCard({
           bar pill. Echoes the bookmark/spine motif from the brand mark. */}
       {isSaved && (
         <div
-          className="pointer-events-none absolute -left-3 -top-3 z-10 h-6 w-6 rotate-45 bg-gold-400"
+          className="pointer-events-none absolute -left-3 -top-3 z-local h-6 w-6 rotate-45 bg-gold-400"
           aria-hidden
         />
       )}
@@ -398,7 +398,7 @@ export function PaperCard({
       {selection && (
         <div
           className={cn(
-            'absolute inset-y-0 left-0 z-10 flex w-8 items-start justify-center pt-[18px] transition-colors duration-200',
+            'absolute inset-y-0 left-0 z-local flex w-8 items-start justify-center pt-[18px] transition-colors duration-200',
             selection.checked
               ? 'bg-alma-folio'
               : 'bg-transparent group-hover/paper-card:bg-control-quiet',

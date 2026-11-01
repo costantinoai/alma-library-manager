@@ -16,7 +16,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-scrim bg-scrim data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className,
     )}
     {...props}
@@ -45,7 +45,7 @@ const DialogContent = React.forwardRef<
           // patched this locally with ad-hoc max-h-[NNvh] overrides — this is
           // the primitive-level default; per-dialog className overrides still
           // win via cn()'s twMerge.
-          'fixed left-[50%] top-[50%] z-50 grid max-h-[85dvh] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
+          'fixed left-[50%] top-[50%] z-modal grid max-h-[85dvh] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
           className,
         )}
         {...props}

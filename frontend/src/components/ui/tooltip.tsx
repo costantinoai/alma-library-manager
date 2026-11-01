@@ -31,7 +31,7 @@ const TooltipContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        'z-[1000] overflow-hidden rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
+        'z-tooltip overflow-hidden rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',
         TOOLTIP_TONES[tone],
         className,
       )}

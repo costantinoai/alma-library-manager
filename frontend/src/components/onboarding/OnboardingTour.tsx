@@ -162,7 +162,7 @@ export function OnboardingTour({
     <AnimatePresence>
       {open && step ? (
         <motion.div
-          className="fixed inset-0 z-[55]"
+          className="fixed inset-0 z-tour"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

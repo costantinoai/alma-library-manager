@@ -283,3 +283,28 @@ describe('colour-guard', () => {
     expect(scanColours()).toEqual([])
   })
 })
+
+/* ───────────────────────────────────────
+ * layer-guard — one z-index scale, `--z-index-*` in index.css.
+ * ─────────────────────────────────────── */
+const LAYER_BANNED = /(?<![\w-])-?z-(\d+|\[\d+\])(?![\w-])|\bzIndex:\s*(\S+\s*\?\s*)?\d/g
+
+function scanLayers(): string[] {
+  const hits: string[] = []
+  for (const file of allSource(ROOT)) {
+    const rel = relative(ROOT, file).split(sep).join('/')
+    if (rel === 'test/surface-guard.test.ts') continue
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      const code = line.trim()
+      if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//') || code.startsWith('{/*')) return
+      for (const m of line.matchAll(LAYER_BANNED)) hits.push(`${rel}:${i + 1}  ${m[0]}`)
+    })
+  }
+  return hits
+}
+
+describe('layer-guard', () => {
+  it('no numeric z-index outside the scale in index.css', () => {
+    expect(scanLayers()).toEqual([])
+  })
+})

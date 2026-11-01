@@ -198,7 +198,7 @@ export function Sidebar({
       {/* Mobile overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-scrim lg:hidden"
+          className="fixed inset-0 z-nav-scrim bg-scrim lg:hidden"
           onClick={onClose}
         />
       )}
@@ -214,7 +214,7 @@ export function Sidebar({
           // Texture + shadow recipe lives in .alma-cardstock-cover
           // (index.css) — keep this class in sync when tweaking.
           'alma-cardstock-cover',
-          'fixed inset-y-0 left-0 z-50 flex flex-col transition-[transform,width] duration-200 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-nav flex flex-col transition-[transform,width] duration-200 lg:translate-x-0',
           // Width is responsive to `collapsed` — but only on desktop.
           // On mobile the off-canvas drawer always uses the full width.
           // The literal widths live in `sidebarMetrics` so the main column

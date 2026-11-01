@@ -35,7 +35,7 @@ export function OnboardingShell({
 
   return (
     <motion.div
-      className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-scrim p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-onboarding grid place-items-center overflow-y-auto bg-scrim p-4 backdrop-blur-sm"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

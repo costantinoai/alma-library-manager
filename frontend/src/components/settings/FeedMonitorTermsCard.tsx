@@ -313,7 +313,7 @@ function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggab
   const sortableStyle = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 10 : undefined,
+    zIndex: isDragging ? 'var(--z-index-local)' : undefined,
   }
   const queryClient = useQueryClient()
   const { toast } = useToast()

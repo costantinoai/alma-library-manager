@@ -1094,7 +1094,7 @@ function OperationDetailView({
       )}
 
       {/* ── LOG STREAM TOOLBAR ── */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
+      <div className="sticky top-0 z-local flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
         <EyebrowLabel tone="muted">Log stream</EyebrowLabel>
         <span className="text-[11px] tabular-nums text-slate-400">
           {filteredLogs.length}/{logs.length}
@@ -1370,7 +1370,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
       {isOpen && (
         <div
           onClick={() => setIsOpen(false)}
-          className="fixed inset-0 z-30 bg-scrim lg:hidden"
+          className="fixed inset-0 z-dock-scrim bg-scrim lg:hidden"
           aria-hidden
         />
       )}
@@ -1381,7 +1381,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
           with everything else instead of leaving a dead gutter. */}
       <div
         className={cn(
-          'fixed bottom-0 left-0 right-0 z-40 transition-[left] duration-200',
+          'fixed bottom-0 left-0 right-0 z-dock transition-[left] duration-200',
           sidebarInset(SIDEBAR_DOCK_INSET, sidebarCollapsed),
         )}
       >

@@ -43,7 +43,7 @@ export function TopBar({
   const shortcutKey = isMacPlatform() ? '⌘K' : 'Ctrl K'
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
+    <header className="sticky top-0 z-chrome flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
       <div className="flex items-center gap-4">
         <button
           onClick={onMenuClick}

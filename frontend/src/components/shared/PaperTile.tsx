@@ -101,7 +101,7 @@ export function PaperTile({
       {note && (
         <span
           className={cn(
-            'pointer-events-none absolute right-0 top-0 z-[1] h-0 w-0 border-l-[18px] border-t-[18px] border-l-transparent',
+            'pointer-events-none absolute right-0 top-0 z-local h-0 w-0 border-l-[18px] border-t-[18px] border-l-transparent',
             note.noteFold,
           )}
           aria-hidden
@@ -157,7 +157,7 @@ export function PaperTile({
           <span className="min-w-0 truncate text-[11px] font-medium text-slate-500">
             {reason}
           </span>
-          <div className="relative z-10 flex shrink-0 items-center gap-1.5">
+          <div className="relative z-local flex shrink-0 items-center gap-1.5">
             {explanation && (
               <JargonHint
                 title="Why this is here"
@@ -174,14 +174,14 @@ export function PaperTile({
           </div>
         </div>
       )}
-      {/* Triage strip. `relative z-10` lifts it above the title link's
+      {/* Triage strip. `relative z-local` lifts it above the title link's
           `::after` overlay — without it every button would be a navigation
           click. `mt-auto` keeps it pinned to the bottom when there is no
           reason footer to do that job. */}
       {actions && (
         <div
           className={cn(
-            'relative z-10 mt-auto border-t border-edge-1 bg-control-quiet px-3 py-2',
+            'relative z-local mt-auto border-t border-edge-1 bg-control-quiet px-3 py-2',
             note?.notePlate,
           )}
         >

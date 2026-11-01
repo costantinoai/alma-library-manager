@@ -114,7 +114,7 @@ function LandingPaperRow({
           separate footer). Each chip carries the full `detail`
           string in its title attribute for hover-to-reveal context. */}
       {reasonsSlot ? (
-        <div className="pointer-events-none absolute bottom-2 right-2 z-10 flex flex-wrap justify-end gap-1.5 [&>*]:pointer-events-auto">
+        <div className="pointer-events-none absolute bottom-2 right-2 z-local flex flex-wrap justify-end gap-1.5 [&>*]:pointer-events-auto">
           {reasonsSlot}
         </div>
       ) : null}

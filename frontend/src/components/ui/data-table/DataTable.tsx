@@ -425,7 +425,7 @@ export function DataTable<T>({
                                 onTouchStart={header.getResizeHandler()}
                                 onDoubleClick={() => header.column.resetSize()}
                                 onClick={(e) => e.stopPropagation()}
-                                className="group/resize absolute -right-1.5 top-1/2 z-10 h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none select-none"
+                                className="group/resize absolute -right-1.5 top-1/2 z-local h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none select-none"
                               >
                                 <span
                                   className={cn(
@@ -553,7 +553,7 @@ function DraggableHeader({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.7 : 1,
-    zIndex: isDragging ? 1 : undefined,
+    zIndex: isDragging ? 'var(--z-index-local)' : undefined,
     ...(fixedLayout ? { width: size } : { minWidth: size }),
   }
   return (
