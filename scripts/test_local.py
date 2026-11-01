@@ -174,15 +174,25 @@ def run_pytest(paths: list[Path], *, dry_run: bool, workers: int, shuffle_seed: 
             random.Random(shuffle_seed + index).shuffle(files)
     log_dir = Path(tempfile.mkdtemp(prefix="alma-test-run-"))
     started = time.perf_counter()
+    # Throwaway test databases live in RAM. Each test builds a schema, and on
+    # disk the fsyncs of that build were most of the suite's wall time.
+    ram = Path("/dev/shm")
+    scratch = Path(tempfile.mkdtemp(prefix="alma-pytest-", dir=ram if ram.is_dir() else None))
 
     def run_shard(index: int, files: list[Path]) -> tuple[int, str, float]:
+        worker_tmp = scratch / f"worker-{index + 1}"
+        worker_tmp.mkdir()
         command = [
             str(ROOT / ".venv/bin/python"), "-m", "pytest", "-q", "-m", "not network",
-            "--durations=20", *map(str, files),
+            "--durations=20", f"--basetemp={worker_tmp / 'pytest'}", *map(str, files),
         ]
         shard_started = time.perf_counter()
-        result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        result = subprocess.run(
+            command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env={**os.environ, "TMPDIR": str(worker_tmp)},
+        )
         (log_dir / f"worker-{index + 1}.log").write_text(result.stdout)
+        shutil.rmtree(worker_tmp, ignore_errors=True)
         return result.returncode, result.stdout, time.perf_counter() - shard_started
 
     results: list[tuple[int, str, float] | None] = [None] * len(shards)
@@ -192,6 +202,7 @@ def run_pytest(paths: list[Path], *, dry_run: bool, workers: int, shuffle_seed: 
             index = futures[future]
             results[index] = future.result()
             print(f"Worker {index + 1}/{len(shards)} finished ({len(shards[index])} files).", flush=True)
+    shutil.rmtree(scratch, ignore_errors=True)
     failed = False
     for index, result in enumerate(results, 1):
         assert result is not None
