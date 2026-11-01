@@ -2,7 +2,6 @@ import { useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   api,
-  getApiErrorMessage,
   queueAuthorHistoryBackfill,
   refreshFeedMonitor,
   type Author,
@@ -16,6 +15,7 @@ import {
 } from '@/components/authors/AuthorsNeedsAttentionSection'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { describeJobLaunch } from '@/lib/activity'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 
 export interface AuthorAttentionRouter {
@@ -57,7 +57,7 @@ export function useAuthorAttentionRouter(
       void invalidateAfterAuthorChange(queryClient, authorId)
       toast(describeJobLaunch(data, 'Author refresh'))
     },
-    onError: (err) => errorToast('Could not queue the refresh', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not queue the refresh', err),
   })
 
   // Operational fixes surfaced by the unified needs-attention feed (the same
@@ -69,7 +69,7 @@ export function useAuthorAttentionRouter(
       void invalidateQueries(queryClient, ['feed-inbox'])
       toast(describeJobLaunch(data, `Monitor refresh of ${row.author_name}`))
     },
-    onError: (err) => errorToast('Monitor refresh failed', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Monitor refresh failed', err),
   })
   const backfillMutation = useMutation({
     mutationFn: (authorId: string) => queueAuthorHistoryBackfill(authorId),
@@ -77,7 +77,7 @@ export function useAuthorAttentionRouter(
       void invalidateAfterAuthorChange(queryClient, authorId)
       toast(describeJobLaunch(data, 'Historical backfill'))
     },
-    onError: (err) => errorToast('Historical backfill failed', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Historical backfill failed', err),
   })
 
   // A row can name an author the loaded list does not hold; the panel loads the

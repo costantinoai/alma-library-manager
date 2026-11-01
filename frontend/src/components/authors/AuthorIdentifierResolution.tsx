@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAcceptUnidentified } from '@/components/authors/useAcceptUnidentified'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
 import { Alert } from '@/components/ui/alert'
 
@@ -97,7 +98,7 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
       void invalidateAfterAuthorChange(queryClient, author.id)
       toast({ title: 'Identifiers updated', description: 'Author identifiers saved.' })
     },
-    onError: (err) => errorToast('Could not save identifiers', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not save identifiers', err),
   })
 
   // No candidate is right: the same terminal exit the Resolve identity dialog has.
@@ -109,6 +110,17 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
 
   return (
     <div className="space-y-4">
+      {candidateQuery.isError ? (
+        <Alert variant="negative" className="flex items-center justify-between gap-3 px-3 py-2">
+          <p className="min-w-0 text-xs">
+            Candidate search failed: {getApiErrorMessage(candidateQuery.error)}. You can still paste
+            an identifier below.
+          </p>
+          <Button size="sm" variant="outline" className="shrink-0" onClick={() => candidateQuery.refetch()}>
+            Retry
+          </Button>
+        </Alert>
+      ) : null}
       {candidateQuery.data?.timed_out ? (
         <Alert variant="warning" layout="row" className="justify-between gap-3 px-2 py-1.5">
           <p className="text-xs text-warning-700">
@@ -158,8 +170,11 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
                 </Button>
               </div>
             ))}
-            {(candidateQuery.data?.openalex ?? []).length === 0 ? (
-              <p className="text-xs text-slate-400">No OpenAlex candidates.</p>
+            {candidateQuery.data && candidateQuery.data.openalex.length === 0 ? (
+              <p className="text-xs text-slate-400">
+                No OpenAlex candidates. Paste an identifier, merge a duplicate, or choose
+                Can&apos;t identify.
+              </p>
             ) : null}
           </div>
         )}

@@ -438,6 +438,30 @@ def list_all_alt_openalex_ids(db: sqlite3.Connection) -> set[str]:
     }
 
 
+def _carried_follow(
+    db: sqlite3.Connection, primary_id: str, alt_ids: list[str]
+) -> bool | None:
+    """Whether an alt's follow must move to the primary, and if it is the owner's.
+
+    ``None``: nothing moves, because no alt is followed or the primary already
+    is. Otherwise the value says whether one of the alts was the owner row.
+    """
+    if not alt_ids:
+        return None
+    if db.execute(
+        "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1", (primary_id,)
+    ).fetchone():
+        return None
+    placeholders = ",".join("?" for _ in alt_ids)
+    rows = db.execute(
+        f"SELECT is_owner FROM followed_authors WHERE author_id IN ({placeholders})",  # noqa: S608
+        alt_ids,
+    ).fetchall()
+    if not rows:
+        return None
+    return any(row["is_owner"] for row in rows)
+
+
 class MergeRefused(ValueError):
     """A merge the user's own record forbids, or that must be asked for by row."""
 
@@ -485,10 +509,12 @@ def merge_author_profiles(
     if not primary_id:
         raise ValueError("primary_author_id is required")
     primary_row = db.execute(
-        "SELECT id, name, openalex_id FROM authors WHERE id = ?", (primary_id,),
+        "SELECT id, name, openalex_id, status FROM authors WHERE id = ?", (primary_id,),
     ).fetchone()
     if primary_row is None:
         raise ValueError(f"primary author {primary_id} not found")
+    if str(primary_row["status"] or "active") == "removed":
+        raise MergeRefused(f"{primary_row['name']} was removed, so it cannot survive a merge.")
     primary_oid = (primary_row["openalex_id"] or "").strip()
     if not primary_oid:
         raise ValueError(
@@ -561,6 +587,9 @@ def merge_author_profiles(
     # (each add_job_log opens its own connection — keep it out of our open
     # write transaction). Tuples of (message, data).
     pending_audit_logs: list[tuple[str, dict]] = []
+    # A follow is the user's intent about the person: it moves to the survivor.
+    # Read now, because the loop drops the alts' rows.
+    carried_follow = _carried_follow(db, primary_id, alt_ids_clean)
     for alt_id in alt_ids_clean:
         # Pull the FULL alt row so the field-union step has every
         # column to draw from. SELECT * keeps this resilient to
@@ -573,36 +602,37 @@ def merge_author_profiles(
             summary["alts_skipped"] += 1
             continue
         alt_oid = (alt_row["openalex_id"] or "").strip()
-        if not alt_oid or alt_oid.lower() == primary_oid.lower():
-            # Nothing to reassign — but still soft-remove the alt
-            # row so it's out of the followed list.
-            _drop_follow_and_soft_remove(db, alt_id)
-            summary["alts_skipped"] += 1
-            continue
+        # An alt with no OpenAlex id, or the primary's own, has no papers to
+        # move and no alias to record. Its fields, follow and row are merged all
+        # the same, or the merge would drop what only that row knew.
+        has_own_identity = bool(alt_oid) and alt_oid.lower() != primary_oid.lower()
+        reassigned = dropped = 0
+        if has_own_identity:
+            # 1. Drop alt's `publication_authors` rows that would collide
+            #    with primary's existing rows on the same paper. Without
+            #    this, the UPDATE below would hit the (paper_id, openalex_id)
+            #    UNIQUE constraint.
+            drop_cur = db.execute(
+                """
+                DELETE FROM publication_authors
+                WHERE openalex_id = ?
+                  AND paper_id IN (
+                      SELECT paper_id FROM publication_authors
+                      WHERE openalex_id = ?
+                  )
+                """,
+                (alt_oid, primary_oid),
+            )
+            dropped = drop_cur.rowcount or 0
 
-        # 1. Drop alt's `publication_authors` rows that would collide
-        #    with primary's existing rows on the same paper. Without
-        #    this, the UPDATE below would hit the (paper_id, openalex_id)
-        #    UNIQUE constraint.
-        drop_cur = db.execute(
-            """
-            DELETE FROM publication_authors
-            WHERE openalex_id = ?
-              AND paper_id IN (
-                  SELECT paper_id FROM publication_authors
-                  WHERE openalex_id = ?
-              )
-            """,
-            (alt_oid, primary_oid),
-        )
-        summary["papers_dropped_as_dup"] += drop_cur.rowcount or 0
-
-        # 2. Reassign the rest of the alt's papers to the primary.
-        upd_cur = db.execute(
-            "UPDATE publication_authors SET openalex_id = ? WHERE openalex_id = ?",
-            (primary_oid, alt_oid),
-        )
-        summary["papers_reassigned"] += upd_cur.rowcount or 0
+            # 2. Reassign the rest of the alt's papers to the primary.
+            upd_cur = db.execute(
+                "UPDATE publication_authors SET openalex_id = ? WHERE openalex_id = ?",
+                (primary_oid, alt_oid),
+            )
+            reassigned = upd_cur.rowcount or 0
+        summary["papers_dropped_as_dup"] += dropped
+        summary["papers_reassigned"] += reassigned
 
         # 3. Field-union: copy missing profile fields from alt to
         #    primary (affiliation, h_index, citedby, works_count,
@@ -664,9 +694,10 @@ def merge_author_profiles(
         _drop_follow_and_soft_remove(db, alt_id)
 
         # 5. Record the alias so the rail / dossier knows (one alias writer).
-        record_author_alias(
-            db, primary_id, alt_oid, alt_author_id=alt_id, source="manual_merge"
-        )
+        if has_own_identity:
+            record_author_alias(
+                db, primary_id, alt_oid, alt_author_id=alt_id, source="manual_merge"
+            )
 
         # 5. Audit log entry — DEFERRED to after commit. add_job_log opens
         #    its OWN connection (operation_logs); emitting it here, while
@@ -682,14 +713,15 @@ def merge_author_profiles(
                     "primary_openalex_id": primary_oid,
                     "alt_author_id": alt_id,
                     "alt_openalex_id": alt_oid,
-                    "papers_reassigned": upd_cur.rowcount or 0,
-                    "papers_dropped_as_dup": drop_cur.rowcount or 0,
+                    "papers_reassigned": reassigned,
+                    "papers_dropped_as_dup": dropped,
                 },
             )
         )
 
         summary["alts_processed"] += 1
-        summary["alt_openalex_ids"].append(alt_oid)
+        if has_own_identity:
+            summary["alt_openalex_ids"].append(alt_oid)
         summary["alt_author_ids"].append(alt_id)
 
     # ---- Row-less aliases (suggestion absorb) ----------------------------
@@ -743,7 +775,14 @@ def merge_author_profiles(
     should_schedule_sweep = False
     if summary["alts_processed"] > 0:
         from alma.application.feed_monitors import sync_author_monitors
+        from alma.application.followed_authors import apply_follow_state
 
+        if carried_follow is not None:
+            apply_follow_state(db, primary_id, followed=True)
+            if carried_follow:
+                db.execute(
+                    "UPDATE followed_authors SET is_owner = 1 WHERE author_id = ?", (primary_id,)
+                )
         sync_author_monitors(db)
 
         # Invalidate the primary's centroid cache so the next centroid
@@ -915,6 +954,7 @@ def discover_aliases_via_orcid(
                     "primary_openalex_id": primary_oid_norm,
                     "orcid": None,
                     "aliases": [],
+                    "lookup_error": f"OpenAlex answered HTTP {primary_resp.status_code}",
                 }
             primary_data = primary_resp.json() or {}
             orcid_url = (primary_data.get("orcid") or "").strip()
@@ -951,6 +991,7 @@ def discover_aliases_via_orcid(
                 "primary_openalex_id": primary_oid_norm,
                 "orcid": orcid_bare,
                 "aliases": [],
+                "lookup_error": f"OpenAlex answered HTTP {resp.status_code}",
             }
         rows = (resp.json() or {}).get("results") or []
     except Exception as exc:
@@ -965,6 +1006,7 @@ def discover_aliases_via_orcid(
             "primary_openalex_id": primary_oid_norm,
             "orcid": None,
             "aliases": [],
+            "lookup_error": "OpenAlex could not be reached",
         }
 
     aliases: list[dict] = []
@@ -1728,6 +1770,25 @@ def reject_author_pair(db: sqlite3.Connection, author_id_a: str, author_id_b: st
         "   OR (primary_author_id = ? AND alt_author_id = ?)",
         (author_id_a, author_id_b, author_id_b, author_id_a),
     )
+
+
+def undo_merge_rejection(db: sqlite3.Connection, author_id_a: str, author_id_b: str) -> bool:
+    """Forget a "not the same person" verdict. RAW: the caller owns the window."""
+    lo, hi = _pair(author_id_a, author_id_b)
+    cur = db.execute(
+        "DELETE FROM author_merge_rejections WHERE author_id_lo = ? AND author_id_hi = ?",
+        (lo, hi),
+    )
+    return bool(cur.rowcount)
+
+
+def rejected_partners(db: sqlite3.Connection, author_id: str) -> list[str]:
+    """The authors this one was called "not the same person" as."""
+    return [
+        lo if hi == author_id else hi
+        for lo, hi in rejected_merge_pairs(db)
+        if author_id in (lo, hi)
+    ]
 
 
 def reject_merge_candidate(db: sqlite3.Connection, candidate_id: str) -> dict:
