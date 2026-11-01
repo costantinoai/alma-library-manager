@@ -87,10 +87,19 @@ composing the same backend primitives the rest of the app uses:
 | Flag | Card | How it resolves |
 |---|---|---|
 | **No OpenAlex match / followed without an id** | Resolve identity | Retry the auto-resolver, paste an authoritative ORCID / OpenAlex / Scholar id, or — if the person genuinely isn't in any index — **accept that they can't be identified**. |
-| **Candidates too close to decide** | Review candidates | Opens the author detail panel's candidate picker to choose the right match. |
-| **Split profiles (same person, many ids)** | Review profiles | The merge dialog, alternate preselected. |
+| **Candidates too close to decide** | Review candidates | Opens the author detail panel on Identifiers, with the candidates, the paste fields and **Can't identify**. |
+| **Split profiles (same person, many ids)** | Review profiles | The merge dialog, alternate preselected: merge them, or say **not the same person**, which is permanent. |
 | **Merge kept a conflicting identifier** | Resolve conflict | Pick which value sticks, or dismiss. |
-| **Affiliation evidence disagrees across sources** | Choose affiliation | Pick which institution to display (the author moved labs). |
+| **Affiliation evidence disagrees across sources** | Choose affiliation | Pick which institution to display (the author moved labs), including the one shown now. |
+| **Feed monitor failing** | Refresh monitor | Queues a refresh. A monitor with no OpenAlex id has no row of its own: its identity row owns the fix. |
+| **Thin, stale or unverified corpus** | Backfill corpus | Queues a history backfill. |
+
+A soft-removed author, and a conflict whose primary is gone, are never rows:
+nothing could act on them.
+
+An identifier typed by hand is checked first. A malformed one is refused and
+changes nothing, and one that another author already holds is refused by name,
+because the fix for that is a merge.
 
 Two of these are **terminal acknowledgments** — they end a flag that would
 otherwise re-appear forever, because it is recomputed from raw data on every
@@ -102,7 +111,8 @@ assessment:
   even though OpenAlex / ORCID / Crossref still disagree underneath.
 - **Accept as unidentifiable** sets `id_resolution_status='dismissed'`, which is
   excluded from both needs-attention and the author-health counts. No identifier
-  is invented; the user can still resolve it later by pasting one.
+  is invented; the user can still resolve it later by pasting one. An unattended
+  retry that finds nothing cannot reopen it. The toast offers **Undo**.
 
 The Health page's author dimensions read the same predicates, so a resolved or
 acknowledged flag clears there too (the author-health snapshot's freshness

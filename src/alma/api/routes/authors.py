@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -33,6 +34,7 @@ from alma.api.models import (
     ErrorResponse,
 )
 from alma.application import authors as authors_app
+from alma.application.author_identity import sticky_resolution_status
 from alma.application.followed_authors import (
     apply_follow_state,
     schedule_followed_author_historical_backfill,
@@ -61,6 +63,7 @@ from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
     canonical_lookup_doi,
+    normalize_openalex_id,
     normalize_orcid,
     repair_display_text,
 )
@@ -354,7 +357,7 @@ def _apply_author_resolution_result(
             params.append(json.dumps(topic_terms))
 
     updates.append("id_resolution_status = ?")
-    params.append(result.status)
+    params.append(sticky_resolution_status(db, author_id, result.status))
     updates.append("id_resolution_reason = ?")
     params.append(summarize_author_resolution(result))
     updates.append("id_resolution_updated_at = ?")
@@ -843,6 +846,7 @@ def _set_resolution_status(
     status_norm = (status_value or "unresolved").strip().lower()
     if status_norm not in _RESOLUTION_STATUSES:
         status_norm = "unresolved"
+    status_norm = sticky_resolution_status(db, author_id, status_norm)
     db.execute(
         """
         UPDATE authors
@@ -2402,8 +2406,65 @@ def list_authors_needs_attention(
     """
     from alma.services import author_attention
 
-    rows = author_attention.needs_attention_rows(db, limit=limit)
-    return {"total": len(rows), "items": rows}
+    total, rows = author_attention.needs_attention_page(db, limit=limit)
+    return {"total": total, "items": rows}
+
+
+def _validated_manual_identifiers(
+    db: sqlite3.Connection,
+    author_id: str,
+    *,
+    orcid: str | None,
+    openalex_id: str | None,
+    scholar_id: str | None,
+) -> dict[str, str]:
+    """The identifiers a person typed, normalized and safe to write.
+
+    Blank fields are absent. Anything malformed is a 422, because storing it
+    would mark the author resolved with no identity behind it (a bad ORCID
+    normalizes to NULL). An ORCID or OpenAlex id another author already holds
+    is a 409 that names them: the way out is a merge, not a second owner.
+    """
+    clean: dict[str, str] = {}
+    if (orcid or "").strip():
+        normalized = normalize_orcid(orcid)
+        if not normalized:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{orcid.strip()}' is not an ORCID iD (0000-0000-0000-0000).",
+            )
+        clean["orcid"] = normalized
+    if (openalex_id or "").strip():
+        normalized = normalize_openalex_id(openalex_id)
+        if not re.fullmatch(r"A\d+", normalized):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{openalex_id.strip()}' is not an OpenAlex author ID (A1234567890).",
+            )
+        clean["openalex_id"] = normalized
+    if (scholar_id or "").strip():
+        clean["scholar_id"] = scholar_id.strip()
+
+    for column, label in (("orcid", "ORCID"), ("openalex_id", "OpenAlex ID")):
+        value = clean.get(column)
+        if not value:
+            continue
+        owner = db.execute(
+            f"""
+            SELECT name FROM authors
+            WHERE lower(trim({column})) = lower(?)
+              AND id != ?
+              AND COALESCE(status, 'active') != 'removed'
+            LIMIT 1
+            """,  # noqa: S608 — column comes from the literal tuple above
+            (value, author_id),
+        ).fetchone()
+        if owner:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{label} {value} already belongs to {owner['name']}. Merge the two authors instead.",
+            )
+    return clean
 
 
 class SetIdentifiersRequest(BaseModel):
@@ -2434,30 +2495,26 @@ def set_author_identifiers(
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
+    from alma.services.author_hydrate import (
+        enqueue_pending_author_hydration,
+        schedule_pending_author_hydration_sweep,
+    )
+
     row = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Author not found")
 
-    updates: list[str] = []
-    params: list[object] = []
-
-    if body.orcid is not None:
-        updates.append("orcid = ?")
-        params.append(normalize_orcid(body.orcid))
-
-    if body.openalex_id is not None:
-        oid = body.openalex_id.strip()
-        # _normalize_oaid handles both bare A123… and full URL forms.
-        oid_norm = _norm_oaid(oid) if oid else ""
-        updates.append("openalex_id = ?")
-        params.append(oid_norm or None)
-
-    if body.scholar_id is not None:
-        updates.append("scholar_id = ?")
-        params.append(body.scholar_id.strip() or None)
-
-    if not updates:
+    clean = _validated_manual_identifiers(
+        db,
+        author_id,
+        orcid=body.orcid,
+        openalex_id=body.openalex_id,
+        scholar_id=body.scholar_id,
+    )
+    if not clean:
         raise HTTPException(status_code=400, detail="No identifiers supplied")
+    updates = [f"{column} = ?" for column in clean]  # keys are this function's literals
+    params: list[object] = list(clean.values())
 
     now = utcnow().isoformat()
     updates.extend([
@@ -2484,8 +2541,16 @@ def set_author_identifiers(
             f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
             params,
         )
+        # A new identifier is the author equivalent of a paper insert: it joins
+        # the hydration lane now, the same as a follow or a merge.
+        enqueue_pending_author_hydration(
+            db, author_id, priority="high", reason="manual_identifiers"
+        )
 
     run_write_unit(db, _persist, label="set_author_identifiers")
+    schedule_pending_author_hydration_sweep(
+        reason="manual_identifiers", target_author_ids=[author_id]
+    )
     _log_author_action(
         db,
         "set_identifiers",
@@ -2650,7 +2715,16 @@ def resolve_merge_conflict(
         if field not in {"orcid", "scholar_id", "semantic_scholar_id"}:
             raise HTTPException(status_code=400, detail=f"Unknown conflict field: {field}")
         target_field = field
-        new_value = normalize_orcid(row["alt_value"]) if field == "orcid" else row["alt_value"]
+        new_value = row["alt_value"]
+        if field == "orcid":
+            # Same refusal as a typed ORCID: another author may hold this one.
+            new_value = _validated_manual_identifiers(
+                db,
+                str(row["primary_author_id"]),
+                orcid=row["alt_value"],
+                openalex_id=None,
+                scholar_id=None,
+            )["orcid"]
         new_status = "resolved_use_alt"
     else:
         new_status = "dismissed"
@@ -2682,6 +2756,59 @@ def resolve_merge_conflict(
         "status": new_status,
         "primary_author_id": row["primary_author_id"],
     }
+
+
+class NotSamePersonRequest(BaseModel):
+    """Body for `POST /authors/{id}/not-same-person`: the `authors.id` values
+    the user says are different people from the path author."""
+
+    alt_author_ids: list[str] = Field(..., min_length=1)
+
+
+@router.post(
+    "/{author_id}/not-same-person",
+    summary="Record that authors sharing a name are different people",
+    description=(
+        "The other answer to a split-profile warning, next to merge. Stores the "
+        "unordered pair in `author_merge_rejections` (D17: permanent), so neither "
+        "the warning nor any dedup detector proposes it again."
+    ),
+)
+def not_same_person(
+    author_id: str,
+    body: NotSamePersonRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import reject_author_pair
+
+    alt_ids = [alt for alt in dict.fromkeys(body.alt_author_ids) if alt != author_id]
+    if not alt_ids:
+        raise HTTPException(status_code=400, detail="An author cannot be rejected against itself")
+    placeholders = ",".join("?" for _ in [author_id, *alt_ids])
+    known = {
+        row["id"]
+        for row in db.execute(
+            f"SELECT id FROM authors WHERE id IN ({placeholders})",  # noqa: S608 — placeholders only
+            (author_id, *alt_ids),
+        ).fetchall()
+    }
+    if len(known) != len(alt_ids) + 1:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    def _persist() -> None:
+        for alt_id in alt_ids:
+            reject_author_pair(db, author_id, alt_id)
+
+    run_write_unit(db, _persist, label="not_same_person")
+    _log_author_action(
+        db,
+        "not_same_person",
+        f"Marked {author_id} as a different person from {len(alt_ids)} author(s)",
+        author_id=author_id,
+        data={"alt_author_ids": alt_ids},
+    )
+    return {"author_id": author_id, "rejected": alt_ids}
 
 
 @router.post(
@@ -3225,26 +3352,26 @@ def confirm_identifiers_for_author(
         raise HTTPException(status_code=404, detail="Author not found")
 
     # Build the column set up front (pure compute — no writes yet).
-    updates: list[str] = []
-    params: list[Any] = []
-    if payload.openalex_id is not None:
-        updates.append("openalex_id = ?")
-        params.append(_norm_oaid(payload.openalex_id))
-    if payload.scholar_id is not None:
-        updates.append("scholar_id = ?")
-        params.append((payload.scholar_id or "").strip())
-    if payload.orcid is not None:
-        # Store the canonical 0000-0000-0000-000X form when the input parses;
-        # fall back to the trimmed raw so a manual override is never silently
-        # dropped (parity with how openalex_id/scholar_id are taken as given).
-        normalized_orcid = normalize_orcid(payload.orcid)
-        updates.append("orcid = ?")
-        params.append(normalized_orcid or (payload.orcid or "").strip())
+    clean = _validated_manual_identifiers(
+        db,
+        author_id,
+        orcid=payload.orcid,
+        openalex_id=payload.openalex_id,
+        scholar_id=payload.scholar_id,
+    )
+    updates = [f"{column} = ?" for column in clean]  # keys are the helper's literals
+    params: list[Any] = list(clean.values())
 
     status_value = (payload.status or "resolved_manual").strip().lower()
     if status_value not in _RESOLUTION_STATUSES:
         status_value = "resolved_manual"
     reason = (payload.reason or "Identifiers manually confirmed").strip()
+    if status_value == "resolved_manual" and not clean and not any(
+        db.execute(
+            "SELECT openalex_id, orcid, scholar_id FROM authors WHERE id = ?", (author_id,)
+        ).fetchone()
+    ):
+        raise HTTPException(status_code=400, detail="No identifiers supplied")
 
     # One atomic write unit: set the chosen identifiers (if any) and stamp
     # the resolution status together, serialized behind the writer gate.
@@ -4089,6 +4216,38 @@ def accept_author_unidentified(
         author_id=author_id,
     )
     return {"author_id": author_id, "id_resolution_status": "dismissed"}
+
+
+@router.delete(
+    "/{author_id}/accept-unidentified",
+    summary="Undo accepting an author as unidentifiable",
+    description="Reopens the identity gap: the author is `unresolved` and back on Needs attention.",
+)
+def reopen_author_identity(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    row = db.execute("SELECT name FROM authors WHERE id = ?", (author_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Author not found")
+    now = utcnow().isoformat()
+
+    def _persist():
+        db.execute(
+            "UPDATE authors SET id_resolution_status = 'unresolved', "
+            "id_resolution_updated_at = ? WHERE id = ? AND id_resolution_status = 'dismissed'",
+            (now, author_id),
+        )
+
+    run_write_unit(db, _persist, label="reopen_author_identity")
+    _log_author_action(
+        db,
+        "reopen_identity",
+        f"Reopened identity of {row['name'] or author_id}",
+        author_id=author_id,
+    )
+    return {"author_id": author_id, "id_resolution_status": "unresolved"}
 
 
 @router.post(

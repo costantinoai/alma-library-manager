@@ -386,8 +386,10 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
     """All conflicts that haven't been resolved or dismissed yet.
 
     Joined to `authors` so the needs-attention surface can render the
-    primary's display name without a second round-trip. A pure read: Home and
-    a GET call this, and a database with no merge yet simply has no conflict.
+    primary's display name without a second round-trip, and so a conflict
+    whose primary was removed or deleted stops being listed: nobody is left to
+    decide it. A pure read: Home and a GET call this, and a database with no
+    merge yet simply has no conflict.
     """
     try:
         rows = db.execute(
@@ -403,8 +405,9 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
                 a.name AS primary_name,
                 a.openalex_id AS primary_openalex_id
             FROM author_merge_conflicts c
-            LEFT JOIN authors a ON a.id = c.primary_author_id
+            JOIN authors a ON a.id = c.primary_author_id
             WHERE c.status = 'unresolved'
+              AND COALESCE(a.status, 'active') != 'removed'
             ORDER BY c.created_at DESC
             """
         ).fetchall()
@@ -1651,6 +1654,33 @@ def record_merge_rejection(
         "(id, author_id_lo, author_id_hi, source, reason, rejected_at) "
         "VALUES (?, ?, ?, ?, ?, datetime('now'))",
         (uuid.uuid4().hex, lo, hi, source, reason),
+    )
+
+
+def rejected_merge_pairs(db: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every rejected pair in canonical order, for a detector that checks many."""
+    try:
+        rows = db.execute(
+            "SELECT author_id_lo, author_id_hi FROM author_merge_rejections"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {(str(row["author_id_lo"]), str(row["author_id_hi"])) for row in rows}
+
+
+def reject_author_pair(db: sqlite3.Connection, author_id_a: str, author_id_b: str) -> None:
+    """Record "not the same person" for two authors and drop any pending candidate.
+
+    The same verdict as ``reject_merge_candidate`` for a pair the attention list
+    found, which may have no candidate row. RAW writes: the caller owns the
+    gated write window.
+    """
+    record_merge_rejection(db, author_id_a, author_id_b, source="split_profiles", reason="user_rejected")
+    db.execute(
+        "DELETE FROM author_merge_candidates "
+        "WHERE (primary_author_id = ? AND alt_author_id = ?) "
+        "   OR (primary_author_id = ? AND alt_author_id = ?)",
+        (author_id_a, author_id_b, author_id_b, author_id_a),
     )
 
 
