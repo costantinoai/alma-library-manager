@@ -728,6 +728,11 @@ if os.path.exists(_frontend_dist):
     #
     # Path-traversal guard: rebuild the requested path under
     # _frontend_dist with realpath and verify it stays inside.
+    # These files keep their name across releases, so a browser must revalidate
+    # them. Left to its own heuristic, Safari kept an old index.html after an
+    # upgrade and ran the old bundle against the new API.
+    _REVALIDATE = {"Cache-Control": "no-cache"}
+
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         """Serve a real dist file if it exists, else 404."""
@@ -737,13 +742,13 @@ if os.path.exists(_frontend_dist):
         if not full_path:
             index_path = os.path.join(_frontend_dist, "index.html")
             if os.path.exists(index_path):
-                return FileResponse(index_path)
+                return FileResponse(index_path, headers=_REVALIDATE)
             raise HTTPException(status_code=404, detail="Frontend not built")
 
         candidate = os.path.realpath(os.path.join(_frontend_dist, full_path))
         dist_root = os.path.realpath(_frontend_dist)
         if candidate.startswith(dist_root + os.sep) and os.path.isfile(candidate):
-            return FileResponse(candidate)
+            return FileResponse(candidate, headers=_REVALIDATE)
 
         raise HTTPException(status_code=404, detail="Not found")
 
