@@ -1765,7 +1765,7 @@ def _import_or_stage_paper(
     ``skipped`` (already saved Library row).
     """
     component_type, parent_paper_id = resolve_component(
-        conn, doi=doi, work_type=work_type
+        conn, doi=doi, work_type=work_type, title=title
     )
     existing_id = find_existing_paper(conn, doi, openalex_id, title, year)
     if component_type:

@@ -747,11 +747,13 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
         doi=doi,
         work_type=work_type,
         relation_parent_doi=w.get("relation_parent_doi"),
+        title=title,
     )
     preprint_source = classify_preprint_source(
         doi,
         preprint_source=w.get("preprint_source"),
         work_type=work_type,
+        journal=journal,
     )
     topics = w.get("topics") or []
     institutions = w.get("institutions") or []

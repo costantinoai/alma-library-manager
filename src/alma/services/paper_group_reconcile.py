@@ -18,9 +18,6 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
-from alma.application.preprint_dedup import (
-    merge_preprint_into_canonical,
-)
 from alma.core.components import backfill_components, count_linkable_orphan_components
 from alma.core.paper_groups import (
     PaperGroupIntegrityError,
@@ -28,9 +25,11 @@ from alma.core.paper_groups import (
     build_preprint_title_index,
     collect_paper_group_ids,
     is_component_row,
+    not_component_ids,
     purge_orphan_subordinate_state,
     relationship_integrity_counts,
 )
+from alma.library.deduplication import merge_planned_group, plan_same_work
 
 
 def _integrity_defect_total(counts: dict[str, int]) -> int:
@@ -48,14 +47,17 @@ def _count_component_candidates(conn: sqlite3.Connection) -> int:
 
     rows = conn.execute(
         """
-        SELECT doi, work_type
+        SELECT id, doi, work_type, title
         FROM papers
         WHERE component_type IS NULL
         """
     ).fetchall()
+    kept_as_papers = not_component_ids(conn)
     pending = 0
     for row in rows:
-        component_type, parent_doi = classify_component(row["doi"], row["work_type"])
+        if row["id"] in kept_as_papers:
+            continue
+        component_type, parent_doi = classify_component(row["doi"], row["work_type"], row["title"])
         if component_type or parent_doi:
             pending += 1
     return pending
@@ -93,20 +95,21 @@ def preview_paper_group_repairs(
     linkable_orphans = count_linkable_orphan_components(conn) if orphans else 0
     integrity["orphan_components"] = linkable_orphans
 
-    pairs = index.pairs(require_doi=True)
-    safe = [pair for pair in pairs if not pair["ambiguous"]]
-    ambiguous = [pair for pair in pairs if pair["ambiguous"]]
-    selected = len(safe) if limit is None else min(len(safe), limit)
+    plan = plan_same_work(conn)
+    ready = int(plan["merges"])
+    ambiguous = plan["ambiguous"]
+    selected = ready if limit is None else min(ready, limit)
     components = _count_component_candidates(conn)
 
-    repairable = _integrity_defect_total(integrity) + len(safe) + components
+    repairable = _integrity_defect_total(integrity) + ready + components
     return {
         "repairable": repairable,
         "relationships_to_repair": _integrity_defect_total(integrity),
         "components_to_classify": components,
-        "title_matches_ready": len(safe),
+        "title_matches_ready": ready,
         "title_matches_this_run": selected,
-        "title_matches_deferred": len(safe) - selected,
+        "title_matches_deferred": ready - selected,
+        "merges_by_evidence": plan["levels"],
         "ambiguous": len(ambiguous),
         "terminal_orphans": max(0, orphans - linkable_orphans),
         "ambiguous_defect_rows": ambiguous_defects,
@@ -114,8 +117,8 @@ def preview_paper_group_repairs(
         "message": (
             f"Would repair {repairable} {'finding' if repairable == 1 else 'findings'}: "
             f"{_integrity_defect_total(integrity)} relationship(s), "
-            f"{components} component(s), {selected} preprint merge(s)"
-            + (f" ({len(safe) - selected} deferred by the limit)" if len(safe) > selected else "")
+            f"{components} component(s), {selected} same-work merge(s)"
+            + (f" ({ready - selected} deferred by the limit)" if ready > selected else "")
             + f". {len(ambiguous)} ambiguous match(es) and "
             f"{max(0, orphans - linkable_orphans)} orphan component(s) with no parent "
             "in the corpus are left for you to look at."
@@ -332,17 +335,24 @@ def reconcile_paper_groups(
     # Freeze the WHOLE candidate graph before any mutation: picking matches
     # after earlier merges can make an ambiguous component appear unique.
     report("match", {"message": "Checking complete title-match groups before merging."})
-    pairs = build_preprint_title_index(conn).pairs(require_doi=True)
-    ambiguous = [p for p in pairs if p["ambiguous"]]
-    safe = [p for p in pairs if not p["ambiguous"]]
-    selected = safe if limit is None else safe[:limit]
+    plan = plan_same_work(conn)
+    ambiguous = plan["ambiguous"]
+    budget = int(plan["merges"]) if limit is None else limit
+    selected: list = []
+    for group in plan["groups"]:
+        if budget <= 0:
+            break
+        selected.append(group)
+        budget -= len(group) - 1
     merged = skipped = 0
-    for pair in selected:
-        ok, result = unit("preprint_twins", pair["preprint_id"], lambda: merge_preprint_into_canonical(
-            conn, pair["preprint_id"], pair["canonical_id"]))
+    for group in selected:
+        def merge_group():
+            return merge_planned_group(conn, group, unit=nullcontext)
+
+        ok, result = unit("same_work", str(group[0]["id"]), merge_group)
         if ok:
-            skipped += int(bool(result.get("skipped")))
-            merged += int(not result.get("skipped"))
+            merged += int(result["merged"])
+            skipped += len(group) - 1 - int(result["merged"])
     for pair in ambiguous[:_AMBIGUOUS_REPORT_LIMIT]:
         report("ambiguous", {"paper_id": pair["preprint_id"], "title": pair["title"],
                              "candidates": pair["canonical_candidates"],
@@ -355,12 +365,13 @@ def reconcile_paper_groups(
                        "left separate; see Health → paper groups for the full count.",
             "remaining": len(ambiguous) - _AMBIGUOUS_REPORT_LIMIT,
         })
-    twins = {"preprint_candidates": len(safe), "preprint_twins_merged": merged,
+    twins = {"preprint_candidates": int(plan["merges"]), "preprint_twins_merged": merged,
              "preprint_twins_skipped": skipped, "ambiguous": len(ambiguous),
-             "remaining": max(0, len(safe) - len(selected)), "limit": limit}
+             "merges_by_evidence": plan["levels"],
+             "remaining": max(0, int(plan["merges"]) - sum(len(g) - 1 for g in selected)), "limit": limit}
     report("preprint_twins", twins)
     after = relationship_integrity_counts(conn)
-    message = (f"Paper groups: {merged} preprints merged; {normalized['groups_normalized']} groups repaired; "
+    message = (f"Paper groups: {merged} same-work merges; {normalized['groups_normalized']} groups repaired; "
                f"{len(ambiguous)} ambiguous (left separate); {len(errors)} failed; "
                f"{twins['remaining']} title matches remain. "
                f"Title-match limit: {limit if limit is not None else 'all'}; existing-group scan: corpus-wide.")

@@ -2018,6 +2018,26 @@ def _m_0056_author_merges(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "author_merge_candidates", {"alt_name": "TEXT"})
 
 
+def _m_0057_paper_same_work(conn: sqlite3.Connection) -> None:
+    """Splits that stay split, registered relations, and the widened preprint index."""
+    from alma.core.paper_groups import (
+        PAPER_GROUP_REJECTIONS_DDL,
+        PAPER_RELATIONS_DDL,
+        PAPER_RELATIONS_INDEX_DDL,
+        PREPRINT_YEAR_INDEX_SQL,
+    )
+
+    conn.execute(PAPER_GROUP_REJECTIONS_DDL)
+    conn.execute(PAPER_RELATIONS_DDL)
+    conn.execute(PAPER_RELATIONS_INDEX_DDL)
+    # SQLite uses a partial index only for a query that repeats its predicate.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_papers_preprint_year'"
+    ).fetchone():
+        conn.execute("DROP INDEX idx_papers_preprint_year")
+        conn.execute(PREPRINT_YEAR_INDEX_SQL)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -2075,6 +2095,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (54, "retire_hosted_embedding_provider", _m_0054_retire_hosted_embedding_provider),
     (55, "phantom_followed_authors", _m_0055_phantom_followed_authors),
     (56, "author_merges", _m_0056_author_merges),
+    (57, "paper_same_work", _m_0057_paper_same_work),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

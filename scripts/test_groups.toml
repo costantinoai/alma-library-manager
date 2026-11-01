@@ -35,7 +35,7 @@ tests = ["test_core_control_inventory_contract.py", "test_inbox_*.py", "test_inb
 sources = ["src/alma/application/inbox*.py", "src/alma/application/inbound*.py", "src/alma/application/home*.py", "src/alma/services/inbox*.py", "src/alma/services/inbox_channels/**", "src/alma/api/routes/inbox*.py", "src/alma/api/routes/home.py", "src/alma/api/routes/extension.py"]
 
 [groups.papers]
-tests = ["test_core_control_inventory_contract.py", "test_paper_*.py", "test_duplicate_identity_*.py", "test_doi_*.py", "test_identifier_*.py", "test_title_*.py", "test_normalize_openalex_id_*.py", "test_source_identifier_*.py", "test_api_e2e_signal_work.py"]
+tests = ["test_same_work_ladder.py", "test_core_control_inventory_contract.py", "test_paper_*.py", "test_duplicate_identity_*.py", "test_doi_*.py", "test_identifier_*.py", "test_title_*.py", "test_normalize_openalex_id_*.py", "test_source_identifier_*.py", "test_api_e2e_signal_work.py"]
 sources = ["src/alma/application/paper*.py", "src/alma/application/preprint_dedup.py", "src/alma/core/paper*.py", "src/alma/core/fetcher.py", "src/alma/api/routes/publications.py", "src/alma/services/title*.py", "src/alma/services/paper_group_reconcile.py"]
 
 [groups.embeddings]

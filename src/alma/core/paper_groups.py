@@ -9,14 +9,18 @@ rewrite used by ingest, duplicate collapse, and corpus reconciliation.
 
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 import sqlite3
+import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from alma.core import addons
+from alma.core.author_names import parse_author_names, surname
 from alma.core.time import utcnow
-from alma.core.utils import normalize_title_key
+from alma.core.utils import doi_version, doi_work_stem, normalize_title_key
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +28,43 @@ logger = logging.getLogger(__name__)
 PREPRINT_DOI_PREFIXES: dict[str, str] = {
     "10.48550/arxiv": "arxiv",
     "10.1101/": "biorxiv",
+    "10.64898/": "biorxiv",
     "10.31234/": "psyrxiv",
     "10.31219/": "osf",
+    "10.31222/": "metaarxiv",
+    "10.31235/": "socarxiv",
     "10.26434/chemrxiv": "chemrxiv",
+    "10.36227/techrxiv": "techrxiv",
     "10.20944/preprints": "mdpi_preprints",
+    "10.21203/rs": "research_square",
+    "10.2139/ssrn": "ssrn",
+    "10.22541/au": "authorea",
+    "10.7287/peerj.preprints": "peerj_preprints",
+    "10.2196/preprints": "jmir_preprints",
+    "10.1038/npre": "nature_precedings",
 }
+# Cold Spring Harbor publishes journals under bioRxiv's prefix: `10.1101/lm...`
+# is Learning & Memory. bioRxiv's own DOIs start with a digit.
+_BIORXIV_DOI_RE = re.compile(r"^10\.1101/\d")
+
+# A venue that only hosts preprints, for rows with no telling DOI.
+_PREPRINT_VENUE_RE = re.compile(
+    r"rxiv|research square|\bssrn\b|osf preprints|preprints\.org|authorea|nature precedings",
+    re.IGNORECASE,
+)
+# A venue that keeps copies of other people's papers. OpenAlex types many of
+# those copies as preprints, and calls some of them journal articles.
+_REPOSITORY_VENUE_RE = re.compile(
+    r"zenodo|figshare|repositor|dspace|\bhal\b|pubmed|doaj|\bmpg\.pure\b|scholarlycommons|repec"
+    r"|open science framework|publication database|research online|\bpure\b",
+    re.IGNORECASE,
+)
+_REPOSITORY_DOI_PREFIXES = (
+    "10.5281/", "10.17605/", "10.6084/", "10.17863/", "10.25673/", "10.17169/", "10.21942/",
+    "10.17615/", "10.5167/", "10.15496/", "10.34657/", "10.6082/", "10.3204/", "10.48620/",
+)
+# Meeting abstracts: Journal of Vision (VSS) and Cognitive Computational Neuroscience.
+_ABSTRACT_DOI_PREFIXES = ("10.1167/", "10.32470/")
 
 _PREPRINT_WORK_TYPES = frozenset({"preprint", "posted-content", "posted_content"})
 COMPONENT_WORK_TYPES = frozenset(
@@ -125,18 +161,28 @@ def classify_preprint_source(
     *,
     preprint_source: str | None = None,
     work_type: str | None = None,
+    journal: str | None = None,
 ) -> str | None:
-    """Return a preprint source using persisted evidence before DOI heuristics."""
-    persisted = str(preprint_source or "").strip().lower()
-    if persisted:
-        return persisted
-    wt = str(work_type or "").strip().lower()
-    if wt in _PREPRINT_WORK_TYPES:
-        return wt.replace("_", "-")
+    """Return the preprint source, or ``None`` for a published row.
+
+    The DOI decides first, then the venue. OpenAlex's type comes last and loses
+    to a real journal: it calls some published articles preprints, and it calls
+    bioRxiv's newest DOIs articles. A stored source of plain ``preprint`` is that
+    same type copied onto the row, so it is no evidence of its own.
+    """
     lowered = str(doi or "").strip().lower()
     for prefix, source in PREPRINT_DOI_PREFIXES.items():
-        if lowered.startswith(prefix):
+        if lowered.startswith(prefix) and (prefix != "10.1101/" or _BIORXIV_DOI_RE.match(lowered)):
             return source
+    venue = str(journal or "").strip()
+    if _PREPRINT_VENUE_RE.search(venue):
+        return "preprint_venue"
+    persisted = str(preprint_source or "").strip().lower()
+    if persisted and persisted not in _PREPRINT_WORK_TYPES:
+        return persisted
+    wt = str(work_type or "").strip().lower()
+    if wt in _PREPRINT_WORK_TYPES and (not venue or _REPOSITORY_VENUE_RE.search(venue)):
+        return wt.replace("_", "-")
     return None
 
 
@@ -146,29 +192,56 @@ def is_preprint_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
             _value(row, "doi"),
             preprint_source=_value(row, "preprint_source"),
             work_type=_value(row, "work_type"),
+            journal=_value(row, "journal"),
         )
     )
+
+
+def is_repository_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """A deposited copy: real, but never the version a group should show."""
+    doi = str(_value(row, "doi") or "").strip().lower()
+    venue = str(_value(row, "journal") or "")
+    return doi.startswith(_REPOSITORY_DOI_PREFIXES) or bool(_REPOSITORY_VENUE_RE.search(venue))
+
+
+def is_meeting_abstract_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
+    return str(_value(row, "doi") or "").strip().lower().startswith(_ABSTRACT_DOI_PREFIXES)
 
 
 def is_component_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
     if str(_value(row, "component_type") or "").strip():
         return True
-    if classify_preprint_source(
-        _value(row, "doi"),
-        preprint_source=_value(row, "preprint_source"),
-        work_type=_value(row, "work_type"),
-    ):
+    if is_preprint_row(row):
         return False
     return str(_value(row, "work_type") or "").strip().lower() in COMPONENT_WORK_TYPES
 
 
 def _root_rank(row: Mapping[str, Any] | sqlite3.Row) -> int:
-    """Published/regular papers always outrank preprints; components never root."""
+    """Published beats a meeting abstract, a deposit and a preprint. Components never root."""
     if is_component_row(row):
         return 0
     if is_preprint_row(row):
         return 100
+    if is_repository_row(row):
+        return 200
+    if is_meeting_abstract_row(row):
+        return 250
     return 300
+
+
+def _title_reads_as_a_title(row: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """A capture that fell back on its link, or a publisher's file name, never shows."""
+    title = str(_value(row, "title") or "").strip().lower()
+    return bool(title) and not title.startswith("10.") and "accepted manuscript" not in title
+
+
+def _version_rank(row: Mapping[str, Any] | sqlite3.Row) -> float:
+    """Within one rank the newest version shows. An unnumbered eLife DOI is the record."""
+    doi = _value(row, "doi")
+    versioned = doi_version(doi)
+    if versioned:
+        return float(versioned[1])
+    return float("inf") if str(doi or "").lower().startswith("10.7554/elife.") else 0.0
 
 
 def resolve_paper_root_id(
@@ -291,13 +364,15 @@ def choose_paper_group_root(
     if not candidates:
         raise PaperGroupIntegrityError("paper group contains no root-capable paper")
 
-    def key(row: sqlite3.Row) -> tuple[int, int, int, str]:
+    def key(row: sqlite3.Row) -> tuple[int, int, float, int, int, str]:
         pid = str(row["id"])
         standalone = not str(row["canonical_paper_id"] or "").strip() and not str(
             row["parent_paper_id"] or ""
         ).strip()
         return (
             _root_rank(row),
+            int(_title_reads_as_a_title(row)),
+            _version_rank(row),
             1 if standalone else 0,
             1 if pid == preferred_id else 0,
             pid,
@@ -802,6 +877,116 @@ def purge_orphan_subordinate_state(conn: sqlite3.Connection, paper_id: str) -> i
     return cleaned
 
 
+PAPER_GROUP_REJECTIONS_DDL = """
+    CREATE TABLE IF NOT EXISTS paper_group_rejections (
+        id TEXT PRIMARY KEY,
+        paper_id_lo TEXT NOT NULL,
+        paper_id_hi TEXT NOT NULL,
+        child_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (paper_id_lo, paper_id_hi)
+    )
+"""
+PAPER_RELATIONS_DDL = """
+    CREATE TABLE IF NOT EXISTS paper_relations (
+        paper_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        related_doi TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (paper_id, relation, related_doi)
+    )
+"""
+PAPER_RELATIONS_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_paper_relations_doi ON paper_relations(related_doi)"
+)
+
+
+def record_paper_relations(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    relations: Iterable[tuple[str, str]] | None,
+    *,
+    source: str,
+) -> int:
+    """Store registered same-work links, then let them merge what is already here.
+
+    The other DOI is often not in the corpus yet, so the link waits here and
+    `_settle_same_work` finds it when that paper arrives. Inside a write unit.
+    """
+    now = utcnow().isoformat()
+    written = 0
+    for relation, doi in relations or []:
+        stem = doi_work_stem(doi)
+        if stem:
+            written += conn.execute(
+                "INSERT OR IGNORE INTO paper_relations "
+                "(paper_id, relation, related_doi, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                (paper_id, relation, stem, source, now),
+            ).rowcount
+    if written:
+        _settle_same_work(conn, resolve_paper_root_id(conn, paper_id, strict=False))
+    return written
+
+
+def _ordered_pair(first: str, second: str) -> tuple[str, str]:
+    return (first, second) if first <= second else (second, first)
+
+
+def rejected_paper_pairs(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every pair the user split, in canonical order."""
+    try:
+        rows = conn.execute("SELECT paper_id_lo, paper_id_hi FROM paper_group_rejections").fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {(str(row[0]), str(row[1])) for row in rows}
+
+
+def is_split(conn: sqlite3.Connection, first_id: str, second_id: str) -> bool:
+    """Did the user say these two are not one work? A keyed read for write sections."""
+    try:
+        return conn.execute(
+            "SELECT 1 FROM paper_group_rejections WHERE paper_id_lo = ? AND paper_id_hi = ?",
+            _ordered_pair(first_id, second_id),
+        ).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
+def not_component_ids(conn: sqlite3.Connection) -> set[str]:
+    """Rows the user said are papers, whatever their DOI suffix or type says."""
+    try:
+        rows = conn.execute(
+            "SELECT child_id FROM paper_group_rejections WHERE kind = 'not_component'"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {str(row[0]) for row in rows}
+
+
+def record_paper_split(
+    conn: sqlite3.Connection, child_id: str, root_id: str, *, kind: str
+) -> None:
+    """Remember "these are not one work". Every matcher and `absorb` honours it."""
+    lo, hi = _ordered_pair(child_id, root_id)
+    conn.execute(
+        "INSERT OR REPLACE INTO paper_group_rejections "
+        "(id, paper_id_lo, paper_id_hi, child_id, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (uuid.uuid4().hex, lo, hi, child_id, kind, utcnow().isoformat()),
+    )
+
+
+def remove_paper_split(conn: sqlite3.Connection, first_id: str, second_id: str) -> bool:
+    """Take the verdict back. The next repair may join the two again."""
+    lo, hi = _ordered_pair(first_id, second_id)
+    return bool(
+        conn.execute(
+            "DELETE FROM paper_group_rejections WHERE paper_id_lo = ? AND paper_id_hi = ?", (lo, hi)
+        ).rowcount
+    )
+
+
 def absorb_paper_group(
     conn: sqlite3.Connection,
     loser_id: str,
@@ -837,6 +1022,8 @@ def absorb_paper_group(
         if cleared:
             return {"skipped": False, "reason": "self_link_cleared", "self_links_cleared": 1}
         return {"skipped": True, "reason": "same_id"}
+    if is_split(conn, loser_id, keeper_id):
+        return {"skipped": True, "reason": "rejected"}
     group_ids = collect_paper_group_ids(conn, loser_id, keeper_id)
     rows = _paper_rows(conn, group_ids)
     if loser_id not in rows:
@@ -984,8 +1171,11 @@ def settle_new_paper_group(
     # Promote on the ROOT, not on whatever id we were handed: a row that is
     # already subordinate must not become a second root of its own group.
     root_id = resolve_paper_root_id(conn, pid, strict=False)
-    promote_matching_preprints(conn, root_id)
+    merged = _settle_same_work(conn, root_id)
+    merged += int(promote_matching_preprints(conn, root_id)["merged"])
     root_id = resolve_paper_root_id(conn, root_id, strict=False)
+    if merged:
+        _note_ingest_merge(conn, root_id, merged, reason)
     # Adopt against the ROOT's own DOI: after a promotion the surviving row may
     # not be the one we were handed, and its DOI is what the orphans' suffixes
     # derive from.
@@ -996,6 +1186,103 @@ def settle_new_paper_group(
     if root_doi:
         link_orphan_components(conn, parent_paper_id=root_id, parent_doi=root_doi)
     return root_id
+
+
+#: S2 gives one id to a preprint and its journal version. Title and authors confirm it.
+S2_TITLE_RATIO = 0.9
+
+
+def authors_agree(first: str | None, second: str | None) -> bool:
+    """Both list authors, and at least half of the shorter list is shared."""
+    left = {surname(name).casefold() for name in parse_author_names(first or "")}
+    right = {surname(name).casefold() for name in parse_author_names(second or "")}
+    shared = left & right
+    return bool(shared) and len(shared) * 2 >= min(len(left), len(right))
+
+
+def titles_alike(first: str | None, second: str | None) -> bool:
+    """Same title but for wording a journal changed."""
+    return (
+        difflib.SequenceMatcher(
+            None, normalize_title_key(first)[:200], normalize_title_key(second)[:200]
+        ).ratio()
+        >= S2_TITLE_RATIO
+    )
+
+
+def _settle_same_work(conn: sqlite3.Connection, paper_id: str) -> int:
+    """Merge what identifiers alone prove to be this work. Returns the merges.
+
+    The strong rungs of the same-work ladder, readable from indexes, so they are
+    cheap inside a write section. The title rung is `promote_matching_preprints`;
+    the corpus-wide pass is `library.deduplication.plan_same_work`.
+    """
+    from alma.core.sql_helpers import standalone_paper_sql
+
+    row = conn.execute(
+        "SELECT id, doi, title, authors, semantic_scholar_id FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    if row is None:
+        return 0
+    standalone = standalone_paper_sql("p")
+    matches: dict[str, str] = {}
+    stem = doi_work_stem(row["doi"])
+    if stem:
+        for other in conn.execute(
+            f"SELECT p.id, p.doi FROM papers p WHERE p.doi >= ? AND p.doi < ? AND {standalone}",
+            (stem, f"{stem}~"),
+        ):
+            if doi_work_stem(other["doi"]) == stem:
+                matches[str(other["id"])] = "version"
+        for other in conn.execute(
+            f"""
+            SELECT p.id FROM paper_relations r JOIN papers p ON p.id = r.paper_id
+            WHERE r.related_doi = ? AND {standalone}
+            UNION
+            SELECT p.id FROM paper_relations r JOIN papers p ON p.doi = r.related_doi
+            WHERE r.paper_id = ? AND {standalone}
+            """,
+            (stem, paper_id),
+        ):
+            matches[str(other["id"])] = "relation"
+    s2_id = str(row["semantic_scholar_id"] or "").strip()
+    if s2_id:
+        for other in conn.execute(
+            f"SELECT p.id, p.title, p.authors FROM papers p "
+            f"WHERE p.semantic_scholar_id = ? AND {standalone}",
+            (s2_id,),
+        ):
+            if titles_alike(row["title"], other["title"]) and authors_agree(row["authors"], other["authors"]):
+                matches.setdefault(str(other["id"]), "semantic_scholar")
+    matches.pop(paper_id, None)
+    merged = 0
+    for other_id, level in matches.items():
+        result = absorb_paper_group(conn, other_id, paper_id, reason=f"same_work:{level}")
+        merged += int(not result.get("skipped"))
+    return merged
+
+
+def _note_ingest_merge(conn: sqlite3.Connection, root_id: str, merged: int, reason: str) -> None:
+    """One Activity row for a merge nobody asked for. Written after the commit."""
+    from alma.core.db_write import run_after_gate_release
+    from alma.core.operations.activity import record_foreground_action
+
+    title = conn.execute("SELECT title FROM papers WHERE id = ?", (root_id,)).fetchone()
+    message = (
+        f"Merged {merged} {'version' if merged == 1 else 'versions'} of "
+        f"\"{str(title[0] if title else '')[:80]}\""
+    )
+
+    def write() -> None:
+        record_foreground_action(
+            conn,
+            operation_key="papers.action.merge",
+            message=message,
+            result={"paper_id": root_id, "merged": merged, "reason": reason},
+            job_id=f"paper_merge_{uuid.uuid4().hex[:10]}",
+        )
+
+    run_after_gate_release(write, conn=conn, label="paper merge note")
 
 
 # The relationship defect vocabulary, in the order Health explains it. Health
@@ -1063,10 +1350,11 @@ def paper_group_defect_map(
         entry[defect] = entry.get(defect, 0) + occurrences
 
     rows = conn.execute(
-        "SELECT id, doi, work_type, preprint_source, canonical_paper_id, "
+        "SELECT id, doi, journal, work_type, preprint_source, canonical_paper_id, "
         "parent_paper_id, component_type, status, rating, reading_status, notes FROM papers"
     ).fetchall()
     by_id = {str(row["id"]): row for row in rows}
+    kept_as_papers = not_component_ids(conn)
     for row in rows:
         pid = str(row["id"])
         canonical = str(row["canonical_paper_id"] or "").strip()
@@ -1092,7 +1380,7 @@ def paper_group_defect_map(
                 flag(pid, "component_roots")
             if canonical and not is_preprint_row(row) and is_preprint_row(target):
                 flag(pid, "published_under_preprint")
-        if is_component_row(row) and not parent:
+        if is_component_row(row) and not parent and pid not in kept_as_papers:
             flag(pid, "orphan_components")
         if _has_pointer_cycle(pid, by_id):
             flag(pid, "cycles")
@@ -1142,13 +1430,16 @@ def relationship_integrity_counts(
 class PreprintTitleIndex:
     """Standalone title buckets shared by ingest, repair and pending counts.
 
-    A title/year heuristic is accepted only when both endpoints have a unique
-    partner. Multiple plausible works are review evidence, never a tie to break.
-    Linked versions cannot be stolen from an existing group.
+    A preprint pairs with a published row when that is the only published work it
+    fits. Several preprints of one journal paper are the ordinary case, not a
+    tie. A preprint that fits two published works is review evidence, never a tie
+    to break. Linked versions cannot be stolen from an existing group, and a pair
+    the user split is never offered.
     """
 
-    def __init__(self, rows: list[Any]) -> None:
+    def __init__(self, rows: list[Any], rejected: set[tuple[str, str]] | None = None) -> None:
         self._by_title: dict[str, list[Any]] = {}
+        self._rejected = rejected or set()
         for row in rows:
             if not is_component_row(row):
                 key = normalize_title_key(str(row["title"] or ""))
@@ -1164,6 +1455,17 @@ class PreprintTitleIndex:
                 if str(row["id"]) == str(preprint_id):
                     del rows[i]
                     return
+
+    def _fits(self, preprint: Any, published: Any, year_tolerance: int) -> bool:
+        if _ordered_pair(str(preprint["id"]), str(published["id"])) in self._rejected:
+            return False
+        if preprint["year"] is None or published["year"] is None:
+            return False
+        gap = int(published["year"]) - int(preprint["year"])
+        if abs(gap) <= year_tolerance:
+            return True
+        # Publication can take years. The authors say it is still this work.
+        return 0 < gap <= PUBLICATION_LAG_YEARS and authors_agree(preprint["authors"], published["authors"])
 
     def pairs(
         self,
@@ -1188,17 +1490,16 @@ class PreprintTitleIndex:
                 rows = [r for r in rows if str(r["doi"] or "").strip()]
             preprints = [r for r in rows if is_preprint_row(r)]
             journals = [r for r in rows if not is_preprint_row(r)]
-            edges = [(p, j) for p in preprints for j in journals
-                     if p["year"] is not None and j["year"] is not None
-                     and abs(int(p["year"]) - int(j["year"])) <= year_tolerance]
             for p in preprints:
-                matches = [j for pp, j in edges if pp["id"] == p["id"]]
+                matches = [j for j in journals if self._fits(p, j, year_tolerance)]
                 if not matches:
                     continue
-                unique = len(matches) == 1 and sum(
-                    j["id"] == matches[0]["id"] for _, j in edges
-                ) == 1
-                j = matches[0] if unique else None
+                # A deposit or an abstract beside the journal row is no rival.
+                best = max(_root_rank(j) for j in matches)
+                top = [j for j in matches if _root_rank(j) == best]
+                works = {doi_work_stem(j["doi"]) or str(j["id"]) for j in top}
+                unique = len(works) == 1
+                j = top[0] if unique else None
                 result.append({
                     "preprint_id": str(p["id"]),
                     "canonical_id": str(j["id"]) if j is not None else None,
@@ -1207,7 +1508,8 @@ class PreprintTitleIndex:
                     "preprint_doi": p["doi"],
                     "canonical_doi": j["doi"] if j is not None else None,
                     "preprint_source": classify_preprint_source(
-                        p["doi"], preprint_source=p["preprint_source"], work_type=p["work_type"]),
+                        p["doi"], preprint_source=p["preprint_source"], work_type=p["work_type"],
+                        journal=_value(p, "journal")),
                     "title": str(p["title"] or "")[:240],
                     "year": int(p["year"]),
                     "confidence": round(1 - abs(int(p["year"]) - int(j["year"])) * .05, 3)
@@ -1234,10 +1536,14 @@ def build_preprint_title_index(conn: sqlite3.Connection) -> PreprintTitleIndex:
     rows = conn.execute(
         f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers p WHERE {standalone_paper_sql('p')}"
     ).fetchall()
-    return PreprintTitleIndex(rows)
+    return PreprintTitleIndex(rows, rejected_paper_pairs(conn))
 
 
-_PREPRINT_INDEX_COLUMNS = "id, title, year, doi, work_type, preprint_source, component_type, status"
+_PREPRINT_INDEX_COLUMNS = (
+    "id, title, year, doi, journal, authors, work_type, preprint_source, component_type, status"
+)
+#: How long after its preprint a journal version still counts when the authors agree.
+PUBLICATION_LAG_YEARS = 6
 
 
 def _preprint_candidate_sql(alias: str = "p") -> str:
@@ -1257,7 +1563,13 @@ def _preprint_candidate_sql(alias: str = "p") -> str:
     return (
         f"(COALESCE(TRIM({col}preprint_source), '') <> '' "
         f"OR LOWER(TRIM(COALESCE({col}work_type, ''))) IN ({work_types}) "
-        f"OR {prefixes})"
+        f"OR {prefixes} "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%rxiv%' "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%research square%' "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%ssrn%' "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%preprint%' "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%authorea%' "
+        f"OR LOWER(COALESCE({col}journal, '')) LIKE '%precedings%')"
     )
 
 
@@ -1284,13 +1596,12 @@ def preprint_index_for_paper(
     chunk of an author refresh, with every foreground write queued behind it
     (2026-10-31). A write unit must stay short however large the corpus grows.
 
-    The slice gives the same answer as the full index. A preprint pairs with
-    this paper only within `year_tolerance`, and it stays unambiguous only if no
-    other journal row sits within `year_tolerance` of THAT preprint, so twice the
-    tolerance holds every row the decision reads. Rows with no year form no edge.
+    The slice gives the same answer as the full index, from either side: a
+    journal row looks back for its preprints, a preprint looks forward for its
+    journal row. Rows with no year form no edge.
 
-    Almost no ingest has a twin, so the first query looks only at preprints of
-    nearby years and returns empty when none shares the title.
+    Almost no ingest has a twin, so the first query reads only the few rows that
+    could share the title and returns empty when none does.
     """
     from alma.core.sql_helpers import standalone_paper_sql
 
@@ -1298,8 +1609,7 @@ def preprint_index_for_paper(
     row = conn.execute(
         f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers WHERE id = ?", (paper_id,)
     ).fetchone()
-    # Only a dated, published row can absorb a preprint.
-    if row is None or row["year"] is None or is_preprint_row(row) or is_component_row(row):
+    if row is None or row["year"] is None or is_component_row(row):
         return empty
     title_key = normalize_title_key(str(row["title"] or ""))
     if not title_key:
@@ -1307,23 +1617,39 @@ def preprint_index_for_paper(
 
     year = int(row["year"])
     standalone = standalone_paper_sql("p")
+    arrived_preprint = is_preprint_row(row)
+    if arrived_preprint:
+        # A preprint arriving after its journal version: look forward in time,
+        # and let SQLite drop what shares no word with this title.
+        word = max(re.findall(r"[^\W\d_]{5,}", str(row["title"] or "")) or [""], key=len)
+        if not word:
+            return empty
+        lo, hi = year - year_tolerance, year + PUBLICATION_LAG_YEARS
+        narrow = "p.title LIKE ?"
+        narrow_params: tuple[str, ...] = (f"%{word}%",)
+    else:
+        lo, hi = year - PUBLICATION_LAG_YEARS, year + year_tolerance
+        narrow = _preprint_candidate_sql("p")
+        narrow_params = ()
     # One string, not one row per title: each fetched row is a round trip through
     # the GIL, and this runs per work inside a write section.
     titles = conn.execute(
         f"SELECT group_concat(p.title, char(31)) FROM papers p WHERE {standalone} "
-        f"AND p.year BETWEEN ? AND ? AND {_preprint_candidate_sql('p')}",
-        (year - year_tolerance, year + year_tolerance),
+        f"AND p.id <> ? AND p.year BETWEEN ? AND ? AND {narrow}",
+        (paper_id, lo, hi, *narrow_params),
     ).fetchone()[0]
     if not any(normalize_title_key(title) == title_key for title in (titles or "").split("\x1f")):
         return empty
 
+    # Every row the pairing reads: both ends of an edge can sit a full lag apart.
     rows = conn.execute(
         f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers p WHERE {standalone} "
         "AND p.year BETWEEN ? AND ?",
-        (year - 2 * year_tolerance, year + 2 * year_tolerance),
+        (year - PUBLICATION_LAG_YEARS - year_tolerance, year + PUBLICATION_LAG_YEARS + year_tolerance),
     ).fetchall()
     return PreprintTitleIndex(
-        [r for r in rows if normalize_title_key(str(r["title"] or "")) == title_key]
+        [r for r in rows if normalize_title_key(str(r["title"] or "")) == title_key],
+        rejected_paper_pairs(conn),
     )
 
 
@@ -1348,13 +1674,13 @@ def promote_matching_preprints(
     if row is None:
         return {"candidates": 0, "merged": 0, "reparented": 0, "ambiguous": 0}
     pairs = [p for p in index.pairs(year_tolerance=year_tolerance, title_key=normalize_title_key(row["title"] or ""))
-             if published_paper_id in p["canonical_candidates"]]
+             if published_paper_id in (p["preprint_id"], *p["canonical_candidates"])]
     merged = reparented = ambiguous = 0
     for pair in pairs:
         if pair["ambiguous"]:
             ambiguous += 1
             continue
-        result = absorb_paper_group(conn, pair["preprint_id"], published_paper_id,
+        result = absorb_paper_group(conn, pair["preprint_id"], pair["canonical_id"],
                                     reason="journal_publication_promotion")
         index.forget(pair["preprint_id"])
         if not result.get("skipped"):

@@ -111,15 +111,17 @@ _TITLE_KEY_NOISE_RE = re.compile(r"[^a-z0-9]+")
 def normalize_title_key(title: str | None) -> str:
     """Deduplication key for paper titles.
 
-    Lowercases and strips every non-alphanumeric character (including
-    whitespace). Deliberately lossy — the intended use is catching the
-    same preprint indexed under two different OpenAlex work IDs
-    (e.g. ArXiv.org vs arXiv (Cornell)). Real distinct papers with
-    coincidentally identical keys must disambiguate by year.
+    Lowercases, folds accents and strips everything that is not a letter or a
+    digit, in any script. Deliberately lossy: the intended use is catching the
+    same work indexed twice. Real distinct papers with coincidentally identical
+    keys must disambiguate by year and authors.
     """
     if not title:
         return ""
-    return _TITLE_KEY_NOISE_RE.sub("", title.strip().lower())
+    if title.isascii():
+        return _TITLE_KEY_NOISE_RE.sub("", title.strip().lower())
+    folded = unicodedata.normalize("NFKD", title).casefold()
+    return "".join(ch for ch in folded if ch.isalnum())
 
 
 def candidate_paper_id(item: dict) -> str:
@@ -201,8 +203,12 @@ def strong_identifiers_conflict(
     branch and the importer's year-less exact-title fallback so the rule lives in
     exactly one place (DRY).
     """
-    oa_in = (incoming_openalex_id or "").strip()
-    oa_cand = (candidate_openalex_id or "").strip()
+    # Two versions of one work carry two DOIs and that says nothing against them.
+    stem_in = doi_work_stem(incoming_doi)
+    if stem_in and stem_in == doi_work_stem(candidate_doi):
+        return False
+    oa_in = bare_openalex_work_id(incoming_openalex_id)
+    oa_cand = bare_openalex_work_id(candidate_openalex_id)
     if oa_in and oa_cand and oa_in != oa_cand:
         return True
     doi_in = normalize_doi(incoming_doi)
@@ -234,6 +240,17 @@ def logical_dup_signature(title: str | None, year: object | None) -> str | None:
         except (TypeError, ValueError):
             y = str(year).strip()
     return f"{nk}::{y}"
+
+
+#: A title key shorter than this ("Introduction", "Theory of mind") names many works.
+MIN_IDENTIFYING_TITLE_CHARS = 20
+#: Title keys this short are words, not titles: "Introduction", "Preface".
+GENERIC_TITLE_CHARS = 12
+
+
+def bare_openalex_work_id(value: str | None) -> str:
+    """``W123`` from any spelling of an OpenAlex work id. ``""`` for nothing."""
+    return str(value or "").strip().rstrip("/").rsplit("/", 1)[-1]
 
 
 def resolve_existing_paper_id(
@@ -268,11 +285,12 @@ def resolve_existing_paper_id(
         params_tail.append(status)
     filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
 
-    oa = (openalex_id or "").strip()
+    oa = bare_openalex_work_id(openalex_id)
     if oa:
+        # Both spellings: rows from before ingest stored one form.
         row = conn.execute(
-            f"SELECT id FROM papers WHERE openalex_id = ?{filter_sql}",
-            (oa, *params_tail),
+            f"SELECT id FROM papers WHERE openalex_id IN (?, ?){filter_sql}",
+            (oa, f"https://openalex.org/{oa}", *params_tail),
         ).fetchone()
         if row:
             return str(row["id"])
@@ -295,6 +313,12 @@ def resolve_existing_paper_id(
             ).fetchall()
             for candidate_row in rows:
                 if normalize_title_key(str(candidate_row["title"] or "")) == key:
+                    # "Introduction" names many works: a short title proves
+                    # nothing once either side has an identifier to compare.
+                    if len(key) <= GENERIC_TITLE_CHARS and (
+                        doi_norm or oa or candidate_row["doi"] or candidate_row["openalex_id"]
+                    ):
+                        continue
                     if strong_identifiers_conflict(
                         incoming_doi=doi_norm,
                         incoming_openalex_id=oa,
@@ -322,14 +346,44 @@ def normalize_doi(doi_val: str | None) -> str | None:
 
     d = doi_val.strip()
     d = d.replace('DOI:', '').replace('doi:', '').strip()
-
-    d_lower = d.lower()
-    if d_lower.startswith('https://doi.org/'):
-        d = d[len('https://doi.org/'):]
-    elif d_lower.startswith('http://doi.org/'):
-        d = d[len('http://doi.org/'):]
-
+    d = _DOI_RESOLVER_RE.sub("", d)
+    # Pasted link text: a DOI holds no whitespace and no pipe.
+    d = re.split(r"[\s|]", d, maxsplit=1)[0]
+    # APA registered `10.1037//...` beside `10.1037/...`: one DOI, two spellings.
+    d = _DOI_DOUBLE_SLASH_RE.sub(r"\1/", d)
     return d or None
+
+
+_DOI_RESOLVER_RE = re.compile(r"^(?:https?://)?(?:dx\.|www\.)?doi\.org/", re.IGNORECASE)
+_DOI_DOUBLE_SLASH_RE = re.compile(r"^(10\.\d{4,9})//+")
+_DOI_VERSION_RE = re.compile(r"(?:_v|\.v|/v|(?<=\d)v)(\d{1,3})$")
+_ELIFE_VERSION_RE = re.compile(r"^(10\.7554/elife\.\d+)\.(\d{1,2})$")
+
+
+def doi_version(doi_val: str | None) -> tuple[str, int] | None:
+    """``(work stem, version)`` of a versioned DOI, ``None`` when it carries none.
+
+    Servers register each version under its own DOI: PsyArXiv ``_v2``, figshare
+    and F1000 ``.v2``, Research Square ``/v2``, arXiv and bioRxiv ``v2``, eLife
+    ``.2``. Those are distinct registered DOIs, so no spelling rule joins them.
+    Only the stem says they are one work.
+    """
+    doi = canonical_lookup_doi(doi_val)
+    if not doi:
+        return None
+    match = _ELIFE_VERSION_RE.match(doi)
+    if match:
+        return match.group(1), int(match.group(2))
+    match = _DOI_VERSION_RE.search(doi)
+    if match:
+        return doi[: match.start()], int(match.group(1))
+    return None
+
+
+def doi_work_stem(doi_val: str | None) -> str:
+    """The DOI of the work, whichever version this one is. ``""`` without a DOI."""
+    versioned = doi_version(doi_val)
+    return versioned[0] if versioned else (canonical_lookup_doi(doi_val) or "")
 
 
 # DOI shape per the Crossref / DataCite registry: prefix `10.<4-9 digits>`,

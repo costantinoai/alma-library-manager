@@ -41,6 +41,7 @@ from alma.core.time import utcnow
 from alma.core.utils import (
     clean_display_text,
     normalize_doi,
+    bare_openalex_work_id,
     resolve_existing_paper_id,
 )
 
@@ -523,7 +524,7 @@ def _upsert_candidate_paper(
             candidate_outcomes["invalid_candidate"] = candidate_outcomes.get("invalid_candidate", 0) + 1
         return None
 
-    openalex_id = str(candidate.get("openalex_id") or "").strip()
+    openalex_id = bare_openalex_work_id(candidate.get("openalex_id"))
     canonical_doi = normalize_doi(str(candidate.get("canonical_doi") or "").strip())
     doi = normalize_doi(str(candidate.get("doi") or "").strip()) or canonical_doi or str(candidate.get("doi") or "").strip()
     if canonical_doi and not doi:
@@ -553,6 +554,7 @@ def _upsert_candidate_paper(
         doi=doi,
         work_type=work_type,
         relation_parent_doi=str(candidate.get("parent_doi") or "").strip() or None,
+        title=title,
     )
 
     existing_paper_id = resolve_existing_paper_id(
