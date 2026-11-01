@@ -63,7 +63,7 @@ corpus, not the entire tracked set.
     your SPECTER2 embeddings, each labelled by the terms that distinguish it.
     Those answer different questions, so the taxonomy no longer stands in for
     it — if embeddings aren't computed yet the card says so and points at
-    **Settings → AI** rather than silently falling back. OpenAlex topics remain
+    **Settings → Intelligence → AI provider** rather than silently falling back. OpenAlex topics remain
     visible inside individual paper rows.
 
 ### Reports

@@ -107,15 +107,14 @@ None of these techniques are individually new.
 ALMa runs on the user's own machine (laptop, home server,
 whatever's available) as a long-running backend with a web UI in
 the browser and background jobs that fetch new papers between
-sessions. The code is open source under CC BY-NC 4.0; the data
+sessions. The code is source-available under PolyForm Noncommercial 1.0.0; the data
 lives in one SQLite file (`data/scholar.db`) on disk.
 
 There is no auth, no accounts, no multi-tenant database, no
-telemetry. Settings are one JSON blob. Heavy work (embeddings,
-clustering, label generation) runs locally or against API keys
-the user has configured. The only outbound calls are to public
-scholarly APIs (OpenAlex, Crossref, arXiv, bioRxiv, Semantic
-Scholar) and, optionally, an LLM provider the user has set up.
+telemetry. Settings are one JSON blob. Heavy work (embeddings) runs
+locally. The only outbound calls are to public scholarly APIs
+(OpenAlex, Crossref, arXiv, bioRxiv, Semantic Scholar) and to the
+plugins the user has switched on.
 
 Imports come from Zotero and BibTeX, and exports go back out as
 BibTeX or JSON. The library is portable in both directions.
@@ -163,7 +162,7 @@ silent fallbacks.
 ALMa works without any AI provider configured. Discovery still
 ranks, clustering falls back to non-AI strategies,
 recommendations still flow. AI features (semantic similarity,
-cluster labels, auto-tags, LLM query planning) light up only when
+auto-tags) light up only when
 the user has explicitly enabled and configured the underlying
 provider. No half-working fallbacks that quietly degrade quality.
 

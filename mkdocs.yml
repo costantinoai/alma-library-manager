@@ -6,7 +6,7 @@ repo_name: costantinoai/alma-library-manager
 edit_uri: edit/main/docs/
 copyright: >
   Copyright &copy; Andrea Ivan Costantino — Released under
-  <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>.
+  <a href="https://polyformproject.org/licenses/noncommercial/1.0.0/" target="_blank" rel="noopener">PolyForm Noncommercial 1.0.0</a>.
 
 docs_dir: docs
 
@@ -181,6 +181,9 @@ nav:
       - Testing: development/testing.md
       - Contributing: development/contributing.md
   - Releases:
+      - v0.25.0: releases/v0.25.0.md
+      - v0.24.2: releases/v0.24.2.md
+      - v0.24.1: releases/v0.24.1.md
       - v0.24.0: releases/v0.24.0.md
       - v0.23.4: releases/v0.23.4.md
       - v0.23.3: releases/v0.23.3.md

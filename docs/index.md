@@ -90,12 +90,12 @@ Monitors generate the **Feed** (chronological, deterministic). Saving
 from the Feed grows the **Library** (curated, organised). Discovery
 recommends papers adjacent to the Library (probabilistic, ranked).
 Every save, rating, removal, and tracked interaction strengthens the
-feedback loop that tunes Discovery over time. **Insights** projects the
-Library into charts and a clustered SPECTER2 graph. **Alerts** turns
-rules into Slack or email digests.
+feedback loop that tunes Discovery over time. **Analytics** inside
+the Library charts how it is spread. **Alerts**, an add-on you switch
+on, turns rules into Slack or email digests.
 
 ## License
 
-[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) ©
-Andrea Ivan Costantino. Personal and academic use are free; academic
-use requires a citation. Commercial use is not permitted.
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) ©
+Andrea Ivan Costantino. Personal and academic use are free. Commercial
+use is not permitted.

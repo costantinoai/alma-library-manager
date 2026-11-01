@@ -113,7 +113,7 @@ an existing install points it at a different (probably empty) profile.
 | `ALMA_ENV` | `prod` | Profile namespace. `dev` gives an isolated copy so development never touches your real library — `scripts/start-dev.sh` sets it. |
 | `ALMA_CONFIG_DIR` | OS config dir | Directory holding `.env` and `settings.json`. Docker sets it to `/app`. |
 | `ALMA_SETTINGS_PATH` | `<config dir>/settings.json` | Exact settings file. Docker pins it into the data volume so settings survive image upgrades. |
-| `ALMA_DEFAULT_AI_PROVIDER` | auto | Forces the embedding compute provider (`none`, `local`, or a provider an add-on brings) instead of auto-detecting. Defaults to `local` when torch is importable (D19). |
+| `ALMA_DEFAULT_AI_PROVIDER` | auto | Forces the embedding compute provider (`none` or `local`; any other value is ignored) instead of auto-detecting. Defaults to `local` when torch is importable (D19). |
 
 ### Slack (legacy env aliases)
 

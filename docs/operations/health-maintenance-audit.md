@@ -71,7 +71,7 @@ provider outage must not freeze an already-observable group defect.
 
 The local-embedding repair declares its provider requirement in the task
 registry. With no usable provider it is `blocked_external`, never recommended
-or auto-run, and links to its owner at Settings → AI.
+or auto-run, and links to its owner at Settings → Intelligence → AI provider.
 
 ## Recommendation and card policy
 

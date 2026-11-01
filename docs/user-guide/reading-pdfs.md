@@ -81,7 +81,7 @@ pdfs/
 In the Docker install that is `/app/data/pdfs` on the `alma-data` volume. A
 file is named once, when it is stored, and never overwritten; a daily
 housekeeping pass removes files no paper points to any more. Backups
-(`Settings → Library management`) cover the database, not the PDFs — they can
+(`Settings → Library maintenance`) cover the database, not the PDFs — they can
 always be fetched or attached again.
 
 ## On your phone
