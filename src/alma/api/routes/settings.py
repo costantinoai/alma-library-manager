@@ -27,15 +27,16 @@ Secret handling (2026-04-29; generalized to S2 2026-05-25):
 
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from alma.api.deps import get_current_user
+from alma.api.deps import get_current_user, get_db
+from alma.application import connection_status
 from alma.config import (
     DEFAULT_SETTINGS,
     get_all_settings,
@@ -51,7 +52,6 @@ from alma.config import (
     update_settings as config_update_settings,
 )
 from alma.core import addons
-from alma.core.http_sources import get_source_http_client
 from alma.core.network_policy import (
     NETWORK_ACCESS_SETTING,
     NetworkPolicyStatus,
@@ -69,6 +69,9 @@ from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.openalex.http import get_client as get_openalex_client
 from alma.openalex.http import reset_client as reset_openalex_client
+
+#: The same shape the form checks. Only a format: no service confirms an address.
+_EMAIL_FORMAT = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
 _SEMANTIC_SCHOLAR_ENV_KEY = "SEMANTIC_SCHOLAR_API_KEY"
@@ -437,8 +440,16 @@ def update_settings(payload: SettingsModel):
     - All paths MUST be relative (e.g., ./data/scholar.db)
     - No external APIs are called as part of this endpoint
     """
+    email = (payload.openalex_email or "").strip()
+    if email and not _EMAIL_FORMAT.fullmatch(email):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enter a valid email address."
+        )
+
     try:
         data = payload.model_dump()
+        if payload.openalex_email is not None:
+            data["openalex_email"] = email
 
         # Secrets are persisted in the secret store, not settings.json.
         incoming_openalex_key = data.pop("openalex_api_key", None)
@@ -605,91 +616,24 @@ def get_openalex_usage():
         )
 
 
-@router.get("/openalex/status")
-def get_openalex_status():
-    """Report whether the OpenAlex API key is configured and, if so, whether
-    a live probe accepts it. Drives the connection pill in Settings →
-    Connections → OpenAlex, mirroring the Semantic Scholar status contract.
+@router.get("/connections")
+def get_connections(db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Every dependency's state and each section's worst one. A pure local read:
+    it never probes a service. Checks run through the POST below."""
+    records = connection_status.assess(db)
+    return {"connections": records, "sections": connection_status.summarise(records)}
 
-    States (green dot = ``valid is True``):
-      - ``configured=False`` — no key set (env or secret store).
-      - ``valid=True``       — probe returned 200, or 429 (key authenticated
-                               before the rate limiter applied).
-      - ``valid=False``      — OpenAlex rejected the key (401 / 403).
-      - ``valid=None``       — probe could not complete / unexpected status.
 
-    The probe hits ``/rate-limit`` directly (bypasses the response cache) so
-    a manual re-check always re-probes with the current key.
-    """
+@router.post("/connections/{connection_id}/check")
+def check_connection(
+    connection_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Run one real, read-only check as an Activity job. Posts and sends nothing."""
     try:
-        client = get_openalex_client()
-        return client.probe_credentials()
-    except Exception as e:
-        logger.error("Failed to probe OpenAlex credentials: %s", e)
-        return {
-            "configured": bool(get_openalex_api_key()),
-            "valid": None,
-            "detail": "Could not probe OpenAlex.",
-        }
-
-
-@router.get("/semantic-scholar/status")
-def get_semantic_scholar_status():
-    """Report whether the Semantic Scholar key is configured and, if so,
-    whether a live authenticated probe accepts it. Drives the connection dot
-    in Settings → Connections → Semantic Scholar.
-
-    States (green dot = ``valid is True``):
-      - ``configured=False``         — no key set (env or secret store).
-      - ``valid=True``               — probe returned 200, OR 429 (the key
-                                       was accepted; S2 authenticates before
-                                       applying the 1 req/s throttle).
-      - ``valid=False``              — S2 rejected the key (401 / 403).
-      - ``valid=None``               — probe could not complete (network /
-                                       timeout / unexpected status); unknown.
-
-    The probe is a single cheapest-possible `/paper/search?limit=1` call with
-    a short timeout and no retries — it is on-demand only (card mount / manual
-    refresh), so it doesn't meaningfully spend the 1 req/s budget.
-    """
-    key = get_semantic_scholar_api_key()
-    if not key:
-        return {"configured": False, "valid": None, "detail": "No API key set."}
-
-    try:
-        client = get_source_http_client("semantic_scholar")
-        resp = client.get(
-            "/paper/search",
-            params={"query": "machine learning", "limit": 1, "fields": "title"},
-            headers={"Accept": "application/json"},
-            timeout=8,
-            max_retries=0,
+        return connection_status.start_check(
+            db, connection_id, actor=str(user.get("username") or "api_user")
         )
-    except requests.RequestException as exc:
-        logger.info("Semantic Scholar key probe could not complete: %s", exc)
-        return {
-            "configured": True,
-            "valid": None,
-            "detail": f"Could not reach Semantic Scholar ({exc.__class__.__name__}).",
-        }
-
-    if resp.status_code == 200:
-        return {"configured": True, "valid": True, "detail": "Key accepted."}
-    if resp.status_code == 429:
-        return {
-            "configured": True,
-            "valid": True,
-            "detail": "Key accepted (rate-limited right now — 1 req/s).",
-        }
-    if resp.status_code in (401, 403):
-        return {
-            "configured": True,
-            "valid": False,
-            "detail": "Semantic Scholar rejected the key (invalid or unauthorized).",
-        }
-    return {
-        "configured": True,
-        "valid": None,
-        "detail": f"Unexpected Semantic Scholar response ({resp.status_code}).",
-    }
-
+    except connection_status.CheckRefusedError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

@@ -18,6 +18,7 @@ from alma.api.helpers import (
     safe_div,
     table_exists,
 )
+from alma.application import connection_status
 from alma.application import materialized_views as mv
 from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
@@ -1100,6 +1101,7 @@ def _build_operational_snapshot(
             )
             if half_configured:
                 misconfigured_channels += 1
+            connection = connection_status.state_of(db, entry["id"]) or {}
             plugins.append(
                 {
                     "name": entry["id"],
@@ -1109,9 +1111,12 @@ def _build_operational_snapshot(
                     "can_send": entry["can_send"],
                     "can_receive": entry["can_receive"],
                     "half_configured": half_configured,
-                    # Whether a configured channel actually WORKS is what a
-                    # connectivity test establishes; nothing here can know it.
-                    "is_healthy": None,
+                    # Whether a configured channel actually WORKS is the last
+                    # check's verdict; no verdict stays None, never True.
+                    "is_healthy": {"working": True, "failing": False}.get(
+                        str(connection.get("state"))
+                    ),
+                    "connection_detail": connection.get("detail"),
                 }
             )
     except Exception:
@@ -1369,6 +1374,31 @@ def _build_operational_snapshot(
                 "page": "settings",
                 "params": {"anchor": "plugins"},
                 "targets": plugin_targets,
+            }
+        )
+    failing_plugins = [plugin for plugin in plugins if plugin["is_healthy"] is False]
+    if failing_plugins:
+        states.append(
+            {
+                "id": "plugins_not_working",
+                "label": "An integration is not working",
+                "severity": "critical",
+                "detail": " ".join(
+                    f"{plugin['display_name']}: {plugin['connection_detail']}"
+                    for plugin in failing_plugins
+                ),
+                "page": "settings",
+                "params": {"anchor": "plugins"},
+                "targets": [
+                    {
+                        "id": plugin["name"],
+                        "label": plugin["display_name"],
+                        "kind": "plugin",
+                        "action": "test_plugin",
+                        "plugin_name": plugin["name"],
+                    }
+                    for plugin in failing_plugins[:3]
+                ],
             }
         )
     if disabled_sources:

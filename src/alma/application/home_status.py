@@ -29,18 +29,11 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from alma.application import connection_status
 from alma.core import addons
 from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
-
-#: Job outcomes that PROVE something about a subsystem.
-#:
-#: `cancelled` is deliberately absent and is the whole reason this set exists:
-#: a cancelled run says the user (or a shutdown) stopped the job, not that the
-#: provider answered. Reading it as either success or failure would be a lie,
-#: and cancellations are the single most common row in the ledger.
-CONCLUSIVE_STATUSES = ("completed", "noop", "failed")
 
 #: Modules the local SPECTER2 encoder needs. Checked with `find_spec`, never
 #: imported — importing torch on a page load would cost seconds.
@@ -147,35 +140,6 @@ def ago(stamp: object, *, now: datetime) -> str:
     if hours < 24:
         return f"{hours}h ago"
     return f"{hours // 24}d ago"
-
-
-def _last_conclusive_run(
-    db: sqlite3.Connection, prefixes: tuple[str, ...]
-) -> dict[str, Any] | None:
-    """The most recent run of any of `prefixes` that reached a verdict.
-
-    Prefixes are matched with `LIKE prefix || '%'` because ledger keys are
-    parameterized (`papers.rehydrate_metadata:openalex:metadata:target:<id>`).
-    Every listed prefix must be a job that actually TALKS to the subsystem — one
-    that merely reads the DB afterwards would report a green light for a dead
-    connection.
-    """
-    if not prefixes:
-        return None
-    like = " OR ".join("operation_key LIKE ? || '%'" for _ in prefixes)
-    statuses = ",".join("?" for _ in CONCLUSIVE_STATUSES)
-    row = db.execute(
-        f"""
-        SELECT operation_key, status, message, error,
-               COALESCE(finished_at, updated_at) AS at
-        FROM operation_status
-        WHERE ({like}) AND status IN ({statuses})
-        ORDER BY at DESC
-        LIMIT 1
-        """,
-        (*prefixes, *CONCLUSIVE_STATUSES),
-    ).fetchone()
-    return dict(row) if row else None
 
 
 def scalar(db: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
@@ -517,7 +481,7 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             href=SETTINGS_PLUGINS,
         )
 
-    last = _last_conclusive_run(db, ("inbox.capture_sweep",))
+    last = connection_status.last_conclusive_run(db, ("inbox.capture_sweep",))
     if last and str(last.get("status")) == "failed":
         return pill(
             key="inbox",
@@ -530,6 +494,21 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
             href=SETTINGS_PLUGINS,
             checked_at=last.get("at"),
         )
+    # A provider the last check refused is not ready, whatever its settings say.
+    for manifest, _status in ready:
+        record = connection_status.state_of(db, manifest.id, now=now)
+        if record and record["state"] == "failing":
+            return pill(
+                key="inbox",
+                label="Inbox",
+                state="failed",
+                metric="provider not working",
+                detail=record["detail"],
+                tier="always",
+                href=SETTINGS_PLUGINS,
+                checked_at=record["checked_at"],
+            )
+
     at = (last or {}).get("at")
     return pill(
         key="inbox",
@@ -550,50 +529,35 @@ def _inbox_pill(db: sqlite3.Connection, *, now: datetime) -> dict[str, Any]:
 # problem — absent while healthy
 # ---------------------------------------------------------------------------
 
-#: Suppliers, and the jobs that prove they answered. They sit in the
-#: problem tier on purpose: a real outage manifests as Feed or Embeddings going
-#: stale, which is already reported, so a green dot each day is pure noise.
-SUPPLIERS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
-    (
-        "openalex",
-        "OpenAlex",
-        "Feed monitors, author refreshes and paper metadata all stall.",
-        (
-            "papers.rehydrate_metadata:openalex",
-            "authors.deep_refresh",
-            "authors.rehydrate_metadata",
-        ),
-    ),
-    (
-        "semantic_scholar",
-        "Semantic Scholar",
-        "New papers stop getting vectors, so Discovery cannot see them.",
-        ("ai.backfill_s2_vectors", "ai.title_resolution_sweep"),
-    ),
+#: Suppliers, and what breaking costs. They sit in the problem tier on purpose:
+#: a real outage shows as Feed or Embeddings going stale, which is already
+#: reported, so a green dot each day is pure noise. Whether one is broken is
+#: `connection_status`'s answer, the same one Settings shows.
+SUPPLIERS: tuple[tuple[str, str], ...] = (
+    ("openalex", "Feed monitors, author refreshes and paper metadata all stall."),
+    ("semantic_scholar", "New papers stop getting vectors, so Discovery cannot see them."),
 )
 
 
-def _supplier_pills(db: sqlite3.Connection) -> list[dict[str, Any]]:
+def _supplier_pills(db: sqlite3.Connection, *, now: datetime) -> list[dict[str, Any]]:
     pills = []
-    for key, label, stake, prefixes in SUPPLIERS:
-        last = _last_conclusive_run(db, prefixes)
-        if not last or str(last.get("status")) != "failed":
+    for key, stake in SUPPLIERS:
+        record = connection_status.state_of(db, key, now=now)
+        if not record or record["state"] != "failing":
             continue
         pills.append(
             pill(
                 key=key,
-                label=label,
+                label=record["label"],
                 state="failed",
                 metric="last call failed",
-                detail=f"{stake} {str(last.get('error') or last.get('message') or '').strip()}",
+                detail=f"{stake} {record['detail']}",
                 tier="problem",
                 href=SETTINGS_CONNECTIONS,
-                checked_at=last.get("at"),
+                checked_at=record["checked_at"],
             )
         )
     return pills
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +586,6 @@ def assess(db: sqlite3.Connection, *, now: datetime | None = None) -> list[dict[
         _embeddings(db),
         _inbox_pill(db, now=moment),
         *addons.home_pills(db, moment),
-        *_supplier_pills(db),
+        *_supplier_pills(db, now=moment),
     ]
     return pills
