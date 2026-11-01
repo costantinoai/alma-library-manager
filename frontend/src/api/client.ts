@@ -2898,6 +2898,8 @@ export interface AuthorNeedsAttentionRow {
   conflict_field?: string
   conflict_primary_value?: string
   conflict_alt_value?: string
+  /** The author already holding that value: using it cannot succeed. */
+  conflict_alt_owner?: string | null
   alt_openalex_id?: string
   /** For `reason_code='degraded_monitor'`: the feed monitor to refresh. */
   monitor_id?: string | null
@@ -2916,6 +2918,18 @@ export function rejectAuthorPair(
   return api.post(`/authors/${encodeURIComponent(authorId)}/not-same-person`, {
     alt_author_ids: altAuthorIds,
   })
+}
+
+/** The authors this one was marked as a different person from. */
+export function listRejectedAuthors(authorId: string): Promise<{ rejected: string[] }> {
+  return api.get(`/authors/${encodeURIComponent(authorId)}/not-same-person`)
+}
+
+/** Undo `rejectAuthorPair`: the pair can be merged, and may be asked about, again. */
+export function undoRejectAuthorPair(authorId: string, altAuthorId: string): Promise<unknown> {
+  return api.delete(
+    `/authors/${encodeURIComponent(authorId)}/not-same-person/${encodeURIComponent(altAuthorId)}`,
+  )
 }
 
 /** Merge alt OpenAlex profiles into a primary author. Each entry in
@@ -2967,6 +2981,8 @@ export interface DiscoverAliasesResponse {
   primary_display_name: string
   primary_openalex_id: string
   orcid: string | null
+  /** The lookup itself failed: this says nothing about the ORCID. */
+  lookup_error?: string
   aliases: Array<{
     openalex_id: string
     display_name: string
@@ -3008,6 +3024,8 @@ export function setAuthorIdentifiers(
   orcid: string | null
   scholar_id: string | null
   id_resolution_status: string
+  /** The resolver job queued because the save left no OpenAlex ID. */
+  lookup: { job_id?: string } | null
 }> {
   return api.post(`/authors/${encodeURIComponent(authorId)}/identifiers`, body)
 }

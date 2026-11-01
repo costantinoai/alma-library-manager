@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import { acceptAuthorUnidentified, getApiErrorMessage, reopenAuthorIdentity } from '@/api/client'
-import { errorToast, useToast } from '@/hooks/useToast'
+import { acceptAuthorUnidentified, reopenAuthorIdentity } from '@/api/client'
+import { useToast } from '@/hooks/useToast'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
 
 /**
@@ -23,12 +24,12 @@ export function useAcceptUnidentified(onDone?: () => void) {
           onClick: () => {
             reopenAuthorIdentity(id)
               .then(() => invalidateAfterAuthorChange(queryClient, id))
-              .catch((err) => errorToast('Could not undo', getApiErrorMessage(err)))
+              .catch((err) => authorActionFailed(queryClient, 'Could not undo', err))
           },
         },
       })
       onDone?.()
     },
-    onError: (err) => errorToast('Could not update the author', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not update the author', err),
   })
 }
