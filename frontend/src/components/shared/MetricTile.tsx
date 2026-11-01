@@ -159,7 +159,7 @@ export function MetricTile({
         // the single interactive identity (no new color). A bare tile has no
         // border to tint, so it moves its numeral instead.
         onClick &&
-          'cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+          'cursor-pointer transition-colors focus-ring',
         onClick && !isBare && 'hover:border-alma-folio',
         onClick && isBare && 'group rounded-sm',
         className,

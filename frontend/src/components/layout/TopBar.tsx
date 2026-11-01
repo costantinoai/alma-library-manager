@@ -69,7 +69,7 @@ export function TopBar({
           <button
             type="button"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio sm:flex"
+            className="hidden items-center gap-2 rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-900 focus-ring sm:flex"
             aria-label="Open command palette"
             title="Open command palette"
           >

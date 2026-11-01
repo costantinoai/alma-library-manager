@@ -109,7 +109,7 @@ export function RepairGroup({
                   onClick={() => toggle(op.key)}
                   aria-expanded={open}
                   className={
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio ' +
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-ring ' +
                     (open
                       ? 'border-alma-folio bg-accent-soft text-alma-folio'
                       : 'border-control-edge bg-control-well text-alma-700 hover:border-control-edge-strong')

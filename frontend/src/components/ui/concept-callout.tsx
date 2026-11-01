@@ -80,7 +80,7 @@ export function ConceptCallout({
           className={cn(
             'group flex w-full cursor-pointer select-none items-start gap-3 px-4 py-3 text-left',
             'transition-colors hover:bg-control-quiet',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+            'focus-ring',
           )}
         >
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />

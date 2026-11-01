@@ -510,7 +510,7 @@ export function SettingsSection({
       <CollapsibleTrigger
         className={cn(
           'group flex w-full items-center justify-between gap-3 rounded-t-sm px-4 py-3 text-left',
-          'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+          'hover:bg-control-quiet focus-ring',
           'data-[state=closed]:rounded-b-sm',
         )}
       >

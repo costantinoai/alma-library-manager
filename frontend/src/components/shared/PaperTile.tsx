@@ -119,14 +119,14 @@ export function PaperTile({
             <button
               type="button"
               onClick={onSelect}
-              className="line-clamp-3 text-left rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+              className="line-clamp-3 text-left rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
             >
               {title}
             </button>
           ) : href ? (
             <a
               href={href}
-              className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+              className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-ring"
             >
               {title}
             </a>

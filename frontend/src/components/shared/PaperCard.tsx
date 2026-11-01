@@ -24,7 +24,7 @@ import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBre
 const HEADER_ICON_BUTTON = cn(
   'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-sm transition-colors duration-150',
   'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500 focus-visible:ring-offset-1',
+  'focus-ring',
 )
 
 export interface PaperCardPaper {

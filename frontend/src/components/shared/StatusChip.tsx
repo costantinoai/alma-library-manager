@@ -78,14 +78,14 @@ export function StatusChip({
     ? cn(
         'flex items-center gap-1.5 rounded-sm text-xs text-slate-500 transition-colors',
         'hover:text-alma-folio',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+        'focus-ring',
         className,
       )
     : cn(
     'group flex min-w-[150px] items-start gap-2 rounded-sm border border-control-edge',
     'bg-control-well px-3 py-2 text-left transition-colors',
     'hover:border-control-edge-strong hover:bg-control-quiet',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+    'focus-ring',
     className,
   )
   const inner = isSlim ? (

@@ -53,7 +53,7 @@ export function StatusRow({ severity, label, metric, onOpen, title }: StatusRowP
       title={title}
       className={cn(
         BASE,
-        'group transition-colors hover:border-control-edge-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+        'group transition-colors hover:border-control-edge-strong focus-ring',
       )}
     >
       {inner}

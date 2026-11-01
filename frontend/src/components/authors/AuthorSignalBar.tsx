@@ -105,7 +105,7 @@ export function AuthorSignalBar({
                 // The card itself is clickable — keep hovering/clicking the
                 // info dot from opening the detail dialog.
                 onClick={(event) => event.stopPropagation()}
-                className="shrink-0 text-slate-400 transition hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="shrink-0 text-slate-400 transition hover:text-accent focus-ring"
               >
                 <Info className="h-3.5 w-3.5" aria-hidden />
               </TooltipTrigger>
