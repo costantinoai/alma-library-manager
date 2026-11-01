@@ -49,7 +49,8 @@ router = APIRouter()
 # Bumped when the request/response contract changes in a way that an
 # already-installed connector would need to know about. The connector
 # reads this from /ping to detect an ALMa build it can't talk to.
-CONNECTOR_API_VERSION = 1
+# 2: Like and Love rate only; the popup says so and sends `contract`.
+CONNECTOR_API_VERSION = 2
 
 _VALID_ACTIONS = {"add", "like", "love"}
 _VALID_DESTINATIONS = {"library", "reading_list"}
@@ -72,7 +73,12 @@ class ExtensionSaveRequest(BaseModel):
     read off the page.
     """
 
-    action: str = Field("add", description="add | like | love → 3/4/5 stars")
+    action: str = Field(
+        "add", description="add saves at 3 stars | like, love rate 4/5 stars and save nothing"
+    )
+    contract: int = Field(
+        1, description="The connector's save contract. A build older than 2 sends none."
+    )
     destination: str = Field(
         "library",
         description="library (untriaged) | reading_list (reading_status='reading')",
@@ -209,6 +215,17 @@ def save_from_extension(
             detail=f"Invalid action {action!r}. Must be one of: {sorted(_VALID_ACTIONS)}",
         )
 
+    # A connector from before rate only can only report "Saved to Library", so
+    # its Like is refused with the truth rather than done and misreported.
+    if action != "add" and req.contract < CONNECTOR_API_VERSION:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Nothing was changed. This connector is out of date: in ALMa, Like and Love "
+                "no longer save. Choose Add to save, or update the connector."
+            ),
+        )
+
     destination = (req.destination or "library").strip().lower()
     if destination not in _VALID_DESTINATIONS:
         raise HTTPException(
@@ -316,9 +333,6 @@ def save_from_extension(
             candidate=candidate,
             action=action,
             added_from="browser_extension",
-            # The popup's button is Save: its Add/Like/Love picks the stars of
-            # that save, so here Like is not the rate-only verdict of a card.
-            promote=True,
             default_reading_status=_DESTINATION_READING_STATUS[destination],
             # An explicit connector save is a strong user signal — its
             # provenance should win even over a row first seen via feed
@@ -343,7 +357,7 @@ def save_from_extension(
     # Which collection membership did THIS save create? (For the undo token —
     # a membership that existed before the save must survive an Undo.)
     collections_added: list[str] = []
-    if (collection_id or collection_name) and not prior_member:
+    if action == "add" and (collection_id or collection_name) and not prior_member:
         final_cid = collection_id
         if not final_cid and collection_name:
             crow = db.execute(

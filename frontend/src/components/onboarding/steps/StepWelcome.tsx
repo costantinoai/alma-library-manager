@@ -20,7 +20,7 @@ export function StepWelcome({ next }: StepContext) {
       <ul className="space-y-3">
         {POINTS.map((p, i) => (
           <RevealItem key={p.text} index={i}>
-            <li className="flex items-start gap-3 rounded-card border border-divider bg-surface-2 px-4 py-3">
+            <li className="flex items-start gap-3 py-1">
               <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-control bg-alma-folio-soft text-alma-folio">
                 <p.icon className="h-4 w-4" aria-hidden />
               </span>

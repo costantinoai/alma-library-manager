@@ -131,7 +131,7 @@ describe('PluginsSection', () => {
       'href',
       expect.stringContaining('/plugins/slack/'),
     )
-    expect(screen.getAllByText('Working').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Working')).toHaveLength(1)
     await waitFor(() => expect(getPluginConfig).toHaveBeenCalledWith('slack'))
   })
 

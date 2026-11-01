@@ -307,7 +307,7 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                   </div>
 
                   {toLensMutation.isPending && toLensMutation.variables?.id === coll.id && <p role="status" className="px-5 text-sm">Creating Discovery lens…</p>}
-                  <DisclosurePanel title={`Manage collection: ${coll.name}`} description="Edit, delete, create a Discovery lens, or inspect collection activity.">
+                  <DisclosurePanel className="px-5" title={`Manage collection: ${coll.name}`} description="Edit, delete, create a Discovery lens, or inspect collection activity.">
                     <div className="flex flex-wrap items-center gap-2">                      <Button
                         variant="ghost"
                         size="icon"

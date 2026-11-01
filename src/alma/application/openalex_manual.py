@@ -1050,12 +1050,10 @@ def save_online_search_result(
     override_added_from: bool = False,
     collection_name: str | None = None,
     collection_ids: list[str] | None = None,
-    promote: bool = False,
 ) -> dict:
     """Resolve a work + apply the shared add/like/love/dislike contract.
 
-    Like and Love rate only, unless ``promote`` says the action IS a save with
-    those stars (the browser extension's Save button).
+    Like and Love rate only: the paper lands as a rated, tracked row (D6).
 
     Canonical ingest path for the unified Find-and-add surface (Discovery
     + Import Online tab). Maps ``action`` to the ``3/4/5/1`` rating used
@@ -1172,7 +1170,7 @@ def save_online_search_result(
         eff = target_rating
 
         coll = (collection_name or "").strip()
-        if action == "add" or (promote and action in {"like", "love"}):
+        if action == "add":
             # Monotonic rating upgrade — never downgrade a saved paper.
             eff = max(current_rating, target_rating)
             library_app.add_to_library(
@@ -1197,6 +1195,9 @@ def save_online_search_result(
             # Rate only (D6): a verdict from search is not a save. A request
             # for the reading list is still honoured, reading is its own axis.
             eff = paper_actions.apply_valence(db, pid, action, added_from=added_from)["rating"]
+            if override_added_from:
+                # Nothing saved it to stamp this, and an upsert may have said `feed`.
+                db.execute("UPDATE papers SET added_from = ? WHERE id = ?", (added_from, pid))
             if default_reading_status and not db.execute(
                 "SELECT reading_status FROM papers WHERE id = ?", (pid,)
             ).fetchone()["reading_status"]:

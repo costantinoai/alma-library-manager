@@ -21,6 +21,8 @@ declare module '@tanstack/react-table' {
   interface ColumnMeta<TData extends RowData, TValue> {
     cellOverflow?: 'ellipsis' | 'wrap' | 'none'
     label?: string
+    /** Stays at the right edge while the table scrolls, from `lg` up. */
+    stickyRight?: boolean
   }
 }
 import {
@@ -87,6 +89,13 @@ interface DataTableProps<T> {
   rowRef?: (element: HTMLTableRowElement | null, row: T, visibleIndex: number) => void
   /** Default column sizing. */
   defaultColumnWidth?: number
+  /**
+   * Fit the frame: widths from `size` share the table's own width instead of
+   * following content, so long titles cannot push the table wider than its host.
+   */
+  fit?: boolean
+  /** Columns off until the reader turns them on in the Columns menu. */
+  defaultHidden?: string[]
   /** Optional empty-state content. */
   emptyState?: React.ReactNode
   /** Caption shown in the bottom-right of the table footer. */
@@ -158,6 +167,8 @@ export function DataTable<T>({
   rowClassName,
   rowRef,
   defaultColumnWidth = 160,
+  fit = false,
+  defaultHidden,
   emptyState,
   footerCaption,
   sorting: controlledSorting,
@@ -215,7 +226,9 @@ export function DataTable<T>({
     return [selectCol, ...columns]
   }, [columns, selectionEnabled, selectedIds, onSelectionChange, deriveRowId])
 
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(persisted.visibility ?? {})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    persisted.visibility ?? Object.fromEntries((defaultHidden ?? []).map((id) => [id, false])),
+  )
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(
     persisted.order ?? augmentedColumns.map(columnKey),
   )
@@ -292,6 +305,7 @@ export function DataTable<T>({
   // against each other. Until then, `table-layout: auto` lets the browser
   // pick content-driven widths within the min/max bounds from `defaultColumn`.
   const hasUserSizedColumns = Object.keys(columnSizing).length > 0
+  const fixedLayout = fit || hasUserSizedColumns
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
@@ -356,7 +370,7 @@ export function DataTable<T>({
           <table
             className={cn(
               'w-full border-collapse text-sm',
-              hasUserSizedColumns ? 'table-fixed' : 'table-auto',
+              fixedLayout ? 'table-fixed' : 'table-auto',
             )}
             style={hasUserSizedColumns ? { width: table.getTotalSize() } : undefined}
           >
@@ -373,7 +387,8 @@ export function DataTable<T>({
                         key={header.id}
                         headerId={header.id}
                         size={header.getSize()}
-                        fixedLayout={hasUserSizedColumns}
+                        fixedLayout={fixedLayout}
+                        stickyRight={header.column.columnDef.meta?.stickyRight}
                       >
                         {(dragHandleProps) => (
                           <div
@@ -456,7 +471,7 @@ export function DataTable<T>({
                       ref={(element) => rowRef?.(element, row.original, visibleIndex + 1)}
                       onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                       className={cn(
-                        'transition-colors hover:bg-surface-2',
+                        'group/row transition-colors hover:bg-surface-2',
                         onRowClick && 'cursor-pointer',
                         isSelected && 'bg-accent-soft',
                         extraClass,
@@ -466,7 +481,7 @@ export function DataTable<T>({
                         const size = cell.column.getSize()
                         // In auto mode, cells size from content up to a cap;
                         // once the user drags, `size` is authoritative.
-                        const style = hasUserSizedColumns
+                        const style = fixedLayout
                           ? { width: size }
                           : { maxWidth: cell.column.columnDef.maxSize ?? 480 }
                         const overflow = cell.column.columnDef.meta?.cellOverflow ?? 'ellipsis'
@@ -474,7 +489,17 @@ export function DataTable<T>({
                         return (
                           <td
                             key={cell.id}
-                            className="overflow-hidden px-3 py-2 align-middle text-slate-700"
+                            className={cn(
+                              'overflow-hidden px-3 py-2 align-middle text-slate-700',
+                              // Opaque, or the row scrolls through it.
+                              cell.column.columnDef.meta?.stickyRight &&
+                                cn(
+                                  'lg:sticky lg:right-0 lg:z-local lg:border-l lg:border-divider',
+                                  isSelected
+                                    ? 'lg:bg-accent-soft'
+                                    : 'lg:bg-surface-1 lg:group-hover/row:bg-surface-2',
+                                ),
+                            )}
                             style={style}
                           >
                             {overflow === 'none' ? (
@@ -532,11 +557,13 @@ function DraggableHeader({
   headerId,
   size,
   fixedLayout,
+  stickyRight,
   children,
 }: {
   headerId: string
   size: number
   fixedLayout: boolean
+  stickyRight?: boolean
   children: (dragHandleProps: {
     attributes: ReturnType<typeof useSortable>['attributes']
     listeners: ReturnType<typeof useSortable>['listeners']
@@ -557,7 +584,14 @@ function DraggableHeader({
     ...(fixedLayout ? { width: size } : { minWidth: size }),
   }
   return (
-    <th ref={setNodeRef} style={style} className="relative px-3 py-2 text-left">
+    <th
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'relative px-3 py-2 text-left',
+        stickyRight && 'lg:sticky lg:right-0 lg:z-local lg:border-l lg:border-divider lg:bg-surface-2',
+      )}
+    >
       {children({ attributes, listeners, setActivatorNodeRef })}
     </th>
   )

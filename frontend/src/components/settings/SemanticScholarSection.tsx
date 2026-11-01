@@ -91,7 +91,7 @@ export function SemanticScholarSection({
     >
       <Form {...form}>
         <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
-          <ConnectionLine id="semantic_scholar" />
+          <ConnectionLine id="semantic_scholar" badged />
 
           <FormField
             control={form.control}

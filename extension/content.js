@@ -28,7 +28,7 @@
   // The save-contract version this connector speaks. MUST stay in lockstep
   // with the backend's CONNECTOR_API_VERSION (src/alma/api/routes/extension.py):
   // bump BOTH together whenever the /save request or response shape changes.
-  const CONTRACT = 1;
+  const CONTRACT = 2;
 
   function version() {
     try { return api.runtime.getManifest().version; }
