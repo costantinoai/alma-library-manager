@@ -48,7 +48,7 @@ from alma.application.author_merge_ledger import (
     transfer_side_tables,
     write_ledger_row,
 )
-from alma.core.author_identity import MERGED_ALIAS_SOURCES
+from alma.core.author_identity import AUTHOR_MERGES_DDL, MERGED_ALIAS_SOURCES
 from alma.core.author_names import (
     affiliations_corroborate,
     name_match_confidence,
@@ -81,6 +81,7 @@ def ensure_alt_identifiers_table(db: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_alt_identifiers_alt_oid "
         "ON author_alt_identifiers(lower(alt_openalex_id))"
     )
+    db.execute(AUTHOR_MERGES_DDL)
     # Conflicts surface from the field-union step of merge — when both
     # rows hold a different non-null value for a hard identifier
     # (orcid, scholar_id, semantic_scholar_id), the merge keeps the
@@ -582,6 +583,11 @@ def merge_author_profiles(
                 seen.add(rid)
                 alt_ids_clean.append(rid)
             continue
+        if is_pair_rejected(db, primary_id, oid.upper()):
+            raise MergeRefused(
+                f"{primary_row['name']} and {oid} were marked as different people, "
+                "so they cannot be merged."
+            )
         rowless_oids.append(oid)
 
     for alt_id in alt_ids_clean:

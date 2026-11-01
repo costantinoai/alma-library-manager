@@ -352,7 +352,7 @@ def undo_author_merge(db: sqlite3.Connection, merge_id: str) -> dict:
         )
     sync_author_monitors(db)
 
-    other = alt_id or alt_oid
+    other = alt_id or alt_oid.upper()
     lo, hi = _pair(primary_id, other)
     record_merge_rejection(db, lo, hi, source="merge_undo", reason="merge undone")
     db.execute("DELETE FROM author_centroids WHERE lower(author_openalex_id) = lower(?)", (primary_oid,))

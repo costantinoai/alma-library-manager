@@ -57,6 +57,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { AuthorMergeHistory } from '@/components/authors/AuthorMergeHistory'
 import { ConfirmDialog } from '@/components/library'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
@@ -838,6 +839,7 @@ export function AuthorDetailPanel({
 
           <TabsContent value="identifiers" className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <AuthorIdentifierResolution author={resolved} onAccepted={() => onOpenChange(false)} />
+            <AuthorMergeHistory authorId={resolved.id} />
           </TabsContent>
         </Tabs>
 
