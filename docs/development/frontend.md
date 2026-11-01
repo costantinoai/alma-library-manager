@@ -162,6 +162,10 @@ landing page. Rules of thumb:
   `text-2xs` and `text-caption` below `text-xs`, `border-divider` for the
   paper hairline, `focus-ring` for anything pressable that is not a
   `Button`.
+* Depth: fields and sheet buttons are lighter paper (`control-well`), rails
+  and quiet fills are the paper's own warm shade (`control-quiet`,
+  `control-track`), banners are opaque state paper (`bg-state-*`). Navy
+  washes are not used on paper: blue over cream turns grey-brown.
 * Light only. Gold is trim, never a button. Activity's cool ladder is the
   one documented exception to the surface rule.
 * Tabular numerics where it matters (counts, scores, citations).

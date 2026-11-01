@@ -91,14 +91,14 @@ const toneClasses: Record<Tone, { icon: string; hover: string; active: string }>
   neutral: {
     icon: 'text-slate-500',
     hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
-    active: `border-transparent bg-alma-800/[0.14] text-alma-900 font-semibold ring-alma-800/25 ${ACTIVE_RING}`,
+    active: `border-transparent bg-control-quiet-hover text-alma-900 font-semibold ring-control-edge ${ACTIVE_RING}`,
   },
   // Queue — deferred. Reading list is pre-commit limbo: neither a library
   // save nor a signal, so it carries no valence colour at all.
   queue: {
     icon: 'text-slate-500',
     hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
-    active: `border-transparent bg-alma-800/[0.14] text-alma-900 font-semibold ring-alma-800/25 ${ACTIVE_RING}`,
+    active: `border-transparent bg-control-quiet-hover text-alma-900 font-semibold ring-control-edge ${ACTIVE_RING}`,
   },
   // Save — the primary affirmative: this paper joins the library. Accent
   // (folio) is the app's single interactive identity.

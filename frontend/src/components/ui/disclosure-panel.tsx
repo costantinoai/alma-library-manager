@@ -85,7 +85,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
         ref={ref}
         className={cn(
           'overflow-hidden rounded-card shadow-paper-sm',
-          danger && 'border-critical-500 bg-critical-50',
+          danger && 'border-critical-700/30 bg-state-critical',
           className,
         )}
         {...rest}
@@ -144,7 +144,7 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
           <div
             className={cn(
               'border-t p-4',
-              danger ? 'border-critical-100' : 'border-divider',
+              danger ? 'border-critical-700/15' : 'border-divider',
               contentClassName,
             )}
           >
