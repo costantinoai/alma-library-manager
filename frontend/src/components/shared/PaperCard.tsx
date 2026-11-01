@@ -18,6 +18,7 @@ import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
+import { nextLevel, useSurfaceLevel } from '@/components/ui/surface-level'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 import { Button } from '@/components/ui/button'
 import { SubPanel } from '@/components/ui/sub-panel'
@@ -289,6 +290,7 @@ export function PaperCard({
   const isCompact = effectiveSize === 'compact'
   const isDetailed = effectiveSize === 'detailed'
   const showAbstractByDefault = isDetailed
+  const hostLevel = useSurfaceLevel()
   const [showBreakdown, setShowBreakdown] = useState(isDetailed)
   const [showAbstract, setShowAbstract] = useState(showAbstractByDefault)
   const [authorsExpanded, setAuthorsExpanded] = useState(false)
@@ -408,8 +410,9 @@ export function PaperCard({
 
   return (
     <Card
-      // A PaperCard lifts one level off whatever surface it sits on; the
-      // relational ladder handles the contrast, so no manual tone is needed.
+      // A PaperCard is an object in a list, so it keeps its box at any depth:
+      // naming the level opts out of Card's one-box rule.
+      level={nextLevel(hostLevel)}
       className={cn(
         'group/paper-card relative overflow-hidden transition-all duration-150 hover:shadow-paper-sheet-hover',
         rootClickable && 'cursor-pointer',

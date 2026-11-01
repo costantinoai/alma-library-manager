@@ -46,7 +46,7 @@ export function OnboardingShell({
       aria-modal="true"
       aria-label="Welcome to ALMa"
     >
-      <SurfaceProvider level={1}>
+      <SurfaceProvider level={0}>
         <motion.div
           className="w-full max-w-3xl"
           initial={{ opacity: 0, y: reduced ? 0 : 14, scale: reduced ? 1 : 0.99 }}
