@@ -76,6 +76,7 @@ import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { MetaLine, PageIntro, PulseDot } from '@/components/ui/page-intro'
 import { PageSection } from '@/components/ui/page-section'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { formatAuthorNames } from '@/lib/authorNames'
 import { branchReach } from '@/lib/branchReach'
 import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
@@ -1731,7 +1732,7 @@ function DiscoveryCompactTable({
         size: 200,
         cell: ({ row }) => (
           <span className="text-slate-600" title={row.original.authors}>
-            {row.original.authors}
+            {formatAuthorNames(row.original.authors)}
           </span>
         ),
       },

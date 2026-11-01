@@ -24,6 +24,7 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
 import { ScoreBreakdownPanel } from '@/components/ScoreBreakdownPanel'
 import { SubPanel } from '@/components/ui/sub-panel'
+import { formatAuthorNames } from '@/lib/authorNames'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -91,7 +92,7 @@ export function SimilarResultsDialog({
                         {item.title}
                       </h4>
                       {item.authors && (
-                        <p className="mt-0.5 text-xs text-slate-500">{item.authors}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{formatAuthorNames(item.authors)}</p>
                       )}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Progress

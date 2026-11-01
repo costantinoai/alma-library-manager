@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast, errorToast} from '@/hooks/useToast'
+import { formatAuthorNames } from '@/lib/authorNames'
 import { formatPercent } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { PRESET_COLORS } from './types'
@@ -345,7 +346,7 @@ export function TagsTab() {
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-800">{like.title}</p>
-                      <p className="text-xs text-slate-500">{like.authors}</p>
+                      <p className="text-xs text-slate-500">{formatAuthorNames(like.authors)}</p>
                     </div>
                     <div className="flex items-center gap-0.5">
                       {Array.from({ length: like.rating ?? 0 }).map((_, i) => (

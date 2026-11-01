@@ -59,6 +59,7 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
+import { formatAuthorNames } from '@/lib/authorNames'
 import { describeJobLaunch } from '@/lib/activity'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
@@ -1366,7 +1367,7 @@ function FeedCompactTable({
         size: 200,
         cell: ({ row }) => (
           <span className="text-slate-600" title={row.original.authors}>
-            {row.original.authors}
+            {formatAuthorNames(row.original.authors)}
           </span>
         ),
       },

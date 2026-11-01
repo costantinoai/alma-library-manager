@@ -91,3 +91,8 @@ export function uniqueAuthorNames(authors?: string | null): string[] {
     return true
   })
 }
+
+/** The stored string as one readable line, for a table cell or a picker row. */
+export function formatAuthorNames(authors?: string | null): string {
+  return parseAuthorNames(authors).join(', ')
+}

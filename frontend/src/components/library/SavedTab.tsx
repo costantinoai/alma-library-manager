@@ -61,6 +61,7 @@ import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
+import { formatAuthorNames } from '@/lib/authorNames'
 import { navigateTo } from '@/lib/hashRoute'
 import { reactionFromRating } from '@/lib/reactions'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
@@ -964,7 +965,7 @@ function SavedCompactTable({
       size: 200,
       cell: ({ row }) => (
         <span className="text-slate-600" title={row.original.authors}>
-          {row.original.authors}
+          {formatAuthorNames(row.original.authors)}
         </span>
       ),
     },
