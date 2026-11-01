@@ -13,8 +13,8 @@ import {
 import {
   api,
   getTagMergeSuggestions,
+  listAllSavedPapers,
   mergeTags,
-  type Publication,
   type Tag,
 } from '@/api/client'
 import { AddonSlot } from '@/addons/AddonSlot'
@@ -65,7 +65,7 @@ export function TagsTab() {
 
   const likesQuery = useQuery({
     queryKey: ['library-saved', 'tag-picker'],
-    queryFn: () => api.get<Publication[]>('/library/saved?limit=300'),
+    queryFn: listAllSavedPapers,
     enabled: !!assignTagId,
     retry: 1,
   })

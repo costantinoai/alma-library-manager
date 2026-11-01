@@ -27,7 +27,7 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { useDebounce } from '@/hooks/useDebounce'
 import { SubPanel } from '@/components/ui/sub-panel'
@@ -125,6 +125,15 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
 
   const results = searchQuery.data ?? { papers: [], authors: [], collections: [], topics: [] }
   const hasQuery = debouncedQuery.trim().length >= 2
+
+  // Enter takes the first row without an ArrowDown first. cmdk picks a first
+  // row only when its own filter runs, which `shouldFilter={false}` turns off.
+  const firstRow = hasQuery
+    ? [...results.papers, ...results.authors, ...results.collections, ...results.topics][0]
+    : undefined
+  const firstValue = firstRow ? searchResultValue(firstRow) : !hasQuery && pages[0] ? rowValue(pages[0]) : ''
+  const [highlighted, setHighlighted] = useState('')
+  useEffect(() => setHighlighted(firstValue), [firstValue, isOpen])
   const isSearching = hasQuery && searchQuery.isFetching
   const totalAsyncResults =
     results.papers.length + results.authors.length + results.collections.length + results.topics.length
@@ -133,9 +142,12 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
   return (
     <Dialog open={isOpen} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="overflow-hidden p-0 sm:max-w-2xl">
+        <DialogTitle className="sr-only">Search ALMa</DialogTitle>
         <Command
           shouldFilter={false}
           loop
+          value={highlighted}
+          onValueChange={setHighlighted}
           className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-caption [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-slate-400"
         >
           <CommandInput
@@ -160,7 +172,7 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
                     return (
                       <CommandItem
                         key={route.id}
-                        value={`${route.id} ${route.name} ${(route.keywords ?? []).join(' ')}`}
+                        value={rowValue(route)}
                         onSelect={() => handleSelect(route.url)}
                       >
                         <Icon className="text-slate-500" />
@@ -178,7 +190,7 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
                     return (
                       <CommandItem
                         key={action.id}
-                        value={`${action.id} ${action.name} ${(action.keywords ?? []).join(' ')}`}
+                        value={rowValue(action)}
                         onSelect={() => handleSelect(action.url)}
                       >
                         <Icon className="text-slate-500" />
@@ -252,6 +264,14 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
   )
 }
 
+function rowValue(row: { id: string; name: string; keywords?: readonly string[] }): string {
+  return `${row.id} ${row.name} ${(row.keywords ?? []).join(' ')}`
+}
+
+function searchResultValue(result: SearchResult): string {
+  return `${result.type}-${result.id}-${result.name}`
+}
+
 function SearchResultItem({
   result,
   onSelect,
@@ -262,7 +282,7 @@ function SearchResultItem({
   const Icon = getCategoryIcon(result.type)
   return (
     <CommandItem
-      value={`${result.type}-${result.id}-${result.name}`}
+      value={searchResultValue(result)}
       onSelect={() => onSelect(result.url)}
     >
       <Icon className="text-slate-500" />
