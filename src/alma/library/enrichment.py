@@ -831,7 +831,8 @@ def materialize_imported_authors(conn: sqlite3.Connection) -> dict:
             else:
                 author_id = f"import_author_{hashlib.sha1(clean_name.lower().encode('utf-8')).hexdigest()[:16]}"
                 inserted = conn.execute(
-                    "INSERT OR IGNORE INTO authors (name, id, added_at) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO authors (name, id, added_at, author_type) "
+                    "VALUES (?, ?, ?, 'background')",
                     (clean_name, author_id, time.strftime("%Y-%m-%dT%H:%M:%S")),
                 )
                 if inserted.rowcount and inserted.rowcount > 0:

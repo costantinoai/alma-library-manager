@@ -225,7 +225,7 @@ def _m_0004_authors_columns(conn: sqlite3.Connection) -> None:
             "institutions": "TEXT",
             "email_domain": "TEXT",
             "added_at": "TEXT",
-            "author_type": "TEXT DEFAULT 'followed'",
+            "author_type": "TEXT DEFAULT 'background'",
             "id_resolution_status": "TEXT",
             "id_resolution_reason": "TEXT",
             "id_resolution_updated_at": "TEXT",
@@ -1988,6 +1988,27 @@ def _m_0054_retire_hosted_embedding_provider(conn: sqlite3.Connection) -> None:
     delete_secret("openai.api_key")
 
 
+def _m_0055_phantom_followed_authors(conn: sqlite3.Connection) -> None:
+    """Demote every author marked followed with no follow row, again.
+
+    Migration 19 did this once, but the import writer kept leaning on the column
+    default of 'followed', so the rows came back: 1,104 of 1,191 on a copy of
+    prod. They took real-follow priority in author hydration. Existing databases
+    keep the old default, because SQLite cannot change one in place; every writer
+    now names the type (`tests/test_author_type_writers.py`).
+    """
+    if _table_exists(conn, "authors") and _table_exists(conn, "followed_authors"):
+        demoted = conn.execute(
+            """
+            UPDATE authors
+            SET author_type = 'background'
+            WHERE author_type = 'followed'
+              AND id NOT IN (SELECT author_id FROM followed_authors)
+            """
+        ).rowcount
+        logger.info("phantom follows: demoted %d authors", demoted)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -2043,6 +2064,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (52, "drop_noop_discovery_settings", _m_0052_drop_noop_discovery_settings),
     (53, "followed_authors_are_active", _m_0053_followed_authors_are_active),
     (54, "retire_hosted_embedding_provider", _m_0054_retire_hosted_embedding_provider),
+    (55, "phantom_followed_authors", _m_0055_phantom_followed_authors),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -460,7 +460,7 @@ def init_db_schema() -> None:
                     added_at TEXT,
 
                     -- Author classification
-                    author_type TEXT DEFAULT 'followed',
+                    author_type TEXT DEFAULT 'background',
 
                     -- Identity resolution (+ Phase D hierarchical-resolver
                     -- columns, 2026-04-24: method / confidence / evidence)
