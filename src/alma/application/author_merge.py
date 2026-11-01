@@ -386,8 +386,10 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
     """All conflicts that haven't been resolved or dismissed yet.
 
     Joined to `authors` so the needs-attention surface can render the
-    primary's display name without a second round-trip. A pure read: Home and
-    a GET call this, and a database with no merge yet simply has no conflict.
+    primary's display name without a second round-trip, and so a conflict
+    whose primary was removed or deleted stops being listed: nobody is left to
+    decide it. A pure read: Home and a GET call this, and a database with no
+    merge yet simply has no conflict.
     """
     try:
         rows = db.execute(
@@ -403,8 +405,9 @@ def list_unresolved_conflicts(db: sqlite3.Connection) -> list[dict]:
                 a.name AS primary_name,
                 a.openalex_id AS primary_openalex_id
             FROM author_merge_conflicts c
-            LEFT JOIN authors a ON a.id = c.primary_author_id
+            JOIN authors a ON a.id = c.primary_author_id
             WHERE c.status = 'unresolved'
+              AND COALESCE(a.status, 'active') != 'removed'
             ORDER BY c.created_at DESC
             """
         ).fetchall()
@@ -435,6 +438,10 @@ def list_all_alt_openalex_ids(db: sqlite3.Connection) -> set[str]:
     }
 
 
+class MergeRefused(ValueError):
+    """A merge the user's own record forbids, or that must be asked for by row."""
+
+
 def merge_author_profiles(
     db: sqlite3.Connection,
     primary_author_id: str,
@@ -450,8 +457,11 @@ def merge_author_profiles(
     row (e.g. a suggestion-rail candidate the user recognises as a
     duplicate of someone already curated): their `publication_authors`
     rows reattach to the primary and the id is recorded as an alias —
-    no throwaway row is created. An id in this list that turns out to
-    HAVE a local row is routed through the normal row path instead.
+    no throwaway row is created. An id here that has an ACTIVE local row is
+    refused: merging that row picks a survivor and fields, so it is asked for
+    through ``alt_author_ids``. A soft-removed row takes the row path, which
+    only finishes its cleanup. A pair the user called "not the same person"
+    (D17) is refused on either list. Nothing is written before a refusal.
 
     Returns a summary dict suitable for the API response:
       {
@@ -467,6 +477,7 @@ def merge_author_profiles(
 
     Raises:
       ValueError if the primary doesn't exist or has no openalex_id.
+      MergeRefused for an active row in ``alt_openalex_ids`` or a rejected pair.
     """
     ensure_alt_identifiers_table(db)
 
@@ -509,16 +520,28 @@ def merge_author_profiles(
             continue
         seen_oids.add(oid.lower())
         row = db.execute(
-            "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
+            "SELECT id, name, status FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
             (oid,),
         ).fetchone()
         if row is not None:
             rid = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+            if str(row["status"] or "active") != "removed" and rid != primary_id:
+                raise MergeRefused(
+                    f"{oid} is already an author here ({row['name']}). Merge that author directly."
+                )
             if rid != primary_id and rid not in seen:
                 seen.add(rid)
                 alt_ids_clean.append(rid)
             continue
         rowless_oids.append(oid)
+
+    for alt_id in alt_ids_clean:
+        if is_pair_rejected(db, primary_id, alt_id):
+            alt = db.execute("SELECT name FROM authors WHERE id = ?", (alt_id,)).fetchone()
+            raise MergeRefused(
+                f"{primary_row['name']} and {alt['name'] if alt else alt_id} were marked as "
+                "different people, so they cannot be merged."
+            )
 
     summary = {
         "primary_author_id": primary_id,
@@ -803,6 +826,32 @@ def merge_author_profiles(
 
     run_after_gate_release(_post_commit, conn=db, label="author_merge post-commit")
     return summary
+
+
+def annotate_discovered_aliases(
+    db: sqlite3.Connection, primary_author_id: str, aliases: list[dict]
+) -> list[dict]:
+    """Say for each discovered alias whether it is a local author and a rejected pair.
+
+    ``local_author_id`` names an active row, which merges by row. ``rejected``
+    is the user's "not the same person" verdict. Only an alias with neither can
+    go through ``alt_openalex_ids``.
+    """
+    out: list[dict] = []
+    for alias in aliases:
+        rows = db.execute(
+            "SELECT id, status FROM authors WHERE lower(openalex_id) = lower(?)",
+            (str(alias.get("openalex_id") or ""),),
+        ).fetchall()
+        active = next((r for r in rows if str(r["status"] or "active") != "removed"), None)
+        out.append(
+            {
+                **alias,
+                "local_author_id": str(active["id"]) if active else None,
+                "rejected": any(is_pair_rejected(db, primary_author_id, str(r["id"])) for r in rows),
+            }
+        )
+    return out
 
 
 def discover_aliases_via_orcid(
@@ -1654,6 +1703,33 @@ def record_merge_rejection(
     )
 
 
+def rejected_merge_pairs(db: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every rejected pair in canonical order, for a detector that checks many."""
+    try:
+        rows = db.execute(
+            "SELECT author_id_lo, author_id_hi FROM author_merge_rejections"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {(str(row["author_id_lo"]), str(row["author_id_hi"])) for row in rows}
+
+
+def reject_author_pair(db: sqlite3.Connection, author_id_a: str, author_id_b: str) -> None:
+    """Record "not the same person" for two authors and drop any pending candidate.
+
+    The same verdict as ``reject_merge_candidate`` for a pair the attention list
+    found, which may have no candidate row. RAW writes: the caller owns the
+    gated write window.
+    """
+    record_merge_rejection(db, author_id_a, author_id_b, source="split_profiles", reason="user_rejected")
+    db.execute(
+        "DELETE FROM author_merge_candidates "
+        "WHERE (primary_author_id = ? AND alt_author_id = ?) "
+        "   OR (primary_author_id = ? AND alt_author_id = ?)",
+        (author_id_a, author_id_b, author_id_b, author_id_a),
+    )
+
+
 def reject_merge_candidate(db: sqlite3.Connection, candidate_id: str) -> dict:
     """Reject one pending candidate: record the permanent rejection AND drop the
     candidate row so it leaves the queue and is never re-proposed.
@@ -1695,7 +1771,17 @@ def import_suggested_author(
     ).fetchone()
     if not primary:
         return {"success": False, "reason": "primary_not_found"}
-    result = merge_author_profiles(db, primary_author_id, [], alt_openalex_ids=[oid])
+    # The user named this identity, so a local row merges by row.
+    local = db.execute(
+        "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) "
+        "AND COALESCE(status, 'active') != 'removed' LIMIT 1",
+        (oid,),
+    ).fetchone()
+    result = (
+        merge_author_profiles(db, primary_author_id, [str(local["id"])])
+        if local and str(local["id"]) != primary_author_id
+        else merge_author_profiles(db, primary_author_id, [], alt_openalex_ids=[oid])
+    )
     record_author_alias(db, primary_author_id, oid, source="suggestion_import")
     return {
         "success": True,

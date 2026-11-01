@@ -576,8 +576,10 @@ def _backfill_status_from_inputs(
     expected_floor = 0
     coverage_ratio = None
     if total_works > 0:
+        # Never above what the author has published: 4 of 4 papers is not thin.
         expected_floor = min(
             25,
+            total_works,
             max(_AUTHOR_BACKFILL_MIN_EXPECTED, int(math.ceil(total_works * _AUTHOR_BACKFILL_EXPECTED_RATIO))),
         )
         coverage_ratio = round(background_count / float(total_works), 3)

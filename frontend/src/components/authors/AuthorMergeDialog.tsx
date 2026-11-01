@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GitMerge, Loader2, Search } from 'lucide-react'
+import { GitMerge, Loader2, Search, UserX } from 'lucide-react'
 
 import {
   api,
   getApiErrorMessage,
   mergeAuthorProfiles,
+  rejectAuthorPair,
   type Author,
   type AuthorMergeFieldChoice,
 } from '@/api/client'
@@ -20,13 +21,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/library'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Input } from '@/components/ui/input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 import { RowButton } from '@/components/ui/row-button'
 import { SubPanel } from '@/components/ui/sub-panel'
 
@@ -85,6 +87,8 @@ interface AuthorMergeDialogProps {
   emptyCandidateMessage?: string
   contextSlot?: ReactNode
   onMerged?: () => void
+  /** Offer the other answer to "are these the same person?". Permanent (D17). */
+  offerNotSamePerson?: boolean
 }
 
 const MERGE_METADATA_FIELDS: MergeMetadataField[] = [
@@ -149,12 +153,14 @@ export function AuthorMergeDialog({
   emptyCandidateMessage = 'No matching corpus authors.',
   contextSlot,
   onMerged,
+  offerNotSamePerson = false,
 }: AuthorMergeDialogProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [mergeSearch, setMergeSearch] = useState('')
   const [mergeTargetId, setMergeTargetId] = useState<string | null>(null)
   const [mergeChoices, setMergeChoices] = useState<Record<string, AuthorMergeFieldChoice>>({})
+  const [confirmingNotSame, setConfirmingNotSame] = useState(false)
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -227,7 +233,10 @@ export function AuthorMergeDialog({
 
   useEffect(() => {
     if (open && primary && alt && Object.keys(mergeChoices).length === 0) {
-      setMergeChoices(defaultMergeChoices(primary, alt))
+      const defaults = defaultMergeChoices(primary, alt)
+      // Identical profiles have no choices: a new empty object here would
+      // re-run this effect forever and take the whole page down.
+      if (Object.keys(defaults).length > 0) setMergeChoices(defaults)
     }
   }, [mergeChoices, primary, alt, open])
 
@@ -247,18 +256,8 @@ export function AuthorMergeDialog({
       return mergeAuthorProfiles(primary.id, [alt.id], { [alt.id]: mergeChoices })
     },
     onSuccess: (data) => {
-      const survivorId = primary?.id
-      const keys: unknown[][] = [
-        ['authors'],
-        ['authors-needs-attention'],
-        ['library-followed-authors'],
-        ['author-suggestions'],
-        ['feed-monitors'],
-      ]
-      if (survivorId) {
-        keys.push(['author-detail', survivorId], ['author-publications', survivorId])
-      }
-      void invalidateQueries(queryClient, ...keys)
+      void invalidateAfterAuthorChange(queryClient, primary?.id)
+      void invalidateQueries(queryClient, ['author-suggestions'])
       toast({
         title: 'Authors merged',
         description:
@@ -271,6 +270,23 @@ export function AuthorMergeDialog({
     onError: (err) => errorToast('Failed to merge authors', getApiErrorMessage(err)),
   })
 
+  const notSameMutation = useMutation({
+    mutationFn: () => rejectAuthorPair(primary!.id, [alt!.id]),
+    onSuccess: () => {
+      void invalidateAfterAuthorChange(queryClient, primary?.id)
+      toast({
+        title: 'Kept as different people',
+        description: `${primary?.name} and this profile won't be flagged again.`,
+      })
+      setConfirmingNotSame(false)
+      onOpenChange(false)
+      onMerged?.()
+    },
+    onError: (err) => errorToast('Could not save that', getApiErrorMessage(err)),
+  })
+
+  const busy = mergeMutation.isPending || notSameMutation.isPending
+
   const effectiveTitle =
     title ?? (absorbMode ? 'Merge this author into another' : 'Merge author profiles')
   const effectiveDescription =
@@ -280,7 +296,8 @@ export function AuthorMergeDialog({
       : 'Choose the existing author row that represents the same person, then pick which metadata value survives on the merged profile.')
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+    <Dialog open={open} onOpenChange={(next) => (busy ? undefined : onOpenChange(next))}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>{effectiveTitle}</DialogTitle>
@@ -460,7 +477,19 @@ export function AuthorMergeDialog({
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row">
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={mergeMutation.isPending}>
+          {offerNotSamePerson ? (
+            <Button
+              variant="ghost"
+              className="sm:mr-auto"
+              onClick={() => setConfirmingNotSame(true)}
+              disabled={!primary || !alt || busy}
+              title="These are two different people. The warning goes away for good."
+            >
+              <UserX className="h-4 w-4" />
+              Not the same person
+            </Button>
+          ) : null}
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
           <Button
@@ -469,7 +498,7 @@ export function AuthorMergeDialog({
               !primary ||
               !alt ||
               (absorbOpenAlexOnly && !alt.openalex_id) ||
-              mergeMutation.isPending
+              busy
             }
             title={
               primary && alt
@@ -489,5 +518,15 @@ export function AuthorMergeDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={confirmingNotSame}
+      onOpenChange={setConfirmingNotSame}
+      variant="default"
+      title="Not the same person?"
+      description={`${alt?.affiliation || alt?.openalex_id || 'This profile'} stays a separate author from ${primary?.name ?? 'this one'}. This pair is never suggested for merging again, and there is no undo.`}
+      isPending={notSameMutation.isPending}
+      onConfirm={() => notSameMutation.mutate()}
+    />
+    </>
   )
 }

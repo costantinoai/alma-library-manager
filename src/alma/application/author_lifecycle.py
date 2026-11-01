@@ -262,7 +262,8 @@ def soft_remove_author(
 
     now = utcnow().isoformat()
     db.execute(
-        "UPDATE authors SET status = 'removed' WHERE id = ?", (aid,),
+        "UPDATE authors SET status = 'removed', author_type = 'background' WHERE id = ?",
+        (aid,),
     )
     # The audit line goes through the scheduler's OWN connection (`add_job_log`
     # → `_persist_job_log`). Most callers run this inside a `run_write_unit` /

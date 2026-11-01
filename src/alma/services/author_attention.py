@@ -41,6 +41,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from alma.application.feed_monitors import author_monitor_can_fetch
 from alma.application.followed_authors import get_followed_author_backfill_status
 from alma.services import health as health_service
 
@@ -122,6 +123,7 @@ def monitor_attention_rows(monitors: list[dict[str, Any]]) -> list[dict[str, Any
             "health_reason": m.get("health_reason"),
             "last_error": m.get("last_error"),
             "last_checked_at": m.get("last_checked_at"),
+            "can_fetch": author_monitor_can_fetch(m),
         }
         for m in monitors
         if str(m.get("monitor_type") or "") == "author" and m.get("health") == "degraded"
@@ -223,17 +225,17 @@ AUTO_FIX_CODES = frozenset(
 def _identity_action(status: str, has_openalex: bool) -> dict[str, str]:
     """Map the row shape to a user-facing action."""
     if status == "error":
-        return {"code": "retry_refresh", "label": "Retry refresh",
-                "hint": "The last refresh hit an exception. Try again."}
+        return {"code": "retry_refresh", "label": "Resolve identity",
+                "hint": "The last refresh hit an exception. Retry it, paste an identifier, or accept that they can't be identified."}
     if status == "no_match":
-        return {"code": "manual_search", "label": "Search OpenAlex",
-                "hint": "Automatic search returned zero hits. Open the author card and paste an OpenAlex / ORCID manually."}
+        return {"code": "manual_search", "label": "Resolve identity",
+                "hint": "Automatic search returned zero hits. Search the candidates, paste an identifier, or accept that they can't be identified."}
     if status == "needs_manual_review":
         return {"code": "review_candidates", "label": "Review candidates",
                 "hint": "Multiple OpenAlex candidates scored too close to each other. Pick the right one."}
     if not has_openalex:
-        return {"code": "resolve_now", "label": "Resolve IDs",
-                "hint": "Followed author with no OpenAlex identifier. Run resolve to link one."}
+        return {"code": "resolve_now", "label": "Resolve identity",
+                "hint": "Followed author with no OpenAlex identifier. Retry the resolver, paste an identifier, or accept that they can't be identified."}
     return {"code": "refresh", "label": "Refresh",
             "hint": "Re-run the full refresh pipeline."}
 
@@ -250,11 +252,17 @@ _IDENTITY_DECISION_STATUSES = tuple(
 def _split_profile_clusters(db: sqlite3.Connection) -> list[list[sqlite3.Row]]:
     """Followed authors sharing a name across OpenAlex ids: one person, split.
 
+    Each cluster is ``[primary, *alts]``: the most recently active member that
+    still has an open question, and the members it may be the same person as.
+    A pair the user called "not the same person" (D17) is out for good, so a
+    cluster with nothing left to ask is no cluster.
+
     Names are NFKD-folded, lowercased and stripped of punctuation (the form the
     suggestion-rail dedup uses), so "Müller" / "MÜLLER" / "Muller" collapse but
     "Müller" / "Mueller" stay distinct. Only clusters the user followed at least
     twice count: every author-table cluster would be too noisy on a fresh import.
     """
+    from alma.application.author_merge import _pair, rejected_merge_pairs
     from alma.application.authors import _normalize_author_display_name
 
     cluster_rows = db.execute(
@@ -272,7 +280,36 @@ def _split_profile_clusters(db: sqlite3.Connection) -> list[list[sqlite3.Row]]:
         if not name_key:
             continue
         clusters.setdefault(name_key, []).append(cr)
-    return [members for members in clusters.values() if len(members) >= 2]
+
+    rejected = rejected_merge_pairs(db)
+    open_clusters: list[list[sqlite3.Row]] = []
+    for members in clusters.values():
+        # Most recent activity first, then id, so the primary is stable.
+        members.sort(
+            key=lambda r: (
+                str(r["id_resolution_updated_at"] or r["last_fetched_at"] or ""),
+                str(r["id"]),
+            ),
+            reverse=True,
+        )
+        for primary in members:
+            alts = [
+                other
+                for other in members
+                if other["id"] != primary["id"]
+                and _pair(str(primary["id"]), str(other["id"])) not in rejected
+            ]
+            if alts:
+                open_clusters.append([primary, *alts])
+                break
+    return open_clusters
+
+
+_CONFLICT_FIELD_LABELS = {
+    "orcid": "ORCID",
+    "scholar_id": "Google Scholar ID",
+    "semantic_scholar_id": "Semantic Scholar ID",
+}
 
 
 def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
@@ -287,24 +324,14 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
     ranked = identity_attention_rows(db, limit=limit)
 
     split_profiles: list[dict] = []
-    for members in _split_profile_clusters(db):
-        # Pick a primary: most recent activity, then alphabetical id.
-        members_sorted = sorted(
-            members,
-            key=lambda r: (
-                str(r["id_resolution_updated_at"] or r["last_fetched_at"] or ""),
-                str(r["id"]),
-            ),
-            reverse=True,
-        )
-        primary = members_sorted[0]
+    for primary, *others in _split_profile_clusters(db):
         alts = [
             {
                 "author_id": str(r["id"]),
                 "openalex_id": str(r["openalex_id"]),
                 "display_name": str(r["name"] or ""),
             }
-            for r in members_sorted[1:]
+            for r in others
         ]
         primary_name = str(primary["name"] or "").strip() or str(primary["id"])
         primary_oid = str(primary["openalex_id"] or "")
@@ -317,7 +344,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                 "method": None,
                 "confidence": 0.0,
                 "reason_code": "split_profiles",
-                "reason": f"Multiple OpenAlex profiles for the same name ({len(members)} found)",
+                "reason": f"Multiple OpenAlex profiles for the same name ({len(others) + 1} found)",
                 "reason_detail": (
                     f"Primary: {primary_oid}; alternates: "
                     + ", ".join(a["openalex_id"] for a in alts)
@@ -328,8 +355,8 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                     "label": "Review profiles",
                     "hint": (
                         "Same person split across multiple OpenAlex IDs. "
-                        "Mark them as duplicates to merge follow + corpus, "
-                        "or confirm they're different humans to dismiss."
+                        "Merge them to keep one follow and one corpus, or "
+                        "say they are not the same person: that is permanent."
                     ),
                 },
                 "updated_at": str(
@@ -343,6 +370,9 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
 
     def _reason_text(status: str, raw_reason: str) -> str:
         """Friendly user-facing summary."""
+        if status == "resolved_manual":
+            # Followed, manual identifiers saved, and none of them an OpenAlex id.
+            return "Identifiers saved, but no OpenAlex ID yet, so no papers can be fetched."
         if raw_reason:
             return raw_reason
         if status == "error":
@@ -370,7 +400,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
         - "No resolver step has run yet"
         """
         bits: list[str] = []
-        if method:
+        if method and method != "none":
             bits.append(f"Last step: {method}")
         if confidence > 0.0:
             bits.append(f"confidence {confidence:.2f}")
@@ -419,6 +449,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
     for c in list_unresolved_conflicts(db):
         primary_name = str(c.get("primary_name") or c.get("primary_author_id") or "")
         field = str(c.get("field") or "")
+        field_label = _CONFLICT_FIELD_LABELS.get(field, field)
         primary_val = str(c.get("primary_value") or "")
         alt_val = str(c.get("alt_value") or "")
         merge_conflicts.append(
@@ -430,7 +461,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                 "method": None,
                 "confidence": 0.0,
                 "reason_code": "merge_conflict",
-                "reason": f"Merge kept conflicting {field}",
+                "reason": f"Merge kept one of two {field_label} values",
                 "reason_detail": (
                     f"Primary: {primary_val} · merged-in alt "
                     f"({c.get('alt_openalex_id')}) had {alt_val}. "
@@ -508,7 +539,13 @@ def _operational_rows(db: sqlite3.Connection) -> list[dict[str, Any]]:
     for m in monitor_attention_rows(list_feed_monitors(db)):
         if not m.get("author_id"):
             continue
+        # With no OpenAlex id a refresh cannot fetch anything. That is an
+        # identity gap: its row owns the fix, and accepting the author as
+        # unidentified must end the warning.
+        if not m.get("can_fetch"):
+            continue
         reason = str(m.get("health_reason") or "").strip()
+        last_error = str(m.get("last_error") or "").strip()
         operational.append(
             {
                 "author_id": str(m["author_id"]),
@@ -521,7 +558,7 @@ def _operational_rows(db: sqlite3.Connection) -> list[dict[str, Any]]:
                 "reason": "Feed monitor is degraded — refreshes are not landing",
                 "reason_detail": (
                     (f"Reason: {reason}. " if reason else "")
-                    + (f"Last error: {m['last_error']}. " if m.get("last_error") else "")
+                    + (f"Last error: {last_error}. " if last_error and last_error != reason else "")
                     or None
                 ),
                 "monitor_id": m.get("monitor_id"),
@@ -575,13 +612,19 @@ def _marked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+#: No cap for a count: `limit` bounds what one page renders.
+_EVERY_ROW = 1_000_000
+
+
 def needs_attention_rows(db: sqlite3.Connection, *, limit: int = 50) -> list[dict[str, Any]]:
     """The one list of authors that need attention: the Authors page shows it."""
     return _marked(_people_rows(db, limit=limit) + _operational_rows(db))
 
 
-#: No cap for a count: `limit` bounds what one page renders.
-_EVERY_ROW = 1_000_000
+def needs_attention_page(db: sqlite3.Connection, *, limit: int) -> tuple[int, list[dict[str, Any]]]:
+    """The true row count and the first ``limit`` rows, for a list that says when it is cut."""
+    rows = needs_attention_rows(db, limit=_EVERY_ROW)
+    return len(rows), rows[:limit]
 
 
 def author_decision_count(db: sqlite3.Connection) -> int:

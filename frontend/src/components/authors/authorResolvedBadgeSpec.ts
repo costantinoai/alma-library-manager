@@ -1,4 +1,14 @@
-import { AlertCircle, AlertTriangle, BadgeCheck, HelpCircle, History, RssIcon } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  BadgeCheck,
+  Building2,
+  GitMerge,
+  HelpCircle,
+  History,
+  RssIcon,
+  UserX,
+} from 'lucide-react'
 import type { StatusBadgeTone } from '@/components/ui/status-badge'
 
 export interface AuthorResolvedBadgeAuthor {
@@ -47,6 +57,38 @@ export function resolvedBadgeSpec(author: AuthorResolvedBadgeAuthor): BadgeSpec 
       icon: History,
       label: 'Corpus',
       title: 'The historical-corpus backfill for this author needs maintenance.',
+    }
+  }
+  if (status === 'merge_conflict') {
+    return {
+      tone: 'warning',
+      icon: GitMerge,
+      label: 'Conflict',
+      title: 'A merge kept one of two different identifiers. Pick the right one.',
+    }
+  }
+  if (status === 'split_profiles') {
+    return {
+      tone: 'warning',
+      icon: GitMerge,
+      label: 'Duplicate',
+      title: 'You follow more than one profile under this name.',
+    }
+  }
+  if (status === 'affiliation_conflict') {
+    return {
+      tone: 'warning',
+      icon: Building2,
+      label: 'Affiliation',
+      title: 'Sources name different institutions for this author.',
+    }
+  }
+  if (status === 'dismissed') {
+    return {
+      tone: 'neutral',
+      icon: UserX,
+      label: 'Unidentified',
+      title: "You accepted that this author can't be identified. Paste an identifier to change that.",
     }
   }
   if (status === 'needs_manual_review') {
