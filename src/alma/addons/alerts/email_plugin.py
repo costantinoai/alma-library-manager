@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from typing import Annotated
 
@@ -12,29 +13,39 @@ from alma.plugins.manifest import SEND, PluginManifest
 
 
 class EmailConfig(StrictPluginConfig):
-    host: str = Field("", title="SMTP host", json_schema_extra={"x-alma-order": 10})
+    host: str = Field(
+        "", title="SMTP host", json_schema_extra={"x-alma-order": 10, "x-alma-required": True}
+    )
     port: Annotated[int, Field(ge=1, le=65535)] = Field(
         587,
         title="Port",
         json_schema_extra={"x-alma-order": 20},
     )
-    username: str = Field("", title="Username", json_schema_extra={"x-alma-order": 30})
+    username: str = Field(
+        "",
+        title="Username",
+        json_schema_extra={"x-alma-order": 30, "x-alma-adds": "a login, for servers that ask for one"},
+    )
     password: str = Field(
         "",
         title="Password",
         description="SMTP password or app key. Stored in the secret store.",
-        json_schema_extra={"x-alma-secret": True, "x-alma-order": 40},
+        json_schema_extra={
+            "x-alma-secret": True,
+            "x-alma-order": 40,
+            "x-alma-adds": "a login, for servers that ask for one",
+        },
     )
     from_address: str = Field(
         "",
         title="From address",
-        json_schema_extra={"x-alma-order": 50},
+        json_schema_extra={"x-alma-order": 50, "x-alma-required": True},
     )
     recipients: str = Field(
         "",
         title="Recipients",
         description="Comma-separated recipient addresses.",
-        json_schema_extra={"x-alma-order": 60},
+        json_schema_extra={"x-alma-order": 60, "x-alma-required": True},
     )
     use_tls: bool = Field(
         True,
@@ -103,27 +114,16 @@ async def send_alert(papers: list[dict], alert_name: str) -> bool:
 
 
 async def test_connection() -> dict:
+    """Log in to the SMTP server. Sends nothing: it also runs right after a save."""
     from alma.addons.alerts.mailer import get_email_notifier
 
-    notifier = get_email_notifier()
-    try:
-        ok = await notifier.send_test_message()
-    except Exception as exc:  # pragma: no cover - network failure boundary
-        return {
-            "ok": False,
-            "error": str(exc),
-            "message": f"Email test failed: {exc}",
-        }
-    recipients = ", ".join(notifier.resolve_recipients()) if ok else ""
-    return {
-        "ok": ok,
-        "target": recipients or None,
-        "message": (
-            f"Test email sent to {recipients}"
-            if ok
-            else "SMTP rejected the test email; check host, port, and credentials."
-        ),
-    }
+    return await asyncio.to_thread(get_email_notifier().check_login)
+
+
+def secret_values() -> tuple[str, ...]:
+    from alma.addons.alerts.mailer import get_smtp_password
+
+    return (get_smtp_password() or "",)
 
 
 EMAIL_PLUGIN = PluginManifest(
@@ -141,6 +141,7 @@ EMAIL_PLUGIN = PluginManifest(
     alert_sender=send_alert,
     connection_tester=test_connection,
     action_ids=("test",),
+    secret_values=secret_values,
 )
 
 __all__ = ["EMAIL_PLUGIN", "EmailConfig"]

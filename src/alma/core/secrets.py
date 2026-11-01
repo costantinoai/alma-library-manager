@@ -30,6 +30,9 @@ SECRET_OPENALEX_API_KEY = "openalex.api_key"
 # exit (see `tasks/01_LLM_PRODUCTION_EXIT.md`).
 # Anna's Archive member key (shadow-libraries PDF plugin, task 81).
 SECRET_ANNAS_ARCHIVE_KEY = "annas_archive.member_key"
+# Keys the stamps `application.connection_status` leaves in the ledger, so a
+# snapshot of the ledger alone cannot be brute-forced for a weak SMTP password.
+SECRET_CONNECTION_STAMP_SALT = "connections.stamp_salt"
 
 _SECRET_KEYS = {
     SECRET_SLACK_BOT_TOKEN,
@@ -38,6 +41,7 @@ _SECRET_KEYS = {
     SECRET_ZOTERO_API_KEY,
     SECRET_OPENALEX_API_KEY,
     SECRET_ANNAS_ARCHIVE_KEY,
+    SECRET_CONNECTION_STAMP_SALT,
 }
 
 _LOCK = threading.RLock()

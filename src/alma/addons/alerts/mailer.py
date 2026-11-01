@@ -114,18 +114,46 @@ class EmailNotifier:
         text = "ALMa — your email digest channel is configured correctly."
         return await asyncio.to_thread(self._send, to, subject, html, text)
 
-    def test_connection(self) -> bool:
-        """SMTP handshake + login check, no message sent (plugin test path)."""
-        if not self._host:
-            return False
+    def check_login(self) -> dict:
+        """SMTP handshake and login. Sends nothing.
+
+        ``ok`` is False when the server answered and refused, None when it was
+        never reached: a timeout or a DNS failure cannot tell a wrong host from
+        a dead network, so it is not a verdict on the settings.
+        """
+        import smtplib
+
+        from alma.core.network_policy import NetworkAccessDisabledError
+
         try:
             with self._connect() as server:
                 if self._username and self._password:
                     server.login(self._username, self._password)
-            return True
-        except Exception as exc:  # noqa: BLE001 — surface as False, log detail
-            logger.warning("SMTP test connection failed: %s", exc)
-            return False
+                    return {"ok": True, "message": f"{self._host} accepted the login. No mail was sent."}
+            return {"ok": True, "message": f"{self._host} answered. No login is set, and no mail was sent."}
+        except NetworkAccessDisabledError:
+            raise
+        except smtplib.SMTPAuthenticationError as exc:
+            return {
+                "ok": False,
+                "error": str(exc.smtp_code),
+                "message": f"{self._host} refused the login ({exc.smtp_code}).",
+                "action": "Check the username and password; many providers need an app password.",
+            }
+        except smtplib.SMTPException as exc:
+            return {
+                "ok": False,
+                "error": exc.__class__.__name__,
+                "message": f"{self._host} refused the connection ({exc.__class__.__name__}).",
+                "action": "Check the port and the STARTTLS switch.",
+            }
+        except OSError as exc:
+            return {
+                "ok": None,
+                "error": exc.__class__.__name__,
+                "message": f"Could not reach {self._host} ({exc.__class__.__name__}).",
+                "action": "Check the host and port, or try again if the network is down.",
+            }
 
     # ---- SMTP plumbing ---------------------------------------------------
     def _connect(self):
