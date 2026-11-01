@@ -12,7 +12,7 @@ full_suite_paths = [
 
 [groups.authors]
 tests = ["test_core_control_inventory_contract.py", "test_author_*.py", "test_authors_*.py", "test_affiliation_*.py", "test_follow_author_*.py", "test_dedup_orcid_*.py", "test_secondary_author_*.py", "test_suggestion_dedup.py", "test_get_purity_followed_authors.py"]
-sources = ["src/alma/api/routes/authors.py", "src/alma/application/author*.py", "src/alma/application/followed_authors.py", "src/alma/services/author*.py", "src/alma/core/author*.py", "src/alma/core/fetcher.py"]
+sources = ["src/alma/api/routes/authors.py", "src/alma/application/author*.py", "src/alma/application/followed_authors.py", "src/alma/services/author*.py", "src/alma/core/author*.py", "src/alma/core/fetcher.py", "src/alma/core/scholar_access.py"]
 
 [groups.discovery]
 tests = ["test_core_control_inventory_contract.py", "test_discovery_*.py", "test_branch_*.py", "test_recommendation_*.py", "test_retrieval_*.py", "test_ranking_*.py", "test_ranker_*.py", "test_scoring_*.py", "test_score_*.py", "test_outcome_*.py", "test_default_weights_*.py", "test_exemplar_*.py", "test_directions.py", "test_citation_fabric.py", "test_cluster_*.py", "test_clustering_*.py", "test_signal_*.py", "test_corpus_paper_feedback.py", "test_venue_monitors.py", "test_find_and_add_ranking.py", "test_dismiss_scope_and_valence.py"]

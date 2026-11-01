@@ -42,6 +42,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 _S2_BATCH_SIZE = 100
+_UPSERT_SECTION_SECONDS = 0.25
 _VECTOR_FIELDS = "paperId,externalIds,embedding.specter_v2"
 
 
@@ -744,16 +746,21 @@ def refresh_author_works_and_vectors(
             cursor = page.get("next_cursor")
 
         # Phase 3: upsert each work + publication_authors row. All works are
-        # already gathered (Phase 2), so the writes are local-only; chunked
-        # writer-gated IMMEDIATE sections keep each lock window short — a
-        # prolific author can carry thousands of works, and one giant
-        # transaction would stall foreground writes for its whole duration.
+        # already gathered (Phase 2), so the writes are local-only. Each writer-
+        # gated IMMEDIATE section is cut by time, not by count: the same 25 works
+        # take 0.1 s on a quiet machine and 11 s while a lens refresh and a Health
+        # rebuild fight this thread for the GIL (measured 2026-10-31), and the
+        # gate stays held for all of it. Several authors take turns on the gate,
+        # so a foreground write can wait out several windows in a row.
         now_iso = datetime.now(timezone.utc).isoformat()
         new_paper_ids: list[str] = []
-        upsert_chunk = 200
-        for chunk_start in range(0, len(works), upsert_chunk):
+        next_work = 0
+        while next_work < len(works):
+            section_ends = monotonic() + _UPSERT_SECTION_SECONDS
             with write_section(conn, label="author_backfill works upsert"):
-                for work in works[chunk_start:chunk_start + upsert_chunk]:
+                while next_work < len(works) and monotonic() < section_ends:
+                    work = works[next_work]
+                    next_work += 1
                     paper_id, is_new = _upsert_work(conn, work, now=now_iso)
                     if paper_id is None:
                         continue
@@ -1371,7 +1378,6 @@ def _upsert_work(
     cheap pre-call `resolve_existing_paper_id` lookup.
     """
     from alma.openalex.client import (
-        _ensure_schema,
         _normalize_openalex_work_id,
         _upsert_single_paper,
     )
@@ -1391,7 +1397,6 @@ def _upsert_work(
     pre_existing = resolve_existing_paper_id(
         conn, openalex_id=oa_norm, doi=doi_norm, title=title, year=year
     )
-    _ensure_schema(conn)
     paper_id = _upsert_single_paper(conn, work)
     if paper_id is None:
         return None, False

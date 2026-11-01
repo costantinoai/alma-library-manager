@@ -56,6 +56,7 @@ from alma.core.resolution import (
     resolve_paper_openalex_work,
     summarize_author_resolution,
 )
+from alma.core.scholar_access import ScholarIntent, scholarly_client
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import (
@@ -718,11 +719,15 @@ def _find_existing_author_row(
     return None
 
 
-def _resolve_scholar_candidates_from_local(author_name: str, sample_titles: list[str]) -> list[dict]:
+def _resolve_scholar_candidates_from_local(
+    author_name: str,
+    sample_titles: list[str],
+    *,
+    intent: ScholarIntent,
+) -> list[dict]:
     """Best-effort Scholar candidate resolution from name + sample titles."""
-    try:
-        from scholarly import scholarly as _sch
-    except Exception:
+    _sch = scholarly_client(intent)
+    if _sch is None:
         return []
 
     name = (author_name or "").strip()
@@ -808,12 +813,10 @@ def _resolve_scholar_candidates(
     )
 
     from_local: list[dict] = []
-    if mode == "manual":
-        if settings["scholar_scrape_manual_enabled"]:
-            from_local = _resolve_scholar_candidates_from_local(author_name, sample_titles)
-    elif mode == "auto":
-        if settings["scholar_scrape_auto_enabled"]:
-            from_local = _resolve_scholar_candidates_from_local(author_name, sample_titles)
+    if mode in ("auto", "manual"):
+        from_local = _resolve_scholar_candidates_from_local(
+            author_name, sample_titles, intent=mode
+        )
 
     return _merge_scholar_candidates(from_api, from_local)
 
@@ -2793,17 +2796,21 @@ def merge_one_candidate_endpoint(
     "/{author_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an author",
-    description="Remove an author and all their cached publications from the system.",
+    description=(
+        "Permanently delete an author, keeping every paper in the Library or "
+        "touched by the user. Only plain tracked papers no other author covers "
+        "go with them."
+    ),
 )
 def delete_author(
     author_id: str,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Delete an author and all their publications.
+    """Delete an author and the corpus papers nobody else has a claim on.
 
     Args:
-        author_id: Google Scholar ID of the author to delete
+        author_id: ID of the author to delete
 
     Raises:
         HTTPException: If author is not found
@@ -2830,6 +2837,7 @@ def delete_author(
             handler=_handler,
             trigger_source="user",
             actor=str(user.get("username") or "api_user"),
+            write_unit=True,
         )
         if op["status"] == "noop":
             raise HTTPException(

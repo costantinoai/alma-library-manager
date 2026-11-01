@@ -1130,10 +1130,99 @@ def build_preprint_title_index(conn: sqlite3.Connection) -> PreprintTitleIndex:
     from alma.core.sql_helpers import standalone_paper_sql
 
     rows = conn.execute(
-        f"SELECT id, title, year, doi, work_type, preprint_source, component_type, status "
-        f"FROM papers p WHERE {standalone_paper_sql('p')}"
+        f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers p WHERE {standalone_paper_sql('p')}"
     ).fetchall()
     return PreprintTitleIndex(rows)
+
+
+_PREPRINT_INDEX_COLUMNS = "id, title, year, doi, work_type, preprint_source, component_type, status"
+
+
+def _preprint_candidate_sql(alias: str = "p") -> str:
+    """SQL prune for rows that can be preprints. It only prunes.
+
+    `is_preprint_row` still decides. This is the three kinds of evidence
+    `classify_preprint_source` reads, so a preprint cannot fall out of it. It is
+    also the predicate of `PREPRINT_YEAR_INDEX_SQL`: SQLite uses a partial index
+    only for a query that repeats its predicate, so both come from here.
+    """
+    col = f"{alias}." if alias else ""
+    work_types = ", ".join(f"'{wt}'" for wt in sorted(_PREPRINT_WORK_TYPES))
+    prefixes = " OR ".join(
+        f"LOWER(TRIM(COALESCE({col}doi, ''))) LIKE '{prefix}%'"
+        for prefix in PREPRINT_DOI_PREFIXES
+    )
+    return (
+        f"(COALESCE(TRIM({col}preprint_source), '') <> '' "
+        f"OR LOWER(TRIM(COALESCE({col}work_type, ''))) IN ({work_types}) "
+        f"OR {prefixes})"
+    )
+
+
+# Asserted by the bootstrap DDL. Promotion runs once per ingested work inside a
+# write section, and each of its reads has to touch the few rows it needs, not
+# walk `papers`, whose rows carry abstracts.
+PREPRINT_YEAR_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_papers_preprint_year ON papers(year) "
+    f"WHERE {_preprint_candidate_sql('')}"
+)
+
+
+def preprint_index_for_paper(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    *,
+    year_tolerance: int = 2,
+) -> PreprintTitleIndex:
+    """The slice of the title index that ONE paper's promotion can reach.
+
+    Every ingest settles inside a write section, so its cost is paid while the
+    writer gate is held. Building the whole index there read and normalized the
+    corpus once per work: 0.22 s a work on 18,000 papers, 46 s for one 200-work
+    chunk of an author refresh, with every foreground write queued behind it
+    (2026-10-31). A write unit must stay short however large the corpus grows.
+
+    The slice gives the same answer as the full index. A preprint pairs with
+    this paper only within `year_tolerance`, and it stays unambiguous only if no
+    other journal row sits within `year_tolerance` of THAT preprint, so twice the
+    tolerance holds every row the decision reads. Rows with no year form no edge.
+
+    Almost no ingest has a twin, so the first query looks only at preprints of
+    nearby years and returns empty when none shares the title.
+    """
+    from alma.core.sql_helpers import standalone_paper_sql
+
+    empty = PreprintTitleIndex([])
+    row = conn.execute(
+        f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    # Only a dated, published row can absorb a preprint.
+    if row is None or row["year"] is None or is_preprint_row(row) or is_component_row(row):
+        return empty
+    title_key = normalize_title_key(str(row["title"] or ""))
+    if not title_key:
+        return empty
+
+    year = int(row["year"])
+    standalone = standalone_paper_sql("p")
+    # One string, not one row per title: each fetched row is a round trip through
+    # the GIL, and this runs per work inside a write section.
+    titles = conn.execute(
+        f"SELECT group_concat(p.title, char(31)) FROM papers p WHERE {standalone} "
+        f"AND p.year BETWEEN ? AND ? AND {_preprint_candidate_sql('p')}",
+        (year - year_tolerance, year + year_tolerance),
+    ).fetchone()[0]
+    if not any(normalize_title_key(title) == title_key for title in (titles or "").split("\x1f")):
+        return empty
+
+    rows = conn.execute(
+        f"SELECT {_PREPRINT_INDEX_COLUMNS} FROM papers p WHERE {standalone} "
+        "AND p.year BETWEEN ? AND ?",
+        (year - 2 * year_tolerance, year + 2 * year_tolerance),
+    ).fetchall()
+    return PreprintTitleIndex(
+        [r for r in rows if normalize_title_key(str(r["title"] or "")) == title_key]
+    )
 
 
 def promote_matching_preprints(
@@ -1143,8 +1232,16 @@ def promote_matching_preprints(
     year_tolerance: int = 2,
     preprint_index: PreprintTitleIndex | None = None,
 ) -> dict[str, int]:
-    """Apply only unambiguous standalone matches through the group owner."""
-    index = preprint_index if preprint_index is not None else build_preprint_title_index(conn)
+    """Apply only unambiguous standalone matches through the group owner.
+
+    Runs inside write units, so with no ``preprint_index`` it reads the small
+    slice from `preprint_index_for_paper`, never the whole corpus.
+    """
+    index = (
+        preprint_index
+        if preprint_index is not None
+        else preprint_index_for_paper(conn, published_paper_id, year_tolerance=year_tolerance)
+    )
     row = conn.execute("SELECT title FROM papers WHERE id = ?", (published_paper_id,)).fetchone()
     if row is None:
         return {"candidates": 0, "merged": 0, "reparented": 0, "ambiguous": 0}

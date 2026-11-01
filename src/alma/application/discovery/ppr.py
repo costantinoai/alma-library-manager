@@ -35,6 +35,7 @@ the layout builders' import closure so
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from alma.core.sql_helpers import standalone_paper_sql
@@ -203,9 +204,12 @@ def _load_edges(db: sqlite3.Connection) -> list[tuple[str, str]]:
     work we hold no row for cannot be scored or recommended, and including it
     would inflate the graph with millions of dangling nodes for no gain.
     """
-    rows = db.execute(
+    # One JSON value, not one Python row per edge. Each fetched row is a round trip
+    # through the GIL, and a walk over this table fought every other thread for
+    # 13 s: a writer holding the gate slowed to a crawl behind it (2026-10-31).
+    edges = db.execute(
         f"""
-        SELECT pr.paper_id AS src, q.id AS dst
+        SELECT json_group_array(json_array(pr.paper_id, q.id))
         FROM publication_references pr
         JOIN papers q ON q.openalex_id = 'W' || pr.referenced_work_id
         JOIN papers p ON p.id = pr.paper_id
@@ -213,8 +217,8 @@ def _load_edges(db: sqlite3.Connection) -> list[tuple[str, str]]:
           AND {standalone_paper_sql('p')}
           AND {standalone_paper_sql('q')}
         """
-    ).fetchall()
-    return [(str(r["src"]), str(r["dst"])) for r in rows if r["src"] and r["dst"]]
+    ).fetchone()[0]
+    return [(str(src), str(dst)) for src, dst in json.loads(edges) if src and dst]
 
 
 def _load_seed_ids(db: sqlite3.Connection, seed_scope: str) -> list[str]:

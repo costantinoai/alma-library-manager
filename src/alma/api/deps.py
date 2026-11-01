@@ -410,6 +410,9 @@ def init_db_schema() -> None:
                     updated_at TEXT DEFAULT (datetime('now'))
                 )"""
             )
+            from alma.core.components import ORPHAN_COMPONENT_INDEX_SQL
+            from alma.core.paper_groups import PREPRINT_YEAR_INDEX_SQL
+
             for idx_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_openalex_id ON papers(openalex_id) WHERE openalex_id IS NOT NULL",
@@ -422,6 +425,8 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_papers_resolution ON papers(openalex_resolution_status)",
                 "CREATE INDEX IF NOT EXISTS idx_papers_canonical ON papers(canonical_paper_id) WHERE canonical_paper_id IS NOT NULL",
                 "CREATE INDEX IF NOT EXISTS idx_papers_parent ON papers(parent_paper_id) WHERE parent_paper_id IS NOT NULL",
+                ORPHAN_COMPONENT_INDEX_SQL,
+                PREPRINT_YEAR_INDEX_SQL,
             ]:
                 _safe_execute(conn, idx_sql)
 

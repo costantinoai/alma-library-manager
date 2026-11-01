@@ -5,10 +5,11 @@
  * It is the LAST resort in the needs-attention ladder, after the resolver
  * (retry), the manual identifier paste, and "can't identify" (which keeps the
  * author but stops the nagging). Deleting is a hard delete, so it is always
- * gated behind a confirm that spells out the three consequences: the author row
- * goes, papers left with no other tracked author go with them, and the person is
- * suppressed from the suggestion rails so they don't reappear on the next
- * OpenAlex co-author expansion.
+ * gated behind a confirm that spells out the consequences: the author row and
+ * their follow go, corpus papers nobody else has a claim on go with them, Library
+ * papers and anything the user touched stay, and the person is suppressed from
+ * the suggestion rails so they don't reappear on the next OpenAlex co-author
+ * expansion.
  */
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -92,9 +93,10 @@ export function DeleteAuthorButton({
         title={`Delete ${authorName}?`}
         description={
           `This is permanent, and unlike "can't identify" it does not keep the row: ` +
-          `the author is removed, every paper that no author you track still covers is ` +
-          `deleted with them, and the person is suppressed from the author suggestion ` +
-          `rails so co-author expansion doesn't surface them again.`
+          `the author and their follow are removed, and the person is suppressed from ` +
+          `the author suggestion rails so co-author expansion doesn't surface them again. ` +
+          `Library papers and any paper you rated, tagged or filed stay. Other papers ` +
+          `that no other author in your corpus covers are deleted.`
         }
         isPending={mutation.isPending}
         onConfirm={() => mutation.mutate()}

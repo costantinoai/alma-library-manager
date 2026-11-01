@@ -59,21 +59,21 @@ class OperationContext:
         """
         if self._db is None:
             return
-        from .activity import persist_operation_log, persist_operation_status
+        from .activity import persist_operation_log, persist_operation_status, write_lifecycle
 
         self.message = message
-        persist_operation_status(self._db, self, processed=processed, total=total)
-        persist_operation_log(
-            self._db,
-            operation_id=self.operation_id,
-            step=step,
-            message=message,
-            data=data,
-        )
-        try:
-            self._db.commit()
-        except Exception:
-            pass
+
+        def _write() -> None:
+            persist_operation_status(self._db, self, processed=processed, total=total)
+            persist_operation_log(
+                self._db,
+                operation_id=self.operation_id,
+                step=step,
+                message=message,
+                data=data,
+            )
+
+        write_lifecycle(self._db, _write, label="operation step")
 
     def to_envelope(self) -> dict[str, Any]:
         """Serialize operation state to a response envelope."""

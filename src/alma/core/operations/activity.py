@@ -6,8 +6,10 @@ import json
 import logging
 import sqlite3
 import uuid
+from collections.abc import Callable
 from typing import Any
 
+from alma.core.db_retry import commit_with_retry
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 from alma.core.time import utcnow
 
@@ -21,6 +23,33 @@ def _json_dumps(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=str)
     except Exception:
         return json.dumps(str(value), ensure_ascii=False)
+
+
+def write_lifecycle(
+    db: sqlite3.Connection,
+    write: Callable[[], None],
+    *,
+    label: str,
+) -> None:
+    """Persist one Activity row of a synchronous operation through the gate.
+
+    The request's own connection takes the same queue as every other writer. A
+    bare write here waits inside `busy_timeout` instead, and when a background
+    unit holds the lock past 30 s the row is lost and the request answers 503.
+
+    Writes a handler left open on ``db`` are committed first, on purpose: the
+    unit starts with a rollback, and those writes hold the SQLite lock, so
+    waiting for the gate with them open could block the gate's holder.
+    Inside a caller's unit this only stages the row and that unit commits it.
+    """
+    from alma.core.db_write import gate_held_by_current_thread, run_write_unit
+
+    if gate_held_by_current_thread():
+        write()
+        return
+    if db.in_transaction:
+        commit_with_retry(db, label=label)
+    run_write_unit(db, write, label=label)
 
 
 def persist_operation_status(

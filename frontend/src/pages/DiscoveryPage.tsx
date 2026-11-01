@@ -62,6 +62,7 @@ import {
 } from '@/components/discovery'
 import { BranchCoverageRows } from '@/components/discovery/BranchCoverageRows'
 import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
+import { LostLanesNotice, type LostLane } from '@/components/discovery/LostLanesNotice'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
@@ -1146,6 +1147,8 @@ export function DiscoveryPage() {
             onReorder={(orderedIds) => reorderLensesMutation.mutate(orderedIds)}
           />
         </div>
+
+        <LostLanesNotice lanes={selectedLensSummary?.lost_lanes as LostLane[] | undefined} />
 
         {/* Is it working? — read the lens before you reach for its controls. */}
         <DisclosurePanel

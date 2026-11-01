@@ -51,7 +51,13 @@ export function usePaperUndo(lensId?: string | null) {
             const paper = { ...rec.paper }
             let userAction = rec.user_action
             let inLibrary = rec.in_library
-            if (aspect === 'rating' || aspect === 'all') paper.rating = 0
+            if (aspect === 'rating' || aspect === 'all') {
+              paper.rating = 0
+              // `deriveDiscoveryReaction` reads this first; it must not stay lit.
+              if (userAction === 'like' || userAction === 'love' || userAction === 'dislike') {
+                userAction = inLibrary ? 'save' : null
+              }
+            }
             if (aspect === 'reading' || aspect === 'all') {
               paper.reading_status = ''
               if (userAction === 'read') userAction = null

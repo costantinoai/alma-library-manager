@@ -680,7 +680,12 @@ def _insert_feed_item(
 
 
 def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | None]:
-    """Return window for latest successful Feed fetch, including no-op runs."""
+    """Return window for latest successful Feed fetch, including no-op runs.
+
+    Every way a Feed refresh runs counts: the Refresh button, one monitor, and
+    the scheduled run. ``started_at`` bounds Feed's New list, so each run must
+    own its row (see `refresh_feed_inbox_periodic`).
+    """
     try:
         row = db.execute(
             """
@@ -688,7 +693,7 @@ def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | 
             FROM operation_status
             WHERE status IN ('completed', 'noop')
               AND (
-                operation_key = 'feed.refresh_inbox'
+                operation_key IN ('feed.refresh_inbox', 'feed.refresh_periodic')
                 OR operation_key LIKE 'feed.monitor.refresh:%'
               )
               AND COALESCE(started_at, '') <> ''

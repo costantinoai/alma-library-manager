@@ -1880,7 +1880,23 @@ def _m_0050_legacy_branch_controls(conn: sqlite3.Connection) -> None:
             )
 
 
-def _m_0051_drop_noop_discovery_settings(conn: sqlite3.Connection) -> None:
+def _m_0051_periodic_feed_refresh_window(conn: sqlite3.Connection) -> None:
+    """Close the window of the one row every scheduled Feed refresh shared.
+
+    The fixed job id `periodic_feed_refresh` kept the `started_at` of its first
+    run while `finished_at` moved on, so read as a fetch window it spans weeks and
+    would put all of them into Feed's New list. Its real start is gone; the
+    finish is the one known fact, and it keeps the row's "last refresh" true.
+    """
+    if not _table_exists(conn, "operation_status"):
+        return
+    conn.execute(
+        "UPDATE operation_status SET started_at = finished_at "
+        "WHERE job_id = 'periodic_feed_refresh' AND finished_at IS NOT NULL"
+    )
+
+
+def _m_0052_drop_noop_discovery_settings(conn: sqlite3.Connection) -> None:
     """Delete stored discovery settings nothing reads any more.
 
     The strategy toggles and the listed limits fed only the legacy generator or
@@ -1978,7 +1994,8 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (48, "drop_lens_max_seeds", _m_0048_drop_lens_max_seeds),
     (49, "discovery_branch_structure", _m_0049_discovery_branch_structure),
     (50, "legacy_branch_controls", _m_0050_legacy_branch_controls),
-    (51, "drop_noop_discovery_settings", _m_0051_drop_noop_discovery_settings),
+    (51, "periodic_feed_refresh_window", _m_0051_periodic_feed_refresh_window),
+    (52, "drop_noop_discovery_settings", _m_0052_drop_noop_discovery_settings),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

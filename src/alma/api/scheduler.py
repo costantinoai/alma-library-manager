@@ -35,6 +35,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -634,6 +635,28 @@ def _load_statuses_from_db(limit: int = _ACTIVITY_STATUS_LIMIT) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM operation_status ORDER BY updated_at DESC LIMIT ?",
                 (max(1, limit),),
+            ).fetchall()
+            return [_row_to_status(r) for r in rows]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def _load_active_statuses_from_db(operation_key: str) -> list[dict]:
+    """Active rows of one operation key, read through its index.
+
+    `find_active_job` runs once per scheduled job, and it used to load and
+    redact the 2,000 latest Activity rows to find these: 0.35 s of CPU a call.
+    """
+    placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
+    try:
+        conn = _activity_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM operation_status "
+                f"WHERE operation_key = ? AND status IN ({placeholders})",
+                (operation_key, *sorted(_ACTIVE_STATUSES)),
             ).fetchall()
             return [_row_to_status(r) for r in rows]
         finally:
@@ -2034,6 +2057,16 @@ def refresh_recommendations_periodic() -> None:
                         step="branches",
                         data=structure,
                     )
+                lost_lanes = (result or {}).get("lost_lanes") or []
+                if lost_lanes:
+                    add_job_log(
+                        job_id,
+                        f"Lens '{lens['name']}': built without "
+                        + ", ".join(str(lane["label"]) for lane in lost_lanes),
+                        level="ERROR",
+                        step="lost_lanes",
+                        data={"lost_lanes": lost_lanes},
+                    )
                 logger.info(
                     "Lens '%s' (%s): %d recommendations inserted",
                     lens["name"],
@@ -2223,8 +2256,12 @@ def refresh_feed_inbox_periodic() -> None:
     registered when feed auto-refresh is enabled (see ``reschedule_feed_refresh``
     / ``setup_scheduler``). Uses its own connection and the gather-then-write
     feed path, so it never holds the writer gate across network I/O.
+
+    Each run gets its own job id. One fixed id cannot restart: `set_job_status`
+    ignores `running` on a terminal row, so the row kept the `started_at` of its
+    first run, and `latest_feed_fetch_window` would have read a five-week window.
     """
-    job_id = "periodic_feed_refresh"
+    job_id = f"periodic_feed_refresh_{uuid.uuid4().hex[:10]}"
     operation_key = "feed.refresh_periodic"
     set_job_status(
         job_id,
@@ -2690,12 +2727,8 @@ def find_active_job(operation_key: str) -> dict | None:
             and st.get("status") in _ACTIVE_STATUSES
             and not _is_stale_active_status(st)
         )
-    for st in _load_statuses_from_db(limit=_ACTIVITY_STATUS_LIMIT):
-        if (
-            st.get("operation_key") == operation_key
-            and st.get("status") in _ACTIVE_STATUSES
-            and not _is_stale_active_status(st)
-        ):
+    for st in _load_active_statuses_from_db(operation_key):
+        if not _is_stale_active_status(st):
             candidates.append((str(st.get("job_id")), st))
     if not candidates:
         return None

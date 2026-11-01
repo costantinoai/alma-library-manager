@@ -24,13 +24,13 @@ function show() {
   )
 }
 
-describe('AuthorDetailPanel Delete', () => {
+describe('AuthorDetailPanel Remove', () => {
   beforeEach(() => vi.mocked(softRemoveAuthor).mockClear())
 
   it('asks first and removes nothing on the first click', () => {
     show()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
     expect(softRemoveAuthor).not.toHaveBeenCalled()
     expect(screen.getByText('Remove Ada Lovelace?')).toBeInTheDocument()
@@ -39,7 +39,7 @@ describe('AuthorDetailPanel Delete', () => {
   it('removes after the confirmation', async () => {
     show()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
 
     await waitFor(() => expect(softRemoveAuthor).toHaveBeenCalledTimes(1))

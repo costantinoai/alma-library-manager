@@ -162,7 +162,7 @@ export function RecommendationEngagement({
                       </span>
                       {s.avg_score != null && (
                         <span className="shrink-0 tabular-nums text-slate-400">
-                          avg {(s.avg_score * 100).toFixed(0)}%
+                          avg {s.avg_score.toFixed(0)}%
                         </span>
                       )}
                     </div>

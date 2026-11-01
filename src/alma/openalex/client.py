@@ -8,6 +8,7 @@ rate-limit tracking, automatic retries).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -25,6 +26,7 @@ from alma.core.paper_groups import (
     settle_new_paper_group,
 )
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.scholar_access import ScholarIntent, scholarly_client
 from alma.core.utils import (
     normalize_doi as _normalize_doi,
 )
@@ -577,22 +579,21 @@ def _upsert_referenced_works(
             "DELETE FROM publication_references WHERE paper_id = ?",
             (paper_id,),
         )
-        inserted = 0
-        seen: set[int] = set()
+        work_ids: dict[int, None] = {}
         for raw_work_id in referenced_work_ids or []:
             work_id_int = _work_id_to_int(str(raw_work_id or ""))
-            if work_id_int is None or work_id_int in seen:
-                continue
-            seen.add(work_id_int)
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO publication_references (paper_id, referenced_work_id)
-                VALUES (?, ?)
-                """,
-                (paper_id, work_id_int),
-            )
-            inserted += 1
-        return inserted
+            if work_id_int is not None:
+                work_ids[work_id_int] = None
+        # One statement, not one per reference: this runs per work inside a
+        # write section, and a work can cite hundreds of papers.
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO publication_references (paper_id, referenced_work_id)
+            SELECT ?, value FROM json_each(?)
+            """,
+            (paper_id, json.dumps(list(work_ids))),
+        )
+        return len(work_ids)
     except sqlite3.OperationalError as e:
         logger.warning("Failed to upsert references for paper %s: %s", paper_id, e)
         return 0
@@ -1804,8 +1805,14 @@ def backfill_missing_publication_references(
 def resolve_openalex_candidates_from_scholar(
     scholar_id: str,
     mailto: str | None = None,
+    *,
+    intent: ScholarIntent = "auto",
 ) -> list[dict[str, object]]:
     """Resolve OpenAlex author candidates using Google Scholar metadata (name, affiliation, and one work).
+
+    Returns no candidates, with no contact, unless `scholarly_client` allows
+    this ``intent`` (D14). ``manual`` is for a person asking; everything else is
+    ``auto``.
 
     Strategy:
     1. Use `scholarly` to fetch author name, affiliation, and at least one publication title.
@@ -1822,25 +1829,22 @@ def resolve_openalex_candidates_from_scholar(
     candidates: dict[str, dict[str, object]] = {}
 
     # Step 1: fetch from Scholar
+    _sch = scholarly_client(intent)
+    if _sch is None:
+        return []
     try:
-        try:
-            from scholarly import scholarly as _sch
-        except Exception as e:  # scholarly may be missing
-            logger.warning(f"scholarly unavailable: {e}")
-            _sch = None
-        if _sch is not None:
-            a = _sch.search_author_id(scholar_id)
-            a = _sch.fill(a)
-            name = (a or {}).get("name")
-            affiliation = (a or {}).get("affiliation") or (a or {}).get("organization")
-            pubs = (a or {}).get("publications") or []
-            if isinstance(pubs, list) and pubs:
-                # Prefer the most recent filled pub title; otherwise first available title
-                try:
-                    # Sometimes need to fill a publication to get full title; but we avoid network here
-                    sample_title = (pubs[0] or {}).get("bib", {}).get("title")
-                except Exception:
-                    sample_title = None
+        a = _sch.search_author_id(scholar_id)
+        a = _sch.fill(a)
+        name = (a or {}).get("name")
+        affiliation = (a or {}).get("affiliation") or (a or {}).get("organization")
+        pubs = (a or {}).get("publications") or []
+        if isinstance(pubs, list) and pubs:
+            # Prefer the most recent filled pub title; otherwise first available title
+            try:
+                # Sometimes need to fill a publication to get full title; but we avoid network here
+                sample_title = (pubs[0] or {}).get("bib", {}).get("title")
+            except Exception:
+                sample_title = None
     except Exception as e:
         logger.warning(f"Scholar fetch failed for {scholar_id}: {e}")
 
