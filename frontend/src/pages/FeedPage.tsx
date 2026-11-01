@@ -1171,6 +1171,7 @@ export function FeedPage() {
                   isQueued={isQueued}
                   trailingHeader={isNew ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
                   forceShowAbstract={viewMode === 'extended'}
+                  compactActions={viewMode === 'normal'}
                   showActionLabels={viewMode === 'extended'}
                   // Discover-similar pivot — sends the user to Discovery
                   // with this paper as the seed. Hidden when the row has
