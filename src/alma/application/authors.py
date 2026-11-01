@@ -693,8 +693,8 @@ def list_authors(
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """List authors with optional name filtering."""
-    where = ["1=1"]
+    """List authors with optional name filtering. Soft-removed rows are out."""
+    where = ["COALESCE(status, 'active') != 'removed'"]
     params: list[object] = []
     if search and search.strip():
         where.append("LOWER(name) LIKE LOWER(?)")

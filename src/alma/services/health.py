@@ -216,6 +216,9 @@ _AUTHOR_FOLLOWED_UNRESOLVED_SQL = (
 )
 
 
+_AUTHOR_ACTIVE_SQL = "COALESCE(a.status, 'active') != 'removed'"
+
+
 def author_attention_severity_case_sql(alias: str = "severity") -> str:
     """The ``CASE … END AS severity`` that ranks attention rows (lower first)."""
     whens = "\n".join(
@@ -232,11 +235,17 @@ def author_attention_severity_case_sql(alias: str = "severity") -> str:
 
 
 def author_attention_where_sql() -> str:
-    """The ``WHERE`` predicate selecting every author row that needs attention."""
+    """The ``WHERE`` predicate selecting every author row that needs attention.
+
+    A soft-removed author (D3, or the alt of a merge) keeps its last resolver
+    status, but it is out of every list and nothing can act on it, so it is
+    never a row here.
+    """
     status_list = ", ".join(f"'{s}'" for s in AUTHOR_ATTENTION_STATUSES)
     return (
-        f"COALESCE(a.id_resolution_status, '') IN ({status_list})\n"
-        f"           OR ({_AUTHOR_FOLLOWED_UNRESOLVED_SQL})"
+        f"{_AUTHOR_ACTIVE_SQL}\n"
+        f"           AND (COALESCE(a.id_resolution_status, '') IN ({status_list})\n"
+        f"           OR ({_AUTHOR_FOLLOWED_UNRESOLVED_SQL}))"
     )
 
 
@@ -1375,6 +1384,7 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
               SUM(CASE WHEN ({author_attention_where_sql()})
                        THEN 1 ELSE 0 END) AS n_unique_attention
             FROM authors a
+            WHERE {_AUTHOR_ACTIVE_SQL}
             """
         ).fetchone()
         if row:
