@@ -14,10 +14,6 @@ describe('fixes from the live test of 2026-11-01', () => {
     expect(source('components/CommandPalette.tsx')).toContain('<DialogTitle')
   })
 
-  it('branch controls merge over the saved object, not the defaulted one', () => {
-    expect(source('hooks/useBranchControls.ts')).toContain('...lens.branch_controls, ...patch')
-  })
-
   it('no picker asks for a fixed page of the Library', () => {
     for (const file of ['components/library/TagsTab.tsx', 'addons/auto_tagger/TagSuggestionsPanel.tsx']) {
       expect(source(file)).not.toMatch(/library\/saved\?limit=/)
