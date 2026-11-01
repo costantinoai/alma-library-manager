@@ -1089,13 +1089,18 @@ def sync_surface_resolution(
         "dislike": "dislike",
     }.get(action)
 
+    # A Save, Like or Love replaces a Dislike, so a row still showing that
+    # Dislike takes the new state like an unresolved row does. Without this the
+    # Feed button stays lit, and a stored `user_action='dislike'` keeps counting
+    # in `_add_recommendation_signals` after the verdict has ended.
+    replaces_dislike = action in {"add", "save", "like", "love"}
     if feed_status and _table_exists(db, "feed_items"):
         db.execute(
-            """
+            f"""
             UPDATE feed_items
             SET status = ?
             WHERE paper_id = ?
-              AND COALESCE(status, 'new') = 'new'
+              AND COALESCE(status, 'new') IN ('new'{", 'dislike'" if replaces_dislike else ""})
             """,
             (feed_status, paper_id),
         )
@@ -1118,6 +1123,12 @@ def sync_surface_resolution(
                 WHERE paper_id = ?
                   AND (user_action IS NULL OR TRIM(user_action) = '')
                 """,
+                (recommendation_action, now, paper_id),
+            )
+        if replaces_dislike:
+            db.execute(
+                "UPDATE recommendations SET user_action = ?, action_at = ? "
+                "WHERE paper_id = ? AND user_action = 'dislike'",
                 (recommendation_action, now, paper_id),
             )
 
@@ -1267,8 +1278,10 @@ def undo_paper_feedback(
 
     A paper has ONE signal (Feed / Discovery / Library / onboarding all write
     ``feedback_events``, read back with no surface filter), so deleting the
-    relevant events here clears it everywhere. ``preference_profiles`` is a
-    recomputed aggregate, rebuilt on the next lens refresh. Idempotent.
+    relevant events here clears it everywhere. ``preference_profiles`` is written
+    only by Feed events and is not rebuilt, so an undone Feed verdict's delta
+    stays there and decays; undoing a Save does give back the Dislikes it ended.
+    Idempotent.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
@@ -1285,6 +1298,9 @@ def undo_paper_feedback(
                 "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
                 (rating_before_save, now, paper_id),
             )
+        from alma.services.feedback_substrate import reinstate_dislikes_ended_by_save
+
+        reinstate_dislikes_ended_by_save(db, paper_id)
         added_at_before_save = _added_at_before_save(db, paper_id)
         if added_at_before_save is not None:
             db.execute(
@@ -1300,7 +1316,9 @@ def undo_paper_feedback(
         # The save/global-hide resolved feed + recommendation rows; make them
         # actionable again now that the paper is no longer a member.
         if _table_exists(db, "feed_items"):
-            db.execute("UPDATE feed_items SET status = 'new' WHERE paper_id = ?", (paper_id,))
+            # The Dislike the Save replaced is back, so its button lights again.
+            resting = "dislike" if rating_before_save == DISLIKE_RATING else "new"
+            db.execute("UPDATE feed_items SET status = ? WHERE paper_id = ?", (resting, paper_id))
         if _table_exists(db, "recommendations"):
             # Only what this membership set. A lens-local Dismiss belongs to
             # that lens (D6) and survives leaving the Library; a global hide

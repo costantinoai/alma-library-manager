@@ -44,6 +44,8 @@ _NEGATIVE_ACTIONS = {
     "swipe_left",
 }
 _VISIBILITY_ACTIONS = {"dismiss", "dismissed"}
+#: A Save replaces an earlier negative verdict; the event stays, its effect ends.
+SAVE_ACTIONS = ("add", "add_to_library", "save", "saved")
 _POSITION_WEIGHTS = {
     "first": 1.25,
     "last": 1.25,
@@ -117,6 +119,34 @@ def _is_rating_event(raw_value: Any) -> bool:
     return isinstance(value, dict) and str(value.get("action") or "").strip().lower() == "rate"
 
 
+def _is_save_event(raw_value: Any) -> bool:
+    value = _coerce_value(raw_value)
+    return isinstance(value, dict) and str(value.get("action") or "").strip().lower() in SAVE_ACTIONS
+
+
+def load_last_save_rowids(db: sqlite3.Connection) -> dict[str, int]:
+    """Each paper's newest Save event, by rowid.
+
+    A negative event with a lower rowid was replaced by that Save. Readers of
+    raw events use this; ``load_paper_verdicts`` applies the same rule itself.
+    """
+    placeholders = ",".join("?" for _ in SAVE_ACTIONS)
+    try:
+        rows = db.execute(
+            f"""
+            SELECT entity_id, MAX(rowid)
+            FROM feedback_events
+            WHERE entity_type IN ('publication', 'paper')
+              AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+            GROUP BY entity_id
+            """,
+            SAVE_ACTIONS,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {str(row[0]): int(row[1]) for row in rows}
+
+
 def load_paper_verdicts(
     db: sqlite3.Connection,
     *,
@@ -133,7 +163,9 @@ def load_paper_verdicts(
     counts nor hides an earlier verdict. So is a Save at 3 stars: saving is a
     membership decision (D6), and Feed records 3 even when the paper keeps its 5.
     An explicit rating of 3 or 0 stars is different: the user said this paper
-    has no opinion now, so it is the newest statement and gives no verdict. A
+    has no opinion now, so it is the newest statement and gives no verdict.
+    A Save does end a negative verdict older than it: Dislike then Save means
+    the paper stands, with no verdict. It leaves a positive verdict alone. A
     verdict past ``max_age_days`` still stands as the newest, it has simply
     expired, so an older event cannot replace it.
 
@@ -161,15 +193,18 @@ def load_paper_verdicts(
     now = datetime.now(timezone.utc)
     verdicts: dict[str, float] = {}
     judged: set[str] = set()
+    saved_since: set[str] = set()
     for row in rows:
         paper_id = str(row[0] or "").strip()
         if not paper_id or paper_id in judged:
             continue
         signal = normalize_feedback_event_value(row[1], row[2])
         if signal == 0.0 and not _is_rating_event(row[2]):
+            if _is_save_event(row[2]):
+                saved_since.add(paper_id)
             continue
         judged.add(paper_id)
-        if signal == 0.0:
+        if signal == 0.0 or (signal < 0.0 and paper_id in saved_since):
             continue
         age_days = _days_since(row[3], now)
         if age_days is not None and age_days > max_age_days:

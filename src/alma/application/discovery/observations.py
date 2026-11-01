@@ -8,7 +8,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from alma.application.signal_projection import normalize_feedback_event_value
+from alma.application.signal_projection import (
+    load_last_save_rowids,
+    normalize_feedback_event_value,
+)
 from alma.core.time import utcnow
 
 from .exploration import POLICY_VERSION
@@ -233,6 +236,7 @@ def load_ltr_observations(
             rc.position_probability,
             di.position,
             rc.feature_timestamp,
+            fe.rowid AS event_rowid,
             fe.value,
             fe.created_at AS outcome_timestamp
         FROM discovery_ranking_candidates rc
@@ -257,7 +261,10 @@ def load_ltr_observations(
 
     # One explicit outcome per recommendation. Repeated actions keep the first
     # causal response; later preference edits remain useful to taste projection
-    # but do not rewrite the original ranking label.
+    # but do not rewrite the original ranking label. The exception is a negative
+    # that a later Save replaced: it is not a label at all, so the next response
+    # on the recommendation, if any, is the one that counts.
+    last_saves = load_last_save_rowids(db)
     seen_recommendations: set[str] = set()
     observations: list[LTRObservation] = []
     for row in db.execute(sql, params).fetchall():
@@ -275,6 +282,8 @@ def load_ltr_observations(
         if signal > 0 or action in {"save", "like", "love"}:
             label = 1
         elif signal < 0 or action in {"dislike", "remove"}:
+            if int(row["event_rowid"]) < last_saves.get(str(row["paper_id"]), 0):
+                continue
             label = 0
         else:
             # read/dismiss/seen are resolution or visibility, not preference.

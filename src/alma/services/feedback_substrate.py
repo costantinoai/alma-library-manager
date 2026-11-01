@@ -138,6 +138,11 @@ def record_feedback(
                 # than persist a value that breaks the canonical set.
                 enriched_context.pop("source_bucket", None)
 
+    # A Save replaces the Dislikes before it, in the profile as in the verdict.
+    # Read before the insert: this Save must not stop its own walk.
+    if entity_type == "publication" and paper_target_id and _is_save_value(value):
+        _shift_open_dislikes(conn, paper_target_id, _open_dislikes(conn, paper_target_id), -1.0)
+
     conn.execute(
         """INSERT INTO feedback_events
            (id, event_type, entity_type, entity_id, value, context_json)
@@ -498,6 +503,80 @@ def _apply_decay(
         return weight * decay
     except (ValueError, TypeError):
         return weight
+
+
+def _is_save_value(value: dict[str, Any] | None) -> bool:
+    # Lazy import: `signal_projection` sits in `application`, which imports this module.
+    from alma.application.signal_projection import SAVE_ACTIONS
+
+    action = str((value or {}).get("action") or "").strip().lower()
+    return action in SAVE_ACTIONS
+
+
+def _open_dislikes(
+    conn: sqlite3.Connection, paper_id: str, *, under_last_save: bool = False
+) -> list[sqlite3.Row]:
+    """The paper's Feed Dislikes since its last Save, newest first.
+
+    Only Feed events move ``preference_profiles`` (D26), so only they have a
+    delta to take out. With ``under_last_save`` the walk starts below the newest
+    Save instead, finding the Dislikes that Save ended; with no Save on top
+    there are none, because those Dislikes are still in force.
+    """
+    rows = conn.execute(
+        """
+        SELECT event_type, value, context_json, created_at
+        FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+          AND event_type IN ('paper_action', 'feed_action')
+        ORDER BY created_at DESC, rowid DESC
+        """,
+        (paper_id,),
+    ).fetchall()
+    events = [(row, _safe_json_loads(row["value"])) for row in rows]
+    if under_last_save:
+        verdict_events = [
+            pair
+            for pair in events
+            if _is_save_value(pair[1]) or str(pair[1].get("action") or "").lower() == "dislike"
+        ]
+        if not verdict_events or not _is_save_value(verdict_events[0][1]):
+            return []
+        while verdict_events and _is_save_value(verdict_events[0][1]):
+            verdict_events.pop(0)
+        events = verdict_events
+    dislikes: list[sqlite3.Row] = []
+    for row, value in events:
+        if _is_save_value(value):
+            break
+        if row["event_type"] == "feed_action" and str(value.get("action") or "").lower() == "dislike":
+            dislikes.append(row)
+    return dislikes
+
+
+def _shift_open_dislikes(
+    conn: sqlite3.Connection, paper_id: str, dislikes: list[sqlite3.Row], sign: float
+) -> None:
+    """Take Dislikes' deltas out of the profile (-1) or put them back (+1).
+
+    A Dislike's delta is negative, so taking it out adds. Each is decayed by its
+    age, the same decay the profile row has applied to it since.
+    """
+    for row in dislikes:
+        delta = _affinity_delta(
+            row["event_type"], _safe_json_loads(row["value"]), _safe_json_loads(row["context_json"])
+        )
+        shift = sign * _apply_decay(delta, str(row["created_at"] or ""))
+        if shift:
+            _update_preference_profile(conn, "publication", paper_id, shift)
+            _propagate_to_topics_and_authors(conn, paper_id, shift)
+
+
+def reinstate_dislikes_ended_by_save(conn: sqlite3.Connection, paper_id: str) -> None:
+    """Undoing a Save gives back the Dislikes it ended. Call before deleting it."""
+    if not paper_id:
+        return
+    _shift_open_dislikes(conn, paper_id, _open_dislikes(conn, paper_id, under_last_save=True), 1.0)
 
 
 def _propagate_to_topics_and_authors(

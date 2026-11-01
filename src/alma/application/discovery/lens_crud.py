@@ -24,6 +24,7 @@ from typing import Any
 
 from alma.application import library as library_app
 from alma.application import paper_actions
+from alma.application.signal_projection import load_last_save_rowids
 from alma.core.db_write import commit_unless_gated, run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.scoring_math import age_decay, clamp
@@ -993,7 +994,7 @@ def _aggregate_branch_outcomes(
         # each recommendation row.
         feedback_rows = db.execute(
             """
-            SELECT entity_id, value, context_json, created_at
+            SELECT rowid AS event_rowid, entity_id, value, context_json, created_at
             FROM feedback_events
             WHERE event_type = 'paper_action'
               AND created_at >= ?
@@ -1002,6 +1003,7 @@ def _aggregate_branch_outcomes(
             """,
             (since,),
         ).fetchall()
+        last_saves = load_last_save_rowids(db)
         for event in feedback_rows:
             try:
                 context = json.loads(event["context_json"] or "{}")
@@ -1014,6 +1016,11 @@ def _aggregate_branch_outcomes(
                 continue
             rec_id = str(context.get("recommendation_id") or "").strip()
             action = str(value.get("action") or "").strip().lower()
+            # A Save on any surface replaces the Dislike before it.
+            if action == "dislike" and int(event["event_rowid"]) < last_saves.get(
+                str(event["entity_id"] or ""), 0
+            ):
+                continue
             if rec_id and action in {"save", "like", "love", "dislike"}:
                 feedback_by_rec[rec_id] = (action, str(event["created_at"] or ""), context)
                 verdict_key = (

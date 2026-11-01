@@ -51,6 +51,10 @@ Consequences worth knowing:
   your surfaces cannot count against a paper.
 * **Negative opinion is `dislike`.** "Bad and gone" is dislike **plus** dismiss:
   two verbs, composed deliberately.
+* **A Save replaces a Dislike.** Dislike then Save ends the negative verdict in
+  ranking, the preference profile and the learning labels, and clears the
+  Dislike button on Feed and Discovery. The event stays in the history. Undoing
+  that Save brings the Dislike back. A Save leaves a Like or Love alone.
 * **`defer` is not a verdict**, it is the absence of one — which is why the
   Inbox X button cannot reuse `dismiss`.
 * **"Added" is when you saved it.** Saving stamps `added_at`, replacing any
