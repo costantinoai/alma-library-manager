@@ -1261,6 +1261,24 @@ def _withdraw_surface_verdicts(db: sqlite3.Connection, paper_id: str) -> None:
         )
 
 
+def clear_library_ratings(db: sqlite3.Connection, paper_ids: list[str]) -> int:
+    """Set saved papers to no rating and take the verdict off their surface rows.
+
+    The papers stay saved. Papers outside the Library are left alone. Returns the
+    number cleared. Caller owns the transaction.
+    """
+    cleared = 0
+    for paper_id in paper_ids:
+        cursor = db.execute(
+            "UPDATE papers SET rating = 0, updated_at = ? WHERE id = ? AND status = ?",
+            (utcnow().isoformat(), paper_id, LIBRARY_STATUS),
+        )
+        if cursor.rowcount:
+            _withdraw_surface_verdicts(db, paper_id)
+            cleared += 1
+    return cleared
+
+
 def _undo_last_action(db: sqlite3.Connection, paper_id: str) -> None:
     """Reverse the paper's newest Save, verdict or Remove: the toast's Undo.
 

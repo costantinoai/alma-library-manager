@@ -484,18 +484,14 @@ def bulk_clear_rating(
 ):
     """Set rating to 0 for multiple library papers (paper stays saved)."""
     root_ids = _bulk_root_ids(db, req.paper_ids)
-    placeholders = ",".join("?" for _ in root_ids)
     if not root_ids:
         return _BulkActionResponse(affected=0)
 
-    def _persist() -> int:
-        cursor = db.execute(
-            f"UPDATE papers SET rating = 0 WHERE id IN ({placeholders}) AND status = 'library'",
-            root_ids,
-        )
-        return cursor.rowcount or 0
-
-    affected = run_write_unit(db, _persist, label="library_bulk_clear_rating")
+    affected = run_write_unit(
+        db,
+        lambda: library_app.clear_library_ratings(db, root_ids),
+        label="library_bulk_clear_rating",
+    )
     return _BulkActionResponse(affected=affected)
 
 
