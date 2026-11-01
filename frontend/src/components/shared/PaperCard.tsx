@@ -22,15 +22,18 @@ import { formatPaperDate } from '@/lib/format'
 import { nextLevel, useSurfaceLevel } from '@/components/ui/surface-level'
 import { ScoreBreakdownPanel, ScoreBreakdownTeaser } from '@/components/ScoreBreakdownPanel'
 import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { SubPanel } from '@/components/ui/sub-panel'
 
 /** The card header's small round icon controls (PDF link, Discover similar).
  *  Local PDF access is independent of fetch plugins. */
 const HEADER_ICON_BUTTON = cn(
-  'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-paper-sm transition-colors duration-150',
-  'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
-  'focus-ring',
+  buttonVariants({ variant: 'outline', size: 'icon-sm' }),
+  'size-7 text-slate-600 hover:text-alma-900 data-[state=open]:border-control-edge-strong data-[state=open]:bg-control-quiet-hover',
 )
+/** Same object as the action row's pressed Save: this paper is already yours. */
+const HEADER_PDF_HELD =
+  'border-accent-edge bg-accent-soft text-alma-folio hover:border-alma-folio hover:bg-accent-soft hover:text-alma-folio-700'
 
 export interface PaperCardPaper {
   id: string
@@ -472,10 +475,10 @@ export function PaperCard({
                   paper id and nothing supplied, the slot collapses entirely. */}
               {(onPivot || trailingHeader || paper.id) && (
                 <div
-                  className="ml-auto order-last flex shrink-0 items-center gap-1.5"
+                  className="ml-auto order-last flex shrink-0 items-center gap-1"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <PaperPdfLink paperId={paper.id} className={HEADER_ICON_BUTTON} iconClassName="h-3.5 w-3.5" />
+                  <PaperPdfLink paperId={paper.id} className={HEADER_ICON_BUTTON} heldClassName={HEADER_PDF_HELD} iconClassName="h-3.5 w-3.5" />
                   {onPivot && (
                     <button
                       type="button"

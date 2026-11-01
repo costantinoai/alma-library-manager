@@ -2898,6 +2898,11 @@ export function getPaperPdfDetails(paperId: string): Promise<{ title: string; pd
   return api.get(`/papers/${encodeURIComponent(paperId)}/details`)
 }
 
+/** Every paper with a kept PDF on disk: one read for a whole page of cards. */
+export function getHeldPdfIds(): Promise<{ paper_ids: string[] }> {
+  return api.get('/papers/pdfs/held')
+}
+
 export function fetchPaperPdf(paperId: string): Promise<JobEnvelope> {
   return api.post<JobEnvelope>(`/papers/${encodeURIComponent(paperId)}/pdf/fetch`)
 }
