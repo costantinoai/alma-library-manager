@@ -426,11 +426,20 @@ function OperationsView({
     const duration = terminal ? formatDuration(op.started_at, op.finished_at) : null
 
     return (
-      <RowButton
+      // A div, because the row holds its own buttons and a <button> cannot.
+      <div
         key={op.job_id}
+        role="button"
+        tabIndex={0}
         onClick={() => onSelect(op.job_id)}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault()
+            onSelect(op.job_id)
+          }
+        }}
         className={cn(
-          'min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 hover:bg-surface-cool-2',
+          'flex w-full min-w-0 cursor-pointer items-start gap-3 overflow-hidden border-b text-left transition-colors focus-ring border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 hover:bg-surface-cool-2',
           statusAccent(runDisplayStatus(op.status, op.result?.batch)),
           isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
@@ -601,7 +610,7 @@ function OperationsView({
             <p className="text-caption text-slate-400">Started {formatTimestamp(op.started_at)}</p>
           )}
         </div>
-      </RowButton>
+      </div>
     )
   }
 

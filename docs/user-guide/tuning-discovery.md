@@ -186,8 +186,8 @@ components so you can audit what moved.
 
 ## Retrieval strategies
 
-The Settings card also lets you toggle retrieval lanes on and off.
-Current strategies include:
+Every retrieval lane runs on each refresh; there is no switch for one lane. To steer
+them, use a branch's pin, boost and mute. Current strategies include:
 
 * `related_works`
 * `topic_search`
@@ -200,8 +200,6 @@ Current strategies include:
 * `taste_authors`
 * `taste_venues`
 * `recent_wins`
-
-Disabling a strategy removes it from the candidate pool entirely.
 
 ## Branch controls
 

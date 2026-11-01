@@ -24,6 +24,7 @@ from typing import Any
 # composite signal, the feedback comparison AND the ranker's atoms. Re-exported
 # here because this module is the historical import path (`sim_module.calibrate_
 # similarity_score`); it is a re-export, not a second implementation.
+from alma.core.author_names import parse_author_names
 from alma.core.scoring_math import calibrate_similarity_score  # noqa: F401
 from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np
@@ -741,8 +742,7 @@ def prepare_query_text(
 
 
 def _split_author_names(authors_raw: object, *, limit: int = 4) -> list[str]:
-    authors = [part.strip() for part in str(authors_raw or "").split(",") if part and part.strip()]
-    return authors[: max(1, int(limit or 4))]
+    return parse_author_names(str(authors_raw or ""))[: max(1, int(limit or 4))]
 
 
 def _load_publication_topic_terms(

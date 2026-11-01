@@ -592,7 +592,7 @@ export function DiscoveryPage() {
         patchRecommendationPaper(rec, { rating: 4 }),
       ),
     onSuccess: (_result, { paperId }) => {
-      toast({ title: 'Rated', description: 'Paper rated 4 stars.', action: offerUndo(paperId) })
+      toast({ title: 'Liked', description: 'Recorded a +1 preference signal.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
@@ -682,7 +682,7 @@ export function DiscoveryPage() {
         patchRecommendationPaper(rec, { rating: 5 }),
       ),
     onSuccess: (_result, { paperId }) => {
-      toast({ title: 'Rated', description: 'Paper rated 5 stars.', action: offerUndo(paperId) })
+      toast({ title: 'Loved', description: 'Recorded a +2 preference signal.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {

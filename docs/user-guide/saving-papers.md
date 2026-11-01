@@ -11,9 +11,9 @@ Online search, Library — you'll find the same four rating verbs:
 | Verb | Effect |
 |---|---|
 | **Save** (or **Add**) | Adds the paper to your Library at rating 3 (neutral). |
-| **Like** | Adds to Library at rating 4 (positive). |
-| **Love** | Adds to Library at rating 5 (strongly positive). |
-| **Dislike** | Records a negative signal at rating 1. **Does not** save the paper unless it was already saved (in which case the existing rating is preserved — see below). |
+| **Like** | Rates the paper 4 (positive). It stays where it is; only Save adds it to your Library. It still teaches Discovery. |
+| **Love** | Rates the paper 5 (strongly positive). Same rule as Like. |
+| **Dislike** | Records a negative signal at rating 1. It does not change Library membership. |
 
 The vocabulary is identical across surfaces because the underlying
 operation is the same. The recommender treats a Like in Feed and a

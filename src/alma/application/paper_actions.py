@@ -9,15 +9,14 @@ The Inbox is a **buffer** on the membership axis (D2), between `tracked` and
 
 Both verbs here are deliberately **valence-free**. Neither writes
 `papers.rating`, neither records a `feedback_events` row, and neither shifts the
-Discovery centroid (every centroid query is scoped to `status='library'`). A
+Discovery centroid (taste queries read saved or rated papers, and an untriaged
+capture is neither, `sql_helpers.taste_paper_sql`). A
 paper can sit in the Inbox all morning and be X'd out at noon having left no
 mark on your recommendations — which is the property that makes a two-second
 phone flick a safe gesture.
 
-This module will also host `apply_paper_action`, the single owner of the
-valence verbs (save / like / love / dislike) and the scoped `dismiss` registry,
-once `application/library.py` is free to delegate to it. Until then it owns only
-the two transitions the Inbox itself needs.
+Valence verbs follow the same rule on the membership axis: only Save moves a
+paper. Like, Love and Dislike rate it where it stands (`apply_valence`).
 """
 
 from __future__ import annotations
@@ -96,11 +95,15 @@ def apply_valence(
     the context genuinely differs (Feed carries monitor provenance, Discovery
     carries the lens); only this shared half is centralised.
 
-    Rating is monotonically upgraded — `add_to_library`'s SQL does
+    Only `add` changes membership. It promotes to the Library and upgrades the
+    rating monotonically — `add_to_library`'s SQL does
     ``CASE WHEN rating > ? THEN rating ELSE ?`` — so add-after-love never
-    demotes a loved paper to 3. `dislike` is the exception: it is an explicit
-    new opinion, sets rating 1, and deliberately leaves membership alone so a
-    disliked paper stays visible where it was.
+    demotes a loved paper to 3.
+
+    `like`, `love` and `dislike` are opinions and rate only (D6, rate only on
+    every surface). They set the rating they name and leave membership alone: a
+    liked Feed paper stays tracked, a liked Inbox paper stays in the Inbox until
+    Save or Not now. It still teaches taste, see `sql_helpers.taste_paper_sql`.
 
     Returns ``{"rating", "status", "previous"}`` — the paper's state AFTER the
     write, so callers report the truth rather than what they intended, plus the
@@ -124,11 +127,10 @@ def apply_valence(
 
     before = state_before_action(db, paper_id)
 
-    if normalized == "dislike":
-        # Preference only: rating 1, membership untouched (D6).
-        library_app.sink_disliked_paper(db, paper_id)
+    target = ACTION_RATINGS[normalized]
+    if normalized != "add":
+        library_app.rate_paper(db, paper_id, target)
     else:
-        target = ACTION_RATINGS[normalized]
         if collection_ids:
             library_app.save_paper_to_collections(
                 db, paper_id, collection_ids, rating=target, added_from=added_from

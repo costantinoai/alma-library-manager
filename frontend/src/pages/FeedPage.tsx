@@ -90,12 +90,12 @@ function deriveFeedReaction(status?: string | null): PaperReaction {
 function deriveFeedIsSaved(itemStatus?: string | null, paperStatus?: string | null): boolean {
   // Resolved library membership is authoritative: a paper just removed from
   // the Library (status 'removed') reads as not-saved even though the feed
-  // item still carries its old 'add'/'like'/'love' action — that's what lets
-  // the Save button toggle off. Fall back to the feed action only while the
-  // paper row is still unresolved.
+  // item still carries its old 'add' action — that's what lets the Save button
+  // toggle off. Like and Love rate only, so they never read as saved. Fall back
+  // to the feed action only while the paper row is still unresolved.
   if (paperStatus === 'library') return true
   if (paperStatus === 'removed') return false
-  return itemStatus === 'add' || itemStatus === 'like' || itemStatus === 'love'
+  return itemStatus === 'add'
 }
 
 const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
@@ -161,8 +161,8 @@ function parseBreakdown(raw: unknown): ScoreBreakdown | null {
 function actionLabel(action: FeedAction): string {
   switch (action) {
     case 'add': return 'Saved to Library with a baseline positive signal'
-    case 'like': return 'Saved to Library with a +1 preference signal'
-    case 'love': return 'Saved to Library with a +2 preference signal'
+    case 'like': return 'Recorded a +1 preference signal'
+    case 'love': return 'Recorded a +2 preference signal'
     case 'dislike': return 'Recorded a -1 signal and kept the paper out of Library'
     case 'dismiss': return 'Hidden from Feed'
   }
@@ -744,7 +744,8 @@ export function FeedPage() {
                 Each action sends a different signal:
               </p>
               <ul className="ml-4 list-disc space-y-1">
-                <li><span className="font-medium text-alma-900">Add / Like / Love</span> — saves the paper to your Library (Love rates it 5★).</li>
+                <li><span className="font-medium text-alma-900">Add</span> — saves the paper to your Library.</li>
+                <li><span className="font-medium text-alma-900">Like / Love</span> — a positive signal to Discovery (4★, 5★). The paper stays out of your Library until you Add it.</li>
                 <li><span className="font-medium text-alma-900">Dislike</span> — a negative signal to Discovery, but the paper <span className="font-medium">stays in the Feed</span> so the inbox keeps its chronological record.</li>
                 <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> without changing your preference signal. You can undo it right after.</li>
               </ul>

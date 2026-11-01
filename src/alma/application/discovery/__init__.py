@@ -19,7 +19,7 @@ from alma.core.db_retry import commit_with_retry
 from alma.core.db_write import write_section
 from alma.core.paper_groups import is_component_row, resolve_paper_root_id
 from alma.core.settings_helpers import setting_float
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import POSITIVE_RATING, standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
@@ -1430,6 +1430,7 @@ def _refresh_lens_recommendations(
     phase_started = perf_counter()
     status_by_paper: dict[str, str] = {}
     reading_status_by_paper: dict[str, str] = {}
+    rating_by_paper: dict[str, int] = {}
     actioned_paper_ids: set[str] = set()
     component_paper_ids: set[str] = set()
     # For a collection lens: which candidates are already IN the linked
@@ -1445,13 +1446,14 @@ def _refresh_lens_recommendations(
     for chunk in _chunked(unique_paper_ids, 200):
         placeholders = ", ".join("?" for _ in chunk)
         status_rows = db.execute(
-            "SELECT id, status, reading_status, doi, work_type, preprint_source, component_type "
+            "SELECT id, status, rating, reading_status, doi, work_type, preprint_source, component_type "
             f"FROM papers WHERE id IN ({placeholders})",
             chunk,
         ).fetchall()
         for row in status_rows:
             status_by_paper[str(row["id"])] = str(row["status"] or "tracked")
             reading_status_by_paper[str(row["id"])] = str(row["reading_status"] or "").strip()
+            rating_by_paper[str(row["id"])] = int(row["rating"] or 0)
             if is_component_row(row):
                 component_paper_ids.add(str(row["id"]))
         if lens_collection_id:
@@ -1536,7 +1538,11 @@ def _refresh_lens_recommendations(
             ):
                 skipped_library += 1
                 continue
-        elif paper_status in ("library", "dismissed", "removed") or reading_status_by_paper.get(paper_id):
+        elif (
+            paper_status in ("library", "dismissed", "removed")
+            or reading_status_by_paper.get(paper_id)
+            or rating_by_paper.get(paper_id, 0) >= POSITIVE_RATING
+        ):
             skipped_library += 1
             continue
         if paper_id in actioned_paper_ids:

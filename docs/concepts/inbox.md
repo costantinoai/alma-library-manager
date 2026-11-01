@@ -19,9 +19,10 @@ The Inbox is a value on the **membership axis** (see
 [Paper lifecycle](paper-lifecycle.md)), between `tracked` and `library`:
 
 ```
-tracked ──capture──▶ inbox ──┬─ Save / Like / Love ──▶ library
-                             ├─ Dislike ─────────────▶ rating 1
-                             └─ X (defer) ──────────▶ tracked
+tracked ──capture──▶ inbox ──┬─ Save ──────────────▶ library
+                             ├─ Like / Love ───────▶ stays, rating 4 / 5
+                             ├─ Dislike ───────────▶ stays, rating 1
+                             └─ X (defer) ─────────▶ tracked
 ```
 
 The reading axis is untouched by all of this. Capturing a paper says nothing

@@ -15,6 +15,7 @@ import { PaperActionBar, type PaperReaction } from '@/components/discovery/Paper
 import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
 import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/api/client'
+import { uniqueAuthorNames } from '@/lib/authorNames'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
@@ -175,25 +176,6 @@ interface PaperCardProps {
   }
 }
 
-function parseAuthorNames(value?: string | null): string[] {
-  const raw = String(value || '').trim()
-  if (!raw) return []
-  const parts = raw
-    .split(/,|;|\sand\s|\s&\s/gi)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0 && item.toLowerCase() !== 'et al.')
-
-  const unique: string[] = []
-  const seen = new Set<string>()
-  for (const part of parts) {
-    const normalized = normalizeAuthorName(part)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    unique.push(part)
-  }
-  return unique
-}
-
 /** A list this short is shown whole: eliding it would save nothing. */
 const AUTHORS_SHOWN_WHOLE = 6
 const AUTHORS_KEPT_FIRST = 3
@@ -347,7 +329,7 @@ export function PaperCard({
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
   const canToggleAbstract = !suppressSummaries && !showAbstractByDefault && !!paper.abstract
-  const authorNames = parseAuthorNames(paper.authors)
+  const authorNames = uniqueAuthorNames(paper.authors)
   const authorRuns: AuthorRun[] = authorNames.length > 0
     ? (authorsExpanded
         ? authorNames.map((name, index) => ({ kind: 'name' as const, name, index }))

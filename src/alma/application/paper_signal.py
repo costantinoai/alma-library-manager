@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 
 from alma.application.signal_projection import load_paper_verdicts
 from alma.core.scoring_math import age_decay
-from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql, taste_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def _load_library_centroid(db: sqlite3.Connection, model: str):
             SELECT pe.embedding AS embedding
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
-            WHERE p.status = 'library' AND pe.model = ?
+            WHERE {taste_paper_sql('p')} AND pe.model = ?
               AND {standalone_paper_sql('p')}
             """,
             (model,),
@@ -159,7 +159,7 @@ def _load_library_topic_weights(db: sqlite3.Connection) -> dict[str, float]:
             SELECT pt.term AS term, SUM(COALESCE(pt.score, 0)) AS w
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
-            WHERE p.status = 'library' AND COALESCE(pt.term, '') <> ''
+            WHERE {taste_paper_sql('p')} AND COALESCE(pt.term, '') <> ''
               AND {standalone_paper_sql('p')}
             GROUP BY pt.term
             """

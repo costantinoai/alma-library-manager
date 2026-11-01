@@ -1289,15 +1289,18 @@ def list_derivative_works(
 @router.delete(
     "/{paper_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a paper",
-    description="Remove a specific paper from the database.",
+    summary="Remove a paper",
+    description=(
+        "Soft-remove a paper (D3): status becomes `removed` and a negative signal is "
+        "recorded. The row stays, and the action can be undone."
+    ),
 )
 def delete_publication(
     paper_id: str,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Delete a specific paper from the database.
+    """Soft-remove a paper: the row stays with `status='removed'` (D3).
 
     Args:
         paper_id: UUID of the paper

@@ -366,7 +366,7 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings/openalex/usage` | Live OpenAlex quota state |
 | `GET` | `/settings/connections` | Every outside service: state, detail, last check, last use. Local read, never probes |
 | `POST` | `/settings/connections/{id}/check` | Run one read-only check as an Activity job. Posts and sends nothing |
-| `GET` | `/settings/export` | Export the settings document |
+| `GET` | `/settings/export` | Export settings and core tables as JSON, without Activity history. Nothing imports it; `/backup/export` is the restorable snapshot |
 
 ### Onboarding and walkthroughs
 

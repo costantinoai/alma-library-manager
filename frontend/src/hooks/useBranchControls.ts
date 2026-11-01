@@ -48,8 +48,9 @@ export function useBranchControls(lens: Lens | null | undefined) {
   const saveControls = useMutation({
     mutationFn: (patch: Partial<ResolvedBranchControls>) => {
       if (!lens?.id) throw new Error('No lens')
-      // Merge over the CURRENT saved controls, never over defaults.
-      return updateLens(lens.id, { branch_controls: { ...controls, ...patch } })
+      // Merge over the CURRENT saved controls, never over defaults: a pin must
+      // not store the default temperature as if someone had chosen it.
+      return updateLens(lens.id, { branch_controls: { ...lens.branch_controls, ...patch } })
     },
     onSuccess: (updated) => {
       queryClient.setQueryData<Lens[]>(['lenses'], (prev) =>

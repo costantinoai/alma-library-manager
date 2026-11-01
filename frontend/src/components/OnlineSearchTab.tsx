@@ -212,7 +212,7 @@ export function OnlineSearchTab({
   const [yearMin, setYearMin] = useState('')
   const [yearMax, setYearMax] = useState('')
   const [showFilters, setShowFilters] = useState(false)
-  // Optional local collection: each save (add/like/love) also groups the
+  // Optional local collection: each save also groups the
   // paper into this collection via the backend `collection_name`. Sticky
   // across saves within the session so a triage run lands in one collection.
   const [collectionName, setCollectionName] = useState('')
@@ -490,7 +490,11 @@ export function OnlineSearchTab({
               ? resp.status === 'library'
                 ? 'Signal recorded'
                 : 'Dismissed'
-              : 'Saved to Library',
+              : action === 'like'
+                ? 'Liked'
+                : action === 'love'
+                  ? 'Loved'
+                  : 'Saved to Library',
           description: resp.title || item.title,
           action: resp.paper_id
             ? {
@@ -675,8 +679,8 @@ export function OnlineSearchTab({
   return (
     <div className="space-y-4">
       {/* ── Optional target collection ──
-          Each save (add/like/love) also groups the paper into this local
-          collection (created if new). */}
+          Each save also groups the paper into this local collection
+          (created if new). Like and Love rate only and file nothing. */}
       <CollectionNameField
         id="online-collection-name"
         label="Add saved papers to collection (optional)"

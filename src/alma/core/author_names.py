@@ -201,41 +201,85 @@ def is_name_suffix(value: str) -> bool:
     return bool(token) and token in _NAME_SUFFIXES
 
 
+def first_last_name(name: str) -> str:
+    """"Last, First[, Suffix]" as "First Last[ Suffix]"; any other name unchanged."""
+    text = " ".join((name or "").split()).strip(" ,;")
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if len(parts) < 2:
+        return text
+    flipped = f"{parts[1]} {parts[0]}"
+    suffix = " ".join(parts[2:])
+    return f"{flipped} {suffix}" if suffix and is_name_suffix(suffix) else flipped
+
+
+def _is_given_name(segment: str) -> bool:
+    """A comma segment that can only be the given-name half of "Last, First".
+
+    One bare word, or nothing but initials ("J. K."). "Jane Doe" is a whole
+    person, because the stored comma form is mostly "First Last, First Last".
+    """
+    words = segment.split()
+    return len(words) == 1 or all(re.fullmatch(r"\w\.?", word) for word in words)
+
+
+def _pair_comma_segments(segments: list[str]) -> list[str]:
+    """Rebuild the people in a comma-only author list, left to right.
+
+    Three stored forms meet here: "First Last, First Last" from OpenAlex,
+    "Last, First, Last, First" from a Zotero RDF import, and a mix of the two
+    where only some names were inverted. A bare surname joins the given name
+    after it. A word left alone is a one-word author ("Daneault", "Eurohaptics").
+    """
+    if len(segments) == 2 and " " not in segments[0]:
+        return [first_last_name(", ".join(segments))]
+    names: list[str] = []
+    idx = 0
+    while idx < len(segments):
+        segment = segments[idx]
+        following = segments[idx + 1] if idx + 1 < len(segments) else ""
+        if (
+            " " not in segment
+            and following
+            and _is_given_name(following)
+            and not is_name_suffix(following)
+        ):
+            name = f"{following} {segment}"
+            idx += 2
+            if idx < len(segments) and is_name_suffix(segments[idx]):
+                name = f"{name} {segments[idx]}"
+                idx += 1
+            names.append(name)
+            continue
+        names.append(segment)
+        idx += 1
+    return names
+
+
 def parse_author_names(authors: str) -> list[str]:
-    """Split an authors string into individual "First Last" names, in order."""
-    text = (authors or "").strip()
+    """Split a stored ``papers.authors`` string into "First Last" names, in order.
+
+    THE parser of the stored form. ``frontend/src/lib/authorNames.ts`` holds the
+    same rule, and both run the cases in
+    ``frontend/src/lib/authorNames.cases.json``, so change them together.
+
+    - Semicolons (a BibTeX import) separate people, each possibly "Last, First".
+    - Otherwise commas separate, see :func:`_pair_comma_segments`.
+    - "and" and "&" separate only in a string with no comma, because a list
+      with commas holds consortia such as "Health and Aging Brain Study".
+    - "et al." is not a person.
+    """
+    text = " ".join((authors or "").split())
     if not text:
         return []
 
-    if " and " in text.lower():
-        parts = [p.strip() for p in re.split(r"\band\b", text, flags=re.IGNORECASE) if p.strip()]
-        return parts
-
     if ";" in text:
-        return [p.strip() for p in text.split(";") if p.strip()]
-
-    comma_parts = [p.strip() for p in text.split(",") if p.strip()]
-    # Legacy imports may have comma-joined "First Last, First Last, ...".
-    if len(comma_parts) >= 2 and all(" " in p for p in comma_parts):
-        return comma_parts
-
-    # Common BibTeX style: "Last, First[, Suffix], Last, First[, Suffix], ..."
-    if len(comma_parts) >= 4:
-        paired: list[str] = []
-        idx = 0
-        while idx + 1 < len(comma_parts):
-            last = comma_parts[idx]
-            first = comma_parts[idx + 1]
-            idx += 2
-            candidate = f"{first} {last}".strip()
-            if idx < len(comma_parts) and is_name_suffix(comma_parts[idx]):
-                candidate = f"{candidate} {comma_parts[idx]}".strip()
-                idx += 1
-            paired.append(candidate)
-        if idx == len(comma_parts) and len(paired) >= 2:
-            return paired
-
-    return [text]
+        names = [first_last_name(p) for p in text.split(";")]
+    elif "," in text:
+        segments = [re.sub(r"^(and|&)\s+", "", p.strip(), flags=re.IGNORECASE) for p in text.split(",")]
+        names = _pair_comma_segments([s for s in segments if s])
+    else:
+        names = [p.strip() for p in re.split(r"\s+(?:and|&)\s+", text, flags=re.IGNORECASE)]
+    return [n for n in names if n and n.lower().rstrip(".") != "et al"]
 
 
 def surname(name: str) -> str:

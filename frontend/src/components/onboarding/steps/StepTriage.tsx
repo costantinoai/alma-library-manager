@@ -73,7 +73,6 @@ export function StepTriage({ state, next, back }: StepContext) {
       setSaved(recId, true)
       setReactions((r) => ({ ...r, [recId]: null }))
     } else if (kind === 'like' || kind === 'love') {
-      setSaved(recId, true)
       setReactions((r) => ({ ...r, [recId]: kind }))
     } else if (kind === 'dislike') {
       setReactions((r) => ({ ...r, [recId]: 'dislike' }))

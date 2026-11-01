@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Cpu, Loader2, RefreshCw, Sparkles, XCircle } from 'lucide-react'
 
-import { api, type Publication } from '@/api/client'
+import { listAllSavedPapers } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -30,7 +30,7 @@ export function TagSuggestionsPanel() {
 
   const likesQuery = useQuery({
     queryKey: ['library-saved', 'tag-picker'],
-    queryFn: () => api.get<Publication[]>('/library/saved?limit=300'),
+    queryFn: listAllSavedPapers,
     retry: 1,
   })
 

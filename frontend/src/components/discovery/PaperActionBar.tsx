@@ -341,7 +341,7 @@ export function PaperActionBar({
           compact={compact}
           disabled={disabled}
           showLabel={showLabel}
-          title="Like — save to library with a positive signal"
+          title="Like — a positive signal; Save keeps the paper"
           onClick={click(reaction === 'like', 'rating', onLike)}
           active={reaction === 'like'}
         />
@@ -355,7 +355,7 @@ export function PaperActionBar({
           compact={compact}
           disabled={disabled}
           showLabel={showLabel}
-          title="Love — save to library with a strong positive signal"
+          title="Love — a strong positive signal; Save keeps the paper"
           onClick={click(reaction === 'love', 'rating', onLove)}
           // Heart fills only when actively loved; empty outline at rest.
           active={reaction === 'love'}

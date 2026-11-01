@@ -110,6 +110,39 @@ def standalone_paper_sql(alias: str = "p", *, leading_and: bool = False) -> str:
     return f" AND {clause}" if leading_and else clause
 
 
+#: The stars from which a rating is praise (`paper_actions.ACTION_RATINGS`: like, love).
+POSITIVE_RATING = 4
+
+
+def taste_paper_sql(alias: str = "p") -> str:
+    """SQL predicate for the papers that teach ALMa what you like.
+
+    A saved paper, or any paper you rated up without saving it. Like and Love
+    change no membership (D6), so a query keyed on ``status = 'library'`` alone
+    would make those buttons a lie. An untriaged capture has no rating, so the
+    Inbox still cannot move Discovery on its own (D13). A paper you hid or
+    removed stopped teaching whatever its rating says.
+    """
+    p = f"{alias}." if alias else ""
+    return (
+        f"({p}status = 'library' OR (COALESCE({p}rating, 0) >= {POSITIVE_RATING} "
+        f"AND COALESCE({p}status, '') NOT IN ('dismissed', 'removed')))"
+    )
+
+
+def unjudged_candidate_sql(alias: str = "p") -> str:
+    """SQL predicate for papers Discovery may still propose.
+
+    Not saved, not hidden, and not already rated up: a paper you Liked is a
+    verdict given, and proposing it again would have its own signal lift it.
+    """
+    p = f"{alias}." if alias else ""
+    return (
+        f"COALESCE({p}status, '') NOT IN ('library', 'dismissed', 'removed') "
+        f"AND COALESCE({p}rating, 0) < {POSITIVE_RATING}"
+    )
+
+
 def standalone_paper_sql_for_db(
     conn: sqlite3.Connection,
     alias: str = "p",

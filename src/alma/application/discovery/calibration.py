@@ -46,7 +46,7 @@ from typing import Any
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 from alma.core.scoring_math import interpolate_calibration
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, unjudged_candidate_sql
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ def build_scoring_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
         r["id"]
         for r in conn.execute(
             f"""SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
-               WHERE {standalone_paper_sql('p')} AND p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?""",
+               WHERE {standalone_paper_sql('p')} AND {unjudged_candidate_sql('p')} AND pe.model = ?""",
             (model,),
         )
     ]

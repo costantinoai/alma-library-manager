@@ -346,7 +346,6 @@ def mark_recommendation_action(
     rec_id: str,
     action: str,
     *,
-    rating: int | None = None,
     collection_ids: list[str] | None = None,
 ) -> dict | None:
     """Apply user action to recommendation row.
@@ -370,9 +369,8 @@ def mark_recommendation_action(
             (paper_id, rec_id),
         )
     previous = paper_actions.state_before_action(db, paper_id) if paper_id else None
-    current_rating = previous["rating"] if previous else 0
 
-    effective_rating = current_rating
+    effective_rating = previous["rating"] if previous else 0
     feedback_action: str | None = None
     event_id: str | None = None
     stamp_recommendation = action in {"save", "read", "dismiss", "seen"}
@@ -387,37 +385,23 @@ def mark_recommendation_action(
         # The engine keys on paper_id so it won't double the explicit
         # recommendation write below.
         nonlocal effective_rating, feedback_action, event_id
-        if action == "save":
-            effective_rating = max(current_rating, int(rating or 3), 3)
+        if action in {"save", "like", "love", "dislike"}:
+            # Membership + rating go through the ONE owner of the rating
+            # contract, so a Discovery Like saves exactly as a Feed Like does.
+            # The lens provenance stays on the event recorded below.
             if paper_id:
-                if collection_ids:
-                    library_app.save_paper_to_collections(
-                        db,
-                        paper_id,
-                        collection_ids,
-                        rating=effective_rating,
-                        added_from="discovery_save",
-                    )
-                else:
-                    library_app.add_to_library(
-                        db,
-                        paper_id,
-                        rating=effective_rating,
-                        added_from="discovery_save",
-                    )
-            feedback_action = "save"
+                applied = paper_actions.apply_valence(
+                    db,
+                    paper_id,
+                    "add" if action == "save" else action,
+                    added_from="discovery_save",
+                    collection_ids=collection_ids if action == "save" else None,
+                )
+                effective_rating = applied["rating"]
+            feedback_action = action
         elif action == "read":
             if paper_id:
                 paper_actions.set_reading_status(db, paper_id, "reading")
-        elif action in {"like", "love"}:
-            effective_rating = int(rating or (5 if action == "love" else 4))
-            effective_rating = max(1, min(5, effective_rating))
-            if paper_id:
-                db.execute(
-                    "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-                    (effective_rating, now, paper_id),
-                )
-            feedback_action = "love" if effective_rating >= 5 else "like"
         elif action == "dismiss":
             # RESOLUTION, not valence (D6 as amended 2026-07-26). Dismiss says
             # "not in this lens's suggestions for a while" and writes nothing
@@ -428,14 +412,6 @@ def mark_recommendation_action(
             #
             # Negative opinion is `dislike`. "Bad and gone" = dislike + dismiss.
             pass
-        elif action == "dislike":
-            effective_rating = 1
-            if paper_id:
-                db.execute(
-                    "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-                    (effective_rating, now, paper_id),
-                )
-            feedback_action = "dislike"
 
         if stamp_recommendation:
             if paper_id and action == "read":
@@ -461,11 +437,11 @@ def mark_recommendation_action(
                     (action, now, rec_id),
                 )
 
-        if paper_id and action == "save":
+        if paper_id and feedback_action:
             library_app.sync_surface_resolution(
                 db,
                 paper_id,
-                action="save",
+                action=feedback_action,
                 source_surface="discovery",
             )
         if paper_id and feedback_action:
@@ -504,12 +480,16 @@ def mark_recommendation_action(
     # and the retry, and this commits only when it is the standalone one.
     _persist()
     commit_unless_gated(db, label="discovery_rec_action")
+    # Read back: a Save stamps the card through the cross-surface reconcile.
+    stamped = db.execute(
+        "SELECT user_action, action_at FROM recommendations WHERE id = ?", (rec_id,)
+    ).fetchone()
     return {
         "id": rec_id,
         action: True,
         "paper_id": paper_id,
-        "user_action": action if stamp_recommendation else None,
-        "action_at": now if stamp_recommendation else None,
+        "user_action": stamped["user_action"] if stamped else None,
+        "action_at": stamped["action_at"] if stamped else None,
         "rating": effective_rating,
         "event_id": event_id,
     }

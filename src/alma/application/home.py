@@ -192,6 +192,7 @@ def _paper(row: dict[str, Any]) -> dict[str, Any]:
         "journal": row.get("journal"),
         "abstract": row.get("abstract"),
         "tldr": row.get("tldr"),
+        "rating": row.get("rating"),
         "url": row.get("url"),
         "doi": row.get("doi"),
         "status": row.get("status"),

@@ -314,6 +314,9 @@ def save_from_extension(
             candidate=candidate,
             action=action,
             added_from="browser_extension",
+            # The popup's button is Save: its Add/Like/Love picks the stars of
+            # that save, so here Like is not the rate-only verdict of a card.
+            promote=True,
             default_reading_status=_DESTINATION_READING_STATUS[destination],
             # An explicit connector save is a strong user signal — its
             # provenance should win even over a row first seen via feed

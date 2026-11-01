@@ -147,6 +147,17 @@ export const api = {
  * Response envelope returned by Activity-backed endpoints.
  * Matches `alma.api.scheduler.activity_envelope` on the backend.
  */
+/** Every saved paper, a page at a time: a picker must not stop at a page size. */
+export async function listAllSavedPapers(): Promise<Publication[]> {
+  const pageSize = 500
+  const papers: Publication[] = []
+  for (;;) {
+    const page = await api.get<Publication[]>(`/library/saved?limit=${pageSize}&offset=${papers.length}`)
+    papers.push(...page)
+    if (page.length < pageSize) return papers
+  }
+}
+
 export interface JobEnvelope {
   status: 'queued' | 'scheduled' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'already_running'
   job_id: string
@@ -4722,6 +4733,7 @@ export interface HomePaper {
   url?: string | null
   doi?: string | null
   status?: string | null
+  rating?: number | null
   /** Best available timestamp for reading-list ordering. */
   added_at?: string | null
   /** Capture provenance — Inbox items only, `null` for a paper that reached

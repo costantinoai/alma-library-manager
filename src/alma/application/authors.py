@@ -35,7 +35,7 @@ from alma.core.scoring_math import (
 from alma.core.scoring_math import (
     log_prevalence_weights,
 )
-from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
+from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql, taste_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
@@ -1282,7 +1282,7 @@ def _top_topics_for_library(db: sqlite3.Connection, *, limit: int = 12) -> dict[
             SELECT pt.term, COUNT(DISTINCT pt.paper_id) AS paper_count
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
-            WHERE p.status = 'library'
+            WHERE {taste_paper_sql('p')}
               AND {standalone_paper_sql('p')}
               AND pt.term IS NOT NULL
               AND TRIM(pt.term) <> ''
@@ -1311,7 +1311,7 @@ def _top_venues_for_library(db: sqlite3.Connection, *, limit: int = 8) -> dict[s
             f"""
             SELECT p.journal, COUNT(DISTINCT p.id) AS paper_count
             FROM papers p
-            WHERE p.status = 'library'
+            WHERE {taste_paper_sql('p')}
               AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal)), p.journal
@@ -1841,7 +1841,7 @@ def _shared_library_authors_for_candidate(
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
             JOIN publication_authors pa2 ON pa2.paper_id = pa.paper_id
-            WHERE p.status = 'library'
+            WHERE {taste_paper_sql('p')}
               AND {standalone_paper_sql('p')}
               AND lower(trim(pa.openalex_id)) = lower(trim(?))
               AND lower(trim(pa2.openalex_id)) <> lower(trim(pa.openalex_id))
@@ -2050,7 +2050,7 @@ def _cited_by_high_signal_candidates(
                 SELECT p.id AS library_paper_id,
                        COALESCE(p.rating, 0) AS citing_rating
                 FROM papers p
-                WHERE p.status = 'library' AND COALESCE(p.rating, 0) >= ?
+                WHERE {taste_paper_sql('p')} AND COALESCE(p.rating, 0) >= ?
                   AND {standalone_paper_sql('p')}
             ),
             cited_works AS (
@@ -2455,7 +2455,7 @@ def list_author_suggestions(
                           AND COALESCE(TRIM(pa2.openalex_id), '') <> ''
                     ), 0), 1) AS author_count
                 FROM papers p
-                WHERE p.status = 'library'
+                WHERE {taste_paper_sql('p')}
                   AND {standalone_paper_sql('p')}
             )
             SELECT
@@ -2666,7 +2666,7 @@ def list_author_suggestions(
                         SELECT DISTINCT pr.paper_id AS seed_paper_id, pr.referenced_work_id
                         FROM publication_references pr
                         JOIN papers p ON p.id = pr.paper_id
-                        WHERE p.status = 'library'
+                        WHERE {taste_paper_sql('p')}
                           AND {standalone_paper_sql('p')}
                     ),
                     referenced_local AS (
@@ -2703,7 +2703,7 @@ def list_author_suggestions(
                     SELECT pt.term
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
-                    WHERE p.status = 'library'
+                    WHERE {taste_paper_sql('p')}
                       AND {standalone_paper_sql('p')}
                       AND pt.term IS NOT NULL
                       AND TRIM(pt.term) <> ''
@@ -2714,7 +2714,7 @@ def list_author_suggestions(
                 library_venues AS (
                     SELECT lower(trim(p.journal)) AS journal_key
                     FROM papers p
-                    WHERE p.status = 'library'
+                    WHERE {taste_paper_sql('p')}
                       AND {standalone_paper_sql('p')}
                       AND COALESCE(TRIM(p.journal), '') <> ''
                     GROUP BY lower(trim(p.journal))

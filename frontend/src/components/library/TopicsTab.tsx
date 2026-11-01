@@ -38,6 +38,9 @@ interface TopicsTabProps {
   initialTopic?: string | null
 }
 
+// A topic card holds five buttons and a corpus has thousands of topics.
+const TOPIC_PAGE_SIZE = 100
+
 export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
   const [createOpen, setCreateOpen] = useState(false)
   const [aliasOpen, setAliasOpen] = useState(false)
@@ -62,6 +65,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
   const [groupSource, setGroupSource] = useState('')
   const [groupTarget, setGroupTarget] = useState('')
   const [deleteReplacement, setDeleteReplacement] = useState('')
+  const [visibleTopics, setVisibleTopics] = useState(TOPIC_PAGE_SIZE)
 
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -80,6 +84,15 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
 
   const topics = topicsQuery.data ?? []
   const canonicalNames = topics.map((t) => t.canonical)
+  // Topics whose canonical name or aliases hold the hierarchy filter (partial,
+  // case-insensitive); every topic when none is set.
+  const lowerFilter = hierarchyFilter?.toLowerCase() ?? ''
+  const filteredTopics = topics.filter(
+    (topic) =>
+      !lowerFilter ||
+      topic.canonical.toLowerCase().includes(lowerFilter) ||
+      topic.aliases.some((alias) => alias.toLowerCase().includes(lowerFilter)),
+  )
   const hierarchy = hierarchyQuery.data?.domains ?? []
 
   const toggleDomain = useCallback((domain: string) => {
@@ -200,8 +213,8 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <span>{topics.length} canonical topic{topics.length !== 1 ? 's' : ''}</span>
             <StatusBadge tone="outline" className="text-xs">
@@ -212,7 +225,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
             Topics are official source-backed concepts from OpenAlex and related scholarly metadata, with canonical names and aliases for cleanup.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             onClick={() => {
@@ -356,18 +369,7 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
               Showing topics related to: <span className="font-medium text-alma-700">{hierarchyFilter}</span>
             </div>
           )}
-          {topics
-            .filter((topic) => {
-              if (!hierarchyFilter) return true
-              // Show all topics if no filter, otherwise show only topics whose canonical name
-              // or aliases contain the filter string (case-insensitive partial match)
-              const lowerFilter = hierarchyFilter.toLowerCase()
-              return (
-                topic.canonical.toLowerCase().includes(lowerFilter) ||
-                topic.aliases.some((alias) => alias.toLowerCase().includes(lowerFilter))
-              )
-            })
-            .map((topic) => (
+          {filteredTopics.slice(0, visibleTopics).map((topic) => (
             <Card key={topic.canonical} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -447,6 +449,16 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
               </CardContent>
             </Card>
           ))}
+          {filteredTopics.length > visibleTopics && (
+            <div className="flex items-center justify-center gap-3 pt-2 text-sm text-slate-600">
+              <span>
+                Showing {visibleTopics.toLocaleString()} of {filteredTopics.length.toLocaleString()} topics
+              </span>
+              <Button variant="outline" size="sm" onClick={() => setVisibleTopics((n) => n + TOPIC_PAGE_SIZE)}>
+                Show more
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

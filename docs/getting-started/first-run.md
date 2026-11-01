@@ -45,8 +45,8 @@ It runs in this order:
    learn from.
 7. **React to your authors' best work** — the most-cited papers from the
    people you follow. Save the keepers and react to the rest. This
-   applies the same rating contract as Feed/Discovery (Save / Like /
-   Love save with progressively stronger positive signal; Dislike is a
+   applies the same rating contract as Feed/Discovery (Save keeps the
+   paper; Like and Love are stronger positive signals that do not save; Dislike is a
    quiet "not for me"; Dismiss hides it), so it teaches the ranker right
    away.
 8. **Keyword monitors** — phrases ALMa should watch for in new

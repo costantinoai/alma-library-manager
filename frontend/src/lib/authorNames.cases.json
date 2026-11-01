@@ -1,0 +1,19 @@
+[
+  { "stored": "", "names": [] },
+  { "stored": "Andrea I. Costantino", "names": ["Andrea I. Costantino"] },
+  { "stored": "Megan Willis, Andrea I. Costantino", "names": ["Megan Willis", "Andrea I. Costantino"] },
+  { "stored": "Testerson, Alice; Probe, Bob", "names": ["Alice Testerson", "Bob Probe"] },
+  { "stored": "Altan, Ege; Solla, Sara A; Miller, Lee E", "names": ["Ege Altan", "Sara A Solla", "Lee E Miller"] },
+  { "stored": "Jeffrey S. Bowers; Gaurav Malhotra; et al.", "names": ["Jeffrey S. Bowers", "Gaurav Malhotra"] },
+  { "stored": "King, Martin Luther, Jr.; Parks, Rosa", "names": ["Martin Luther King Jr.", "Rosa Parks"] },
+  { "stored": "Morgan, Michael Christian", "names": ["Michael Christian Morgan"] },
+  { "stored": "Awadid, Afef, Robert, Boris", "names": ["Afef Awadid", "Boris Robert"] },
+  { "stored": "Lorincz, Erika, Chris I. Baker, David I. Perrett", "names": ["Erika Lorincz", "Chris I. Baker", "David I. Perrett"] },
+  { "stored": "Smith, J. K., Doe, A.", "names": ["J. K. Smith", "A. Doe"] },
+  { "stored": "Giulia Esposito, André Mouraux, Eurohaptics", "names": ["Giulia Esposito", "André Mouraux", "Eurohaptics"] },
+  { "stored": "JT Hull, Daneault, Geneviève Albouy", "names": ["JT Hull", "Daneault", "Geneviève Albouy"] },
+  { "stored": "Health and Aging Brain Study, Monica Diaz", "names": ["Health and Aging Brain Study", "Monica Diaz"] },
+  { "stored": "Ada Lovelace and Alan Turing", "names": ["Ada Lovelace", "Alan Turing"] },
+  { "stored": "Ada Lovelace & Alan Turing", "names": ["Ada Lovelace", "Alan Turing"] },
+  { "stored": "Ada Lovelace, Alan Turing, and Grace Hopper", "names": ["Ada Lovelace", "Alan Turing", "Grace Hopper"] }
+]

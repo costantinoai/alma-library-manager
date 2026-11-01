@@ -378,7 +378,10 @@ def update_network_policy(payload: NetworkPolicyUpdate) -> NetworkPolicyResponse
 def export_data_snapshot():
     """Export a full JSON snapshot for backup/migration use.
 
-    Includes sanitized settings and core DB tables.
+    Includes sanitized settings and core DB tables. Activity history
+    (`operation_status`, `operation_logs`) stays out: it is a log of this
+    install, nothing reads it back, and it was a third of a 131 MB export. The
+    database snapshot behind `/backup` still holds it.
     """
     settings = _export_settings_sanitized(_read_settings())
 
@@ -393,8 +396,6 @@ def export_data_snapshot():
         "recommendations",
         "publication_topics",
         "publication_institutions",
-        "operation_status",
-        "operation_logs",
         *addons.data_tables(),
     ]
 

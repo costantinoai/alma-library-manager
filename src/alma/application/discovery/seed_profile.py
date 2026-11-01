@@ -19,7 +19,13 @@ from collections import Counter, defaultdict
 from typing import Any, NamedTuple
 
 from alma.core.scoring_math import clamp
-from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
+from alma.core.sql_helpers import (
+    IN_ID_LIST,
+    POSITIVE_RATING,
+    id_list,
+    standalone_paper_sql,
+    taste_paper_sql,
+)
 from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 
@@ -175,7 +181,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             f"""
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
-            WHERE status = 'library'
+            WHERE {taste_paper_sql("papers")}
               AND {standalone_paper_sql("papers")}
             ORDER BY COALESCE(rating, 0) DESC, COALESCE(cited_by_count, 0) DESC
             """
@@ -393,7 +399,7 @@ def load_library_preference_inputs(
     rows = db.execute(
         f"""SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
            FROM papers
-           WHERE status = 'library'
+           WHERE {taste_paper_sql("papers")}
              AND {standalone_paper_sql("papers")}
            ORDER BY COALESCE(added_at, '') DESC"""
     ).fetchall()
@@ -565,7 +571,7 @@ def _top_preferred_authors(
     library_author_share: dict[str, float] = {}
     try:
         size_row = db.execute(
-            f"SELECT COUNT(*) AS n FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
+            f"SELECT COUNT(*) AS n FROM papers WHERE {taste_paper_sql('papers')} AND {standalone_paper_sql('papers')}"
         ).fetchone()
         library_size = int(size_row["n"] or 0) if size_row else 0
         if library_size > 0:
@@ -574,7 +580,7 @@ def _top_preferred_authors(
                 SELECT pa.display_name AS display_name, COUNT(DISTINCT pa.paper_id) AS n
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
-                WHERE p.status = 'library'
+                WHERE {taste_paper_sql("p")}
                   AND COALESCE(TRIM(pa.display_name), '') != ''
                   AND {standalone_paper_sql("p")}
                 GROUP BY LOWER(TRIM(pa.display_name))
@@ -659,7 +665,8 @@ def _recent_positive_publications(
             SELECT p.id, p.title, p.abstract, p.authors, p.journal, p.year, r.action_at
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
-            WHERE r.user_action IN ('save', 'like')
+            WHERE (r.user_action IN ('save', 'like') OR COALESCE(p.rating, 0) >= {POSITIVE_RATING})
+              AND COALESCE(r.user_action, '') NOT IN ('dismiss', 'dislike')
               AND {standalone_paper_sql("p")}
             ORDER BY COALESCE(r.action_at, r.created_at, '') DESC
             LIMIT ?

@@ -24,6 +24,7 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
 import { ScoreBreakdownPanel } from '@/components/ScoreBreakdownPanel'
 import { SubPanel } from '@/components/ui/sub-panel'
+import { formatAuthorNames } from '@/lib/authorNames'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -31,7 +32,7 @@ interface SimilarResultsDialogProps {
   data: SimilarityResponse | null
   isLoading: boolean
   onRefresh: () => void
-  onLike: (item: SimilarityResultItem) => void
+  onSave: (item: SimilarityResultItem) => void
 }
 
 export function SimilarResultsDialog({
@@ -40,7 +41,7 @@ export function SimilarResultsDialog({
   data,
   isLoading,
   onRefresh,
-  onLike,
+  onSave,
 }: SimilarResultsDialogProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -91,7 +92,7 @@ export function SimilarResultsDialog({
                         {item.title}
                       </h4>
                       {item.authors && (
-                        <p className="mt-0.5 text-xs text-slate-500">{item.authors}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">{formatAuthorNames(item.authors)}</p>
                       )}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Progress
@@ -136,7 +137,7 @@ export function SimilarResultsDialog({
                         </a>
                       )}
                       <Button variant="muted" size="icon-sm"
-                        onClick={() => onLike(item)}
+                        onClick={() => onSave(item)}
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />

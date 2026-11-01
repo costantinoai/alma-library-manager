@@ -43,7 +43,7 @@ import numpy as np
 
 from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, unjudged_candidate_sql
 
 EVAL_VERSION = "2026.09-4"  # -4: the Signal Lab evidence block left with the feature (D25)
 MIN_PROFILE = 20  # profile papers needed before the cutoff
@@ -324,7 +324,7 @@ def evaluate_ranker_outcomes(conn: sqlite3.Connection) -> dict[str, Any]:
         str(r[0])
         for r in conn.execute(
             f"""SELECT p.id FROM papers p JOIN publication_embeddings pe ON pe.paper_id = p.id
-               WHERE {standalone_paper_sql('p')} AND p.status NOT IN ('library', 'dismissed', 'removed') AND pe.model = ?
+               WHERE {standalone_paper_sql('p')} AND {unjudged_candidate_sql('p')} AND pe.model = ?
                ORDER BY p.id""",
             (inputs.model,),
         )

@@ -566,8 +566,8 @@ def _run_topic_normalize(job_id: str, cap: int, target_paper_ids=None, params=No
 
 def _run_library_dedup(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Generic library dedup + stable-ID pass (paper canonicalization).
-    DESTRUCTIVE: merges duplicate author/paper rows and rewires FKs — manual
-    gate only, never auto."""
+    Merges duplicate author rows and soft-merges paper rows — manual gate only,
+    never auto."""
     from alma.library.deduplication import run_deduplication
 
     with _maintenance_conn() as conn:
@@ -1294,9 +1294,10 @@ REGISTRY: dict[str, MaintenanceTask] = {
             key="library_dedup",
             label="Dedup library (papers + authors)",
             description=(
-                "Generic stable-ID + duplicate collapse: merge papers/authors that "
-                "share a DOI / OpenAlex id / ORCID / (title, year), rewire every FK, "
-                "and assign stable UIDs. DESTRUCTIVE — manual gate, never auto."
+                "Generic stable-ID + duplicate collapse: papers sharing a DOI or (title, "
+                "year) become one, keeping every rating, save and Feed state on the "
+                "survivor; authors sharing an OpenAlex id or ORCID merge. Manual gate, "
+                "never auto."
             ),
             health_dimensions=(),
             candidate_path="",

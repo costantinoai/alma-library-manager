@@ -24,7 +24,11 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { JargonHint, MetricTile } from '@/components/shared'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/useToast'
-import { useBranchControls } from '@/hooks/useBranchControls'
+import {
+  BRANCH_RESOLUTION_DEFAULT,
+  BRANCH_TEMPERATURE_DEFAULT,
+  useBranchControls,
+} from '@/hooks/useBranchControls'
 import { BranchStructureStatus } from './BranchStructureStatus'
 import { BRANCH_COLORS } from '@/lib/palette'
 
@@ -47,9 +51,10 @@ const BRANCH_PRESETS = [
   { id: 'serendipity', label: 'Serendipity', description: 'Push lateral discovery and exploratory variants.', temperature: 0.7 },
 ] as const
 
-// Branch cluster-granularity default (mirrors the Insights graph "Cluster
-// detail"): 1.0 = engine default; >1 finer/more branches, <1 coarser/fewer.
-const BRANCH_RESOLUTION_DEFAULT = 1.0
+/** A slider left at its default on a lens that never set it stays unset. */
+function changedOrUnset(saved: number | null | undefined, draft: number, fallback: number) {
+  return saved == null && Math.abs(draft - fallback) < 0.001 ? undefined : draft
+}
 
 function normalizeControls(lens: Lens | null) {
   return {
@@ -111,8 +116,8 @@ export function BranchExplorerPanel({ lens, bare = false, enabled = true }: Bran
   const saveControlsMutation = useMutation({
     mutationFn: () =>
       branchControls.saveControls.mutateAsync({
-        temperature,
-        resolution,
+        temperature: changedOrUnset(lens?.branch_controls?.temperature, temperature, BRANCH_TEMPERATURE_DEFAULT),
+        resolution: changedOrUnset(lens?.branch_controls?.resolution, resolution, BRANCH_RESOLUTION_DEFAULT),
         pinned,
         muted,
         boosted,

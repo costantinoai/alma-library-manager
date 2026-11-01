@@ -26,6 +26,7 @@ from fastapi.responses import Response, StreamingResponse
 from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
+from alma.core.author_names import parse_author_names
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.sqlite_backup import online_sqlite_backup
 
@@ -114,6 +115,21 @@ def export_database():
     )
 
 
+def _bibtex_author_list(authors: str) -> str:
+    """The stored author string as BibTeX wants it: names joined by `` and ``.
+
+    A name holding the word "and" (a consortium) goes in braces, or BibTeX would
+    read it as two people. A list that ended in "et al." ends in ``others``.
+    """
+    names = [
+        f"{{{name}}}" if re.search(r"\sand\s", name, re.IGNORECASE) else name
+        for name in map(_bibtex_value, parse_author_names(authors))
+    ]
+    if re.search(r"\bet al\b", authors, re.IGNORECASE):
+        names.append("others")
+    return " and ".join(names)
+
+
 def _bibtex_value(value: object) -> str:
     """Return ``value`` safe inside ``field = {...}``.
 
@@ -198,8 +214,8 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
         for paper in papers:
             # Generate citation key (simple: first_author_year_title_word)
             authors_str = paper["authors"] or ""
-            first_author = authors_str.split(",")[0].strip() if authors_str else "Unknown"
-            first_author_lastname = first_author.split()[-1] if first_author else "Unknown"
+            author_names = parse_author_names(authors_str)
+            first_author_lastname = author_names[0].split()[-1] if author_names else "Unknown"
             year = paper["year"] or "0000"
             title_words = (paper["title"] or "").split()
             first_title_word = title_words[0].strip(".,;:!?()[]{}\"'") if title_words else "paper"
@@ -211,8 +227,8 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
             # Build BibTeX entry
             entry = f"@article{{{cite_key},\n"
             entry += f'  title = {{{_bibtex_value(paper["title"] or "Untitled")}}},\n'
-            if authors_str:
-                entry += f'  author = {{{_bibtex_value(authors_str)}}},\n'
+            if author_names:
+                entry += f'  author = {{{_bibtex_author_list(authors_str)}}},\n'
             if paper["year"]:
                 entry += f'  year = {{{_bibtex_value(paper["year"])}}},\n'
             if paper["journal"]:
