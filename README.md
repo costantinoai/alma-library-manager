@@ -4,8 +4,8 @@ A personal academic literature monitor that runs on your own machine.
 ALMa watches [OpenAlex](https://openalex.org/) and Semantic Scholar for
 new work from the authors and topics you follow, builds a local SQLite
 library of the papers you save, and uses SPECTER2 embeddings to surface
-related work you haven't seen yet. Nothing about your reading list
-leaves the box you put it on.
+related work you haven't seen yet. Your reading list stays on your own
+machine.
 
 > **Early preview.** Every surface works end-to-end, and first launch
 > walks you through setup with a guided tour. Expect rough edges at the
@@ -17,8 +17,8 @@ leaves the box you put it on.
 
 ## The surfaces
 
-ALMa is organised the way the work is: **Explore** what is new, **Manage**
-what you keep, **Control** how it runs.
+The sidebar has three groups: **Explore** what is new, **Manage** what you
+keep, **Control** how it runs.
 
 **Explore**
 
@@ -73,42 +73,39 @@ it.
 ## How ranking works
 
 One ranker scores every paper, on every page, so a score means the same
-thing wherever you see it. It weighs ten independent **families** —
+thing wherever you see it. It weighs ten independent **families**:
 semantic similarity, topic overlap, retrieval agreement, authors,
 terminology, recency, citation structure, your explicit feedback, your
-learned preferences, and venue — and a family with nothing to measure is
-dropped rather than counted as zero, so a paper with thin metadata is
-judged on what is actually known about it.
+learned preferences, and venue. A family with nothing to measure is
+dropped, not counted as zero, so a paper with thin metadata is judged on
+what is known about it.
 
-Every suggestion carries a full breakdown: click **Why** on any paper and
-the rows you see add up, exactly, to the score beside them — each one
-expandable to the raw measurements underneath. You can retune the weights
-in **Settings → Discovery weights**. See
+Click **Why** on any paper to see the breakdown. The rows add up to the
+score beside them, and each one expands to the raw measurements
+underneath. You can retune the weights in
+**Settings → Discovery weights**. See
 [scoring formulas](docs/reference/scoring.md) for the arithmetic.
 
 ## Why ALMa
 
-Staying current with the literature is really three jobs: **keeping** the
-papers that matter, **watching** for new work from the people and topics
-you care about, and **finding** adjacent papers you don't yet know
-exist. Those jobs usually live in separate tools — Zotero for the first,
-Connected Papers or Semantic Scholar for the third, scattered journal
-alerts for the second — and that separation is where most of the friction
-comes from.
+ALMa covers three jobs: **keeping** the papers that matter, **watching**
+for new work from the people and topics you care about, and **finding**
+adjacent papers you don't yet know exist. These usually live in separate
+tools: Zotero for the first, scattered journal alerts for the second,
+Connected Papers or Semantic Scholar for the third.
 
-The jobs also need each other. A recommender ranks better when it knows
-which papers you kept and which you dismissed. A watcher is more useful
-when it can up-weight authors that keep showing up in your saved work.
-ALMa puts all three on one local database so they inform each other —
-the library trains discovery, the monitors fill the feed, and discovery
-suggests what to monitor next.
+They also need each other. A recommender ranks better when it knows which
+papers you kept and which you disliked, and a watcher can up-weight
+authors that keep showing up in your saved work. ALMa puts all three on
+one local database: the library trains discovery, the monitors fill the
+feed, and discovery suggests what to monitor next.
 
 Read the full [vision & philosophy](docs/vision.md) for the design
 principles and the lifecycle model the whole UI is built around.
 
 ## Browser connector (Firefox)
 
-Save the paper open in your browser straight into ALMa — like the Zotero
+Save the paper open in your browser straight into ALMa, like the Zotero
 connector. Grab the signed `.xpi` from the
 [latest release](https://github.com/costantinoai/alma-library-manager/releases/latest)
 and install it via `about:addons` → **Install Add-on From File…**. Full
@@ -135,8 +132,8 @@ irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/set
 ```
 
 Then open <http://localhost:8000>. To update later, re-run the same
-command — the installer pulls the new image first, keeps your settings in
-`~/alma-docker/.env`, and your data lives in named volumes, so nothing is lost.
+command. The installer pulls the new image first and keeps your settings in
+`~/alma-docker/.env`. Your data lives in named volumes, so nothing is lost.
 Upgrades migrate the database forward only, so
 [take a backup](docs/operations/backups.md) first.
 
@@ -148,7 +145,7 @@ Upgrades migrate the database forward only, so
 > [never expose it to the open internet](docs/operations/deployment.md).
 > For a
 > [bare-metal Python install](docs/getting-started/installation.md)
-> (development only — not recommended for everyday use), see the
+> (development only, not recommended for everyday use), see the
 > installation docs.
 
 ## First use
@@ -161,16 +158,16 @@ through the same three steps:
    [openalex.org/settings/api](https://openalex.org/settings/api)).
    Paste it into **Settings → Connections** and save. A
    [Semantic Scholar key](https://www.semanticscholar.org/product/api)
-   is recommended too — it keeps Discovery off the shared rate-limit
-   pool.
+   is recommended too, because it keeps Discovery off the shared
+   rate-limit pool.
 2. **Follow a few authors.** Open **Authors** and add three to five
    researchers by name (an ORCID or OpenAlex ID also works). Each follow
-   kicks off a background backfill of their recent papers — watch it run
-   under **Activity**.
+   kicks off a background backfill of their recent papers, which you can
+   watch under **Activity**.
 3. **Wait one refresh.** Once the backfills finish, the **Feed** surfaces
    new papers and **Discovery** recommends related work. Save, like, or
-   dismiss as you go — every action teaches the ranker what you care
-   about, and **Home** shows you what arrived while you were away.
+   dislike as you go to teach the ranker what you care about. **Home**
+   shows you what arrived while you were away.
 
 Optional: import a BibTeX file or Zotero library from **Library →
 Imports** for much better Discovery seed material from day one.
@@ -179,8 +176,8 @@ Full walkthrough: [first-run checklist](docs/getting-started/first-run.md).
 
 ## Configuration
 
-Most settings — Discovery weights, monitor terms, AI provider — live in the
-database and are tuned from the **Settings** page. The `.env` file holds
+Most settings, such as Discovery weights, monitor terms and AI provider,
+live in the database and are tuned from the **Settings** page. The `.env` file holds
 secrets (API keys, Slack tokens) and a few deployment knobs. The full
 reference is in
 [docs/reference/configuration.md](docs/reference/configuration.md), and
@@ -188,7 +185,7 @@ reference is in
 
 ## License
 
-Licensed under [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) —
+Licensed under [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/),
 a source-available license. Personal use, academic research, hobby
 projects, and use by nonprofits or educational institutions are all
 permitted; commercial use is not. Attribution (the `LICENSE` file and
