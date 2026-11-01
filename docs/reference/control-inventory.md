@@ -326,6 +326,8 @@ Names and purposes only. They live in the secret store and can also come from th
 | `ALMA_SECRETS_PATH` | `src/alma/core/secrets.py` | `secrets.json` by the data | `_resolve_store_path` | Path of the secret store. | no measure | env | live |
 | `ALMA_DB_MIGRATION` | `src/alma/core/storage_migration.py` | unset | `_decide` | `migrate` or `fresh` for a legacy database when nobody can answer the prompt. | no measure | env | live |
 | `ALMA_CONFIG_MIGRATION` | `src/alma/core/storage_migration.py` | unset | `_decide` | The same for legacy config. | no measure | env | live |
+| `ALMA_REPAIR_OWNER_ID` | `src/alma/services/merge_repairs.py` | unset | `_owner_needs_repair` | One-run repair: the owner id that survives. Unset skips the owner repair. | no measure | env | live |
+| `ALMA_REPAIR_OWNER_MERGED_ID` | `src/alma/services/merge_repairs.py` | unset | `_owner_needs_repair` | One-run repair: the owner's other id, merged away. | no measure | env | live |
 
 ### Network, access and scheduling
 
