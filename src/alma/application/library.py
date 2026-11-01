@@ -758,7 +758,7 @@ def inbox_preview(db: sqlite3.Connection, *, limit: int = 10) -> dict:
     rows = db.execute(
         f"""
         SELECT p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
-               p.url, p.doi, p.status,
+               p.url, p.doi, p.status, p.rating,
                COALESCE(p.added_at, p.created_at) AS added_at,
                {capture_select}
         FROM papers p
@@ -913,11 +913,8 @@ def dismiss_paper(db: sqlite3.Connection, paper_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def sink_disliked_paper(db: sqlite3.Connection, paper_id: str) -> bool:
-    """Store a paper in the dislike sink without removing it from Feed history.
-
-    Feed dislikes are signals only: keep membership untouched and set rating 1.
-    """
+def rate_paper(db: sqlite3.Connection, paper_id: str, rating: int) -> bool:
+    """Set the rating an opinion names and leave membership untouched (D6)."""
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
@@ -929,7 +926,7 @@ def sink_disliked_paper(db: sqlite3.Connection, paper_id: str) -> bool:
             updated_at = ?
         WHERE id = ?
         """,
-        (DISLIKE_RATING, now, paper_id),
+        (rating, now, paper_id),
     )
     return cursor.rowcount > 0
 
@@ -1077,10 +1074,6 @@ def sync_surface_resolution(
     recommendation_action = None if scoped_dismiss else {
         "add": "save",
         "save": "save",
-        # Generic Like/Love currently promote the paper to Library; `save`
-        # keeps the latest Discovery card visible while recording that fact.
-        "like": "save",
-        "love": "save",
         "dismiss": "dismiss",
     }.get(action)
     feed_status = None if scoped_dismiss else {
@@ -1128,12 +1121,13 @@ def sync_surface_resolution(
                 """,
                 (recommendation_action, now, paper_id),
             )
-        if replaces_dislike:
-            db.execute(
-                "UPDATE recommendations SET user_action = ?, action_at = ? "
-                "WHERE paper_id = ? AND user_action = 'dislike'",
-                (recommendation_action, now, paper_id),
-            )
+    if replaces_dislike and _table_exists(db, "recommendations"):
+        # A Like leaves the card unresolved, a Save stamps it.
+        db.execute(
+            "UPDATE recommendations SET user_action = ?, action_at = ? "
+            "WHERE paper_id = ? AND user_action = 'dislike'",
+            (recommendation_action, now if recommendation_action else None, paper_id),
+        )
 
 
 # Which feedback actions belong to which toggle dimension. Used so an undo

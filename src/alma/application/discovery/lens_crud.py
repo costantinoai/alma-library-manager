@@ -480,7 +480,7 @@ def mark_recommendation_action(
     # and the retry, and this commits only when it is the standalone one.
     _persist()
     commit_unless_gated(db, label="discovery_rec_action")
-    # Read back: a Like stamps the card too, through the cross-surface reconcile.
+    # Read back: a Save stamps the card through the cross-surface reconcile.
     stamped = db.execute(
         "SELECT user_action, action_at FROM recommendations WHERE id = ?", (rec_id,)
     ).fetchone()

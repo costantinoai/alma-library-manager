@@ -1050,8 +1050,12 @@ def save_online_search_result(
     override_added_from: bool = False,
     collection_name: str | None = None,
     collection_ids: list[str] | None = None,
+    promote: bool = False,
 ) -> dict:
     """Resolve a work + apply the shared add/like/love/dislike contract.
+
+    Like and Love rate only, unless ``promote`` says the action IS a save with
+    those stars (the browser extension's Save button).
 
     Canonical ingest path for the unified Find-and-add surface (Discovery
     + Import Online tab). Maps ``action`` to the ``3/4/5/1`` rating used
@@ -1167,7 +1171,8 @@ def save_online_search_result(
         current_rating = previous["rating"]
         eff = target_rating
 
-        if action in {"add", "like", "love"}:
+        coll = (collection_name or "").strip()
+        if action == "add" or (promote and action in {"like", "love"}):
             # Monotonic rating upgrade — never downgrade a saved paper.
             eff = max(current_rating, target_rating)
             library_app.add_to_library(
@@ -1185,10 +1190,17 @@ def save_online_search_result(
             # row + membership commit atomically with the library save. Uses the
             # application-layer collection helpers (plain INSERTs, no commit) so
             # this path doesn't reach across into importer internals.
-            coll = (collection_name or "").strip()
             if coll:
                 collection_id = library_app.find_or_create_collection(db, coll)
                 library_app.insert_collection_item(db, collection_id, pid)
+        elif action in {"like", "love"}:
+            # Rate only (D6): a verdict from search is not a save. A request
+            # for the reading list is still honoured, reading is its own axis.
+            eff = paper_actions.apply_valence(db, pid, action, added_from=added_from)["rating"]
+            if default_reading_status and not db.execute(
+                "SELECT reading_status FROM papers WHERE id = ?", (pid,)
+            ).fetchone()["reading_status"]:
+                paper_actions.set_reading_status(db, pid, default_reading_status)
         else:  # dislike
             if current_status == library_app.LIBRARY_STATUS:
                 # Respect an existing save: don't auto-remove from library just
