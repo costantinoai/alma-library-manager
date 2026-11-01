@@ -2868,6 +2868,12 @@ def remove_author(
 ):
     from alma.application.author_lifecycle import soft_remove_author
 
+    followed = db.execute(
+        "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1", (author_id,)
+    ).fetchone()
+    if followed is not None:
+        raise HTTPException(status_code=409, detail="This author is followed. Unfollow them first.")
+
     try:
         # soft_remove_author is caller-owns-transaction; wrap it in one
         # serialized, atomic unit (D3 soft-remove: status='removed'). It is

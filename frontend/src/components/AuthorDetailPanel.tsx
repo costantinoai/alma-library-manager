@@ -441,7 +441,7 @@ export function AuthorDetailPanel({
       onDeleted?.(resolved)
       onOpenChange(false)
     },
-    onError: () => errorToast('Error', 'Failed to remove author.'),
+    onError: (err) => errorToast('Could not remove the author', getApiErrorMessage(err)),
   })
 
   // Add / Like / Love on an author's paper: the ONE paper-action route, so it

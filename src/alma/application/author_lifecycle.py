@@ -235,7 +235,9 @@ def soft_remove_author(
 
     Idempotent: re-running on an already-removed row updates nothing
     and writes no log. Returns True when a transition actually
-    happened, False otherwise.
+    happened, False otherwise. A followed author is never removed: follow
+    wins, so unfollow first. This is the one writer every removal path goes
+    through, which is what keeps the two states from disagreeing.
 
     `reason` is a short human-readable phrase explaining the trigger
     (e.g. "library paper X removed", "unfollow", "manual sweep") —
@@ -252,6 +254,10 @@ def soft_remove_author(
     if row is None:
         return False
     if (row["status"] or "active") == "removed":
+        return False
+    if db.execute(
+        "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1", (aid,),
+    ).fetchone() is not None:
         return False
 
     now = utcnow().isoformat()

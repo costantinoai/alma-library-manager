@@ -1943,6 +1943,20 @@ def _m_0052_drop_noop_discovery_settings(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM materialized_views WHERE view_key = 'discovery:channel_yield'")
 
 
+def _m_0053_followed_authors_are_active(conn: sqlite3.Connection) -> None:
+    """Restore every followed author left soft-removed: follow wins.
+
+    Following never cleared ``status='removed'``, and a removal never checked
+    the follow, so an author could be both. Such a row was still refreshed by
+    its Feed monitor while it dropped out of the active author views.
+    """
+    if _table_exists(conn, "authors") and _table_exists(conn, "followed_authors"):
+        conn.execute(
+            "UPDATE authors SET status = 'active' WHERE status = 'removed' "
+            "AND id IN (SELECT author_id FROM followed_authors)"
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1996,6 +2010,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (50, "legacy_branch_controls", _m_0050_legacy_branch_controls),
     (51, "periodic_feed_refresh_window", _m_0051_periodic_feed_refresh_window),
     (52, "drop_noop_discovery_settings", _m_0052_drop_noop_discovery_settings),
+    (53, "followed_authors_are_active", _m_0053_followed_authors_are_active),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

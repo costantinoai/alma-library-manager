@@ -70,6 +70,10 @@ needs-attention fixes share the same primitive and backend endpoint.
 On confirm, publications are reassigned to the primary OpenAlex ID, the
 alternate OpenAlex ID is recorded in `author_alt_identifiers`, the alt
 row is soft-removed, and the primary author centroid is invalidated.
+
+Follow wins over removal. Following a soft-removed author restores them, and a
+followed author cannot be soft-removed: `POST /authors/{id}/remove` answers 409
+until they are unfollowed.
 If hard identifiers still conflict, `author_merge_conflicts` keeps a
 follow-up row for needs-attention.
 

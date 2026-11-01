@@ -144,7 +144,7 @@ def resolve_canonical_author_id(
 
 
 def ensure_followed_author_contract(db: sqlite3.Connection) -> int:
-    """Backfill ``followed_authors`` so every row references a real ``authors.id``."""
+    """Backfill ``followed_authors`` so every row references a real, active author."""
     if not _table_exists(db, "followed_authors"):
         return 0
 
@@ -193,6 +193,13 @@ def ensure_followed_author_contract(db: sqlite3.Connection) -> int:
                 (canonical_id, raw_author_id),
             )
         changed += 1
+
+    # A follow can reach a soft-removed row by rekeying above or by an author
+    # merge. Follow wins, so such a row is active.
+    changed += db.execute(
+        "UPDATE authors SET status = 'active' WHERE status = 'removed' "
+        "AND id IN (SELECT author_id FROM followed_authors)"
+    ).rowcount
 
     return changed
 
@@ -251,7 +258,11 @@ def apply_follow_state(
             """,
             (author_id, now),
         )
-        db.execute("UPDATE authors SET author_type = 'followed' WHERE id = ?", (author_id,))
+        # Follow wins over an earlier soft-removal: a followed author is active.
+        db.execute(
+            "UPDATE authors SET author_type = 'followed', status = 'active' WHERE id = ?",
+            (author_id,),
+        )
     else:
         db.execute("DELETE FROM followed_authors WHERE author_id = ?", (author_id,))
         db.execute("UPDATE authors SET author_type = 'background' WHERE id = ?", (author_id,))
