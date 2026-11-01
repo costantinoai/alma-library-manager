@@ -606,7 +606,6 @@ export function PaperCard({
                       const authorName = run.name
                       const normalized = normalizeAuthorName(authorName)
                       const isFollowed = followedAuthorNames?.has(normalized) ?? false
-                      const isPending = followAuthorPendingName === normalized
                       const canWrapHover = authorNames.length > 0
                       const label = (
                         <span
@@ -621,12 +620,7 @@ export function PaperCard({
                       return (
                         <span key={`${paper.id}-${authorName}-${run.index}`} className="group/author">
                           {canWrapHover ? (
-                            <AuthorHoverCard
-                              name={authorName}
-                              isFollowed={isFollowed}
-                              followPending={isPending}
-                              onFollow={canFollowAuthors ? () => onFollowAuthor?.(authorName, paper.id) : undefined}
-                            >
+                            <AuthorHoverCard name={authorName} paperId={paper.id || undefined}>
                               {label}
                             </AuthorHoverCard>
                           ) : (

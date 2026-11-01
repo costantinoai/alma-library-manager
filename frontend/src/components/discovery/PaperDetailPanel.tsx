@@ -399,7 +399,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   .filter(Boolean)
                   .map((name, idx, arr) => (
                     <span key={`${name}-${idx}`} className="inline-flex items-center">
-                      <AuthorHoverCard name={name}>
+                      <AuthorHoverCard name={name} paperId={p.id}>
                         <a
                           href={buildHashRoute('authors', { q: name })}
                           className="rounded-control px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
