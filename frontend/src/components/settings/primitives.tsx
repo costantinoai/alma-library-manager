@@ -499,7 +499,7 @@ export function PackageChip({
     <StatusBadge tone={tone} size="default" title={title} className={cn('gap-1.5', className)}>
       {icon}
       <span className="font-mono">{label}</span>
-      {suffix ? <span className="text-2xs opacity-80">{suffix}</span> : null}
+      {suffix ? <span className="text-2xs font-normal">{suffix}</span> : null}
     </StatusBadge>
   )
 }
