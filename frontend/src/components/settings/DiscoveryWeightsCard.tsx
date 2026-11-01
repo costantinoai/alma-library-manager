@@ -397,7 +397,7 @@ export function DiscoveryWeightsCard() {
             <SettingsSection title="Source Control">
               <div className="grid gap-3">
                 {SOURCE_LABELS.map((source) => (
-                  <div key={source.key} className="rounded-card border border-divider p-3">
+                  <div key={source.key} className="rounded-card border border-divider bg-control-well p-3">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <p className="text-sm font-medium text-alma-800">{source.label}</p>
@@ -684,7 +684,7 @@ function WeightSlider({
   const safeValue = Number.isFinite(value) ? value : 0
   const pct = (v: number | undefined) => (v == null ? null : `${Math.round(v * 100)}%`)
   return (
-    <div className="space-y-1.5 rounded-card border border-divider p-3">
+    <div className="space-y-1.5 rounded-card border border-divider bg-control-well p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-800">

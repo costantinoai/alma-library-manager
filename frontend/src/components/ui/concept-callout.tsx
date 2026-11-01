@@ -6,6 +6,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
+import { nextLevel, SURFACE_BG, useSurfaceLevel } from '@/components/ui/surface-level'
 
 /**
  * ConceptCallout — an in-page explainer for a complex feature or
@@ -66,11 +67,13 @@ export function ConceptCallout({
   flush = false,
   className,
 }: ConceptCalloutProps) {
+  const level = nextLevel(useSurfaceLevel())
   return (
     <Collapsible defaultOpen={defaultOpen} className={cn('w-full', className)}>
       <div
         className={cn(
-          'bg-surface-2',
+          // A fold welded to an intro is a band; a free one sits one step on.
+          flush ? 'bg-surface-2' : SURFACE_BG[level],
           flush
             ? 'border-t border-divider'
             : 'rounded-card border border-divider',

@@ -14,7 +14,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { ImportDialog } from '@/components/ImportDialog'
-import { AsyncButton, SettingsCard, StatTile } from '@/components/settings/primitives'
+import { AsyncButton, SettingsCard, StatTile, SettingsActionRow, SettingsSection } from '@/components/settings/primitives'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -240,62 +240,94 @@ export function LibraryManagementCard() {
               </div>
             </div>
 
-            {/* Primary maintenance actions */}
-            <div className="flex flex-wrap gap-2">
+            <SettingsSection title="Papers">
+              <SettingsActionRow
+                title="Import papers"
+                description="Add papers to your Library from BibTeX or Zotero."
+                action={
               <AsyncButton
                 variant="outline"
+                size="sm"
                 icon={<UploadCloud className="h-4 w-4" />}
                 onClick={() => setImportDialogOpen(true)}
               >
                 Import Papers (BibTeX/Zotero)
               </AsyncButton>
+                }
+              />
+              <SettingsActionRow
+                title="Find duplicates"
+                description="Merges duplicate authors and papers and refreshes stable ids, as a job in Activity."
+                action={
               <AsyncButton
                 variant="outline"
-                icon={<Archive className="h-4 w-4" />}
-                pending={backupMutation.isPending}
-                onClick={() => backupMutation.mutate()}
-              >
-                Create Backup
-              </AsyncButton>
-              <AsyncButton
-                variant="outline"
+                size="sm"
                 icon={<Database className="h-4 w-4" />}
                 pending={deduplicateMutation.isPending}
                 onClick={() => deduplicateMutation.mutate()}
               >
                 Deduplicate Database
               </AsyncButton>
+                }
+              />
+            </SettingsSection>
+
+            <SettingsSection
+              title="Paper groups"
+              description="Repair keeps published versions together and removes child state. Ambiguous matches stay separate. Both actions report in Activity."
+            >
+              <SettingsActionRow
+                title="Preview"
+                description="Reports what a repair would change, touching nothing."
+                action={
               <AsyncButton
                 variant="outline"
+                size="sm"
                 icon={<Eye className="h-4 w-4" />}
                 pending={previewGroupsMutation.isPending}
                 onClick={() => previewGroupsMutation.mutate()}
               >
                 Preview Paper Groups
               </AsyncButton>
+                }
+              />
+              <SettingsActionRow
+                title="Reconcile"
+                description="Runs the repair."
+                action={
               <AsyncButton
                 variant="outline"
+                size="sm"
                 icon={<Layers className="h-4 w-4" />}
                 pending={reconcileGroupsMutation.isPending}
                 onClick={() => reconcileGroupsMutation.mutate()}
               >
                 Reconcile Paper Groups
               </AsyncButton>
-            </div>
+                }
+              />
+            </SettingsSection>
 
-            <p className="text-sm text-slate-500">
-              Paper-group repair keeps published versions together and removes child state.
-              Ambiguous matches stay separate. Preview reports what a repair would change
-              without touching anything; both it and the repair report in Activity.
-            </p>
-
-            {/* Existing backups */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-slate-800">Existing Backups</h4>
-              <p className="text-sm text-slate-500">
-                To restore one, stop ALMa first: a running ALMa cannot replace its own
-                database. The Backups guide in the docs has the steps.
-              </p>
+            <SettingsSection
+              title="Backups"
+              description="To restore one, stop ALMa first: a running ALMa cannot replace its own database. The Backups guide in the docs has the steps."
+            >
+              <SettingsActionRow
+                title="New backup"
+                description="Saves a copy of the database to the list below."
+                action={
+              <AsyncButton
+                variant="outline"
+                size="sm"
+                icon={<Archive className="h-4 w-4" />}
+                pending={backupMutation.isPending}
+                onClick={() => backupMutation.mutate()}
+              >
+                Create Backup
+              </AsyncButton>
+                }
+              />
+              <div className="border-t border-divider pt-3">
               {libraryInfoQuery.data.backups.length === 0 ? (
                 <p className="text-sm text-slate-500">No backups yet.</p>
               ) : (
@@ -303,7 +335,7 @@ export function LibraryManagementCard() {
                   {libraryInfoQuery.data.backups.map((backup: BackupInfo) => (
                     <div
                       key={backup.name}
-                      className="flex items-center justify-between rounded-card border border-divider px-3 py-2"
+                      className="flex items-center justify-between rounded-card bg-control-well border border-divider px-3 py-2"
                     >
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium text-slate-700">{backup.name}</p>
@@ -339,7 +371,8 @@ export function LibraryManagementCard() {
                   ))}
                 </div>
               )}
-            </div>
+              </div>
+            </SettingsSection>
 
             {/* Danger zone — collapsed by default so the destructive
                 actions don't dominate the card. Two side-by-side rows
@@ -349,21 +382,20 @@ export function LibraryManagementCard() {
               tone="danger"
               title="Danger Zone"
               icon={ShieldAlert}
-              contentClassName="space-y-3"
+              contentClassName="space-y-1"
             >
-                <p className="text-xs text-critical-700">
+                <p className="pb-2 text-xs leading-relaxed text-slate-700">
                   Destructive actions here are queued in Activity so you can track the job, but they
                   rewrite the database in place. Take a fresh backup first if you're not sure.
                 </p>
-                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="min-w-48 flex-1 text-xs text-critical-700">
-                    <span className="font-medium">Reset all feedback learning.</span> Wipes feedback events,
-                    lens weights, author dismissals, author centroids, suggestion cache, and
-                    recommendation actions. Library, followed authors, lenses, and corpus stay.
-                  </p>
-                  <ConfirmAction
+                <SettingsActionRow
+                  tone="danger"
+                  title="Reset all feedback learning"
+                  description="Wipes feedback events, lens weights, author dismissals, author centroids, suggestion cache, and recommendation actions. Library, followed authors, lenses, and corpus stay."
+                  action={
+                  <><ConfirmAction
                     trigger={
-                      <Button variant="destructive" disabled={resetFeedbackLearningMutation.isPending}>
+                      <Button variant="destructive" size="sm" disabled={resetFeedbackLearningMutation.isPending}>
                         {resetFeedbackLearningMutation.isPending ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
@@ -377,17 +409,17 @@ export function LibraryManagementCard() {
                     confirmLabel="Reset feedback"
                     destructive
                     onConfirm={() => resetFeedbackLearningMutation.mutate()}
-                  />
-                </div>
-                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="min-w-48 flex-1 text-xs text-critical-700">
-                    <span className="font-medium">Delete saved embeddings.</span> Wipes cached
-                    paper vectors, author centroids, and per-paper vector fetch markers only.
-                    Papers, Library state, feedback, tags, collections, monitors, and sources stay.
-                  </p>
-                  <ConfirmAction
+                  /></>
+                  }
+                />
+                <SettingsActionRow
+                  tone="danger"
+                  title="Delete saved embeddings"
+                  description="Wipes cached paper vectors, author centroids, and per-paper vector fetch markers only. Papers, Library state, feedback, tags, collections, monitors, and sources stay."
+                  action={
+                  <><ConfirmAction
                     trigger={
-                      <Button variant="destructive" disabled={resetEmbeddingsMutation.isPending}>
+                      <Button variant="destructive" size="sm" disabled={resetEmbeddingsMutation.isPending}>
                         {resetEmbeddingsMutation.isPending ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
@@ -401,17 +433,17 @@ export function LibraryManagementCard() {
                     confirmLabel="Delete embeddings"
                     destructive
                     onConfirm={() => resetEmbeddingsMutation.mutate()}
-                  />
-                </div>
-                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="min-w-48 flex-1 text-xs text-critical-700">
-                    <span className="font-medium">Reset publications database.</span> Deletes every
-                    paper, author, and feed item. Saved collections, tags, and topics are kept.
-                    Backups are not touched. Optional: also reset learned feedback in the same step.
-                  </p>
-                  <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                  /></>
+                  }
+                />
+                <SettingsActionRow
+                  tone="danger"
+                  title="Reset publications database"
+                  description="Deletes every paper, author, and feed item. Saved collections, tags, and topics are kept. Backups are not touched. Optional: also reset learned feedback in the same step."
+                  action={
+                  <><AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive" disabled={resetMutation.isPending}>
+                  <Button variant="destructive" size="sm" disabled={resetMutation.isPending}>
                     {resetMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
@@ -462,8 +494,9 @@ export function LibraryManagementCard() {
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
-              </AlertDialog>
-                </div>
+              </AlertDialog></>
+                  }
+                />
               
             </DisclosurePanel>
           </>

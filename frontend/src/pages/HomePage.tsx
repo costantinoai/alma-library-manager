@@ -487,12 +487,13 @@ export function HomePage() {
             section divider). Rendered `bare` because this band supplies the
             paper.
 
-            The band is one rung LIGHTER than the blotter it sits on (`Surface`,
-            relational — never a hand-picked cream) and bleeds to the card's
+            The band is a sheet, LIGHTER than the blotter it sits on (level 3, since
+            level 2 is a well) and bleeds to the card's
             edges, so the masthead is visibly a nameplate rather than the first
             of the blotter's sections. The gold rule closes it from inside, so
             the lighter paper stops exactly where the trim does. */}
         <Surface
+          level={3}
           bordered={false}
           className="-mx-5 -mt-5 rounded-t-card px-5 pt-5 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6"
         >
