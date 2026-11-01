@@ -31,6 +31,8 @@ import {
   setOnboardingProfile,
   type OwnerProfile,
 } from '@/api/client'
+import { ConnectionLine, FieldStatus } from '@/components/settings/ConnectionStatus'
+import { useCheckAfterSave } from '@/components/settings/useConnections'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -66,7 +68,7 @@ export function UserProfileCard() {
     mutationFn: (value: string) => setOnboardingProfile(value),
     onSuccess: async (_result, value) => {
       setNameTouched(false)
-      await invalidateQueries(queryClient, ['user-profile'], ['home-brief'])
+      await invalidateQueries(queryClient, ['user-profile'], ['home-brief'], ['connections'])
       toast(
         value.trim()
           ? { title: 'Name saved', description: 'ALMa will greet you by it.' }
@@ -89,6 +91,7 @@ export function UserProfileCard() {
     onError: (error) => errorToast('Could not find that profile', getApiErrorMessage(error)),
   })
 
+  const checkAfterSave = useCheckAfterSave()
   const claim = useMutation({
     mutationFn: (found: OwnerProfile) =>
       ingestOwner({ openalex_id: found.openalex_id, name: found.name ?? undefined }),
@@ -100,7 +103,9 @@ export function UserProfileCard() {
         ['user-profile'],
         ['authors'],
         ['library-followed-authors'],
+        ['connections'],
       )
+      void checkAfterSave(['owner'])
       toast({
         title: 'That’s you',
         description: 'Your papers are being backfilled in the background.',
@@ -117,6 +122,7 @@ export function UserProfileCard() {
         ['user-profile'],
         ['authors'],
         ['library-followed-authors'],
+        ['connections'],
       )
       toast({
         title: 'No longer marked as you',
@@ -167,6 +173,7 @@ export function UserProfileCard() {
           <p className="text-xs text-slate-500">
             Local only — used for the greeting on Home. It is never sent anywhere.
           </p>
+          <FieldStatus id="name" field="name" dirty={nameDirty} />
         </div>
 
         {/* ── Owner identity ───────────────────────────────────────────── */}
@@ -216,12 +223,8 @@ export function UserProfileCard() {
                 Not me
               </AsyncButton>
             </SubPanel>
-          ) : (
-            <p className="text-sm text-slate-500">
-              Not set. Claiming your profile follows your own work, backfills your
-              papers, and lets ALMa tell your output apart from everyone else&apos;s.
-            </p>
-          )}
+          ) : null}
+          <ConnectionLine id="owner" />
 
           {/* Claim / replace. Shown even when set: correcting a wrong claim is
               exactly the case that used to need an onboarding reset. */}

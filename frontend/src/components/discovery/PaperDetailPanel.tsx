@@ -395,7 +395,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               <div className="flex flex-wrap gap-x-1 gap-y-0.5 text-slate-700">
                 {parseAuthorNames(p.authors).map((name, idx, arr) => (
                     <span key={`${name}-${idx}`} className="inline-flex items-center">
-                      <AuthorHoverCard name={name}>
+                      <AuthorHoverCard name={name} paperId={p.id}>
                         <a
                           href={buildHashRoute('authors', { q: name })}
                           className="rounded-control px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
@@ -522,7 +522,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   {p.abstract.length > 200 ? p.abstract.slice(1) : p.abstract}
                 </Card>
               ) : (
-                <div className="rounded-card border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
+                <div className="text-xs italic text-slate-400">
                   No abstract available for this paper.
                 </div>
               )}
@@ -988,7 +988,7 @@ function RelatedWorksSection({
             <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
           </div>
         ) : works.length === 0 ? (
-          <div className="rounded-card border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
+          <div className="text-xs italic text-slate-400">
             {emptyCopy}
           </div>
         ) : (

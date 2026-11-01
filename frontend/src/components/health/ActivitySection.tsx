@@ -74,7 +74,7 @@ function RefreshEntryRow({
   detail: string
 }) {
   return (
-    <div className="rounded-card border border-divider p-3 text-sm">
+    <div className="text-sm">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium text-alma-800">{status}</span>
         <span className="text-xs text-slate-500">{formatTimestamp(finishedAt)}</span>
@@ -265,7 +265,7 @@ export function ActivitySection({ sections }: { sections: InsightsDiagnosticsSec
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">
                   {cards.map((card) => (
-                    <div key={card.id} className="rounded-card border border-divider p-4">
+                    <div key={card.id} className="">
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium text-alma-800">{card.label}</p>

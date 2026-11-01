@@ -3,10 +3,10 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
 
-import { api, type Settings, type SemanticScholarStatus } from '@/api/client'
-import { AsyncButton, ConnectionPill, SettingsSection } from '@/components/settings/primitives'
+import { api, type Settings } from '@/api/client'
+import { ConnectionBadge, ConnectionLine, FieldStatus } from '@/components/settings/ConnectionStatus'
+import { SettingsSection } from '@/components/settings/primitives'
 import {
   Form,
   FormControl,
@@ -17,7 +17,6 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { SubPanel } from '@/components/ui/sub-panel'
 
 const s2Schema = z.object({
   semantic_scholar_api_key: z.string(),
@@ -39,9 +38,8 @@ interface SemanticScholarSectionProps {
  * 429s frequently, which stalls the Discovery graph lane.
  *
  * The key field writes into the shared `formData`; persistence happens via
- * the Connections section's "Save connection settings" footer. After a save
- * the SettingsPage invalidates `semantic-scholar-status`, so the connection
- * dot re-probes and reflects the new key. The backend masks the stored value
+ * the Connections section's "Save connection settings" footer, and that save
+ * checks the key if it changed. The backend masks the stored value
  * (`****<suffix>`) on GET and skips re-rotation when the masked echo is
  * submitted unchanged.
  */
@@ -72,23 +70,20 @@ export function SemanticScholarSection({
     return () => sub.unsubscribe()
   }, [form, onFormDataChange])
 
-  // On-demand validity probe (one cheap S2 call). No polling — the 1 req/s
-  // budget is precious — so it refetches only on mount, manual refresh, or
-  // when the SettingsPage invalidates the key after a save.
-  const statusQuery = useQuery({
-    queryKey: ['semantic-scholar-status'],
-    queryFn: () => api.get<SemanticScholarStatus>('/settings/semantic-scholar/status'),
-    retry: 1,
-    refetchOnWindowFocus: false,
-    staleTime: 60_000,
+  // What the server last sent (masked), so "typed but not saved" is a fact.
+  const savedQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<Settings>('/settings'),
+    enabled: false,
   })
+  const savedKey = savedQuery.data?.semantic_scholar_api_key ?? ''
 
   return (
     <SettingsSection
       title={
         <span className="inline-flex items-center gap-2">
           Semantic Scholar
-          <ConnectionPill valid={statusQuery.data?.valid} loading={statusQuery.isLoading} />
+          <ConnectionBadge id="semantic_scholar" />
         </span>
       }
       description="Secondary source for SPECTER2 vectors and paper/author recommendations."
@@ -96,25 +91,7 @@ export function SemanticScholarSection({
     >
       <Form {...form}>
         <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
-          {/* The green/red pill lives in the section header (visible collapsed);
-              this box reveals the specific probe reason + the Re-check action,
-              which can't sit in the header (it's a button inside the trigger). */}
-          <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-2 px-3 py-2">
-            <span className="text-xs text-slate-500">
-              {statusQuery.data?.detail ?? 'Checking connection…'}
-            </span>
-            <AsyncButton
-              type="button"
-              variant="outline"
-              size="sm"
-              icon={<RefreshCw className="h-3 w-3" />}
-              pending={statusQuery.isFetching}
-              onClick={() => statusQuery.refetch()}
-              className="h-7 px-2 text-xs"
-            >
-              Re-check
-            </AsyncButton>
-          </SubPanel>
+          <ConnectionLine id="semantic_scholar" />
 
           <FormField
             control={form.control}
@@ -139,6 +116,11 @@ export function SemanticScholarSection({
                   </a>
                   . Saved with the connection settings below, then re-checked.
                 </FormDescription>
+                <FieldStatus
+                  id="semantic_scholar"
+                  field="semantic_scholar_api_key"
+                  dirty={field.value !== savedKey}
+                />
                 <FormMessage />
               </FormItem>
             )}

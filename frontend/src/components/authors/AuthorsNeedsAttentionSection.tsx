@@ -41,6 +41,7 @@ import { DeleteAuthorButton } from '@/components/authors/DeleteAuthorButton'
 import { resolvedBadgeSpec } from '@/components/authors/authorResolvedBadgeSpec'
 import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
 import { RowButton } from '@/components/ui/row-button'
@@ -223,6 +224,7 @@ function NeedsAttentionRow({
           {row.reason_detail ? (
             <p className="mt-1 break-words text-xs text-slate-500">{row.reason_detail}</p>
           ) : null}
+          <p className="mt-1 break-words text-xs text-slate-600">{row.suggested_action.hint}</p>
           {row.updated_at ? (
             <p className="mt-1 text-2xs text-slate-400">Updated {formatTimestamp(row.updated_at)}</p>
           ) : null}
@@ -248,9 +250,9 @@ function NeedsAttentionRow({
         </div>
       </div>
       {/* Warning bubble row, lower-right — same pattern as the Library
-          needs-attention list. The action's hint stays on hover. */}
+          needs-attention list. */}
       <div className="mt-2 flex flex-wrap justify-end gap-1.5">
-        <StatusBadge tone="warning" size="sm" title={row.suggested_action.hint}>
+        <StatusBadge tone="warning" size="sm">
           {row.reason}
         </StatusBadge>
       </div>
@@ -295,7 +297,9 @@ export function ReviewProfilesDialog({
     mutationFn: () => discoverAuthorAliases(row!.author_id),
     onSuccess: (data) => {
       setOrcidDiscovery(data)
-      if (!data.orcid) {
+      if (data.lookup_error) {
+        errorToast('ORCID lookup failed', `${data.lookup_error}. Nothing was checked, try again.`)
+      } else if (!data.orcid) {
         toast({
           title: 'No ORCID on OpenAlex',
           description:
@@ -313,7 +317,7 @@ export function ReviewProfilesDialog({
         })
       }
     },
-    onError: (err) => errorToast('ORCID lookup failed', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'ORCID lookup failed', err),
   })
 
   // An alias with no local row merges by OpenAlex id: an alias of the row's
@@ -324,8 +328,9 @@ export function ReviewProfilesDialog({
     (a) => !localAltIds.has(a.openalex_id.toLowerCase()),
   )
   const absorbable = orcidExtras.filter((alt) => !alt.local_author_id && !alt.rejected)
+  // A rejected local row joins too: the merge dialog is where the verdict can be undone.
   const localExtraIds = orcidExtras.flatMap((alt) =>
-    alt.local_author_id && !alt.rejected ? [alt.local_author_id] : [],
+    alt.local_author_id ? [alt.local_author_id] : [],
   )
   const [confirmingAbsorb, setConfirmingAbsorb] = useState(false)
   const absorbExtrasMutation = useMutation({
@@ -347,7 +352,7 @@ export function ReviewProfilesDialog({
     },
     onError: (err) => {
       setConfirmingAbsorb(false)
-      errorToast('Could not merge the ORCID profiles', getApiErrorMessage(err))
+      authorActionFailed(queryClient, 'Could not merge the ORCID profiles', err)
     },
   })
   const primaryAuthor: Author | null = row
@@ -609,13 +614,13 @@ export function AddIdentifierDialog({
         saved.openalex_id
           ? { title: 'Identifiers saved', description: row?.author_name ?? '' }
           : {
-              title: 'Saved, still no OpenAlex ID',
-              description: `${row?.author_name ?? 'This author'} stays on the list until an OpenAlex ID is found: papers are fetched with it.`,
+              title: 'Saved, looking up the OpenAlex ID',
+              description: `${row?.author_name ?? 'This author'} stays on the list until the lookup finds one: papers are fetched with it.`,
             },
       )
       onClose()
     },
-    onError: (err) => errorToast('Could not save identifiers', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not save identifiers', err),
   })
 
   // Terminal "give up gracefully": some authors are genuinely not in any index
@@ -634,10 +639,13 @@ export function AddIdentifierDialog({
       toast({ title: 'Refresh queued', description: 'Auto-resolution is re-running.' })
       onClose()
     },
-    onError: (err) => errorToast('Could not queue the refresh', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not queue the refresh', err),
   })
 
   const busy = mutation.isPending || acceptMutation.isPending || retryMutation.isPending
+  // The first thing to try: a failed run may just need another go, while a
+  // search that found nothing needs a person to look at the candidates.
+  const retryFirst = row?.status === 'error'
   const canSubmit = !!(orcid.trim() || openalexInput.trim() || scholar.trim())
 
   return (
@@ -657,12 +665,22 @@ export function AddIdentifierDialog({
             <span className="text-xs text-slate-500">Try these first</span>
             <div className="flex flex-wrap justify-end gap-2">
               {onSearchCandidates && row ? (
-                <Button variant="outline" size="sm" onClick={() => onSearchCandidates(row)} disabled={busy}>
+                <Button
+                  variant={retryFirst ? 'outline' : 'default'}
+                  size="sm"
+                  onClick={() => onSearchCandidates(row)}
+                  disabled={busy}
+                >
                   <Search className="mr-1 h-3.5 w-3.5" />
                   Search candidates
                 </Button>
               ) : null}
-              <Button variant="outline" size="sm" onClick={() => retryMutation.mutate()} disabled={busy}>
+              <Button
+                variant={retryFirst ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => retryMutation.mutate()}
+                disabled={busy}
+              >
                 {retryMutation.isPending ? (
                   <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 ) : (
@@ -823,7 +841,7 @@ export function AffiliationPickerDialog({
       toast({ title: 'Affiliation set', description: res.affiliation ?? row?.author_name ?? '' })
       onClose()
     },
-    onError: (err) => errorToast('Could not set the affiliation', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not set the affiliation', err),
   })
 
   const options = useMemo(() => groupAffiliationOptions(data?.items ?? []), [data])
@@ -977,8 +995,9 @@ export function ResolveConflictDialog({
       })
       onClose()
     },
-    onError: (err) => errorToast('Could not resolve the conflict', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not resolve the conflict', err),
   })
+  const altOwner = row?.conflict_alt_owner
   const picking = mutation.isPending ? mutation.variables : null
   const spinner = <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
 
@@ -1007,6 +1026,12 @@ export function ResolveConflictDialog({
             openalexId={row?.alt_openalex_id ?? ''}
             displayName={row?.conflict_alt_value ?? ''}
           />
+          {altOwner ? (
+            <p className="text-xs text-slate-500">
+              {altOwner} already holds the alt value, so it cannot go on this author. Merge the two
+              authors from either one&apos;s panel, or keep the primary&apos;s value.
+            </p>
+          ) : null}
         </div>
         <DialogFooter className="flex-col gap-2 sm:flex-row">
           <Button
@@ -1021,7 +1046,8 @@ export function ResolveConflictDialog({
           <Button
             variant="outline"
             onClick={() => mutation.mutate('alt')}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || !!altOwner}
+            title={altOwner ? `${altOwner} already holds this value.` : undefined}
           >
             {picking === 'alt' && spinner}
             Use alt's value

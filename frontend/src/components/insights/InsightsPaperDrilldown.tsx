@@ -114,7 +114,7 @@ export function InsightsPaperDrilldown({ target, onClose }: InsightsPaperDrilldo
 
 function PaperRow({ paper }: { paper: Publication }) {
   return (
-    <div className="rounded-card border border-divider p-3">
+    <div className="">
       <p className="text-sm font-medium text-alma-800">{paper.title}</p>
       <p className="mt-1 text-xs text-slate-500">
         {paper.authors ? truncate(paper.authors, 90) : 'Unknown authors'}

@@ -92,7 +92,7 @@ Settings-scoped helpers the rest of the app also re-uses:
 * `SettingsNumberField` — spinner-input.
 * `KeyValueRow`, `PackageChip`.
 
-For paper rows: `PaperCard` (compact / default / detailed variants),
+For paper rows: `PaperCard` (compact / default / detailed sizes; Feed, Discovery and Library each have one list view, no density control),
 `PaperActionBar` (the rating verbs), `StatusBadge` (the only badge
 path).
 
@@ -101,11 +101,10 @@ path).
 `components/ui/data-table/DataTable.tsx` is the shared table
 primitive. Built on `@tanstack/react-table` + `@dnd-kit`. Used by:
 
-* Library Saved compact view.
+* Library Saved.
 * Settings → Corpus Explorer modal.
 * Insights Reports tab.
 * Authors followed-list table.
-* Feed compact view.
 
 Features: column visibility toggle, drag-reorder, resize, sort,
 optional row selection, persistence to `localStorage` per
@@ -166,8 +165,11 @@ landing page. Rules of thumb:
   and quiet fills are the paper's own warm shade (`control-quiet`,
   `control-track`), banners are opaque state paper (`bg-state-*`). Navy
   washes are not used on paper: blue over cream turns grey-brown.
-* Nesting alternates above the card: level 2 is a well, level 3 a sheet in
-  that well. `SettingsSection` provides its level, so children climb.
+* One box per level. Inside a card, `Card`, `SubPanel`, `DisclosurePanel`,
+  `ConceptCallout` and `MetricTile` drop their chrome, and a section is a
+  heading and at most one hairline. A surface stays where it does work: an
+  input, a popover, a dialog, a clickable object in a list, a danger zone.
+  Pass `level` or `interactive` to keep a box on purpose.
 * Light only. Gold is trim, never a button. Activity's cool ladder is the
   one documented exception to the surface rule.
 * Tabular numerics where it matters (counts, scores, citations).

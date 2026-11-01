@@ -3,17 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
   ChevronRight,
-  ExternalLink,
   FileText,
   GitBranch,
   Inbox,
-  LayoutGrid,
   LayoutList,
   Loader2,
   RefreshCw,
   Eye,
   EyeOff,
-  Rows3,
   Search,
   Settings2,
   Tag,
@@ -43,12 +40,9 @@ import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { IdentityChip, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
-import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { DisclosurePanel } from '@/components/ui/disclosure-panel'
 import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
-import { DataTable } from '@/components/ui/data-table'
-import type { ColumnDef } from '@tanstack/react-table'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -59,7 +53,6 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
-import { formatAuthorNames } from '@/lib/authorNames'
 import { describeJobLaunch } from '@/lib/activity'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
@@ -67,7 +60,7 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { cn, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { cn, formatMonitorTypeLabel, formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -81,7 +74,6 @@ const FeedAutoRefreshCard = lazy(() => import('@/components/settings/FeedAutoRef
 
 type FeedFilter = 'all' | 'new'
 type FeedSort = 'chronological' | 'relevance'
-type FeedViewMode = 'normal' | 'extended' | 'compact'
 
 /**
  * Feed is chronological and truthful: `feed_items.status` holds whichever
@@ -288,7 +280,6 @@ export function FeedPage() {
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [viewMode, setViewMode] = useState<FeedViewMode>('normal')
   // U-12: grows by a page on "Load more" so the inbox isn't hard-capped at 60.
   const [feedLimit, setFeedLimit] = useState(60)
   // Persisted view preference: a stable choice about what the inbox shows, not
@@ -939,16 +930,6 @@ export function FeedPage() {
           onToggle: toggleSelectAllVisible,
           show: items.length > 0,
         }}
-        view={{
-          value: viewMode,
-          ariaLabel: 'Feed view mode',
-          onChange: (value) => setViewMode(value as FeedViewMode),
-          options: [
-            { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact table view' },
-            { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
-            { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
-          ],
-        }}
       />
 
       {/* ── Bulk workflow bar ──────────────────────────────────────────────
@@ -1025,16 +1006,6 @@ export function FeedPage() {
             }
           />
         )
-      ) : viewMode === 'compact' ? (
-        <FeedCompactTable
-          items={items}
-          selectedIds={selectedIds}
-          onSelectionChange={setSelectedIds}
-          onOpenDetails={(p) => {
-            setSelectedPaper(p)
-            setDetailOpen(true)
-          }}
-        />
       ) : (
         <RevealList className="space-y-3">
           {feedRenderList.map((entry, i) => {
@@ -1172,8 +1143,7 @@ export function FeedPage() {
                   savedClickRemoves
                   isQueued={isQueued}
                   trailingHeader={isNew ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
-                  forceShowAbstract={viewMode === 'extended'}
-                  showActionLabels={viewMode === 'extended'}
+                  compactActions
                   // Discover-similar pivot — sends the user to Discovery
                   // with this paper as the seed. Hidden when the row has
                   // no resolved paper_id (Feed entries occasionally arrive
@@ -1266,155 +1236,5 @@ export function FeedPage() {
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
     </div>
-  )
-}
-
-interface FeedCompactTableProps {
-  items: FeedInboxItem[]
-  selectedIds: Set<string>
-  onSelectionChange: (next: Set<string>) => void
-  onOpenDetails: (paper: Publication | null) => void
-}
-
-interface FeedCompactRow {
-  id: string
-  item: FeedInboxItem
-  paper: Publication | null
-  title: string
-  authors: string
-  publishedSortKey: string
-  publishedLabel: string
-  journal: string
-  source: string
-  isNew: boolean
-}
-
-/**
- * Compact table view wired to the shared `<DataTable>` primitive. All column
- * visibility / reorder / resize / sort state persists per-user via
- * ``storageKey="feed.compact"``. Selection + row highlight are provided by
- * DataTable itself via the `selectedIds` / `onSelectionChange` props.
- */
-function FeedCompactTable({
-  items,
-  selectedIds,
-  onSelectionChange,
-  onOpenDetails,
-}: FeedCompactTableProps) {
-  const rows: FeedCompactRow[] = useMemo(
-    () =>
-      items.map((item) => {
-        const paper = toPublication(item)
-        const matchedAuthors = item.matched_authors ?? []
-        const matchedMonitors = item.matched_monitors ?? []
-        const source =
-          matchedAuthors.length > 0
-            ? matchedAuthors.slice(0, 2).join(', ') + (matchedAuthors.length > 2 ? ` +${matchedAuthors.length - 2}` : '')
-            : matchedMonitors.length > 0
-              ? (matchedMonitors[0].monitor_label?.trim() || formatMonitorTypeLabel(matchedMonitors[0].monitor_type))
-              : item.author_name || ''
-        return {
-          id: item.id,
-          item,
-          paper,
-          title: paper?.title || item.paper_id,
-          authors: paper?.authors ?? '',
-          publishedSortKey: paper?.publication_date ?? (paper?.year != null ? String(paper.year) : ''),
-          publishedLabel: formatPublicationDate(paper),
-          journal: paper?.journal ?? '',
-          source,
-          isNew: Boolean(item.is_new),
-        }
-      }),
-    [items],
-  )
-
-  const columns: ColumnDef<FeedCompactRow>[] = useMemo(
-    () => [
-      {
-        id: 'title',
-        accessorKey: 'title',
-        header: 'Title',
-        size: 420,
-        // Custom flex layout (optional New badge + title + trailing external
-        // link) — manage truncation here via `min-w-0` on the name span.
-        meta: { cellOverflow: 'none' },
-        cell: ({ row }) => (
-          <div className="flex min-w-0 items-center gap-1.5">
-            {row.original.isNew && <StatusBadge tone="positive">New</StatusBadge>}
-            <span className="min-w-0 flex-1 truncate font-medium text-alma-800" title={row.original.title}>
-              {row.original.title}
-            </span>
-            <PaperPdfLink paperId={row.original.paper?.id} className="shrink-0 text-slate-400 hover:text-alma-600" />
-            {row.original.paper?.url && (
-              <a
-                href={row.original.paper.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 text-slate-400 hover:text-alma-600"
-                title="Open source"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-          </div>
-        ),
-      },
-      {
-        id: 'authors',
-        accessorKey: 'authors',
-        header: 'Authors',
-        size: 200,
-        cell: ({ row }) => (
-          <span className="text-slate-600" title={row.original.authors}>
-            {formatAuthorNames(row.original.authors)}
-          </span>
-        ),
-      },
-      {
-        id: 'published',
-        accessorKey: 'publishedSortKey',
-        header: 'Published',
-        size: 120,
-        sortingFn: 'alphanumeric',
-        cell: ({ row }) => <span className="whitespace-nowrap text-slate-600">{row.original.publishedLabel}</span>,
-      },
-      {
-        id: 'journal',
-        accessorKey: 'journal',
-        header: 'Journal',
-        size: 180,
-        cell: ({ row }) => (
-          <span className="text-slate-500" title={row.original.journal}>
-            {row.original.journal}
-          </span>
-        ),
-      },
-      {
-        id: 'source',
-        accessorKey: 'source',
-        header: 'Source',
-        size: 200,
-        cell: ({ row }) => (
-          <span className="text-slate-500" title={row.original.source}>
-            {row.original.source}
-          </span>
-        ),
-      },
-    ],
-    [],
-  )
-
-  return (
-    <DataTable
-      data={rows}
-      columns={columns}
-      storageKey="feed.compact"
-      getRowId={(row) => row.id}
-      onRowClick={(row) => onOpenDetails(row.paper)}
-      selectedIds={selectedIds}
-      onSelectionChange={onSelectionChange}
-    />
   )
 }

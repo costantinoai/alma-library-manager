@@ -44,7 +44,7 @@ import {
   queueAuthorHistoryBackfill,
   refreshFeedMonitor,
   repairAuthor,
-  testPluginConnection,
+  checkConnection,
   updateDiscoverySettings,
 } from '@/api/client'
 import { type InsightsDiagnosticsSections } from '@/components/insights/useDiagnosticsSections'
@@ -495,13 +495,13 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     onError: () => errorToast('Source enable failed'),
   })
   const testPluginMutation = useMutation({
-    mutationFn: (pluginName: string) => testPluginConnection(pluginName),
+    mutationFn: (pluginName: string) => checkConnection(pluginName),
     onSuccess: (result, pluginName) => {
-      invalidateOperational()
+      invalidateOperational(['connections'])
       toast({
-        title: `Plugin test ${result.ok ? 'passed' : 'failed'}`,
+        title: result.ok === null ? 'Could not check' : `Plugin test ${result.ok ? 'passed' : 'failed'}`,
         description: result.message || pluginName,
-        variant: result.ok ? 'default' : 'destructive',
+        variant: result.ok === false ? 'destructive' : 'default',
       })
     },
     onError: () => errorToast('Plugin test failed'),
@@ -537,7 +537,7 @@ export function SystemStatusCards({ sections, onRefresh }: { sections: InsightsD
     backfill_author: (t) => (t.author_id ? queueAuthorHistoryBackfill(t.author_id) : null),
     refresh_monitor: (t) => (t.monitor_id ? refreshFeedMonitor(t.monitor_id) : null),
     enable_source: (t) => (t.source ? enableSource(t.source) : null),
-    test_plugin: (t) => (t.plugin_name ? testPluginConnection(t.plugin_name) : null),
+    test_plugin: (t) => (t.plugin_name ? checkConnection(t.plugin_name) : null),
     compute_stale_embeddings: () => api.post('/ai/compute-embeddings?scope=stale'),
     clear_similarity_cache: () => clearDiscoverySimilarityCache(),
   }

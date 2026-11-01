@@ -144,6 +144,9 @@ def corpus_backfill_rows(
     a non-fresh state (actionable + informational), shaped as the
     diagnostics ``corpus_health`` entries.
 
+    An author with no OpenAlex id is left out: no backfill can run for them, and
+    their identity row owns the fix.
+
     Background-publication counts are pre-computed in one grouped query —
     the per-author helper would otherwise re-issue the same heavy 3-way
     JOIN per author (an N+1 that ran the diagnostics tab into ~60 s on a
@@ -164,15 +167,17 @@ def corpus_backfill_rows(
         SELECT a.id, a.name, COALESCE(a.works_count, 0) AS works_count
         FROM authors a
         JOIN followed_authors fa ON fa.author_id = a.id
+        WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
         ORDER BY a.name
         """
     ).fetchall()
 
     bg_counts: dict[str, int] = {}
+    library_counts: dict[str, int] = {}
     if followed_rows:
         bg_rows = db.execute(
             """
-            SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
+            SELECT a.id AS author_id, p.status = 'library' AS in_library, COUNT(DISTINCT p.id) AS c
             FROM authors a
             JOIN followed_authors fa ON fa.author_id = a.id
             JOIN publication_authors pa
@@ -180,11 +185,12 @@ def corpus_backfill_rows(
              AND a.openalex_id IS NOT NULL
              AND TRIM(a.openalex_id) <> ''
             JOIN papers p ON p.id = pa.paper_id
-            WHERE p.status <> 'library'
-            GROUP BY a.id
+            GROUP BY a.id, in_library
             """
         ).fetchall()
-        bg_counts = {str(r["author_id"]): int(r["c"] or 0) for r in bg_rows}
+        for r in bg_rows:
+            target = library_counts if r["in_library"] else bg_counts
+            target[str(r["author_id"])] = int(r["c"] or 0)
 
     for row in followed_rows:
         author_id = str(row["id"] or "").strip()
@@ -195,6 +201,7 @@ def corpus_backfill_rows(
             author_id,
             works_count=int(row["works_count"] or 0),
             background_publications=bg_counts.get(author_id, 0),
+            library_publications=library_counts.get(author_id, 0),
         )
         state = str(status.get("state") or "unknown")
         if state in counts:
@@ -305,6 +312,21 @@ def _split_profile_clusters(db: sqlite3.Connection) -> list[list[sqlite3.Row]]:
     return open_clusters
 
 
+def _orcid_owner(db: sqlite3.Connection, field: str, value: str, author_id: str) -> str | None:
+    """The active author already holding a conflict's ORCID: "use alt" cannot win then."""
+    if field != "orcid":
+        return None
+    row = db.execute(
+        """
+        SELECT name FROM authors
+        WHERE lower(trim(orcid)) = lower(?) AND id != ? AND COALESCE(status, 'active') != 'removed'
+        LIMIT 1
+        """,
+        (value, author_id),
+    ).fetchone()
+    return str(row["name"]) if row else None
+
+
 _CONFLICT_FIELD_LABELS = {
     "orcid": "ORCID",
     "scholar_id": "Google Scholar ID",
@@ -356,7 +378,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                     "hint": (
                         "Same person split across multiple OpenAlex IDs. "
                         "Merge them to keep one follow and one corpus, or "
-                        "say they are not the same person: that is permanent."
+                        "say they are not the same person, which you can undo from the Merge dialog."
                     ),
                 },
                 "updated_at": str(
@@ -372,7 +394,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
         """Friendly user-facing summary."""
         if status == "resolved_manual":
             # Followed, manual identifiers saved, and none of them an OpenAlex id.
-            return "Identifiers saved, but no OpenAlex ID yet, so no papers can be fetched."
+            return "Identifiers saved, but no OpenAlex ID found yet, so no papers can be fetched."
         if raw_reason:
             return raw_reason
         if status == "error":
@@ -402,7 +424,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
         bits: list[str] = []
         if method and method != "none":
             bits.append(f"Last step: {method}")
-        if confidence > 0.0:
+        if confidence > 0.0 and status != "error":
             bits.append(f"confidence {confidence:.2f}")
         if status == "needs_manual_review" and confidence > 0.0:
             bits.append("too low to auto-pick")
@@ -425,7 +447,8 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                 "author_id": str(row["author_id"]),
                 "author_name": str(row["author_name"] or row["author_id"]),
                 "openalex_id": openalex_id or None,
-                "status": status or "unresolved",
+                # A manual save with no OpenAlex id is not resolved, whatever it stored.
+                "status": "unresolved" if status in ("", "resolved_manual") else status,
                 "method": method or None,
                 "confidence": confidence,
                 "reason_code": action["code"],
@@ -471,6 +494,7 @@ def _people_rows(db: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
                 "conflict_field": field,
                 "conflict_primary_value": primary_val,
                 "conflict_alt_value": alt_val,
+                "conflict_alt_owner": _orcid_owner(db, field, alt_val, str(c.get("primary_author_id") or "")),
                 "alt_openalex_id": c.get("alt_openalex_id"),
                 "suggested_action": {
                     "code": "resolve_conflict",

@@ -25,8 +25,6 @@ import { Input } from '@/components/ui/input'
 import { RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { MetricTile, type MetricTileTone } from '@/components/shared/MetricTile'
-import { SurfaceProvider } from '@/components/ui/surface'
-import { nextLevel, SURFACE_BG, SURFACE_BORDER, useSurfaceLevel } from '@/components/ui/surface-level'
 import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
@@ -215,8 +213,7 @@ export function ToggleRow({
   return (
     <label
       className={cn(
-        'flex items-center justify-between gap-3 rounded-card border px-3 py-2',
-        isWarning ? 'border-warning-500/40 bg-state-warning' : 'border-divider bg-control-well',
+        'flex items-center justify-between gap-3 py-2',
         disabled && 'opacity-70',
         className,
       )}
@@ -533,25 +530,15 @@ export function SettingsSection({
   className,
   children,
 }: SettingsSectionProps) {
-  // Climbs the ladder from its real host and tells its children, so a panel
-  // inside this section lands one step on instead of at this section's level.
-  const level = nextLevel(useSurfaceLevel())
   return (
-    <SurfaceProvider level={level}>
     <Collapsible
       defaultOpen={defaultOpen}
-      className={cn(
-        'rounded-card border shadow-paper-inset',
-        SURFACE_BG[level],
-        SURFACE_BORDER[level],
-        className,
-      )}
+      // A section is a heading over a hairline. The card around it is the box.
+      className={cn('border-t border-divider first:border-t-0', className)}
     >
       <CollapsibleTrigger
         className={cn(
-          'group flex w-full items-center justify-between gap-3 rounded-t-card px-4 py-3 text-left',
-          'hover:bg-control-quiet focus-ring',
-          'data-[state=closed]:rounded-b-control',
+          'group flex w-full items-center justify-between gap-3 py-3 text-left focus-ring',
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -560,39 +547,14 @@ export function SettingsSection({
         </div>
         {trailing ? <div className="flex shrink-0 items-center gap-2">{trailing}</div> : null}
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-divider px-4 py-4">
+      <CollapsibleContent className="pb-4 pt-1">
         {description ? (
           <p className="mb-3 text-xs text-slate-500">{description}</p>
         ) : null}
         {children}
       </CollapsibleContent>
     </Collapsible>
-    </SurfaceProvider>
   )
-}
-
-// ---------------------------------------------------------------------------
-// ConnectionPill — green/red health pill for a connection's section header.
-// ---------------------------------------------------------------------------
-
-/**
- * Binary connection-health pill shown next to a service name in a
- * `SettingsSection` header (OpenAlex / Semantic Scholar): green "Connected"
- * when the live probe validated the key, red "Not connected" otherwise, and
- * a neutral "Checking…" while the first probe is still in flight. The
- * specific reason (key rejected / not set / couldn't verify) lives in the
- * section body so the header stays a glanceable green-or-red signal.
- */
-export function ConnectionPill({
-  valid,
-  loading,
-}: {
-  valid: boolean | null | undefined
-  loading?: boolean
-}) {
-  if (loading) return <StatusBadge tone="neutral" size="sm">Checking…</StatusBadge>
-  if (valid === true) return <StatusBadge tone="positive" size="sm">Connected</StatusBadge>
-  return <StatusBadge tone="negative" size="sm">Not connected</StatusBadge>
 }
 
 // ---------------------------------------------------------------------------

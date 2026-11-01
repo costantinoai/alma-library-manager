@@ -138,12 +138,14 @@ it keeps the stored token.
 
 ## Step 5 — Check it works
 
-**Settings → Plugins → Slack → Test connection.** ALMa queues a job (visible in
-**Activity** as `integrations.slack.test`) that posts an "ALMa — Connection
-Test" message through the same code path real digests use. The toast names the
-resolved target on success, or the precise Slack error on failure.
+Saving runs a check, and **Settings → Plugins → Slack → Check** repeats it. It is
+a job (visible in **Activity** as `integrations.slack.test`) that asks Slack about
+the token with `auth.test`, reads its scopes and looks up your channels. **It posts
+nothing.** Slack's own error shows on the row. *Working* therefore means the token
+and channels are good; whether the bot can post to a private channel shows the
+first time a digest goes out.
 
-The test only runs while the plugin is on. Off, it is refused outright — see
+The check only runs while the plugin is on. Off, it is refused outright — see
 [what is true of every plugin](index.md#what-is-true-of-every-plugin).
 
 ---
@@ -237,7 +239,7 @@ the feature guide:
 | `missing_scope` | A scope is absent, or the app wasn't reinstalled after you added one | Recheck [step 2](#step-2-grant-the-permissions), then **Reinstall to Workspace** |
 | `channel_not_found: '…'` | The resolver tried `conversations.list` then `users.list` and found no match | Check the spelling, that the bot is in the channel, and that `channels:read` / `groups:read` / `users:read` are granted |
 | `not_in_channel` | The bot isn't a member of the channel | `/invite @ALMa` in that channel |
-| `Slack API rejected the test message` | Token and resolution are fine, but the bot cannot post to that target | Usually channel membership; for a user DM, check `im:write` |
+| `This token has no chat:write scope` | The token cannot post | Add `chat:write`, then **Reinstall to Workspace** |
 | *"No capture channel is configured"* | **Capture papers from** is empty, or didn't save | Re-enter the bare channel name and save |
 | ❓ instead of 📥 on your message | The link held no identifiable paper | Read ALMa's thread reply |
 

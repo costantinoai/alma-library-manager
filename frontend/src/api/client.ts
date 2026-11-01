@@ -961,21 +961,9 @@ export interface OpenAlexUsage {
  *  Same contract as {@link SemanticScholarStatus}: `valid===true` → green
  *  dot; `false` → key rejected; `null` → set but unverified or not
  *  configured. */
-export interface OpenAlexStatus {
-  configured: boolean
-  valid: boolean | null
-  detail: string
-}
-
 /** Live validity of the Semantic Scholar API key (Settings → Connections).
  *  `valid===true` → green dot; `false` → key rejected; `null` → set but
  *  unverified (probe couldn't complete) or not configured. */
-export interface SemanticScholarStatus {
-  configured: boolean
-  valid: boolean | null
-  detail: string
-}
-
 // ── Library types ──
 
 export interface Collection {
@@ -2659,15 +2647,6 @@ export function refreshDiagnostics(force = false): Promise<{ job_id: string | nu
   return api.post(`/insights/diagnostics/refresh?force=${force}`)
 }
 
-export interface IntegrationTestResult {
-  ok: boolean
-  message: string
-  target?: string
-  error?: string
-  /** One line per address the test tried (PDF sources); `severity` is lib/severity's. */
-  results?: { address: string; state: string; severity?: string; source?: string }[]
-}
-
 export interface PluginSchemaProperty {
   title?: string
   description?: string
@@ -2736,30 +2715,76 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): Promise<Pl
   return api.put<PluginInfo>(`/plugins/${encodeURIComponent(pluginId)}/enabled`, { enabled })
 }
 
+/** Backend-owned answer to "is this set, and does it work?" (`connection_status`). */
+export type ConnectionState =
+  | 'missing_required'
+  | 'missing_optional'
+  | 'unverified'
+  | 'working'
+  | 'failing'
+  | 'checking'
+  | 'cannot_check'
+  | 'off'
+  | 'last_used'
+  | 'not_seen'
+
+export interface ConnectionField {
+  name: string
+  label: string
+  is_set: boolean
+  required: boolean
+  adds: string
+}
+
+export interface ConnectionRecord {
+  id: string
+  label: string
+  section: string
+  state: ConnectionState
+  severity: string
+  status_label: string
+  detail: string
+  action: string | null
+  required: boolean
+  source: 'saved' | 'environment' | null
+  /** A check exists, there is a value to test, and it can run right now. */
+  checkable: boolean
+  checked_at: string | null
+  last_worked_at: string | null
+  /** When it last delivered. A passive row has nothing else to say. */
+  last_used_at: string | null
+  /** What in ALMa relies on it. */
+  used_by: string[]
+  /** One line per address a check tried (PDF sources); `severity` is lib/severity's. */
+  results: { address: string; state: string; severity?: string; source?: string }[]
+  fields: ConnectionField[]
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionRecord[]
+  sections: Record<string, { state: ConnectionState; severity: string; status_label: string }>
+}
+
+export interface ConnectionCheckResult {
+  ok: boolean | null
+  message: string
+}
+
+export function getConnections(): Promise<ConnectionsResponse> {
+  return api.get<ConnectionsResponse>('/settings/connections')
+}
+
 /**
- * Test an external integration connection.
- *
- * Delivery plugins return an Activity envelope and run the real transport on
- * the scheduler pool, so this exercises the same path as alert delivery.
+ * Run one real, read-only check through Activity and wait for it. `ok` is null
+ * when the check got no answer, which is not a failure of the setting. A PDF
+ * source's check fetches a paper through every address, at the mirrors' own
+ * pace, so it can take a couple of minutes.
  */
-export async function testPluginConnection(
-  pluginName: string,
-): Promise<IntegrationTestResult> {
-  const resp = await api.post<JobEnvelope | { success: boolean; message: string; timestamp: string }>(
-    `/plugins/${encodeURIComponent(pluginName)}/test`,
+export async function checkConnection(id: string): Promise<ConnectionCheckResult> {
+  const envelope = await api.post<JobEnvelope>(
+    `/settings/connections/${encodeURIComponent(id)}/check`,
   )
-  if (isJobEnvelope(resp)) {
-    if (resp.already_running === true) {
-      return { ok: false, message: 'This integration test is already in progress; try again in a moment.' }
-    }
-    // A PDF source's test fetches a real paper through every configured
-    // address at the mirrors' own pace, so it can take a couple of minutes.
-    return waitForJob<IntegrationTestResult>(resp.job_id, { timeoutMs: 180_000 })
-  }
-  return {
-    ok: Boolean((resp as { success?: boolean }).success),
-    message: String((resp as { message?: string }).message ?? ''),
-  }
+  return waitForJob<ConnectionCheckResult>(envelope.job_id, { timeoutMs: 180_000 })
 }
 
 // ── Paper PDFs (task 81) ──
@@ -2909,6 +2934,8 @@ export interface AuthorNeedsAttentionRow {
   conflict_field?: string
   conflict_primary_value?: string
   conflict_alt_value?: string
+  /** The author already holding that value: using it cannot succeed. */
+  conflict_alt_owner?: string | null
   alt_openalex_id?: string
   /** For `reason_code='degraded_monitor'`: the feed monitor to refresh. */
   monitor_id?: string | null
@@ -2927,6 +2954,18 @@ export function rejectAuthorPair(
   return api.post(`/authors/${encodeURIComponent(authorId)}/not-same-person`, {
     alt_author_ids: altAuthorIds,
   })
+}
+
+/** The authors this one was marked as a different person from. */
+export function listRejectedAuthors(authorId: string): Promise<{ rejected: string[] }> {
+  return api.get(`/authors/${encodeURIComponent(authorId)}/not-same-person`)
+}
+
+/** Undo `rejectAuthorPair`: the pair can be merged, and may be asked about, again. */
+export function undoRejectAuthorPair(authorId: string, altAuthorId: string): Promise<unknown> {
+  return api.delete(
+    `/authors/${encodeURIComponent(authorId)}/not-same-person/${encodeURIComponent(altAuthorId)}`,
+  )
 }
 
 /** Merge alt OpenAlex profiles into a primary author. Each entry in
@@ -2978,6 +3017,8 @@ export interface DiscoverAliasesResponse {
   primary_display_name: string
   primary_openalex_id: string
   orcid: string | null
+  /** The lookup itself failed: this says nothing about the ORCID. */
+  lookup_error?: string
   aliases: Array<{
     openalex_id: string
     display_name: string
@@ -3019,6 +3060,8 @@ export function setAuthorIdentifiers(
   orcid: string | null
   scholar_id: string | null
   id_resolution_status: string
+  /** The resolver job queued because the save left no OpenAlex ID. */
+  lookup: { job_id?: string } | null
 }> {
   return api.post(`/authors/${encodeURIComponent(authorId)}/identifiers`, body)
 }

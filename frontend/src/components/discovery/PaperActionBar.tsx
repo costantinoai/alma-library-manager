@@ -1,4 +1,4 @@
-import { BookOpenCheck, BookPlus, BookmarkCheck, FolderPlus, Heart, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { BookOpenCheck, BookPlus, Bookmark, BookmarkCheck, FolderPlus, Heart, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
@@ -150,6 +150,7 @@ interface ActionButtonProps {
   onClick: () => void
   iconFilled?: boolean
   active?: boolean
+  labelClassName?: string
 }
 
 function ActionButton({
@@ -163,6 +164,7 @@ function ActionButton({
   onClick,
   iconFilled = false,
   active = false,
+  labelClassName,
 }: ActionButtonProps) {
   const { icon: iconColor, hover, active: activeClass } = toneClasses[tone]
   return (
@@ -197,7 +199,7 @@ function ActionButton({
           iconFilled && 'fill-current',
         )}
       />
-      {showLabel && <span className="leading-none">{label}</span>}
+      {showLabel && <span className={cn('leading-none', labelClassName)}>{label}</span>}
     </Button>
   )
 }
@@ -241,7 +243,7 @@ export function PaperActionBar({
   const canUndo = !!onUndo
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" data-testid="paper-actions">
+    <div className="flex flex-wrap items-center gap-1.5 max-sm:gap-1" data-testid="paper-actions">
       {onDismiss && (
         <ActionButton
           icon={X}
@@ -273,14 +275,18 @@ export function PaperActionBar({
 
       {onAdd && (
         <ActionButton
-          icon={isSaved ? BookmarkCheck : Plus}
+          icon={isSaved ? BookmarkCheck : Bookmark}
           label={isSaved ? (savedLabel ?? 'Saved') : 'Save'}
           tone="add"
           compact={compact}
           // Read-only saved state: a passive "in library" indicator, not a
           // click target (the destructive remove lives in the Library).
           disabled={disabled || (isSaved && savedReadOnly)}
-          showLabel={showLabel}
+          // The one worded button on an icon row: it is the verb the row exists
+          // for, and it gives the eye a fixed landmark from card to card. Not on
+          // a phone, where the word would push the row onto a second line.
+          showLabel
+          labelClassName={showLabel ? undefined : 'max-sm:hidden'}
           title={
             isSaved
               ? (savedReadOnly
@@ -308,6 +314,10 @@ export function PaperActionBar({
       )}
 
       {collectionAction}
+
+      {hasReactions && (onDislike || onLike || onLove) && (onQueue || onAdd || onAddToCollection || collectionAction) && (
+        <div className="mx-0.5 h-4 w-px bg-control-edge" aria-hidden />
+      )}
 
       {onDislike && (
         <ActionButton

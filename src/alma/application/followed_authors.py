@@ -6,12 +6,11 @@ import logging
 import math
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
-from alma.services.retry_policy import WORKS_RECHECK_AFTER
 
 logger = logging.getLogger(__name__)
 # An author goes STALE when nothing has pulled them in over ~4 months —
@@ -422,6 +421,7 @@ def get_followed_author_backfill_status(
     author_id: str,
     *,
     background_publications: int | None = None,
+    library_publications: int | None = None,
     works_count: int | None = None,
 ) -> dict[str, Any]:
     """Return freshness and maintenance status for a followed-author corpus."""
@@ -475,6 +475,25 @@ def get_followed_author_backfill_status(
         except sqlite3.OperationalError:
             background_count = int(background_publications or 0)
 
+    library_count = int(library_publications or 0)
+    if library_publications is None and _table_exists(db, "publication_authors"):
+        try:
+            row = db.execute(
+                f"""
+                SELECT COUNT(DISTINCT p.id) AS c
+                FROM papers p
+                JOIN publication_authors pa ON pa.paper_id = p.id
+                JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
+                WHERE a.id = ?
+                  AND p.status = 'library'
+                  AND {standalone_paper_sql('p')}
+                """,
+                (author_key,),
+            ).fetchone()
+            library_count = int((row["c"] if row else 0) or 0)
+        except sqlite3.OperationalError:
+            library_count = 0
+
     total_works = int(works_count or 0)
     if works_count is None and _table_exists(db, "authors"):
         try:
@@ -516,6 +535,7 @@ def get_followed_author_backfill_status(
         author_key=author_key,
         is_followed=True,
         background_count=background_count,
+        library_count=library_count,
         total_works=total_works,
         operation_rows=rows,
         monitor_last_pull_at=_monitor_last_pull_at(db, author_key),
@@ -546,6 +566,7 @@ def _backfill_status_from_inputs(
     author_key: str,
     is_followed: bool,
     background_count: int,
+    library_count: int,
     total_works: int,
     operation_rows: list[sqlite3.Row],
     monitor_last_pull_at: str | None = None,
@@ -573,6 +594,9 @@ def _backfill_status_from_inputs(
     if not author_key or not is_followed:
         return base
 
+    # What ALMa holds of this author, wherever it sits: a paper in the Library is
+    # as much in the corpus as one outside it.
+    held_count = int(background_count or 0) + int(library_count or 0)
     expected_floor = 0
     coverage_ratio = None
     if total_works > 0:
@@ -582,7 +606,7 @@ def _backfill_status_from_inputs(
             total_works,
             max(_AUTHOR_BACKFILL_MIN_EXPECTED, int(math.ceil(total_works * _AUTHOR_BACKFILL_EXPECTED_RATIO))),
         )
-        coverage_ratio = round(background_count / float(total_works), 3)
+        coverage_ratio = round(held_count / float(total_works), 3)
 
     latest = operation_rows[0] if operation_rows else None
     recent_runs: list[dict[str, Any]] = []
@@ -623,12 +647,14 @@ def _backfill_status_from_inputs(
     if pulled_at is not None:
         pull_age_days = max(0, int((utcnow() - pulled_at).total_seconds() // 86400))
 
-    thin = bool(expected_floor and background_count < expected_floor)
-    # A corpus can be thin because the source has no more, or because the papers
-    # sit in the Library, which `background_count` excludes. Fetching again repairs
-    # neither, so a good pull settles `thin` until the works window lapses.
+    thin = bool(expected_floor and held_count < expected_floor)
+    # A corpus still thin after a good pull is thin because the source has no
+    # more, and fetching again cannot repair that. The pull settles it for as
+    # long as a pull counts as current.
     thin_settled = bool(
-        thin and success_at is not None and utcnow() - success_at < WORKS_RECHECK_AFTER
+        thin
+        and success_at is not None
+        and utcnow() - success_at < timedelta(days=_AUTHOR_BACKFILL_STALE_AFTER_DAYS)
     )
     stale = bool(
         success_at is not None
@@ -654,14 +680,14 @@ def _backfill_status_from_inputs(
     elif thin_settled:
         state = "fresh"
         detail = (
-            f"Pulled {age_days} days ago; {background_count}/{total_works} papers are "
-            "cached outside the Library, and another run would not add more."
+            f"Pulled {age_days} days ago; ALMa holds {held_count}/{total_works} papers, "
+            "and another run would not add more."
         )
     elif thin:
         state = "thin"
         if total_works > 0:
             detail = (
-                f"Background corpus looks thin ({background_count}/{total_works} papers cached)."
+                f"Corpus looks thin: {held_count}/{total_works} papers held, Library included."
             )
         else:
             detail = "Background corpus exists but still looks thin."
@@ -721,21 +747,22 @@ def get_followed_author_backfill_status_map(
         }
 
     background_counts: dict[str, int] = {author_id: 0 for author_id in author_ids}
+    library_counts: dict[str, int] = {author_id: 0 for author_id in author_ids}
     if _table_exists(db, "publication_authors") and _table_exists(db, "papers") and _table_exists(db, "authors"):
         placeholders = ",".join("?" for _ in author_ids)
         for row in db.execute(
             f"""
-            SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
+            SELECT a.id AS author_id, p.status = 'library' AS in_library, COUNT(DISTINCT p.id) AS c
             FROM authors a
             JOIN publication_authors pa ON lower(a.openalex_id) = lower(pa.openalex_id)
             JOIN papers p ON p.id = pa.paper_id
             WHERE a.id IN ({placeholders})
-              AND p.status <> 'library'
-            GROUP BY a.id
+            GROUP BY a.id, in_library
             """,
             author_ids,
         ).fetchall():
-            background_counts[str(row["author_id"] or "").strip()] = int(row["c"] or 0)
+            target = library_counts if row["in_library"] else background_counts
+            target[str(row["author_id"] or "").strip()] = int(row["c"] or 0)
 
     operation_rows_by_author: dict[str, list[sqlite3.Row]] = {author_id: [] for author_id in author_ids}
     if _table_exists(db, "operation_status"):
@@ -809,6 +836,7 @@ def get_followed_author_backfill_status_map(
             author_key=author_id,
             is_followed=author_id in followed_ids,
             background_count=background_counts.get(author_id, 0) if author_id in followed_ids else 0,
+            library_count=library_counts.get(author_id, 0) if author_id in followed_ids else 0,
             total_works=works_count,
             operation_rows=operation_rows_by_author.get(author_id, []),
             monitor_last_pull_at=monitor_pulls.get(author_id),

@@ -15,10 +15,11 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 
-import { deleteAuthor, getApiErrorMessage } from '@/api/client'
+import { deleteAuthor } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/library'
-import { errorToast, useToast } from '@/hooks/useToast'
+import { useToast } from '@/hooks/useToast'
+import { authorActionFailed } from '@/lib/authorActions'
 import { invalidateAfterAuthorChange, invalidateQueries } from '@/lib/queryHelpers'
 
 interface DeleteAuthorButtonProps {
@@ -51,7 +52,7 @@ export function DeleteAuthorButton({
       toast({ title: 'Author deleted', description: authorName })
       onDeleted?.()
     },
-    onError: (err) => errorToast('Could not delete author', getApiErrorMessage(err)),
+    onError: (err) => authorActionFailed(queryClient, 'Could not delete author', err),
   })
 
   return (

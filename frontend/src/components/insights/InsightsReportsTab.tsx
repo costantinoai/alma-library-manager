@@ -217,7 +217,7 @@ export function InsightsReportsTab({
                 </div>
               </div>
             )}
-            <div className="rounded-card border border-divider p-3">
+            <div className="">
               <h4 className="mb-2 text-sm font-semibold text-slate-700">Recommendation Engagement</h4>
               <div className="flex gap-4 text-sm">
                 <span className="text-slate-500">
@@ -259,7 +259,7 @@ export function InsightsReportsTab({
                 so a busy window can't dominate by volume; insufficient state. */}
             <div className="grid gap-4 lg:grid-cols-3">
               {topicDriftData.windows.map((w) => (
-                <div key={w.label} className="rounded-card border border-divider p-3">
+                <div key={w.label} className="">
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <h4 className="text-sm font-semibold text-slate-700 capitalize">{w.label}</h4>
                     {!w.sufficient && <StatusBadge tone="neutral" size="sm">thin</StatusBadge>}

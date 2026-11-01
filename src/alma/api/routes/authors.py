@@ -69,6 +69,7 @@ from alma.core.utils import (
     repair_display_text,
 )
 from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
+from alma.openalex.client import find_author_by_orcid, openalex_author_exists, openalex_reachable
 from alma.openalex.client import resolve_openalex_candidates_from_scholar as _resolve_oa
 
 logger = logging.getLogger(__name__)
@@ -456,6 +457,9 @@ def _resolve_and_persist_author_identity(
             step="identity_scope",
             data={"use_semantic_scholar": False},
         )
+    # The resolver trusts a stored id at full confidence, so an id OpenAlex no
+    # longer has would read as resolved while nothing can ever be fetched.
+    dead_openalex = bool(before_openalex) and openalex_author_exists(before_openalex) is False
     hierarchical = resolve_identity_hierarchical(
         db,
         author_id=author_id,
@@ -467,6 +471,12 @@ def _resolve_and_persist_author_identity(
         use_orcid=_id_settings["orcid_enabled"],
         use_preprints=semantic_scholar_enabled,
     )
+    # The resolver swallows transport failures, so an outage looks like a search
+    # that found nothing and would brand the author unidentifiable. Ask once
+    # before believing it: the job fails loudly and the row keeps its state.
+    if hierarchical.status == "no_match" and not openalex_reachable():
+        raise RuntimeError("OpenAlex is unreachable or rate limiting. Nothing was changed, try again later.")
+
     # Identity resolution (network) is done above — gate the two writes
     # (evidence row + reason) as one IMMEDIATE unit. persist_identity_result
     # uses commit_unless_gated, so it no-ops inside this section (we own the
@@ -477,6 +487,10 @@ def _resolve_and_persist_author_identity(
             "UPDATE authors SET id_resolution_reason = ? WHERE id = ?",
             (_summarize_hierarchical_identity(hierarchical), author_id),
         )
+        if dead_openalex:
+            _set_resolution_status(
+                db, author_id, "error", f"OpenAlex has no author {before_openalex}."
+            )
 
     # What the row now holds, not what the resolver named: persistence keeps a stored
     # id, so a different one here would send the refresh to an identity no author
@@ -2411,6 +2425,11 @@ def list_authors_needs_attention(
     return {"total": total, "items": rows}
 
 
+def _openalex_id_for_orcid(orcid: str) -> str | None:
+    """The OpenAlex author behind an ORCID, or None if none was found."""
+    return str((find_author_by_orcid(orcid) or {}).get("id") or "") or None
+
+
 def _validated_manual_identifiers(
     db: sqlite3.Connection,
     author_id: str,
@@ -2418,14 +2437,23 @@ def _validated_manual_identifiers(
     orcid: str | None,
     openalex_id: str | None,
     scholar_id: str | None,
+    find_openalex: bool = False,
 ) -> dict[str, str]:
     """The identifiers a person typed, normalized and safe to write.
+
+    ``find_openalex``: an author with no OpenAlex id gets the one their ORCID
+    names, one OpenAlex call before any write, so the save resolves them at
+    once. When that call has no answer `_lookup_missing_openalex` tries harder.
 
     Blank fields are absent. Anything malformed is a 422, because storing it
     would mark the author resolved with no identity behind it (a bad ORCID
     normalizes to NULL). An ORCID or OpenAlex id another author already holds
-    is a 409 that names them: the way out is a merge, not a second owner.
+    is a 409 that names them: the way out is a merge, not a second owner. A
+    removed row holds nothing the user can see, so its claim is released by
+    `_release_from_removed` in the write, unless a merge made the id an alias.
     """
+    from alma.application.author_merge import ensure_alt_identifiers_table
+
     clean: dict[str, str] = {}
     if (orcid or "").strip():
         normalized = normalize_orcid(orcid)
@@ -2435,6 +2463,8 @@ def _validated_manual_identifiers(
                 detail=f"'{orcid.strip()}' is not an ORCID iD (0000-0000-0000-0000).",
             )
         clean["orcid"] = normalized
+        if find_openalex and not (openalex_id or "").strip():
+            openalex_id = _openalex_id_for_orcid(normalized)
     if (openalex_id or "").strip():
         normalized = normalize_openalex_id(openalex_id)
         if not re.fullmatch(r"A\d+", normalized):
@@ -2442,6 +2472,8 @@ def _validated_manual_identifiers(
                 status_code=422,
                 detail=f"'{openalex_id.strip()}' is not an OpenAlex author ID (A1234567890).",
             )
+        if openalex_author_exists(normalized) is False:
+            raise HTTPException(status_code=422, detail=f"OpenAlex has no author {normalized}.")
         clean["openalex_id"] = normalized
     if (scholar_id or "").strip():
         clean["scholar_id"] = scholar_id.strip()
@@ -2465,7 +2497,56 @@ def _validated_manual_identifiers(
                 status_code=409,
                 detail=f"{label} {value} already belongs to {owner['name']}. Merge the two authors instead.",
             )
+    openalex_value = clean.get("openalex_id")
+    if openalex_value:
+        ensure_alt_identifiers_table(db)
+        alias_owner = db.execute(
+            """
+            SELECT a.name FROM author_alt_identifiers alt
+            JOIN authors a ON a.id = alt.primary_author_id
+            WHERE lower(alt.alt_openalex_id) = lower(?) AND a.id != ?
+            LIMIT 1
+            """,
+            (openalex_value, author_id),
+        ).fetchone()
+        if alias_owner:
+            raise HTTPException(
+                status_code=409,
+                detail=f"OpenAlex ID {openalex_value} was merged into {alias_owner['name']}.",
+            )
     return clean
+
+
+def _lookup_missing_openalex(
+    db: sqlite3.Connection, user: dict, author_id: str, openalex_id: str | None
+) -> dict | None:
+    """Queue the resolver when saved identifiers still leave no OpenAlex id.
+
+    A real save of an ORCID left the author listed for good until someone
+    pressed Retry, which then found the id at once. Hydration does not look one
+    up, so the save starts the same job Retry does.
+    """
+    if openalex_id:
+        return None
+    return identity_profile_refresh_author(author_id, background=True, db=db, user=user)
+
+
+def _release_from_removed(db: sqlite3.Connection, author_id: str, clean: dict[str, str]) -> None:
+    """Clear a soft-removed row's claim on identifiers now going to `author_id`.
+
+    The unique indexes cover removed rows, and the validator lets their claim
+    through. RAW: runs inside the caller's write unit, before the write.
+    """
+    for column in ("orcid", "openalex_id"):
+        value = clean.get(column)
+        if value:
+            db.execute(
+                f"""
+                UPDATE authors SET {column} = NULL
+                WHERE lower(trim({column})) = lower(?) AND id != ? AND status = 'removed'
+                """,  # noqa: S608 — column comes from the literal tuple above
+                (value, author_id),
+            )
 
 
 class SetIdentifiersRequest(BaseModel):
@@ -2501,7 +2582,7 @@ def set_author_identifiers(
         schedule_pending_author_hydration_sweep,
     )
 
-    row = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,)).fetchone()
+    row = db.execute("SELECT id, openalex_id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Author not found")
 
@@ -2511,6 +2592,7 @@ def set_author_identifiers(
         orcid=body.orcid,
         openalex_id=body.openalex_id,
         scholar_id=body.scholar_id,
+        find_openalex=not row["openalex_id"],
     )
     if not clean:
         raise HTTPException(status_code=400, detail="No identifiers supplied")
@@ -2538,6 +2620,7 @@ def set_author_identifiers(
     # `params` is fully built above (once), so re-running the unit on a lock
     # retry simply re-issues the same statement — idempotent.
     def _persist() -> None:
+        _release_from_removed(db, author_id, clean)
         db.execute(
             f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
             params,
@@ -2575,6 +2658,7 @@ def set_author_identifiers(
         "orcid": refreshed["orcid"],
         "scholar_id": refreshed["scholar_id"],
         "id_resolution_status": refreshed["id_resolution_status"],
+        "lookup": _lookup_missing_openalex(db, _user, author_id, refreshed["openalex_id"]),
     }
 
 
@@ -2736,6 +2820,8 @@ def resolve_merge_conflict(
     # 'alt' won) AND mark the conflict resolved together, serialized behind
     # the writer gate.
     def _persist() -> None:
+        if target_field == "orcid":
+            _release_from_removed(db, str(row["primary_author_id"]), {"orcid": new_value})
         if target_field is not None:
             db.execute(
                 f"UPDATE authors SET {target_field} = ? WHERE id = ?",  # noqa: S608 — allowlist above
@@ -2812,6 +2898,48 @@ def not_same_person(
         data={"alt_author_ids": alt_ids},
     )
     return {"author_id": author_id, "rejected": alt_ids}
+
+
+@router.get(
+    "/{author_id}/not-same-person",
+    summary="The authors this one was marked as a different person from",
+)
+def list_not_same_person(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import rejected_partners
+
+    return {"author_id": author_id, "rejected": rejected_partners(db, author_id)}
+
+
+@router.delete(
+    "/{author_id}/not-same-person/{alt_author_id}",
+    summary="Undo a not-the-same-person verdict",
+    description="The pair can be merged again, and split-profile warnings may ask about it again.",
+)
+def undo_not_same_person(
+    author_id: str,
+    alt_author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import undo_merge_rejection
+
+    undone = run_write_unit(
+        db, lambda: undo_merge_rejection(db, author_id, alt_author_id), label="undo_not_same_person"
+    )
+    if not undone:
+        raise HTTPException(status_code=404, detail="That pair is not marked as different people")
+    _log_author_action(
+        db,
+        "undo_not_same_person",
+        f"Undid not-the-same-person for {author_id} and {alt_author_id}",
+        author_id=author_id,
+        data={"alt_author_id": alt_author_id},
+    )
+    return {"author_id": author_id, "alt_author_id": alt_author_id}
 
 
 @router.post(
@@ -3214,7 +3342,7 @@ def author_id_candidates(
     a_oaid = str(row["openalex_id"] or "").strip() or None
     a_orcid = str(row["orcid"] or "").strip() or None
 
-    def _compute() -> dict:
+    def _compute(use_semantic_scholar: bool) -> dict:
         # Own connection — this may outlive the request when the deadline fires,
         # so it must NOT touch the request's `db` (committed + closed on return).
         work = open_db_connection()
@@ -3227,7 +3355,7 @@ def author_id_candidates(
                 openalex_id=a_oaid,
                 orcid=a_orcid,
                 sample_titles=titles,
-                use_semantic_scholar=settings["semantic_scholar_enabled"],
+                use_semantic_scholar=use_semantic_scholar,
                 use_orcid=settings["orcid_enabled"],
             )
             # `resolution` ALREADY ran the source-based (S2/ORCID) scholar lookup;
@@ -3259,10 +3387,19 @@ def author_id_candidates(
 
     timed_out = False
     empty = {"titles": [], "openalex": [], "scholar": [], "resolved": None}
+    # Semantic Scholar's backoff alone can eat the whole deadline, and a real
+    # author then got no candidates at all. A second run without it answers from
+    # OpenAlex and ORCID in seconds, so the tab shows those at worst.
+    use_s2 = settings["semantic_scholar_enabled"]
+    full_run = _ID_CANDIDATE_EXECUTOR.submit(_compute, use_s2)
+    quick_run = _ID_CANDIDATE_EXECUTOR.submit(_compute, False) if use_s2 else None
     try:
-        computed = _ID_CANDIDATE_EXECUTOR.submit(_compute).result(
-            timeout=_ID_CANDIDATE_DEADLINE_S
-        )
+        try:
+            computed = full_run.result(timeout=_ID_CANDIDATE_DEADLINE_S)
+        except FuturesTimeout:
+            if quick_run is None:
+                raise
+            computed = quick_run.result(timeout=1.0)
     except FuturesTimeout:
         # Don't cancel — the orphaned worker finishes on its own connection and
         # frees its slot. Return an honest empty result the UI can retry.
@@ -3286,6 +3423,15 @@ def author_id_candidates(
 
     oa_remaining = provider_remaining_credits("openalex")
     openalex_cap_reached = oa_remaining is not None and oa_remaining <= 0
+
+    # An empty list must mean "OpenAlex has nobody", never "could not ask".
+    if (
+        not computed["openalex"]
+        and not timed_out
+        and not openalex_cap_reached
+        and not openalex_reachable()
+    ):
+        raise HTTPException(status_code=503, detail="OpenAlex is unreachable or rate limiting")
 
     return {
         "author_id": author_id,
@@ -3351,7 +3497,7 @@ def confirm_identifiers_for_author(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    row = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,)).fetchone()
+    row = db.execute("SELECT id, openalex_id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
 
@@ -3362,6 +3508,7 @@ def confirm_identifiers_for_author(
         orcid=payload.orcid,
         openalex_id=payload.openalex_id,
         scholar_id=payload.scholar_id,
+        find_openalex=not row["openalex_id"],
     )
     updates = [f"{column} = ?" for column in clean]  # keys are the helper's literals
     params: list[Any] = list(clean.values())
@@ -3382,6 +3529,7 @@ def confirm_identifiers_for_author(
     # `params + [author_id]` builds a fresh arg list each call so a lock
     # retry of the unit can't double-append the id (idempotent unit).
     def _persist() -> None:
+        _release_from_removed(db, author_id, clean)
         if updates:
             db.execute(
                 f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
@@ -3402,7 +3550,13 @@ def confirm_identifiers_for_author(
             "status": status_value,
         },
     )
-    return {"success": True, "author_id": author_id, "status": status_value}
+    current = db.execute("SELECT openalex_id FROM authors WHERE id = ?", (author_id,)).fetchone()
+    return {
+        "success": True,
+        "author_id": author_id,
+        "status": status_value,
+        "lookup": _lookup_missing_openalex(db, user, author_id, current["openalex_id"]),
+    }
 
 
 @router.post(
@@ -4200,9 +4354,17 @@ def accept_author_unidentified(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    row = db.execute("SELECT name FROM authors WHERE id = ?", (author_id,)).fetchone()
+    row = db.execute(
+        "SELECT name, id_resolution_status FROM authors WHERE id = ?", (author_id,)
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
+    if row["id_resolution_status"] in {"resolved_auto", "resolved_manual"} and db.execute(
+        "SELECT 1 FROM authors WHERE id = ? AND COALESCE(openalex_id, '') <> ''", (author_id,)
+    ).fetchone():
+        # Another tab or a finished job got here first: a verdict would hide an
+        # identity that is fine.
+        raise HTTPException(status_code=409, detail=f"{row['name']} was resolved in the meantime.")
     now = utcnow().isoformat()
 
     def _persist():

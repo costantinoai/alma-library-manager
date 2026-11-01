@@ -42,10 +42,8 @@ export function FollowedAuthorCard({
   onAttentionClick,
 }: FollowedAuthorCardProps) {
   const lastCheck = author.monitor_last_success_at ?? author.monitor_last_checked_at
-  const lastYieldParts = [
-    author.monitor_papers_found != null ? `${author.monitor_papers_found} found` : null,
-    author.monitor_items_created != null ? `${author.monitor_items_created} new` : null,
-  ].filter(Boolean)
+  const newPapers = author.monitor_items_created ?? 0
+  const hasChecked = lastCheck != null
 
   return (
     <Card
@@ -97,9 +95,13 @@ export function FollowedAuthorCard({
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
             </Button>
           ) : null}
-          <StatusBadge tone={monitorHealthTone(author.monitor_health)} size="sm">
-            {monitorLabel(author.monitor_health)}
-          </StatusBadge>
+          {/* Quiet when healthy: 89 identical "ready" badges say nothing, and
+              one that speaks only on trouble can be seen from across the grid. */}
+          {author.monitor_health !== 'ready' ? (
+            <StatusBadge tone={monitorHealthTone(author.monitor_health)} size="sm">
+              {monitorLabel(author.monitor_health)}
+            </StatusBadge>
+          ) : null}
         </div>
       </header>
 
@@ -116,8 +118,8 @@ export function FollowedAuthorCard({
 
       <div className="mt-auto flex items-center justify-between gap-3 border-t border-edge-2 pt-2 text-caption text-slate-500">
         <span>
-          {lastYieldParts.length > 0 ? lastYieldParts.join(' · ') : 'No refresh yet'}
-          {lastCheck ? ` · ${formatTimestamp(lastCheck)}` : null}
+          {newPapers > 0 ? <span className="font-medium text-alma-800">{newPapers} new · </span> : null}
+          {hasChecked ? `Checked ${formatTimestamp(lastCheck)}` : 'No refresh yet'}
         </span>
         <ChevronRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:text-accent" />
       </div>

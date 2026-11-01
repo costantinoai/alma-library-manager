@@ -13,8 +13,8 @@ Configuration is resolved via:
 """
 
 import logging
-import re
 import os
+import re
 from datetime import datetime, timezone
 
 from alma.core.author_names import parse_author_names
@@ -209,27 +209,49 @@ class SlackNotifier:
         """
         return self._resolve_target(target)
 
-    def check_auth(self) -> bool:
-        """Is the token accepted by Slack right now? (``auth.test``)
+    def auth_status(self) -> dict:
+        """Ask Slack about this token, keeping the answer. ``auth.test`` posts nothing.
 
-        The cheapest possible liveness check — no message is posted. Used by the
-        plugin's ``test_connection``. Returns False rather than raising: a
-        connectivity probe that explodes is harder to report than one that says
-        "no".
+        ``ok`` is True or False when Slack answered, None when it did not
+        (unreachable, or rate limited, which says nothing about the token).
+        ``scopes`` is None when Slack sent no scope header.
         """
-        if not self.is_configured:
-            return False
+        from slack_sdk.errors import SlackApiError
+
+        from alma.core.network_policy import NetworkAccessDisabledError
+
         try:
             response = self._get_client().auth_test()
-        except Exception as exc:  # pragma: no cover - network failures
-            logger.warning("Slack auth.test failed: %s", exc)
-            return False
-        ok = bool(response.get("ok"))
-        if ok:
-            logger.info("Slack auth.test passed for team %s", response.get("team"))
-        else:
-            logger.warning("Slack auth.test returned ok=False: %s", response.get("error"))
-        return ok
+        except SlackApiError as exc:
+            code = (exc.response.get("error") if exc.response is not None else None) or "unknown"
+            if code in ("ratelimited", "rate_limited"):
+                return {
+                    "ok": None,
+                    "error": code,
+                    "message": "Slack is rate limiting, so it said nothing about the token.",
+                    "action": "Try again in a minute.",
+                }
+            return {
+                "ok": False,
+                "error": code,
+                "message": f"Slack refused the token ({code}).",
+                "action": "Paste a current Bot User OAuth Token from the Slack app.",
+            }
+        except NetworkAccessDisabledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never reached is not a refusal
+            return {
+                "ok": None,
+                "error": "slack_unreachable",
+                "message": f"Slack could not be reached ({exc.__class__.__name__}).",
+            }
+        headers = {str(k).lower(): v for k, v in (response.headers or {}).items()}
+        header = headers.get("x-oauth-scopes")
+        return {
+            "ok": True,
+            "team": response.get("team"),
+            "scopes": None if header is None else {s.strip() for s in header.split(",")},
+        }
 
     def post_text(self, channel: str | None, text: str) -> bool:
         """Post a plain-text message. The generic outbound send.

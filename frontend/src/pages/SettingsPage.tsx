@@ -4,6 +4,8 @@ import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, PlugZap, Puzzle,
 import { PageIntro } from '@/components/ui/page-intro'
 
 import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
+import { SectionStatus } from '@/components/settings/ConnectionStatus'
+import { useCheckAfterSave } from '@/components/settings/useConnections'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { Button } from '@/components/ui/button'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
@@ -135,10 +137,12 @@ export function SettingsPage() {
     if (settingsQuery.data) setFormData(settingsQuery.data)
   }, [settingsQuery.data])
 
+  const checkAfterSave = useCheckAfterSave()
   const saveMutation = useMutation({
     mutationFn: (data: Settings) => api.put<Settings>('/settings', data),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['settings'], ['network-policy'], ['openalex-usage'], ['openalex-status'], ['semantic-scholar-status'])
+      await invalidateQueries(queryClient, ['settings'], ['network-policy'], ['openalex-usage'], ['connections'])
+      void checkAfterSave(['openalex', 'semantic_scholar'])
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
     },
@@ -325,7 +329,7 @@ export function SettingsPage() {
               {saveMutation.isError && (
                 <span className="inline-flex items-center gap-1.5 text-sm text-critical-600">
                   <AlertCircle className="h-4 w-4" />
-                  Failed to save
+                  {getApiErrorMessage(saveMutation.error)}
                 </span>
               )}
               <AsyncButton
@@ -434,9 +438,12 @@ function SettingsSection({
   return (
     <section aria-labelledby={`section-${id}`} className="space-y-4">
       <div className="pb-3">
-        <h2 id={`section-${id}`} className="font-brand text-lg font-semibold tracking-tight text-alma-800">
-          {title}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id={`section-${id}`} className="font-brand text-lg font-semibold tracking-tight text-alma-800">
+            {title}
+          </h2>
+          <SectionStatus section={id} />
+        </div>
         <p className="mt-0.5 text-sm text-slate-500">{caption}</p>
         <Separator className="mt-3" />
       </div>
