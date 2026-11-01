@@ -1,6 +1,7 @@
-"""Database deduplication and stable ID assignment.
+"""Paper deduplication and stable author ids.
 
-This module centralizes author/paper deduplication logic for v3 schema.
+Authors are not merged here: `application.author_merge` owns that, with the
+record of who decided what.
 
 v3 Schema Changes:
 - papers table uses UUID `id` as PK (not composite key)
@@ -121,164 +122,6 @@ def ensure_stable_ids(conn: sqlite3.Connection) -> dict:
         "ON publication_authors(lower(openalex_id))"
     )
     return {"authors_updated": changed_authors}
-
-
-def _merge_author_metadata(conn: sqlite3.Connection, keeper_id: str, dup_id: str) -> None:
-    k = conn.execute("SELECT * FROM authors WHERE id = ?", (keeper_id,)).fetchone()
-    d = conn.execute("SELECT * FROM authors WHERE id = ?", (dup_id,)).fetchone()
-    if not k or not d:
-        return
-    updates: dict[str, object] = {}
-    for col in ("openalex_id", "orcid", "affiliation", "interests", "url_picture", "institutions", "email_domain"):
-        if not (k[col] or "").strip() and (d[col] or "").strip():
-            updates[col] = d[col]
-    updates["citedby"] = max(int(k["citedby"] or 0), int(d["citedby"] or 0))
-    updates["h_index"] = max(int(k["h_index"] or 0), int(d["h_index"] or 0))
-    updates["works_count"] = max(int(k["works_count"] or 0), int(d["works_count"] or 0))
-    if updates:
-        sets = ", ".join(f"{c} = ?" for c in updates.keys())
-        conn.execute(f"UPDATE authors SET {sets} WHERE id = ?", (*updates.values(), keeper_id))
-
-
-def _update_publication_authors_for_merge(conn: sqlite3.Connection, old_author_id: str, new_author_id: str) -> int:
-    """Update publication_authors junction table when merging authors (v3 schema).
-
-    v3 schema: papers don't have author_id column. Author associations are in
-    the publication_authors junction table.
-    """
-    moved = 0
-    try:
-        # Move all authorship records from old author to new author
-        rows = conn.execute(
-            "SELECT * FROM publication_authors WHERE openalex_id IN "
-            "(SELECT openalex_id FROM authors WHERE id = ?)",
-            (old_author_id,),
-        ).fetchall()
-
-        for row in rows:
-            # Try to insert into new author (may already exist)
-            conn.execute(
-                """INSERT OR IGNORE INTO publication_authors
-                   (paper_id, openalex_id, display_name, orcid, position, is_corresponding, institution)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    row["paper_id"],
-                    row["openalex_id"],
-                    row["display_name"],
-                    row["orcid"],
-                    row["position"],
-                    row["is_corresponding"],
-                    row["institution"],
-                ),
-            )
-            moved += 1
-    except Exception as exc:
-        # publication_authors is the only authorship link we have for
-        # papers in v3 schema. Silently dropping a failure here means
-        # papers lose their author attribution after a merge — log it
-        # so a re-run or manual re-link can recover.
-        logger.warning(
-            "Failed to move publication_authors rows for author %s → %s: %s",
-            old_author_id,
-            new_author_id,
-            exc,
-        )
-
-    return moved
-
-
-def _merge_author_publications(conn: sqlite3.Connection, dup_id: str, keeper_id: str) -> int:
-    """Merge author associations when deduplicating authors (v3 schema).
-
-    v3 schema: papers don't have author_id column. Author associations are in
-    publication_authors junction table. We need to update that table.
-    """
-    moved = _update_publication_authors_for_merge(conn, dup_id, keeper_id)
-    return moved
-
-
-def deduplicate_authors(conn: sqlite3.Connection) -> dict:
-    """Deduplicate authors by OpenAlex ID, ORCID, or normalized name (v3 schema)."""
-    rows = conn.execute("SELECT * FROM authors ORDER BY id").fetchall()
-    if not rows:
-        return {"groups": 0, "merged_authors": 0, "moved_authorship_records": 0}
-
-    groups: dict[str, list[str]] = {}
-    by_id: dict[str, sqlite3.Row] = {r["id"]: r for r in rows}
-    for r in rows:
-        keys: list[str] = []
-        oa = _norm_openalex_author(r["openalex_id"])
-        oc = _norm_orcid(r["orcid"])
-        nm = _norm_text(r["name"])
-        if oa:
-            keys.append(f"oa:{oa}")
-        if oc:
-            keys.append(f"orcid:{oc}")
-        if nm:
-            keys.append(f"name:{nm}")
-        key = keys[0] if keys else f"id:{r['id']}"
-        groups.setdefault(key, []).append(r["id"])
-
-    merged_authors = 0
-    moved_authorship_records = 0
-    merged_groups = 0
-
-    for _, ids in groups.items():
-        # Exact duplicate IDs from multiple keys are not expected here.
-        uniq = []
-        seen = set()
-        for i in ids:
-            if i not in seen:
-                uniq.append(i)
-                seen.add(i)
-        if len(uniq) <= 1:
-            continue
-
-        merged_groups += 1
-        # Prefer rows with OA/ORCID + richer metadata.
-        def _score(aid: str) -> int:
-            r = by_id[aid]
-            return (
-                (1 if _norm_openalex_author(r["openalex_id"]) else 0) * 1000
-                + (1 if _norm_orcid(r["orcid"]) else 0) * 900
-                + int(r["works_count"] or 0)
-                + int(r["citedby"] or 0)
-            )
-
-        keeper = sorted(uniq, key=_score, reverse=True)[0]
-        for dup in uniq:
-            if dup == keeper:
-                continue
-            # One gated write window per merged author (commit-per-unit-of-work;
-            # all-local, no network — the gate releases between merges so a
-            # concurrent foreground write isn't starved for the whole sweep).
-            with write_section(conn, label="dedup author merge"):
-                _merge_author_metadata(conn, keeper, dup)
-                moved_authorship_records += _merge_author_publications(conn, dup, keeper)
-
-                # followed_authors should keep one row.
-                try:
-                    row = conn.execute(
-                        "SELECT followed_at, notify_new_papers FROM followed_authors WHERE author_id = ?",
-                        (dup,),
-                    ).fetchone()
-                    if row:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO followed_authors (author_id, followed_at, notify_new_papers) VALUES (?, ?, ?)",
-                            (keeper, row["followed_at"], row["notify_new_papers"]),
-                        )
-                        conn.execute("DELETE FROM followed_authors WHERE author_id = ?", (dup,))
-                except Exception:
-                    pass
-
-                conn.execute("DELETE FROM authors WHERE id = ?", (dup,))
-            merged_authors += 1
-
-    return {
-        "groups": merged_groups,
-        "merged_authors": merged_authors,
-        "moved_authorship_records": moved_authorship_records,
-    }
 
 
 # A title key shorter than this ("Introduction", "Theory of mind") names many works.
@@ -431,16 +274,6 @@ def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> di
         except Exception:
             pass
 
-    # deduplicate_authors commits each merge in its own write_section.
-    author_summary = deduplicate_authors(conn)
-    if job_id:
-        try:
-            from alma.api.scheduler import add_job_log
-
-            add_job_log(job_id, f"Author dedup complete: {author_summary}", step="dedup_authors")
-        except Exception:
-            pass
-
     # deduplicate_papers commits each merge in its own write_section.
     paper_summary = deduplicate_papers(conn)
     if job_id:
@@ -469,7 +302,6 @@ def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> di
     summary = {
         "started_at": started,
         "finished_at": utcnow().isoformat(),
-        "authors": author_summary,
         "papers": paper_summary,
         "stable_ids": id_summary,
     }
