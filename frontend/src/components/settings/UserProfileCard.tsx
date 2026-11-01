@@ -64,10 +64,14 @@ export function UserProfileCard() {
 
   const saveName = useMutation({
     mutationFn: (value: string) => setOnboardingProfile(value),
-    onSuccess: async () => {
+    onSuccess: async (_result, value) => {
       setNameTouched(false)
       await invalidateQueries(queryClient, ['user-profile'], ['home-brief'])
-      toast({ title: 'Name saved', description: 'ALMa will greet you by it.' })
+      toast(
+        value.trim()
+          ? { title: 'Name saved', description: 'ALMa will greet you by it.' }
+          : { title: 'Name cleared', description: 'ALMa will greet you without a name.' },
+      )
     },
     onError: (error) => errorToast('Could not save your name', getApiErrorMessage(error)),
   })
@@ -146,14 +150,14 @@ export function UserProfileCard() {
                 setName(event.target.value)
               }}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && nameDirty && name.trim()) {
+                if (event.key === 'Enter' && nameDirty) {
                   saveName.mutate(name.trim())
                 }
               }}
             />
             <AsyncButton
               size="sm"
-              disabled={!nameDirty || !name.trim()}
+              disabled={!nameDirty}
               pending={saveName.isPending}
               onClick={() => saveName.mutate(name.trim())}
             >

@@ -130,7 +130,7 @@ class WalkthroughImportResponse(BaseModel):
 
 
 class ProfileRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    name: str = Field(max_length=120)
 
 
 class OwnerIdentity(BaseModel):
@@ -205,14 +205,16 @@ def set_onboarding_profile(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Store the user's display name (local greeting; no external call)."""
+    """Store the user's display name; a blank name clears it (local, no external call)."""
     name = payload.name.strip()
 
-    run_write_unit(
-        db,
-        lambda: upsert_setting(db, _USER_NAME_KEY, name),
-        label="onboarding_profile",
-    )
+    def _persist() -> None:
+        if name:
+            upsert_setting(db, _USER_NAME_KEY, name)
+        else:
+            db.execute("DELETE FROM discovery_settings WHERE key = ?", (_USER_NAME_KEY,))
+
+    run_write_unit(db, _persist, label="onboarding_profile")
 
 
 @router.get("/user-profile", response_model=UserProfileResponse)
