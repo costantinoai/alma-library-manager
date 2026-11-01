@@ -18,7 +18,7 @@ from typing import Any
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.http_sources import source_diagnostics_scope
 from alma.core.rotation import RotationWindow, load_cursor, save_cursors, take_window
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, taste_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import candidate_dedup_key
 from alma.core.vector_blob import decode_vector, encode_vector
@@ -183,7 +183,7 @@ def coupling_candidates(
                COUNT(DISTINCT pr.paper_id) AS overlap
         FROM publication_references pr
         JOIN papers p ON p.id = pr.paper_id
-        WHERE p.status = 'library'
+        WHERE {taste_paper_sql('p')}
           AND {standalone_paper_sql('p')}
           AND NOT EXISTS (
               SELECT 1 FROM papers q
@@ -277,7 +277,7 @@ def build_frontier(
             SELECT pr.paper_id, CAST(pr.referenced_work_id AS TEXT) AS rid
             FROM publication_references pr
             JOIN papers p ON p.id = pr.paper_id
-            WHERE p.status = 'library'
+            WHERE {taste_paper_sql('p')}
               AND {standalone_paper_sql('p')}
               AND CAST(pr.referenced_work_id AS TEXT) IN ({placeholders})
             """,
@@ -338,7 +338,7 @@ def build_discovery_frontier(
         SELECT pt.term, SUM(COALESCE(pt.score, 0.0)) AS strength
         FROM publication_topics pt
         JOIN papers p ON p.id = pt.paper_id
-        WHERE p.status = 'library'
+        WHERE {taste_paper_sql('p')}
           AND COALESCE(TRIM(pt.term), '') != ''
           AND {standalone_paper_sql('p')}
         GROUP BY LOWER(TRIM(pt.term))
@@ -970,7 +970,7 @@ def _s2_seed_pools(db: sqlite3.Connection) -> tuple[list[str], list[str]]:
                status, rating
         FROM papers
         WHERE (
-            status = 'library'
+            {taste_paper_sql('papers')}
             OR status = 'removed'
             OR COALESCE(rating, 0) BETWEEN 1 AND 2
         )
@@ -1001,7 +1001,7 @@ def _s2_seed_pools(db: sqlite3.Connection) -> tuple[list[str], list[str]]:
         if not value:
             continue
         rated_down = 1 <= int(row["rating"] or 0) <= 2
-        if row["status"] == "library" and not rated_down:
+        if row["status"] != "removed" and not rated_down:
             positive.append(value)
         else:
             negative.append(value)
@@ -1036,7 +1036,7 @@ def _openalex_seed_window(db: sqlite3.Connection, *, limit: int) -> RotationWind
         f"""
         SELECT openalex_id
         FROM papers
-        WHERE status = 'library'
+        WHERE {taste_paper_sql('papers')}
           AND NOT COALESCE(rating, 0) BETWEEN 1 AND 2
           AND openalex_id GLOB 'W[0-9]*'
           AND {standalone_paper_sql('papers')}

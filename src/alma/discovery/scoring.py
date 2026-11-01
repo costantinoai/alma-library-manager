@@ -47,7 +47,7 @@ from alma.core.scoring_math import (
 from alma.core.scoring_math import (
     log_prevalence_weights,
 )
-from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, POSITIVE_RATING, id_list, standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import candidate_paper_id
 from alma.discovery import similarity as sim_module
@@ -487,7 +487,8 @@ def _incorporate_feedback(
             f"""SELECT r.paper_id, r.user_action
                FROM recommendations r
                JOIN papers p ON p.id = r.paper_id
-               WHERE r.user_action IN ('save', 'like', 'liked')
+               WHERE (r.user_action IN ('save', 'like', 'liked')
+                      OR COALESCE(p.rating, 0) >= {POSITIVE_RATING})
                  AND {standalone_paper_sql('p')}"""
         ).fetchall()
     except sqlite3.OperationalError:

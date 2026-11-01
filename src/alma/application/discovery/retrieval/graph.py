@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql
+from alma.core.sql_helpers import IN_ID_LIST, id_list, standalone_paper_sql, unjudged_candidate_sql
 
 from ..ppr import SEED_LIBRARY, SEED_LOVED, compute_ppr_variants
 from ._common import (
@@ -336,7 +336,7 @@ def _candidates_by_paper_id(
             SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE id IN ({placeholders})
-              AND status NOT IN ('library', 'dismissed', 'removed')
+              AND {unjudged_candidate_sql('')}
               AND {standalone_paper_sql('papers')}
             """,
             chunk,
@@ -360,7 +360,7 @@ def _candidates_by_openalex_id(
             SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE openalex_id IN ({placeholders})
-              AND status NOT IN ('library', 'dismissed', 'removed')
+              AND {unjudged_candidate_sql('')}
               AND {standalone_paper_sql('papers')}
             """,
             chunk,
@@ -425,7 +425,7 @@ def _ppr_candidates(
             SELECT {LOCAL_PAPER_SELECT}
             FROM papers
             WHERE id IN ({placeholders})
-              AND status NOT IN ('library', 'dismissed', 'removed')
+              AND {unjudged_candidate_sql('')}
               AND {standalone_paper_sql('papers')}
             """,
             chunk,

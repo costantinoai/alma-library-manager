@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 
 from alma.application.signal_projection import load_projected_paper_signals
 from alma.core.scoring_math import clamp as _clamp
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, taste_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +447,7 @@ def library_centroid(
             SELECT pe.embedding AS embedding
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
-            WHERE p.status = 'library' AND pe.model = ?
+            WHERE {taste_paper_sql('p')} AND pe.model = ?
               AND {standalone_paper_sql('p')}
             """,
             (model,),
@@ -488,10 +488,10 @@ def _load_paper_stats(
                 f"""
                 SELECT {group_expr} AS k,
                        COUNT(DISTINCT p.id) AS total,
-                       SUM(CASE WHEN p.status = 'library' THEN 1 ELSE 0 END) AS lib,
-                       SUM(CASE WHEN p.status = 'library' AND p.rating > 0
+                       SUM(CASE WHEN {taste_paper_sql('p')} THEN 1 ELSE 0 END) AS lib,
+                       SUM(CASE WHEN {taste_paper_sql('p')} AND p.rating > 0
                                 THEN p.rating ELSE 0 END) AS rsum,
-                       SUM(CASE WHEN p.status = 'library' AND p.rating > 0
+                       SUM(CASE WHEN {taste_paper_sql('p')} AND p.rating > 0
                                 THEN 1 ELSE 0 END) AS rn
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
@@ -590,7 +590,7 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
                 SELECT DISTINCT lower(pa.openalex_id) AS oid
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
-                WHERE p.status = 'library'
+                WHERE {taste_paper_sql('p')}
                   AND COALESCE(TRIM(pa.openalex_id), '') <> ''
                   AND {standalone_paper_sql('p')}
             ),
@@ -626,7 +626,7 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
                 SELECT DISTINCT pr.referenced_work_id AS wid
                 FROM publication_references pr
                 JOIN papers p ON p.id = pr.paper_id
-                WHERE p.status = 'library'
+                WHERE {taste_paper_sql('p')}
                   AND pr.referenced_work_id IS NOT NULL
                   AND {standalone_paper_sql('p')}
             )

@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import POSITIVE_RATING, standalone_paper_sql, taste_paper_sql
 
 # Restart probability complement. 0.85 is the classic PageRank damping factor;
 # lower values keep the walk tighter around the seeds.
@@ -224,9 +224,9 @@ def _load_edges(db: sqlite3.Connection) -> list[tuple[str, str]]:
 def _load_seed_ids(db: sqlite3.Connection, seed_scope: str) -> list[str]:
     """Paper ids the walk restarts from."""
     where = (
-        "p.status = 'library' AND COALESCE(p.rating, 0) >= 4"
+        f"COALESCE(p.rating, 0) >= {POSITIVE_RATING} AND {taste_paper_sql('p')}"
         if seed_scope == SEED_LOVED
-        else "p.status = 'library'"
+        else taste_paper_sql("p")
     )
     rows = db.execute(
         f"SELECT p.id FROM papers p WHERE {where} AND {standalone_paper_sql('p')}"

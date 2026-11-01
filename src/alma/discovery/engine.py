@@ -23,7 +23,7 @@ from typing import Any
 from alma.core.paper_groups import (
     resolve_paper_root_id,
 )
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, unjudged_candidate_sql
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.core.utils import candidate_dedup_key
@@ -457,7 +457,7 @@ def _dense_fallback_candidates(
             FROM publication_embeddings pe
             JOIN papers p ON pe.paper_id = p.id
             WHERE pe.model = ?
-              AND COALESCE(p.status, '') NOT IN ('library', 'removed', 'dismissed')
+              AND {unjudged_candidate_sql('p')}
               AND {standalone_paper_sql('p')}
             """,
             (model,),

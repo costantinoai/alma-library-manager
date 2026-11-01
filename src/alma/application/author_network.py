@@ -44,7 +44,7 @@ from alma.application import paper_signal
 from alma.core.db_write import write_section
 from alma.core.http_sources import get_source_http_client
 from alma.core.rotation import RotationWindow, load_cursor, save_cursors, take_window
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, taste_paper_sql
 from alma.core.utils import normalize_doi
 from alma.discovery.defaults import merge_discovery_defaults
 from alma.openalex import client as openalex_client
@@ -295,7 +295,7 @@ def _rank_seed_authors(db: sqlite3.Connection) -> list[str]:
 
     state = paper_signal.load_library_state(db)
     lib_paper_rows = db.execute(
-        f"SELECT id FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
+        f"SELECT id FROM papers WHERE {taste_paper_sql('papers')} AND {standalone_paper_sql('papers')}"
     ).fetchall()
     lib_ids = [str(r["id"]) for r in lib_paper_rows]
     scores = paper_signal.score_papers_batch(db, lib_ids, state)
@@ -305,7 +305,7 @@ def _rank_seed_authors(db: sqlite3.Connection) -> list[str]:
             SELECT DISTINCT lower(trim(pa.openalex_id)) AS oid, pa.paper_id
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
-            WHERE p.status = 'library'
+            WHERE {taste_paper_sql('p')}
               AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(pa.openalex_id), '') <> ''
             ORDER BY oid, pa.paper_id
@@ -370,7 +370,7 @@ def _select_seed_dois(
             f"""
             SELECT id, doi
             FROM papers
-            WHERE status = 'library'
+            WHERE {taste_paper_sql('papers')}
               AND {standalone_paper_sql('papers')}
               AND COALESCE(NULLIF(TRIM(doi), ''), '') <> ''
             """
@@ -520,7 +520,7 @@ def _library_venue_set(db: sqlite3.Connection) -> set[str]:
             f"""
             SELECT lower(trim(journal)) AS v
             FROM papers
-            WHERE status = 'library'
+            WHERE {taste_paper_sql('papers')}
               AND {standalone_paper_sql('papers')}
               AND COALESCE(TRIM(journal), '') <> ''
             """

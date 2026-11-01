@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from alma.core.scoring_math import query_match_score, query_tokens, rrf_weight
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql, unjudged_candidate_sql
 
 from ..frontier import load_live_frontier
 from ..seed_profile import _extract_keywords
@@ -91,7 +91,7 @@ def _load_local_pool(db: sqlite3.Connection) -> list[dict]:
         f"""
         SELECT {LOCAL_PAPER_SELECT}
         FROM papers
-        WHERE status NOT IN ('library', 'dismissed', 'removed')
+        WHERE {unjudged_candidate_sql('')}
           AND {standalone_paper_sql('papers')}
         """
     ).fetchall()
