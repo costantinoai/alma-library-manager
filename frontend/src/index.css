@@ -56,13 +56,16 @@
 
   /* ── Single neutral elevation ladder (v4 — one color per depth) ────────
    * THE source of truth for surface contrast. Depth alone decides the
-   * color: a surface at level N is always the same hex, everywhere. The
+   * color: a surface at level N is always the same hex, everywhere. Above
+   * the card the ladder alternates so nesting stays visible: level 2 is a
+   * well pressed into the card, level 3 a sheet resting in that well. Three
+   * near-whites in a row were cream on cream. The
    * old warm "content" / cool "chrome" split is gone — there is now ONE
    * neutral paper ladder. Lighter = more forefront (up the z-stack).
    *
    *   surface-0  #EDE6D6  the desk / app body
    *   surface-1  #FAF7EF  card on the desk · dialog/sheet body
-   *   surface-2  #FCFAF4  panel inside a card · table header band
+   *   surface-2  #F2EDE2  panel inside a card · table header band
    *   surface-3  #FEFDFA  nested well · popover / dropdown / menu
    *   surface-4  #FFFFFF  top of the stack (deepest nest)
    *
@@ -71,14 +74,14 @@
    * (Tailwind v4 purges class names it can't see as complete literals). */
   --color-surface-0: #EDE6D6;
   --color-surface-1: #FAF7EF;
-  --color-surface-2: #FCFAF4;
+  --color-surface-2: #F2EDE2;
   --color-surface-3: #FEFDFA;
   --color-surface-4: #FFFFFF;
 
   /* `--color-edge-N` is the warm hairline paired to each level. */
   --color-edge-0: #DAD0BA;   /* hairline on the desk */
   --color-edge-1: #DFD6C4;
-  --color-edge-2: #E5DECF;
+  --color-edge-2: #DCD3C2;
   --color-edge-3: #EBE5D9;
   --color-edge-4: #EFEAE1;   /* faintest, on white */
 
@@ -237,8 +240,8 @@
    * Tailwind's slate, darkened until each step that carries words clears
    * 4.5:1 on the desk and on every paper step. 300 stays a separator. */
   --color-slate-300: #76859B;
-  --color-slate-400: #5C6B82;
-  --color-slate-500: #526176;
+  --color-slate-400: #566579;
+  --color-slate-500: #4C5A6F;
   --color-slate-600: #45536A;
 
   /* ── Semantic status colors ─────────────────────────────────────────────
@@ -387,7 +390,7 @@
  *
  *   surface-0  #EDE6D6  the desk / app body
  *   surface-1  #FAF7EF  card · dialog/sheet body
- *   surface-2  #FCFAF4  panel in a card · table header band · input well host
+ *   surface-2  #F2EDE2  panel in a card · table header band · input well host
  *   surface-3  #FEFDFA  nested well · popover / dropdown / menu
  *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
  *   edge-0..4          one warm hairline paired to each surface level

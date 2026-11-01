@@ -281,8 +281,8 @@ function ResolutionStep({
       className={cn(
         'rounded-card border p-3',
         muted
-          ? 'border-divider bg-surface-2/60'
-          : 'border-divider bg-surface-1 shadow-paper-sm',
+          ? 'border-divider bg-control-quiet'
+          : 'border-divider bg-control-well shadow-paper-sm',
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -1004,7 +1004,7 @@ export function AIConfigCard() {
                 </div>
 
                 {dependencyEnv && (
-                  <Collapsible className="rounded-control border border-divider bg-surface-2/60">
+                  <Collapsible className="rounded-control border border-divider bg-control-well">
                     <CollapsibleTrigger
                       className={cn(
                         'group flex w-full items-center justify-between gap-3 rounded-card px-3 py-2 text-left',
@@ -1033,7 +1033,7 @@ export function AIConfigCard() {
                           <KeyValueRow
                             label="Resolved path"
                             value={
-                              <span className="font-mono text-caption">
+                              <span className="break-all font-mono text-caption">
                                 {dependencyEnv.resolved_path}
                               </span>
                             }
@@ -1043,7 +1043,7 @@ export function AIConfigCard() {
                           <KeyValueRow
                             label="Backend executable"
                             value={
-                              <span className="font-mono text-caption">
+                              <span className="break-all font-mono text-caption">
                                 {dependencyEnv.backend_python_executable}
                               </span>
                             }
@@ -1060,7 +1060,7 @@ export function AIConfigCard() {
                             <KeyValueRow
                               label="Configured executable"
                               value={
-                                <span className="font-mono text-caption">
+                                <span className="break-all font-mono text-caption">
                                   {dependencyEnv.selected_python_executable}
                                 </span>
                               }
