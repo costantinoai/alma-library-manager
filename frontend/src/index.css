@@ -60,27 +60,27 @@
    * old warm "content" / cool "chrome" split is gone — there is now ONE
    * neutral paper ladder. Lighter = more forefront (up the z-stack).
    *
-   *   surface-0  #F1EAD8  the desk / app body
-   *   surface-1  #F8F4E8  card on the desk · dialog/sheet body
-   *   surface-2  #FBF8EE  panel inside a card · table header band
-   *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
+   *   surface-0  #EDE6D6  the desk / app body
+   *   surface-1  #FAF7EF  card on the desk · dialog/sheet body
+   *   surface-2  #FCFAF4  panel inside a card · table header band
+   *   surface-3  #FEFDFA  nested well · popover / dropdown / menu
    *   surface-4  #FFFFFF  top of the stack (deepest nest)
    *
    * Consumed ONLY through the static SURFACE_BG / SURFACE_BORDER literal
    * maps in components/ui/surface.tsx — never interpolate `bg-surface-${n}`
    * (Tailwind v4 purges class names it can't see as complete literals). */
-  --color-surface-0: #F1EAD8;
-  --color-surface-1: #F8F4E8;
-  --color-surface-2: #FBF8EE;
-  --color-surface-3: #FFFEF9;
+  --color-surface-0: #EDE6D6;
+  --color-surface-1: #FAF7EF;
+  --color-surface-2: #FCFAF4;
+  --color-surface-3: #FEFDFA;
   --color-surface-4: #FFFFFF;
 
   /* `--color-edge-N` is the warm hairline paired to each level. */
-  --color-edge-0: #E2D7BE;   /* hairline on the desk */
-  --color-edge-1: #E6DCC6;
-  --color-edge-2: #EBE3D2;
-  --color-edge-3: #F0EADC;
-  --color-edge-4: #F2EEE4;   /* faintest, on white */
+  --color-edge-0: #DAD0BA;   /* hairline on the desk */
+  --color-edge-1: #DFD6C4;
+  --color-edge-2: #E5DECF;
+  --color-edge-3: #EBE5D9;
+  --color-edge-4: #EFEAE1;   /* faintest, on white */
 
   /* ── Control ink ladder — controls are ink, surfaces are paper ─────────
    * The surface ladder above belongs to CONTAINERS (desk, card, panel,
@@ -108,8 +108,8 @@
   --color-control-quiet:       rgb(20 35 58 / 0.07);  /* secondary btn, kbd     */
   --color-control-quiet-hover: rgb(20 35 58 / 0.12);  /* hover: quiet / ghost   */
   --color-control-track:       rgb(20 35 58 / 0.14);  /* rails, switch off      */
-  --color-control-edge:        rgb(20 35 58 / 0.16);  /* control hairline       */
-  --color-control-edge-strong: rgb(20 35 58 / 0.30);  /* hover / focus hairline */
+  --color-control-edge:        rgb(20 35 58 / 0.22);  /* control hairline       */
+  --color-control-edge-strong: rgb(20 35 58 / 0.38);  /* hover / focus hairline */
 
   /* ── Activity surface variant — the ONE deliberate exception ──────────
    * The Activity panel is system telemetry, not editorial reading, so it
@@ -165,7 +165,7 @@
   /* Text and marks on a filled state colour. */
   --color-on-fill: #FFFFFF;
   /* The paper divider hairline, `border-divider`. Controls use `control-edge`. */
-  --color-divider: #D5C7AB;
+  --color-divider: #D3C7B0;
   --color-divider-cool: #DCD6C5;
   /* Chart series with no ramp of their own. */
   --color-chart-sky: #6F98BB;
@@ -205,9 +205,11 @@
   --radius-check: 4px;
 
   /* ── Type sizes below `text-xs`, and the few above the default steps ──── */
-  --text-2xs: 10px;
-  --text-caption: 11px;
-  --text-lede: 15px;
+  --text-2xs: 11px;
+  --text-caption: 12px;
+  --text-xs: 13px;
+  --text-xs--line-height: 1.4;
+  --text-lede: 16px;
   --text-figure-sm: 28px;
   --text-figure-md: 34px;
   --text-figure-lg: 44px;
@@ -228,6 +230,14 @@
   --color-gold-700: #5F471D;
   --color-gold-800: #3F2F14;
   --color-gold-900: #251C0C;
+
+  /* ── Neutral text ramp ───────────────────────────────────────────────────
+   * Tailwind's slate, darkened until each step that carries words clears
+   * 4.5:1 on the desk and on every paper step. 300 stays a separator. */
+  --color-slate-300: #76859B;
+  --color-slate-400: #5C6B82;
+  --color-slate-500: #526176;
+  --color-slate-600: #45536A;
 
   /* ── Semantic status colors ─────────────────────────────────────────────
    * Kept on emerald / amber / rose / sky. These are SEMANTIC (positive /
@@ -299,38 +309,29 @@
    *   shadow-paper-md  — dropdown menus, popovers (default)
    *   shadow-paper-lg  — toasts, hero cards, hovered clickable cards
    */
-  --shadow-paper-sm: 0 1px 2px rgb(9 22 42 / 0.08);
-  --shadow-paper-md: 0 12px 32px rgb(9 22 42 / 0.12);
-  --shadow-paper-lg: 0 24px 60px rgb(9 22 42 / 0.18);
+  --shadow-paper-sm: 0 1px 2px rgb(9 22 42 / 0.10);
+  --shadow-paper-md: 0 1px 2px rgb(9 22 42 / 0.06), 0 6px 16px -4px rgb(9 22 42 / 0.14);
+  --shadow-paper-lg: 0 2px 6px rgb(9 22 42 / 0.08), 0 20px 44px -10px rgb(9 22 42 / 0.24);
 
   /* ── Paper-sheet shadow stack (cards) ──────────────────────────────────
-   * Layered to read as a physical sheet of paper resting on a desk:
-   *   1. Inset top white highlight  — the lit upper edge / paper face
-   *   2. 1px close parchment shadow — paper thickness against the desk
-   *   3. Mid drop                   — the page floats faintly off the surface
-   *   4. Far ambient                — depth diffusing into the room
-   * Single-layer drop shadows look synthetic; this stack reads like real
-   * paper. Use on Card surfaces. Hover variant deepens the lift; lg
-   * variant is for hero / feature cards (paper-detail header, anchored
-   * seed, landing hero).
+   * One light, from above, one ink. A close contact line gives the sheet its
+   * edge, a short drop gives it height. Elevation is the drop alone: rest,
+   * hover and hero differ only in how far the sheet stands off the desk.
    */
   --shadow-paper-sheet:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.85),
-    0 1px 0 0 rgb(155 130 86 / 0.10),
-    0 4px 10px -2px rgb(9 22 42 / 0.06),
-    0 18px 38px -16px rgb(9 22 42 / 0.10);
+    inset 0 1px 0 0 rgb(255 255 255 / 0.70),
+    0 1px 2px rgb(9 22 42 / 0.07),
+    0 4px 10px -6px rgb(9 22 42 / 0.12);
 
   --shadow-paper-sheet-hover:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.92),
-    0 1px 0 0 rgb(155 130 86 / 0.14),
-    0 10px 22px -4px rgb(9 22 42 / 0.10),
-    0 28px 56px -20px rgb(9 22 42 / 0.14);
+    inset 0 1px 0 0 rgb(255 255 255 / 0.70),
+    0 1px 2px rgb(9 22 42 / 0.08),
+    0 10px 20px -10px rgb(9 22 42 / 0.20);
 
   --shadow-paper-sheet-lg:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.95),
-    0 1px 0 0 rgb(155 130 86 / 0.16),
-    0 12px 24px -6px rgb(9 22 42 / 0.10),
-    0 36px 70px -24px rgb(9 22 42 / 0.16);
+    inset 0 1px 0 0 rgb(255 255 255 / 0.70),
+    0 1px 2px rgb(9 22 42 / 0.08),
+    0 14px 28px -14px rgb(9 22 42 / 0.22);
 
   /* ── Paper-inset shadow (sub-panels) ───────────────────────────────────
    * Recessed feel for sub-boxes nested inside a Card — a frame pressed
@@ -371,10 +372,10 @@
  * relation is computed (not hand-picked) by the SurfaceProvider context in
  * components/ui/surface.tsx, so cream-on-cream is structurally impossible.
  *
- *   surface-0  #F1EAD8  the desk / app body
- *   surface-1  #F8F4E8  card · dialog/sheet body
- *   surface-2  #FBF8EE  panel in a card · table header band · input well host
- *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
+ *   surface-0  #EDE6D6  the desk / app body
+ *   surface-1  #FAF7EF  card · dialog/sheet body
+ *   surface-2  #FCFAF4  panel in a card · table header band · input well host
+ *   surface-3  #FEFDFA  nested well · popover / dropdown / menu
  *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
  *   edge-0..4          one warm hairline paired to each surface level
  *
@@ -495,6 +496,11 @@ body {
     inset 1px 0 0 0 rgb(255 255 255 / 0.09),
     inset 0 1px 0 0 rgb(255 255 255 / 0.07),
     inset 0 -1px 0 0 rgb(0 0 0 / 0.32);
+}
+
+/* The cover is navy, so the ramp's mid step needs the lighter one to be read. */
+.alma-cardstock-cover {
+  --color-alma-400: var(--color-alma-300);
 }
 
 /* Ink tooltip: slate is the TEXT ramp for paper, and its dark steps vanish on
