@@ -11,7 +11,7 @@ import {
 } from '@/api/client'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -21,6 +21,7 @@ import { navigateTo } from '@/lib/hashRoute'
 import { invalidateAfterPaperMutation } from '@/lib/queryHelpers'
 import { formatPaperSource } from '@/lib/format'
 import { formatDate } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type ReadingStatusValue = 'clear' | 'reading' | 'done' | 'excluded'
 
@@ -193,13 +194,13 @@ export function ReadingListTab() {
       </div>
 
       {totalVisible === 0 ? (
-        <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-6 py-12 text-center">
+        <SubPanel variant="flat" padded={false}  className="px-6 py-12 text-center">
           <BookOpen className="mx-auto h-10 w-10 text-slate-300" />
           <p className="mt-4 text-sm font-medium text-slate-600">No reading-list papers match this view.</p>
           <p className="mt-1 text-xs text-slate-500">
             Queue papers from Saved Library or Corpus to turn reading status into a real workflow.
           </p>
-        </div>
+        </SubPanel>
       ) : (
         <div className="space-y-6">
           {sections.map((section) => (
@@ -209,11 +210,11 @@ export function ReadingListTab() {
                   <h3 className="text-lg font-semibold text-alma-800">{section.title}</h3>
                   <p className="text-sm text-slate-500">{section.description}</p>
                 </div>
-                <Badge variant="outline">{section.items.length}</Badge>
+                <StatusBadge tone="outline">{section.items.length}</StatusBadge>
               </div>
 
               {section.items.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-6 text-sm text-slate-400">
+                <div className="rounded-card border border-dashed border-divider px-4 py-6 text-sm text-slate-400">
                   No papers in this bucket.
                 </div>
               ) : (
@@ -238,11 +239,11 @@ export function ReadingListTab() {
                     }
                     const readingStatusSlot = (
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={paper.status === 'library' ? 'default' : 'secondary'}>
+                        <StatusBadge tone="neutral">
                           {readingListStatusLabel(paper)}
-                        </Badge>
-                        {paper.added_from && <Badge variant="outline">{formatPaperSource(paper.added_from)}</Badge>}
-                        {paper.added_at && <Badge variant="outline">Added {formatDate(paper.added_at)}</Badge>}
+                        </StatusBadge>
+                        {paper.added_from && <StatusBadge tone="outline">{formatPaperSource(paper.added_from)}</StatusBadge>}
+                        {paper.added_at && <StatusBadge tone="outline">Added {formatDate(paper.added_at)}</StatusBadge>}
                         <Select
                           value={(paper.reading_status as ReadingStatusValue | null) ?? 'clear'}
                           onValueChange={(value) => {
@@ -273,8 +274,7 @@ export function ReadingListTab() {
                         )}
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="text-slate-500 hover:text-slate-700"
+                          variant="muted"
                           onClick={() => updateReadingMutation.mutate({ paperId: paper.id, nextStatus: null, previous: paper.reading_status ?? null })}
                           disabled={updateReadingMutation.isPending}
                         >

@@ -296,7 +296,7 @@ function MonitorMix({ mix }: { mix: HomeBrief['activity']['feed']['by_monitor_ty
           .map((entry) => `${entry.value} ${entry.label}`)
           .join(', ')}`}
       />
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-slate-500">
         {entries.map((entry) => (
           <span key={entry.key} className="flex items-center gap-1.5">
             <span
@@ -350,7 +350,7 @@ function CaptureEyebrow({ paper }: { paper: HomePaper }) {
         </IdentityChip>
       )}
       {when && (
-        <span className="text-[11px] text-slate-500">
+        <span className="text-caption text-slate-500">
           Captured {formatRelativeShort(when)}
         </span>
       )}
@@ -492,13 +492,13 @@ export function HomePage() {
             the lighter paper stops exactly where the trim does. */}
         <Surface
           bordered={false}
-          className="-mx-5 -mt-5 rounded-t-sm px-5 pt-5 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6"
+          className="-mx-5 -mt-5 rounded-t-card px-5 pt-5 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6"
         >
           <PageIntro
             bare
             masthead
             rule
-            // The gold medallion + gold lede are Home's identity hue doing what
+            // The blue medallion + blue lede are Home's identity hue doing what
             // it does on every other page's masthead — here it also separates a
             // greeting from the section headings under it.
             icon={greetingIcon()}

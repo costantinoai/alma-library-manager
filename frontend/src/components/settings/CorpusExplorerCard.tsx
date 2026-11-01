@@ -78,6 +78,7 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // ---------------------------------------------------------------------------
 // Filters
@@ -140,7 +141,7 @@ function CorpusHoverContent({ paper }: { paper: Publication }) {
           {paper.title || 'Untitled'}
         </p>
         <p className="text-xs text-slate-600">{paper.authors || 'Unknown authors'}</p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[11px] text-slate-500">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-caption text-slate-500">
           {paper.journal && <span>{paper.journal}</span>}
           <span className="tabular-nums">{pubDate}</span>
           <span className="tabular-nums">
@@ -158,7 +159,7 @@ function CorpusHoverContent({ paper }: { paper: Publication }) {
         </p>
       )}
 
-      <div className="grid gap-1.5 border-t border-slate-100 pt-2 text-[11px]">
+      <div className="grid gap-1.5 border-t border-slate-100 pt-2 text-caption">
         <KeyRow label="paper_id" value={<span className="font-mono">{paper.id}</span>} />
         {paper.openalex_id && (
           <KeyRow
@@ -218,7 +219,7 @@ function CorpusHoverContent({ paper }: { paper: Publication }) {
 function KeyRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <span className="shrink-0 text-2xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </span>
       <span className="min-w-0 flex-1 text-right text-slate-700">{value}</span>
@@ -237,9 +238,9 @@ export function CorpusExplorerCard() {
       <CardHeader className="gap-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-slate-600">
+            <SubPanel variant="flat" padded={false}  className="flex size-9 shrink-0 items-center justify-center text-slate-600">
               <Database className="size-4" />
-            </div>
+            </SubPanel>
             <div className="space-y-1">
               <CardTitle className="text-base">Corpus explorer</CardTitle>
               <CardDescription className="max-w-2xl">
@@ -259,7 +260,7 @@ export function CorpusExplorerCard() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex h-[90vh] max-w-6xl flex-col overflow-hidden p-0">
-          <DialogHeader className="border-b border-[var(--color-border)] px-6 py-4">
+          <DialogHeader className="border-b border-divider px-6 py-4">
             <DialogTitle className="flex items-center gap-2 text-base">
               <Database className="size-4 text-slate-500" />
               Corpus explorer
@@ -468,7 +469,7 @@ function CorpusExplorerBody() {
         header: 'Resolution',
         size: 160,
         cell: ({ row }) => (
-          <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
+          <span className="rounded-control bg-control-quiet px-1.5 py-0.5 font-mono text-caption text-slate-600">
             {row.original.openalex_resolution_status || '—'}
           </span>
         ),
@@ -489,7 +490,7 @@ function CorpusExplorerBody() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex rounded-sm p-1 text-slate-400 transition-colors hover:bg-control-quiet hover:text-alma-700"
+                  className="inline-flex rounded-control p-1 text-slate-400 transition-colors hover:bg-control-quiet hover:text-alma-700"
                   aria-label="Open paper URL"
                   title="Open paper URL"
                 >
@@ -498,12 +499,12 @@ function CorpusExplorerBody() {
               ) : null}
               <Button
                 type="button"
-                variant="ghost"
+                variant="danger-muted"
                 onClick={(e) => {
                   e.stopPropagation()
                   setRemoveTarget(p)
                 }}
-                className="inline-flex h-auto rounded-sm p-1 text-slate-400 shadow-none hover:bg-critical-700/10 hover:text-critical-700"
+                className="h-auto p-1"
                 aria-label="Remove paper (soft delete)"
                 title="Remove paper (status → removed, row stays in DB)"
               >
@@ -668,7 +669,7 @@ function CorpusExplorerBody() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this paper?</AlertDialogTitle>
             <AlertDialogDescription>
-              Sets <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
+              Sets <code className="rounded-control bg-control-quiet px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
               on{' '}
               <span className="font-medium text-alma-800">
                 {removeTarget?.title || 'this paper'}
@@ -680,6 +681,7 @@ function CorpusExplorerBody() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removeMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               disabled={removeMutation.isPending}
               onClick={() => {
                 if (removeTarget) removeMutation.mutate(removeTarget.id)
@@ -703,7 +705,7 @@ function FilterSlot({
 }) {
   return (
     <div className="space-y-1">
-      <Label className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <Label className="text-2xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </Label>
       {children}

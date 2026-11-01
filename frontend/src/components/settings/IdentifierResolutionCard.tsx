@@ -8,6 +8,7 @@ import type { Settings } from '@/api/client'
 import { SettingsCard, SettingsSaveBar, ToggleRow } from '@/components/settings/primitives'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Form, FormControl, FormField, FormItem } from '@/components/ui/form'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const identifierSchema = z.object({
   id_resolution_semantic_scholar_enabled: z.boolean(),
@@ -162,10 +163,10 @@ export function IdentifierResolutionCard({
             />
           ))}
 
-          <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">
+          <SubPanel variant="flat" padded={false}  className="px-3 py-2 text-xs text-slate-600">
             Default recommended strategy: OpenAlex + Semantic Scholar + ORCID automatically,
             Google Scholar scraping only on manual action.
-          </p>
+          </SubPanel>
         </form>
       </Form>
     </SettingsCard>

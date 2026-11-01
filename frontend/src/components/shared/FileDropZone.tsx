@@ -63,7 +63,7 @@ export function FileDropZone({
       onDrop={onDrop}
       onDragOver={(event) => event.preventDefault()}
       onClick={() => inputRef.current?.click()}
-      className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+      className="flex cursor-pointer flex-col items-center gap-3 rounded-card border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
     >
       <Upload className="h-8 w-8 text-slate-400" />
       {file ? (

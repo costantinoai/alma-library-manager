@@ -25,7 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -46,6 +46,10 @@ import {
 } from '@/api/client'
 import { CollectionNameField } from '@/components/shared/CollectionNameField'
 import { describeJobLaunch } from '@/lib/activity'
+import { RowButton } from '@/components/ui/row-button'
+import { cn } from '@/lib/utils'
+import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type TabId = 'bibtex' | 'pdf' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -237,10 +241,10 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {/* Result */}
@@ -450,40 +454,32 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           <label className="mb-1 block text-sm font-medium text-slate-700">
             Zotero Collection (optional)
           </label>
-          <div className="max-h-48 overflow-y-auto rounded-sm border border-[var(--color-border)]">
-            <button
+          <div className="max-h-48 overflow-y-auto rounded-card border border-divider">
+            <RowButton selected={selectedCollectionKey === null}
               onClick={() => {
                 setSelectedCollectionKey(null)
                 setPreflight(null)
               }}
-              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                selectedCollectionKey === null
-                  ? 'bg-accent-soft text-alma-folio'
-                  : 'text-slate-600 hover:bg-control-quiet'
-              }`}
+              className={cn('px-3 py-2 text-sm', selectedCollectionKey !== null && 'text-slate-600 hover:bg-control-quiet')}
             >
               <FolderOpen className="h-4 w-4" />
               All items
-            </button>
+            </RowButton>
             {collections.map((c) => (
-              <button
+              <RowButton selected={selectedCollectionKey === c.key}
                 key={c.key}
                 onClick={() => {
                   setSelectedCollectionKey(c.key)
                   setPreflight(null)
                 }}
-                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
-                  selectedCollectionKey === c.key
-                    ? 'bg-accent-soft text-alma-folio'
-                    : 'text-slate-600 hover:bg-control-quiet'
-                }`}
+                className={cn('justify-between gap-0 px-3 py-2 text-sm', selectedCollectionKey !== c.key && 'text-slate-600 hover:bg-control-quiet')}
               >
                 <span className="flex items-center gap-2">
                   <FolderOpen className="h-4 w-4" />
                   {c.name}
                 </span>
-                <Badge variant="secondary">{c.num_items}</Badge>
-              </button>
+                <StatusBadge tone="neutral">{c.num_items}</StatusBadge>
+              </RowButton>
             ))}
             {collections.length === 0 && (
               <p className="px-3 py-2 text-sm text-slate-400">No collections found</p>
@@ -503,10 +499,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {/* Result */}
@@ -626,10 +622,10 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
       {preflight && <ImportPreflightDisplay preflight={preflight} />}
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+        <Alert variant="negative" layout="row" className="px-4">
           <AlertCircle className="h-4 w-4 text-critical-500" />
           <span className="text-sm text-critical-700">{error}</span>
-        </div>
+        </Alert>
       )}
 
       {queued && <ImportQueuedDisplay envelope={queued} />}
@@ -672,13 +668,13 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
   const sourceCalls = preflight.likely_source_calls
 
   return (
-    <div className="rounded-sm border border-accent-edge bg-accent-soft p-4">
+    <div className="rounded-card border border-accent-edge bg-accent-soft p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <CheckCircle className="h-5 w-5 text-alma-700" />
           <span className="font-medium text-alma-900">Import review ready</span>
         </div>
-        <Badge variant="secondary">{preflight.valid_entries} entries</Badge>
+        <StatusBadge tone="neutral">{preflight.valid_entries} entries</StatusBadge>
       </div>
       <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
         <div>DOI-backed: <span className="font-medium">{preflight.identifiers.doi}</span></div>
@@ -731,7 +727,7 @@ function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }
       'Your import is running in the background. You can keep using the app — Library will refresh automatically when it finishes.',
   })
   return (
-    <div className="rounded-lg border border-accent-edge bg-accent-soft p-4">
+    <div className="rounded-card border border-accent-edge bg-accent-soft p-4">
       <div className="mb-2 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
         <span className="font-medium text-alma-800">{title}</span>
@@ -750,7 +746,7 @@ function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }
 
 function ImportResultDisplay({ result }: { result: ImportResult }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
+    <SubPanel variant="flat" padded={false}  className="p-4">
       <div className="mb-2 flex items-center gap-2">
         <CheckCircle className="h-5 w-5 text-success-600" />
         <span className="font-medium text-alma-800">Import Complete</span>
@@ -778,7 +774,7 @@ function ImportResultDisplay({ result }: { result: ImportResult }) {
           </ul>
         </div>
       )}
-    </div>
+    </SubPanel>
   )
 }
 
@@ -797,11 +793,11 @@ function StatBox({
     red: 'text-critical-700',
   }
   return (
-    <div className="rounded-md bg-surface-1 p-2 text-center shadow-sm">
+    <SubPanel variant="flat" padded={false}  className="p-2 text-center shadow-paper-sm">
       <div className={`text-lg font-bold ${color ? colorMap[color] : 'text-alma-800'}`}>
         {value}
       </div>
       <div className="text-xs text-slate-500">{label}</div>
-    </div>
+    </SubPanel>
   )
 }

@@ -82,7 +82,7 @@ export function PluginsSection() {
         `off again keeps what you typed.`
       }
     >
-      <ul className="divide-y divide-[var(--color-border)]">
+      <ul className="divide-y divide-divider">
         {plugins.map((plugin) => (
           <PluginRow key={plugin.id} plugin={plugin} />
         ))}
@@ -113,7 +113,7 @@ function PluginRow({ plugin }: { plugin: PluginInfo }) {
   return (
     <li className="py-3 first:pt-0 last:pb-0">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-control-quiet text-slate-500">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-control-quiet text-slate-500">
           <Icon className="h-4 w-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
@@ -200,7 +200,7 @@ function PluginSetup({ plugin }: { plugin: PluginInfo }) {
   const hasAdvanced = fields.some(([, schema]) => schema['x-alma-advanced'])
 
   return (
-    <div className="mt-3 ml-10 space-y-4 border-l border-[var(--color-border)] pl-4">
+    <div className="mt-3 ml-10 space-y-4 border-l border-divider pl-4">
       {configQuery.isError && (
         <p className="text-xs text-critical-600">
           Configuration unavailable: {getApiErrorMessage(configQuery.error)}

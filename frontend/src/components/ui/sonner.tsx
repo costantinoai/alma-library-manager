@@ -5,17 +5,14 @@ import {
   OctagonX,
   TriangleAlert,
 } from "lucide-react"
-import { useTheme } from "next-themes"
 import { Toaster as Sonner } from "sonner"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
-
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme="light"
       className="toaster group"
       icons={{
         success: <CircleCheck className="h-4 w-4" />,
@@ -38,14 +35,15 @@ const Toaster = ({ ...props }: ToasterProps) => {
       }
       toastOptions={{
         classNames: {
-          // Paper-warm toast surface with a thin gold left-edge ribbon
-          // (the v2 trim accent). Sits on shadow-paper-lg so it floats
-          // clearly above the page without going hard-shadow.
-          toast: "border-l-4! border-l-gold-400! shadow-paper-lg! rounded!",
+          // The left edge says the outcome: green, red, or a neutral hairline
+          // for anything else. Sits on shadow-paper-lg so it floats clearly
+          // above the page without going hard-shadow.
+          toast:
+            "border-l-4! border-l-control-edge-strong! data-[type=success]:border-l-success-600! data-[type=error]:border-l-critical-600! shadow-paper-lg! rounded-card!",
           // slate-600, not slate-500: 500 misses AA on this paper.
           description: "text-slate-600!",
-          actionButton: "bg-alma-800! text-alma-cream! rounded-sm!",
-          cancelButton: "bg-control-quiet! text-alma-700! rounded-sm!",
+          actionButton: "bg-alma-800! text-alma-cream! rounded-control!",
+          cancelButton: "bg-control-quiet! text-alma-700! rounded-control!",
         },
       }}
       {...props}

@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { Plug, X } from 'lucide-react'
 import type { ConnectorNotice } from '@/lib/connector'
+import { Button } from '@/components/ui/button'
 
 const COPY: Record<ConnectorNotice['kind'], { title: string; body: string }> = {
   connector_outdated: {
@@ -24,7 +25,7 @@ export function ConnectorToastCard({
   const copy = COPY[notice.kind]
 
   return (
-    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded border border-[var(--color-border)] border-l-4 border-l-gold-400 bg-surface-1 p-4 shadow-paper-lg">
+    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded-card border border-divider border-l-4 border-l-control-edge-strong bg-surface-1 p-4 shadow-paper-lg">
       <div className="relative mt-0.5 shrink-0">
         {!reduceMotion && (
           <motion.span
@@ -48,28 +49,26 @@ export function ConnectorToastCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-alma-900">{copy.title}</p>
-          <span className="rounded border border-[var(--color-border)] bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
+          <span className="rounded-control border border-divider bg-control-quiet px-1.5 py-0.5 font-mono text-2xs leading-none tracking-tight text-alma-700">
             v{notice.connectorVersion}
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-slate-500">{copy.body}</p>
-        <button
-          type="button"
+        <Button variant="outline" size="xs"
           onClick={onClose}
-          className="mt-2.5 rounded-sm border border-control-edge px-2.5 py-1 text-xs font-medium text-alma-700 transition-colors hover:bg-control-quiet"
+          className="mt-2.5"
         >
           Got it
-        </button>
+        </Button>
       </div>
 
-      <button
-        type="button"
+      <Button variant="ghost" size="icon-xs" 
         aria-label="Dismiss"
         onClick={onClose}
-        className="absolute right-2 top-2 rounded-sm p-1 text-alma-400 transition-colors hover:bg-control-quiet hover:text-alma-700"
+        className="absolute right-2 top-2"
       >
         <X className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   )
 }

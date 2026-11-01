@@ -49,6 +49,8 @@ import {
 } from './healthFormat'
 import { DimensionStatusRow } from './DimensionStatusRow'
 import { RepairConfirmDialog } from './RepairConfirmDialog'
+import { Button } from '@/components/ui/button'
+import { Alert } from '@/components/ui/alert'
 
 interface RepairCardProps {
   op: MaintenanceOperation
@@ -174,7 +176,7 @@ export function RepairCard({
 
   return (
     <div
-      className={`space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper ${spine}`}
+      className={`space-y-3 rounded-card border border-divider bg-surface-2 p-4 shadow-paper ${spine}`}
     >
       {/* Head: what it is · cost · rolled-up severity · pending · ETA */}
       <div className="flex items-start justify-between gap-3">
@@ -227,20 +229,20 @@ export function RepairCard({
       {noEligibleWork ? <p className="text-xs text-slate-500">No eligible work for this repair in the selected scope.</p> : null}
 
       {op.blocked_by.length > 0 ? (
-        <p className="rounded-sm border border-warning-100 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+        <Alert variant="warning" layout="row" className="block px-3 py-2 text-xs">
           Prerequisites unresolved:{' '}
           {op.blocked_by.map((item) => `${item.label} (${item.pending ?? 'unknown'})${item.assessment_error ? `: ${item.assessment_error.message} Cause: ${item.assessment_error.cause}. ${item.assessment_error.recovery}` : ''}`).join(', ')}
           {prerequisiteUnknown
             ? ' — re-assess Health before running this repair.'
             : ' — you can run this now, but results may be incomplete until it finishes.'}
-        </p>
+        </Alert>
       ) : null}
 
       {quotaBlocked ? (
-        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+        <Alert variant="negative" layout="row" className="items-start px-3 py-2 text-xs">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{quota?.reason ?? 'Provider quota cannot cover this run.'}</span>
-        </p>
+        </Alert>
       ) : quota && pending != null ? (
         <p className="text-xs text-slate-500">
           Planned cost: {quota.required.toLocaleString()} {quota.provider === 'openalex' ? 'OpenAlex credits' : quota.unit}
@@ -249,7 +251,7 @@ export function RepairCard({
       ) : null}
 
       {op.availability_blocker ? (
-        <p className="flex items-start gap-2 rounded-sm border border-critical-500/40 bg-critical-50 px-3 py-2 text-xs text-critical-800">
+        <Alert variant="negative" layout="row" className="items-start px-3 py-2 text-xs">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
             {op.availability_blocker.message}{' '}
@@ -258,7 +260,7 @@ export function RepairCard({
             </a>
             {' '}Owner: {op.availability_blocker.owner}.
           </span>
-        </p>
+        </Alert>
       ) : null}
 
       {/* Status rows — the gaps this op repairs (click → affected papers). */}
@@ -268,7 +270,7 @@ export function RepairCard({
             <DimensionStatusRow key={dim.key} dim={dim} onOpen={() => onOpenDim(dim)} />
           ))}
           {healthyCount > 0 ? (
-            <p className="pl-1 text-[11px] text-slate-400">+{healthyCount} healthy</p>
+            <p className="pl-1 text-caption text-slate-400">+{healthyCount} healthy</p>
           ) : null}
         </div>
       ) : dims.length > 0 && !assessmentFailed ? (
@@ -302,7 +304,7 @@ export function RepairCard({
       </div>
 
       {/* Controls footer: auto-repair · scope/cap · preview · run */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-3">
         <div className="flex items-center gap-2">
           {!op.destructive ? (
             <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -324,13 +326,12 @@ export function RepairCard({
           {pausedUntil ? (
             <span className="inline-flex items-center gap-1 text-xs text-warning-700">
               Paused by you until {formatTimestamp(pausedUntil)}
-              <button
-                type="button"
-                className="rounded px-1.5 py-0.5 font-medium text-alma-folio-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
+              <Button variant="link-ink" size="inline"
+                className=""
                 onClick={() => onResume(op.key)}
               >
                 Resume
-              </button>
+              </Button>
             </span>
           ) : null}
           {/* H-11: config write in flight — the controls will snap to server

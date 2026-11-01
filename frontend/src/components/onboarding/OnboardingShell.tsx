@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { BrandRule } from '@/components/ui/brand-rule'
+import { SCRIM } from '@/components/ui/scrim'
 import { SurfaceProvider } from '@/components/ui/surface'
+import { cn } from '@/lib/utils'
 
 const EASE = [0.22, 0.61, 0.36, 1] as const
 
@@ -35,7 +37,7 @@ export function OnboardingShell({
 
   return (
     <motion.div
-      className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-scrim p-4 backdrop-blur-sm"
+      className={cn(SCRIM, 'z-onboarding grid place-items-center overflow-y-auto p-4 backdrop-blur-sm')}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -64,7 +66,7 @@ export function OnboardingShell({
                 <span className="font-brand text-xl font-semibold tracking-[0.01em] text-alma-800">
                   ALMa
                 </span>
-                <span className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.16em] text-alma-folio">
+                <span className="mt-0.5 text-2xs font-bold uppercase tracking-[0.16em] text-alma-folio">
                   <span className="text-alma-800">A</span>nother{' '}
                   <span className="text-alma-800">L</span>ibrary{' '}
                   <span className="text-alma-800">Ma</span>nager
@@ -72,20 +74,20 @@ export function OnboardingShell({
               </div>
               <div className="ml-auto flex items-center gap-2">
                 <div className="text-right">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                  <span className="text-2xs font-bold uppercase tracking-[0.16em] text-slate-400">
                     Step {Math.min(step + 1, total)} of {total}
                   </span>
                 </div>
                 {onClose ? (
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="muted"
                     size="icon-sm"
                     onClick={onClose}
                     disabled={closeDisabled}
                     aria-label="Close onboarding"
                     title="Close onboarding"
-                    className="shrink-0 text-slate-500 hover:text-alma-900"
+                    className="shrink-0"
                   >
                     <X className="h-4 w-4" aria-hidden />
                   </Button>

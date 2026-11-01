@@ -38,6 +38,10 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 import { PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'
+import { RowButton } from '@/components/ui/row-button'
+import { cn } from '@/lib/utils'
+import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 export function TagsTab() {
   const [tuneOpen, setTuneOpen] = useState(false)
@@ -190,9 +194,8 @@ export function TagsTab() {
           ) : (
             <div className="space-y-2">
               {mergeSuggestionsQuery.data?.map((item) => (
-                <div
-                  key={`${item.source_tag_id}:${item.target_tag_id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-3 py-2"
+                <SubPanel variant="flat" padded={false}
+                  key={`${item.source_tag_id}:${item.target_tag_id}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
                 >
                   <div className="text-sm text-slate-700">
                     <span className="font-medium">{item.source_tag}</span>
@@ -211,7 +214,7 @@ export function TagsTab() {
                     <GitMerge className="h-3.5 w-3.5" />
                     Merge
                   </Button>
-                </div>
+                </SubPanel>
               ))}
             </div>
           )}
@@ -236,12 +239,12 @@ export function TagsTab() {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {tags.map((tag) => (
-            <Card key={tag.id} className="transition-shadow hover:shadow-md">
+            <Card key={tag.id} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex items-center gap-2.5">
                     <div
-                      className="h-3.5 w-3.5 shrink-0 rounded-full shadow-sm"
+                      className="h-3.5 w-3.5 shrink-0 rounded-full shadow-paper-sm"
                       style={{ backgroundColor: tag.color }}
                     />
                     <span className="truncate font-medium text-alma-800">{tag.name}</span>
@@ -296,10 +299,10 @@ export function TagsTab() {
             </div>
           </div>
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <Alert variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to create tag.</span>
-            </div>
+            </Alert>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
@@ -334,14 +337,10 @@ export function TagsTab() {
             ) : (
               <div className="max-h-64 space-y-2 overflow-y-auto">
                 {likes.map((like) => (
-                  <button
+                  <RowButton selected={assignPubKey === like.id}
                     key={like.id}
                     onClick={() => setAssignPubKey(like.id)}
-                    className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      assignPubKey === like.id
-                        ? 'border-alma-folio bg-accent-soft'
-                        : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet'
-                    }`}
+                    className={cn('gap-3 rounded-control border px-3 py-2.5', assignPubKey === like.id ? 'border-alma-folio text-inherit' : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet')}
                   >
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">
@@ -353,7 +352,7 @@ export function TagsTab() {
                         <Star key={i} className="h-3 w-3 fill-warning-500 text-warning-500" />
                       ))}
                     </div>
-                  </button>
+                  </RowButton>
                 ))}
               </div>
             )}

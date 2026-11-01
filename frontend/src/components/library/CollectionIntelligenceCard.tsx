@@ -14,7 +14,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 
 import { getCollectionIntelligence, type CollectionIntelligenceData } from '@/api/client'
 import { ActionCardHeader } from '@/components/shared'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
@@ -131,9 +131,9 @@ export function CollectionIntelligenceCard() {
         cell: ({ row }) => (
           <div className="flex flex-wrap gap-1">
             {row.original.top_topics.slice(0, 3).map((t) => (
-              <Badge key={t.topic} variant="secondary" className="text-xs" title={t.topic}>
+              <StatusBadge key={t.topic} tone="neutral" className="text-xs" title={t.topic}>
                 {truncate(t.topic, 20)}
-              </Badge>
+              </StatusBadge>
             ))}
           </div>
         ),

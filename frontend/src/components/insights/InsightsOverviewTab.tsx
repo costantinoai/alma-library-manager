@@ -29,7 +29,6 @@ import {
 } from 'recharts'
 
 import type { AIStatus, InsightsData, InsightsDrilldownFilter } from '@/api/client'
-import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -50,7 +49,10 @@ import { CHART_FRAME, COLORS } from '@/components/insights/chartTheme'
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { Meter } from '@/components/ui/meter'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
-import { cn, formatNumber, truncate } from '@/lib/utils'
+import { formatNumber, truncate } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface Palette {
   blue: string
@@ -326,23 +328,21 @@ export function InsightsOverviewTab({
             accent="text-alma-folio"
             title="Provenance"
             action={
-              <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
+              <ToggleGroup
+                type="single"
+                variant="segment"
+                size="chip"
+                value={provenanceMode}
+                onValueChange={(mode) => {
+                  if (mode) setProvenanceMode(mode as typeof provenanceMode)
+                }}
+              >
                 {(['countries', 'institutions'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setProvenanceMode(mode)}
-                    className={cn(
-                      'px-2 py-1 text-xs font-medium capitalize transition-colors',
-                      provenanceMode === mode
-                        ? 'bg-accent-soft text-alma-folio'
-                        : 'bg-control-well text-slate-600 hover:bg-control-quiet',
-                    )}
-                  >
+                  <ToggleGroupItem key={mode} value={mode} className="capitalize">
                     {mode}
-                  </button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             }
           />
           <CardContent>
@@ -472,12 +472,11 @@ export function InsightsOverviewTab({
                   const followed = venueFollow.isVenueFollowed(j.journal)
                   return (
                     <li key={j.journal} className="group relative">
-                      <button
-                        type="button"
+                      <RowButton
                         onClick={() =>
                           openDrilldown('journal', j.journal, `Papers in journal: ${j.journal}`)
                         }
-                        className="flex w-full items-center gap-3 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-control-quiet"
+                        className="gap-3 rounded-control px-2 py-1.5 hover:bg-control-quiet"
                       >
                         <span className="min-w-0 flex-1">
                           <span className="flex items-baseline justify-between gap-2">
@@ -521,7 +520,7 @@ export function InsightsOverviewTab({
                             </StatusBadge>
                           )
                         )}
-                      </button>
+                      </RowButton>
                     </li>
                   )
                 })}
@@ -559,7 +558,7 @@ export function InsightsOverviewTab({
 
             <div className="space-y-3">
               <h4 className="font-brand text-sm font-semibold text-alma-800">Vector Embeddings</h4>
-              <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+              <SubPanel variant="flat" padded={false}  className="p-4 shadow-paper-sm">
                 <div className="flex items-center gap-3">
                   <Database className="h-5 w-5 text-alma-folio" />
                   <div className="flex-1">
@@ -567,9 +566,9 @@ export function InsightsOverviewTab({
                       <p className="font-brand font-semibold text-alma-800 tabular-nums">
                         {formatNumber(embeddings.total_vectors)} vectors
                       </p>
-                      <Badge variant="secondary" className="text-xs">
+                      <StatusBadge tone="neutral" className="text-xs">
                         {embeddings.coverage_pct}% coverage
-                      </Badge>
+                      </StatusBadge>
                     </div>
                     <p className="mt-1 text-xs text-slate-400">Model: {embeddings.model}</p>
                     <Progress
@@ -579,9 +578,8 @@ export function InsightsOverviewTab({
                     {embeddingModels.length > 0 ? (
                       <div className="mt-3 space-y-1">
                         {embeddingModels.map((row) => (
-                          <div
-                            key={row.model}
-                            className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-2 py-1.5 text-xs"
+                          <SubPanel variant="flat" padded={false}
+                            key={row.model} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2 px-2 py-1.5 text-xs"
                           >
                             <span className="truncate font-mono text-alma-800">{row.model}</span>
                             <span className="text-slate-500 tabular-nums">{formatNumber(row.vectors)} vectors</span>
@@ -593,13 +591,13 @@ export function InsightsOverviewTab({
                             >
                               {row.active ? 'active' : `${row.coverage_pct.toFixed(1)}%`}
                             </StatusBadge>
-                          </div>
+                          </SubPanel>
                         ))}
                       </div>
                     ) : null}
                   </div>
                 </div>
-              </div>
+              </SubPanel>
             </div>
           </CardContent>
         </Card>
@@ -654,7 +652,7 @@ function TimelineTooltip(props: {
     top_paper_citations?: number
   }
   return (
-    <div className="max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
+    <div className="max-w-xs rounded-card border border-divider bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
       <p className="font-semibold text-alma-800">{label}</p>
       <p className="mt-0.5 text-slate-600">
         {row.count ?? 0} paper{row.count === 1 ? '' : 's'} · median{' '}
@@ -667,7 +665,7 @@ function TimelineTooltip(props: {
         </p>
       ) : null}
       {row.top_paper_title ? (
-        <p className="mt-1.5 border-t border-[var(--color-border)] pt-1.5 text-slate-500">
+        <p className="mt-1.5 border-t border-divider pt-1.5 text-slate-500">
           <span className="text-slate-400">Most cited:</span>{' '}
           <span className="text-alma-800">{row.top_paper_title}</span>
           {row.top_paper_citations ? ` (${row.top_paper_citations})` : ''}

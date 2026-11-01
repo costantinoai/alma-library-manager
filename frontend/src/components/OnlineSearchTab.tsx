@@ -83,6 +83,7 @@ import { topFamilies } from '@/lib/signals'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
 import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 // ---------------------------------------------------------------------------
 // Per-source progress, used to render the "openalex ✓ · arxiv ⟳ ..." strip
@@ -705,22 +706,22 @@ export function OnlineSearchTab({
             disabled={loading}
           />
           <InputGroupAddon align="inline-end">
-            <Kbd className="text-[10px]">↵</Kbd>
+            <Kbd className="text-2xs">↵</Kbd>
           </InputGroupAddon>
         </InputGroup>
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs leading-relaxed text-slate-500">
             Prefix with{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               author:
             </code>{' '}
             ,{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               title:
             </code>
             , or{' '}
-            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded-control bg-control-quiet px-1 py-0.5 text-caption text-slate-600">
               journal:
             </code>{' '}
             to scope the search. DOIs and OpenAlex URLs are detected automatically.
@@ -732,7 +733,6 @@ export function OnlineSearchTab({
             onClick={() => setShowFilters((s) => !s)}
             aria-expanded={showFilters}
             aria-controls="online-search-filters"
-            className={filtersActive ? 'text-alma-700' : ''}
           >
             <SlidersHorizontal className="size-3.5" />
             Filters{filtersActive ? ` · ${[yearMin, yearMax].filter(Boolean).join('–')}` : ''}
@@ -740,12 +740,11 @@ export function OnlineSearchTab({
         </div>
 
         {showFilters && (
-          <div
-            id="online-search-filters"
-            className="flex flex-wrap items-end gap-3 rounded-md border border-[var(--color-border)] bg-surface-2/60 p-3"
+          <SubPanel variant="flat" padded={false}
+            id="online-search-filters" className="flex flex-wrap items-end gap-3 p-3"
           >
             <div className="space-y-1">
-              <Label htmlFor="online-year-min" className="text-[11px] font-medium text-slate-600">
+              <Label htmlFor="online-year-min" className="text-caption font-medium text-slate-600">
                 From year
               </Label>
               <Input
@@ -761,7 +760,7 @@ export function OnlineSearchTab({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="online-year-max" className="text-[11px] font-medium text-slate-600">
+              <Label htmlFor="online-year-max" className="text-caption font-medium text-slate-600">
                 To year
               </Label>
               <Input
@@ -789,13 +788,13 @@ export function OnlineSearchTab({
             >
               Clear filters
             </Button>
-          </div>
+          </SubPanel>
         )}
       </div>
 
       {/* ── Per-source progress strip ── */}
       {(loading || Object.keys(sourceProgress).length > 0) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500" data-testid="online-search-progress">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-slate-500" data-testid="online-search-progress">
           {Object.entries(sourceProgress).map(([source, progress]) => {
             const Icon = progress.status === 'pending' ? Loader2
               : progress.status === 'partial' ? CheckCircle2
@@ -824,7 +823,7 @@ export function OnlineSearchTab({
             )
           })}
           {loading && !streamFinalised && (
-            <span className="ml-auto text-[10px] text-slate-400">ranking…</span>
+            <span className="ml-auto text-2xs text-slate-400">ranking…</span>
           )}
         </div>
       )}
@@ -917,9 +916,8 @@ export function OnlineSearchTab({
                   followedVenueKeys.has(venue.source_id.toLowerCase())
                 const pending = pendingVenueName === venue.display_name.toLowerCase()
                 return (
-                  <div
-                    key={venue.source_id}
-                    className="flex items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 p-3"
+                  <SubPanel variant="flat" padded={false}
+                    key={venue.source_id} className="flex items-center gap-3 p-3"
                   >
                     <BookOpen className="h-5 w-5 shrink-0 text-alma-folio" aria-hidden />
                     <div className="min-w-0 flex-1">
@@ -950,7 +948,7 @@ export function OnlineSearchTab({
                         Follow
                       </Button>
                     )}
-                  </div>
+                  </SubPanel>
                 )
               })}
             </div>
@@ -1044,7 +1042,7 @@ export function OnlineSearchTab({
                     Math.min(prev + PAGE_SIZE, sortedItems.length),
                   )
                 }
-                className="text-xs text-alma-700 hover:text-alma-800"
+                className="text-xs"
               >
                 + {Math.min(PAGE_SIZE, sortedItems.length - visibleCount)} more
               </Button>
@@ -1100,7 +1098,7 @@ function WhyChips({ score, breakdown }: WhyChipsProps) {
   const families = topFamilies(breakdown, 3)
   if (families.length === 0) return null
   return (
-    <div className="flex flex-wrap items-center gap-1.5 pl-1 text-[10px] text-slate-500">
+    <div className="flex flex-wrap items-center gap-1.5 pl-1 text-2xs text-slate-500">
       <span className="font-medium uppercase tracking-[0.08em] text-slate-500">Why</span>
       {typeof score === 'number' && score > 0 && (
         <StatusBadge tone="neutral" size="sm" title="Personal-fit score (0-100)">

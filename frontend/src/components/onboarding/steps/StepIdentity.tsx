@@ -19,6 +19,7 @@ import {
 } from '@/api/client'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 type Mode = 'id' | 'name'
 
@@ -164,7 +165,7 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       >
         <SubPanel variant="accent" className="space-y-3">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio text-alma-cream">
               <UserRoundCheck className="h-5 w-5" aria-hidden />
             </span>
             <div className="min-w-0">
@@ -193,7 +194,7 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       >
         <SubPanel variant="accent" className="space-y-3">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio text-alma-cream">
               <UserRoundCheck className="h-5 w-5" aria-hidden />
             </span>
             <div className="min-w-0">
@@ -243,28 +244,22 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
       footer={<StepNav onBack={back} onSkip={next} skipLabel="I'll do this later" />}
     >
       <div className="space-y-5">
-        <div className="inline-flex rounded-sm border border-[var(--color-border)] bg-surface-2 p-1">
-          <button
-            type="button"
-            onClick={() => setMode('id')}
-            className={
-              'flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ' +
-              (mode === 'id' ? 'bg-alma-folio-soft text-alma-folio' : 'text-slate-500 hover:text-alma-800')
-            }
-          >
+        <ToggleGroup
+          type="single"
+          variant="segment"
+          value={mode}
+          onValueChange={(next) => {
+            if (next) setMode(next as typeof mode)
+          }}
+          className="inline-flex"
+        >
+          <ToggleGroupItem value="id" className="h-8 gap-1.5 px-3">
             <IdCard className="h-4 w-4" /> ORCID / OpenAlex
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('name')}
-            className={
-              'flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ' +
-              (mode === 'name' ? 'bg-alma-folio-soft text-alma-folio' : 'text-slate-500 hover:text-alma-800')
-            }
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="name" className="h-8 gap-1.5 px-3">
             <Search className="h-4 w-4" /> Search by name
-          </button>
-        </div>
+          </ToggleGroupItem>
+        </ToggleGroup>
 
         {mode === 'id' ? (
           <div className="space-y-3">
@@ -334,9 +329,9 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
             </div>
 
             {searched && results.length === 0 ? (
-              <p className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3 text-sm text-slate-500">
+              <SubPanel variant="flat" padded={false}  className="px-4 py-3 text-sm text-slate-500">
                 No author profiles matched that name. Try a different spelling, or switch to ORCID.
-              </p>
+              </SubPanel>
             ) : null}
 
             <div className="space-y-2">
@@ -409,7 +404,7 @@ function ResultRow({
   onPick: () => void
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3">
+    <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-alma-800">{candidate.name}</p>
         <MetaLine candidate={candidate} />
@@ -417,6 +412,6 @@ function ResultRow({
       <Button variant="accent" size="sm" onClick={onPick} loading={pending} className="shrink-0">
         This is me
       </Button>
-    </div>
+    </SubPanel>
   )
 }

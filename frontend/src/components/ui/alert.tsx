@@ -9,16 +9,22 @@ import { cn } from "@/lib/utils"
 // exactly the drift this vocabulary is meant to prevent; reach for
 // `variant="warning"` instead.
 const alertVariants = cva(
-  "relative w-full rounded border border-[var(--color-border)] p-4 [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-alma-800",
+  "relative w-full rounded-card border border-divider [&>svg]:text-alma-800",
   {
     variants: {
+      // `callout` hangs the icon in the margin of a block of text. `row` is the
+      // one-line box: icon, message and any action share a line, spaced by the
+      // caller, which is what a failed fetch or a small notice wants.
+      layout: {
+        callout:
+          "p-4 [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4",
+        row: "flex items-center gap-2 p-3",
+      },
       variant: {
         default: "bg-surface-1 text-alma-900",
-        destructive:
-          "border-critical-500/50 text-critical-500 [&>svg]:text-critical-500",
         // Soft "negative" tone matching the StatusBadge `negative` palette.
         // Use for anti-affordance content (top negative preferences, suppressed
-        // entities, dislike summaries) where `destructive` is too loud.
+        // entities, dislike summaries) and every failed state.
         negative:
           "border-critical-200 bg-critical-50 text-critical-800 [&>svg]:text-critical-700",
         warning:
@@ -31,6 +37,7 @@ const alertVariants = cva(
     },
     defaultVariants: {
       variant: "default",
+      layout: "callout",
     },
   }
 )
@@ -38,11 +45,11 @@ const alertVariants = cva(
 const Alert = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & VariantProps<typeof alertVariants>
->(({ className, variant, ...props }, ref) => (
+>(({ className, variant, layout, ...props }, ref) => (
   <div
     ref={ref}
     role="alert"
-    className={cn(alertVariants({ variant }), className)}
+    className={cn(alertVariants({ variant, layout }), className)}
     {...props}
   />
 ))

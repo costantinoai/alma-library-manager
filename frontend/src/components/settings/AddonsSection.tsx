@@ -71,7 +71,7 @@ export function AddonsSection() {
       {addons.length === 0 ? (
         <p className="text-sm text-slate-500">This build has no add-ons.</p>
       ) : (
-        <ul className="divide-y divide-[var(--color-border)]">
+        <ul className="divide-y divide-divider">
           {addons.map((addon) => (
             <AddonRow key={addon.id} addon={addon} />
           ))}

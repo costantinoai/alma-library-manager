@@ -28,6 +28,9 @@ import { WALKTHROUGHS_QUERY_KEY } from '@/components/onboarding'
 import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
+import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /**
  * Settings page — two-column layout (sticky TOC + scroll-spy on the left,
@@ -204,21 +207,21 @@ export function SettingsPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+          <SubPanel variant="flat" padded={false} key={i} className="p-4 shadow-paper-sm">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="mt-3 h-3 w-2/3" />
             <Skeleton className="mt-4 h-10 w-full" />
-          </div>
+          </SubPanel>
         ))}
       </div>
     )
   }
   if (settingsQuery.isError) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-8">
+      <Alert variant="negative" layout="row" className="justify-center px-4 py-8">
         <AlertCircle className="h-5 w-5 text-critical-500" />
         <span className="text-sm text-critical-700">Failed to load settings. Is the backend running?</span>
-      </div>
+      </Alert>
     )
   }
 
@@ -241,23 +244,22 @@ export function SettingsPage() {
                     <section.icon className="h-3.5 w-3.5" />
                     {section.label}
                   </EyebrowLabel>
-                  <ul className="space-y-0.5 border-l border-[var(--color-border)] pl-2">
+                  <ul className="space-y-0.5 border-l border-divider pl-2">
                     {entries.map((entry) => {
                       const active = activeAnchor === entry.id
                       return (
                         <li key={entry.id}>
-                          <button
-                            type="button"
+                          <RowButton
                             onClick={() => jumpTo(entry.id)}
                             className={cn(
-                              '-ml-[calc(0.5rem+1px)] flex w-full items-center rounded-r-md border-l-2 py-1 pl-3 pr-2 text-left text-sm transition-colors',
+                              '-ml-[calc(0.5rem+1px)] gap-0 rounded-r-control border-l-2 py-1 pl-3 pr-2 text-sm',
                               active
                                 ? 'border-alma-folio bg-accent-soft font-medium text-alma-folio'
-                                : 'border-transparent text-slate-600 hover:border-[var(--color-border)] hover:text-alma-800',
+                                : 'border-transparent text-slate-600 hover:border-divider hover:text-alma-800',
                             )}
                           >
                             {entry.label}
-                          </button>
+                          </RowButton>
                         </li>
                       )
                     })}
@@ -347,7 +349,7 @@ export function SettingsPage() {
           {/* -- Intelligence -- */}
           <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. Each card has its own Save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
-            <Anchor id="feed-monitors"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
+            <Anchor id="feed-monitors"><Button variant="outline" className="h-auto whitespace-normal py-2" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Tune Feed monitors — add, edit, or remove sources</Button></Anchor>
             <Anchor id="feed-auto-refresh"><Button variant="outline" onClick={() => navigateTo('feed', { tune: 'monitors' })}>Set the Feed refresh schedule</Button></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
           </SettingsSection>

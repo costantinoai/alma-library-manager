@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { useAcceptUnidentified } from '@/components/authors/useAcceptUnidentified'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
+import { Alert } from '@/components/ui/alert'
 
 interface OpenAlexCandidate {
   openalex_id: string
@@ -109,7 +110,7 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
   return (
     <div className="space-y-4">
       {candidateQuery.data?.timed_out ? (
-        <div className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-3 py-2">
+        <Alert variant="warning" layout="row" className="justify-between gap-3 px-2 py-1.5">
           <p className="text-xs text-warning-700">
             Online candidate search timed out (a source is likely rate-limiting).
             No candidates this time — retry in a moment.
@@ -125,14 +126,14 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
             ) : null}
             Retry
           </Button>
-        </div>
+        </Alert>
       ) : null}
       <section>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
           OpenAlex candidates
         </p>
         {candidateQuery.data?.openalex_cap_reached ? (
-          <p className="mb-2 text-[11px] text-warning-700">
+          <p className="mb-2 text-caption text-warning-700">
             OpenAlex daily API limit reached — online OpenAlex matches are
             unavailable until the quota resets (around 00:00 UTC).
           </p>
@@ -144,11 +145,11 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
             {(candidateQuery.data?.openalex ?? []).slice(0, 3).map((c) => (
               <div
                 key={c.openalex_id}
-                className="flex items-center justify-between gap-3 rounded border border-[var(--color-border)] px-2 py-1.5"
+                className="flex items-center justify-between gap-3 rounded-control border border-divider px-2 py-1.5"
               >
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium text-slate-700">{c.display_name}</p>
-                  <p className="truncate text-[11px] text-slate-500">
+                  <p className="truncate text-caption text-slate-500">
                     {c.openalex_id} · score {c.score}
                   </p>
                 </div>
@@ -189,11 +190,11 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
           {(candidateQuery.data?.scholar ?? []).slice(0, 3).map((c) => (
             <div
               key={c.scholar_id}
-              className="flex items-center justify-between gap-3 rounded border border-[var(--color-border)] px-2 py-1.5"
+              className="flex items-center justify-between gap-3 rounded-control border border-divider px-2 py-1.5"
             >
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium text-slate-700">{c.display_name}</p>
-                <p className="truncate text-[11px] text-slate-500">
+                <p className="truncate text-caption text-slate-500">
                   {c.scholar_id} · score {c.score}
                   {c.source ? ` · ${c.source}` : ''}
                 </p>
@@ -207,22 +208,22 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
             <>
               <p className="pt-1 text-xs font-medium text-warning-700">Manual scrape results</p>
               {manualScholarCandidates.slice(0, 3).map((c) => (
-                <div
+                <Alert variant="warning" layout="row"
                   key={`manual-${c.scholar_id}`}
-                  className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-2 py-1.5"
+                  className="justify-between gap-3 px-2 py-1.5"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium text-slate-700">
                       {c.display_name || c.scholar_id}
                     </p>
-                    <p className="truncate text-[11px] text-slate-500">
+                    <p className="truncate text-caption text-slate-500">
                       {c.scholar_id} · score {c.score}
                     </p>
                   </div>
                   <Button size="sm" variant="outline" onClick={() => setScholarId(c.scholar_id)}>
                     Use
                   </Button>
-                </div>
+                </Alert>
               ))}
             </>
           ) : null}
@@ -232,7 +233,7 @@ export function AuthorIdentifierResolution({ author, onAccepted }: AuthorIdentif
           ) : null}
         </div>
         {candidateQuery.data?.scholar_manual_search_enabled ? (
-          <p className="mt-1 text-[11px] text-slate-500">
+          <p className="mt-1 text-caption text-slate-500">
             Manual search uses scraping and may fail due to rate limits.
           </p>
         ) : null}

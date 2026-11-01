@@ -10,7 +10,7 @@ const Switch = React.forwardRef<
     ref={ref}
     className={cn(
       // Off = the control ink track; on = folio, the single "active" colour.
-      'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-alma-folio data-[state=unchecked]:bg-control-track',
+      'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-ring disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-alma-folio data-[state=unchecked]:bg-control-track',
       className,
     )}
     {...props}

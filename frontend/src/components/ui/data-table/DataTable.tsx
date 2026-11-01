@@ -314,19 +314,19 @@ export function DataTable<T>({
   const hasRows = table.getRowModel().rows.length > 0
 
   return (
-    <div className="rounded-sm border border-edge-1 bg-surface-1">
+    <div className="rounded-control border border-edge-1 bg-surface-1">
       {/* ── Toolbar: column visibility menu only (other tools live on the
           table headers themselves for locality). ──────────────────────── */}
-      <div className="flex items-center justify-end gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
+      <div className="flex items-center justify-end gap-2 border-b border-divider px-2 py-1.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="xs" className="text-slate-500 hover:text-slate-800">
+            <Button variant="muted" size="xs">
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Columns
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <DropdownMenuLabel className="text-caption font-semibold uppercase tracking-wide text-slate-500">
               Show columns
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
@@ -384,7 +384,7 @@ export function DataTable<T>({
                               {...dragHandleProps.attributes}
                               ref={dragHandleProps.setActivatorNodeRef}
                               type="button"
-                              className="cursor-grab touch-none rounded p-0.5 text-slate-300 opacity-0 transition-opacity hover:text-slate-500 group-hover:opacity-100 active:cursor-grabbing"
+                              className="cursor-grab touch-none rounded-control p-0.5 text-slate-300 opacity-0 transition-opacity hover:text-slate-500 group-hover:opacity-100 active:cursor-grabbing"
                               aria-label="Drag to reorder column"
                               title="Drag to reorder"
                               tabIndex={-1}
@@ -396,7 +396,7 @@ export function DataTable<T>({
                               onClick={header.column.getToggleSortingHandler()}
                               disabled={!header.column.getCanSort()}
                               className={cn(
-                                'flex min-w-0 flex-1 items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500',
+                                'flex min-w-0 flex-1 items-center gap-1 text-left text-caption font-semibold uppercase tracking-wide text-slate-500 focus-ring',
                                 header.column.getCanSort() && 'cursor-pointer hover:text-slate-700',
                               )}
                             >
@@ -425,11 +425,11 @@ export function DataTable<T>({
                                 onTouchStart={header.getResizeHandler()}
                                 onDoubleClick={() => header.column.resetSize()}
                                 onClick={(e) => e.stopPropagation()}
-                                className="group/resize absolute -right-1.5 top-1/2 z-10 h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none select-none"
+                                className="group/resize absolute -right-1.5 top-1/2 z-local h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none select-none"
                               >
                                 <span
                                   className={cn(
-                                    'absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-[var(--color-border)] transition-colors',
+                                    'absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-divider transition-colors',
                                     'group-hover/resize:bg-alma-folio group-hover/resize:w-1',
                                     header.column.getIsResizing() && 'bg-alma-folio-600 w-1',
                                   )}
@@ -444,7 +444,7 @@ export function DataTable<T>({
                 </SortableContext>
               ))}
             </thead>
-            <tbody className="divide-y divide-[var(--color-border)]">
+            <tbody className="divide-y divide-divider">
               {hasRows ? (
                 table.getRowModel().rows.map((row, visibleIndex) => {
                   const extraClass = rowClassName ? rowClassName(row.original) : ''
@@ -553,7 +553,7 @@ function DraggableHeader({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.7 : 1,
-    zIndex: isDragging ? 1 : undefined,
+    zIndex: isDragging ? 'var(--z-index-local)' : undefined,
     ...(fixedLayout ? { width: size } : { minWidth: size }),
   }
   return (

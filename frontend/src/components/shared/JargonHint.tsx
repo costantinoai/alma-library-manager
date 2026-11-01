@@ -43,7 +43,7 @@ export function JargonHint({
           className={cn(
             'inline-flex size-4 shrink-0 items-center justify-center rounded-full text-slate-400 transition-colors',
             'hover:bg-control-quiet hover:text-slate-600',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500/60 focus-visible:ring-offset-1',
+            'focus-ring',
             className,
           )}
         >

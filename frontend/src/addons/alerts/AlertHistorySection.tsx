@@ -7,11 +7,11 @@ import type { Alert, AlertHistory } from './api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { formatDate } from '@/lib/utils'
 import { StatusBadge } from './AlertBadges'
+import { StatusBadge as Pill } from '@/components/ui/status-badge'
 
 // Page size for "Load More"; the API caps `limit` at 1000, so growth stops
 // there instead of tripping a 422 after enough clicks.
@@ -87,16 +87,16 @@ export function AlertHistorySection({ initialAlertId }: AlertHistorySectionProps
       ) : (
         <div className="space-y-3">
           {history.map((item) => (
-            <Card key={item.id} className="transition-shadow hover:shadow-md">
+            <Card key={item.id} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={item.status} />
-                      <Badge variant="outline">
+                      <Pill tone="outline">
                         <Hash className="mr-1 h-3 w-3" />
                         {item.channel}
-                      </Badge>
+                      </Pill>
                       {item.publication_count != null && (
                         <span className="text-xs text-slate-500">
                           {item.publication_count} paper{item.publication_count !== 1 ? 's' : ''}

@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -63,6 +63,9 @@ import {
   type RuleFormValues,
   type RuleType,
 } from './ruleFormLogic'
+import { RowButton } from '@/components/ui/row-button'
+import { Alert as AlertBox } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 /** Sentinel for the "type an ID by hand" entry in the author Select —
  * Radix forbids empty-string item values. */
@@ -454,10 +457,10 @@ function RuleFormDialog({
             />
 
             {isError && (
-              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertBox variant="negative" layout="row">
                 <AlertCircle className="h-4 w-4 text-critical-500" />
                 <span className="text-sm text-critical-700">{errorMessage}</span>
-              </div>
+              </AlertBox>
             )}
           </form>
         </Form>
@@ -678,28 +681,27 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
       ) : (
         <div className="space-y-3">
           {rules.map((rule) => (
-            <Card key={rule.id} className="transition-shadow hover:shadow-md">
+            <Card key={rule.id} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <h3 className="font-medium text-alma-800">{rule.name}</h3>
-                      {!rule.enabled && <Badge variant="secondary">Disabled</Badge>}
+                      {!rule.enabled && <StatusBadge tone="neutral">Disabled</StatusBadge>}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <RuleTypeBadge type={rule.rule_type} />
                       {orphanIds.has(rule.id) && (
-                        <button
-                          type="button"
+                        <RowButton
                           onClick={onGoToDigests}
                           title="Rules only run inside a digest. Click to open Digests and assign it."
-                          className="cursor-pointer"
+                          className="w-auto"
                         >
-                          <Badge variant="warning">
+                          <StatusBadge tone="warning">
                             <AlertCircle className="mr-1 h-3 w-3" />
                             Not in any digest
-                          </Badge>
-                        </button>
+                          </StatusBadge>
+                        </RowButton>
                       )}
                     </div>
                     <p className="mt-1.5 text-sm text-slate-600">
@@ -826,13 +828,13 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
                   : ''}
               </p>
               {testFireResult.matches.length > 0 && (
-                <ul className="max-h-64 space-y-1 overflow-y-auto rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false} className="max-h-64 overflow-y-auto p-3"><ul className="space-y-1">
                   {testFireResult.matches.map((title, i) => (
                     <li key={`${i}-${title}`} className="text-sm text-slate-700">
                       {title}
                     </li>
                   ))}
-                </ul>
+                </ul></SubPanel>
               )}
               {testFireResult.rule_type === 'feed_monitor' && (
                 <p className="text-xs text-slate-500">

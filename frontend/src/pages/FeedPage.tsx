@@ -70,6 +70,10 @@ import { cn, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort,
 import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { RowButton } from '@/components/ui/row-button'
+import { Toggle } from '@/components/ui/toggle'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const FeedMonitorTermsCard = lazy(() => import('@/components/settings/FeedMonitorTermsCard').then(m => ({ default: m.FeedMonitorTermsCard })))
 const FeedAutoRefreshCard = lazy(() => import('@/components/settings/FeedAutoRefreshCard').then(m => ({ default: m.FeedAutoRefreshCard })))
@@ -680,7 +684,7 @@ export function FeedPage() {
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" align="start" className="max-w-xs">
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    <p className="mb-1 text-caption font-semibold uppercase tracking-wide text-slate-400">
                       Degraded monitors
                     </p>
                     <ul className="space-y-1 text-xs">
@@ -804,45 +808,35 @@ export function FeedPage() {
           get their own surface instead of drowning the author/topic/keyword
           inbox. The active tab drives the `monitor_scope` query param.
       ──────────────────────────────────────────────────────────────────── */}
-      <div
-        data-tour="feed-scope"
-        className="flex items-center gap-1 border-b border-[var(--color-border)]"
-        role="tablist"
-        aria-label="Feed scope"
+      <Tabs
+        value={feedScope}
+        onValueChange={(value) => {
+          setFeedScope(value as typeof feedScope)
+          setSelectedIds(new Set())
+        }}
       >
-        {([
-          { scope: 'inbox' as const, label: 'Inbox', Icon: LayoutList },
-          { scope: 'journals' as const, label: 'Journals', Icon: BookOpen },
-        ]).map(({ scope, label, Icon }) => {
-          const active = feedScope === scope
-          return (
-            <button
-              key={scope}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => {
-                setFeedScope(scope)
-                setSelectedIds(new Set())
-              }}
-              className={cn(
-                'relative -mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                active
-                  ? 'border-[var(--color-accent)] text-alma-900'
-                  : 'border-transparent text-slate-500 hover:text-alma-800',
-              )}
-            >
+        <TabsList
+          variant="underline"
+          data-tour="feed-scope"
+          className="border-b border-divider"
+          aria-label="Feed scope"
+        >
+          {([
+            { scope: 'inbox' as const, label: 'Inbox', Icon: LayoutList },
+            { scope: 'journals' as const, label: 'Journals', Icon: BookOpen },
+          ]).map(({ scope, label, Icon }) => (
+            <TabsTrigger key={scope} value={scope}>
               <Icon className="h-4 w-4" aria-hidden />
               {label}
               {scope === 'journals' && journalMonitorCount > 0 && (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-alma-800/[0.08] px-1 text-[10px] font-semibold tabular-nums text-slate-700">
+                <StatusBadge tone="neutral" size="sm" className="ml-0.5 font-semibold tabular-nums">
                   {journalMonitorCount}
-                </span>
+                </StatusBadge>
               )}
-            </button>
-          )
-        })}
-      </div>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       {/* Journals sub-controls: expand/collapse the groups, or merge them into
           one flat stream. Only shown on the Journals surface. */}
@@ -850,25 +844,23 @@ export function FeedPage() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
           {!mergeJournals && (
             <div className="flex items-center gap-2 text-slate-500">
-              <button
-                type="button"
+              <Button variant="link-ink" size="inline"
                 onClick={() =>
                   setOpenJournals(
                     new Set(feedRenderList.flatMap((e) => (e.type === 'header' ? [e.journal] : []))),
                   )
                 }
-                className="font-medium text-alma-700 hover:text-alma-900"
+                className=""
               >
                 Expand all
-              </button>
+              </Button>
               <span className="text-slate-300" aria-hidden>·</span>
-              <button
-                type="button"
+              <Button variant="link-ink" size="inline"
                 onClick={() => setOpenJournals(new Set())}
-                className="font-medium text-alma-700 hover:text-alma-900"
+                className=""
               >
                 Collapse all
-              </button>
+              </Button>
             </div>
           )}
           <label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-slate-600">
@@ -913,25 +905,20 @@ export function FeedPage() {
             {/* "Only what I haven't dealt with." Feed is a chronological
                 record, so saved papers stay by default — hiding what you kept
                 would make the record dishonest. This is the opt-in view. */}
-            <button
-              type="button"
-              onClick={() => setHideLibrary((v) => !v)}
-              aria-pressed={hideLibrary}
+            <Toggle
+              size="chip"
+              pressed={hideLibrary}
+              onPressedChange={setHideLibrary}
               title={
                 hideLibrary
                   ? 'Showing only papers you have not saved or queued'
                   : 'Hide papers already in your Library or reading list'
               }
-              className={cn(
-                'inline-flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs font-medium transition-colors',
-                hideLibrary
-                  ? 'bg-accent-soft text-alma-folio'
-                  : 'text-slate-600 hover:bg-control-quiet-hover hover:text-alma-800',
-              )}
+              className="text-slate-600"
             >
               {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               Not saved or queued
-            </button>
+            </Toggle>
             <div className="h-5 w-px bg-control-edge" aria-hidden />
           </>
         }
@@ -971,22 +958,21 @@ export function FeedPage() {
         <section
           role="region"
           aria-label="Bulk actions"
-          className="flex flex-wrap items-center gap-3 rounded-sm border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-sm"
+          className="flex flex-wrap items-center gap-3 rounded-card border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-paper-sm"
         >
           <div className="flex items-center gap-2.5 text-sm">
-            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-[11px] font-semibold tabular-nums text-on-fill shadow-sm">
+            <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-caption font-semibold tabular-nums text-on-fill shadow-paper-sm">
               {selectedIds.size}
             </span>
             <span className="text-slate-700">
               selected
               <span className="mx-1.5 text-slate-300" aria-hidden>·</span>
-              <button
-                type="button"
+              <Button variant="link-ink" size="inline"
                 onClick={toggleSelectAllVisible}
-                className="text-xs text-alma-700 underline-offset-2 hover:underline"
+                className="text-xs"
               >
                 {allVisibleSelected ? 'Clear visible' : 'Select all visible'}
-              </button>
+              </Button>
             </span>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -1056,22 +1042,21 @@ export function FeedPage() {
               if (entry.count === 0) {
                 return (
                   <RevealItem key={`journal-header-${entry.journal}`} index={i}>
-                    <div className="flex w-full items-center gap-2 rounded-sm border border-dashed border-[var(--color-border)] bg-surface-1 px-3 py-2 text-slate-400">
+                    <SubPanel variant="flat" padded={false}  className="flex w-full items-center gap-2 border-dashed px-3 py-2 text-slate-400">
                       <BookOpen className="ml-6 h-4 w-4 shrink-0" aria-hidden />
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.journal}</span>
                       <span className="text-xs">no papers yet · Refresh to fetch</span>
-                    </div>
+                    </SubPanel>
                   </RevealItem>
                 )
               }
               const open = openJournals.has(entry.journal)
               return (
                 <RevealItem key={`journal-header-${entry.journal}`} index={i}>
-                  <button
-                    type="button"
+                  <RowButton
                     onClick={() => toggleJournalOpen(entry.journal)}
                     aria-expanded={open}
-                    className="flex w-full items-center gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left transition-colors hover:bg-control-quiet"
+                    className="rounded-control border border-control-edge bg-control-well px-3 py-2 hover:bg-control-quiet"
                   >
                     <ChevronRight
                       className={cn(
@@ -1085,12 +1070,12 @@ export function FeedPage() {
                       {entry.journal}
                     </span>
                     {entry.newCount > 0 && (
-                      <span className="inline-flex items-center rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-alma-folio">
+                      <StatusBadge tone="info" className="px-2 text-caption font-semibold">
                         {entry.newCount} new
-                      </span>
+                      </StatusBadge>
                     )}
                     <span className="text-xs tabular-nums text-slate-400">{entry.count}</span>
-                  </button>
+                  </RowButton>
                 </RevealItem>
               )
             }
@@ -1131,7 +1116,7 @@ export function FeedPage() {
             return (
               <RevealItem key={item.id} index={i}>
               <div
-                className="relative rounded-sm"
+                className="relative rounded-control"
                 data-tour={i === 0 ? 'feed-card' : undefined}
               >
                 <PaperCard

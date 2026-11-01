@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { lookupAuthorByName, type Author } from '@/api/client'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface AuthorHoverCardProps {
   name: string
@@ -60,7 +61,7 @@ export function AuthorHoverCard({
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-alma-800">{name}</p>
               {author?.affiliation && (
-                <p className="truncate text-[11px] text-slate-500" title={author.affiliation}>
+                <p className="truncate text-caption text-slate-500" title={author.affiliation}>
                   {author.affiliation}
                 </p>
               )}
@@ -77,33 +78,33 @@ export function AuthorHoverCard({
 
           {/* Metrics */}
           {lookup.isLoading && (
-            <p className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+            <p className="inline-flex items-center gap-1.5 text-caption text-slate-400">
               <Loader2 className="h-3 w-3 animate-spin" /> Looking up corpus record…
             </p>
           )}
 
           {author && (
             <>
-              <div className="grid grid-cols-3 gap-2 rounded-md border border-slate-100 bg-surface-2/70 px-2 py-1.5 text-center">
+              <SubPanel variant="flat" padded={false}  className="grid grid-cols-3 gap-2 px-2 py-1.5 text-center">
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-slate-500">h-index</p>
+                  <p className="text-2xs uppercase tracking-wide text-slate-500">h-index</p>
                   <p className="text-sm font-semibold tabular-nums text-alma-800">
                     {author.h_index ?? '—'}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-slate-500">Papers</p>
+                  <p className="text-2xs uppercase tracking-wide text-slate-500">Papers</p>
                   <p className="text-sm font-semibold tabular-nums text-alma-800">
                     {formatCount(author.works_count ?? author.publication_count)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wide text-slate-500">Cites</p>
+                  <p className="text-2xs uppercase tracking-wide text-slate-500">Cites</p>
                   <p className="text-sm font-semibold tabular-nums text-alma-800">
                     {formatCount(author.citedby)}
                   </p>
                 </div>
-              </div>
+              </SubPanel>
 
               {topInterests.length > 0 && (
                 <div className="flex flex-wrap gap-1">
@@ -124,9 +125,9 @@ export function AuthorHoverCard({
           )}
 
           {notInCorpus && (
-            <p className="rounded-md border border-dashed border-[var(--color-border)] bg-surface-2/60 px-2 py-1.5 text-[11px] text-slate-500">
+            <SubPanel variant="flat" padded={false}  className="border-dashed px-2 py-1.5 text-caption text-slate-500">
               Not in your authors corpus yet. Follow to start tracking their new papers.
-            </p>
+            </SubPanel>
           )}
 
           {/* Actions */}
@@ -170,7 +171,7 @@ export function AuthorHoverCard({
             )}
             <a
               href={`#/authors?q=${encodeURIComponent(name)}`}
-              className="ml-auto inline-flex items-center gap-0.5 text-[11px] font-medium text-alma-700 hover:text-alma-900"
+              className="ml-auto inline-flex items-center gap-0.5 text-caption font-medium text-alma-700 hover:text-alma-900"
               onClick={(e) => e.stopPropagation()}
             >
               Open in Authors
