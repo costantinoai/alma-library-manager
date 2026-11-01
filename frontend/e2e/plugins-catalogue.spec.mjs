@@ -7,17 +7,38 @@
  * Then that switching one on reveals its setup, reads its config exactly once,
  * and that switching it off again puts it away.
  *
- * Needs a dev stack on a FRESH profile (every plugin off).
+ * Works on any profile. Email exists only inside Alerts, so Alerts goes on first;
+ * every plugin is then switched off through the API, and everything is put back
+ * as it was at the end, also after a failure.
  * Run:  ALMA_URL=http://127.0.0.1:5198 npm run e2e:plugins
  * Screenshots go to $SHOTS_DIR (default /tmp) — LOOK at them.
  */
 import { chromium } from 'playwright'
 const BASE = process.env.ALMA_URL ?? 'http://127.0.0.1:5173'
+const API = process.env.ALMA_API ?? `${BASE}/api/v1`
 const SHOTS = process.env.SHOTS_DIR ?? '/tmp'
 const fails = []
 const check = (ok, msg) => { console.log(`${ok ? '  ok  ' : '  FAIL'} ${msg}`); if (!ok) fails.push(msg) }
 
-const browser = await chromium.launch()
+const put = (path, enabled) =>
+  fetch(`${API}${path}/enabled`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`PUT ${path}/enabled -> ${r.status}`)
+  })
+const list = (path) => fetch(`${API}${path}`).then((r) => r.json())
+
+// What this profile had on, to restore. Alerts first: Email is one of its plugins.
+const addonsBefore = await list('/addons')
+const alertsWasOn = addonsBefore.find((a) => a.id === 'alerts')?.enabled === true
+await put('/addons/alerts', true)
+const pluginsOn = (await list('/plugins')).filter((p) => p.enabled).map((p) => p.id)
+for (const id of pluginsOn) await put(`/plugins/${id}`, false)
+
+const browser = await chromium.launch({ executablePath: process.env.ALMA_BROWSER_EXECUTABLE || undefined })
+try {
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } })
 await ctx.addInitScript(() => {
   for (const p of ['home', 'feed', 'authors', 'library', 'discovery']) localStorage.setItem(`alma.tour.${p}.completed`, 'done')
@@ -42,7 +63,7 @@ for (const name of ['Slack', 'Email', 'Open-access PDFs', 'Shadow libraries']) {
 }
 check(
   (await card.getByText('Off', { exact: true }).count()) === rowCount,
-  'every plugin ships switched off',
+  'every plugin reads as off',
 )
 check(await card.getByRole('button', { name: /save plugin settings/i }).count() === 0, 'an off plugin offers no Save')
 check(await card.getByRole('button', { name: /test connection/i }).count() === 0, 'an off plugin offers no Test')
@@ -76,6 +97,10 @@ await page.goto(`${BASE}/#/alerts`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(1500)
 check((await page.getByText(/slack/i).count()) > 0, 'Alerts still knows about Slack while it is off')
 
-await browser.close()
+} finally {
+  await browser.close()
+  for (const id of pluginsOn) await put(`/plugins/${id}`, true)
+  if (!alertsWasOn) await put('/addons/alerts', false)
+}
 console.log(fails.length ? `\n${fails.length} FAILED` : '\nall checks passed')
 process.exit(fails.length ? 1 : 0)

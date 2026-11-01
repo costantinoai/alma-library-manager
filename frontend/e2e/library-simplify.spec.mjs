@@ -2,9 +2,16 @@
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 const base = process.env.ALMA_URL ?? 'http://127.0.0.1:5173'
+const api = process.env.ALMA_API ?? `${base}/api/v1`
 const browser = await chromium.launch({ executablePath: process.env.ALMA_BROWSER_EXECUTABLE || undefined })
 const errors = []
 let restore
+// "AI Generate Suggestions" belongs to the Auto tagger add-on. Put it back as found.
+const setTagger = enabled => fetch(`${api}/addons/auto_tagger/enabled`, {
+  method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
+})
+const taggerWasOn = (await (await fetch(`${api}/addons/auto_tagger`)).json()).enabled === true
+assert.ok((await setTagger(true)).ok)
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
   await page.addInitScript(() => localStorage.setItem('alma.tour.library.completed', 'done'))
@@ -96,5 +103,6 @@ try {
     const context = await browser.newContext()
     await context.request.patch(restore.url, { data: { reading_status: restore.status } })
   }
+  if (!taggerWasOn) await setTagger(false)
   await browser.close()
 }

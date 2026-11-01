@@ -7,15 +7,16 @@
  *      leaves, and a toast says which verb ran. The user reported "pressing X
  *      does nothing" on 2026-07-26 and the mutation had no `onError` at all, so
  *      any rejected write was indistinguishable from a dead button;
- *   3. the connections rail and inflow strip render on the real payload.
+ *   3. the status rail and inflow strip render on the real payload.
  *
  * Not part of `vitest run`: needs the dev server. Run with
  *   npm run e2e:home            (scripts/start-dev.sh must be up)
  *
- * The Inbox assertions need at least one paper in `status='inbox'`. With an
- * empty Inbox the spec SAYS it skipped them rather than passing silently — a
- * quiet skip here would report "triage works" on the strength of never having
- * tried it.
+ * The Inbox assertions need at least one paper in `status='inbox'`. The section
+ * renders even when empty, so emptiness is read from its tiles. With an empty
+ * Inbox the spec SAYS it skipped them rather than passing silently — a quiet
+ * skip here would report "triage works" on the strength of never having tried
+ * it. The ✕ is undone from its toast, so a run leaves the Inbox as it found it.
  */
 import { chromium } from 'playwright'
 
@@ -27,7 +28,7 @@ const check = (ok, message) => {
   if (!ok) failures.push(message)
 }
 
-const browser = await chromium.launch()
+const browser = await chromium.launch({ executablePath: process.env.ALMA_BROWSER_EXECUTABLE || undefined })
 const page = await browser.newPage({ viewport: { width: 1500, height: 1200 } })
 const consoleErrors = []
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text().slice(0, 200)))
@@ -50,18 +51,27 @@ for (let i = 0; i < 6; i++) {
 }
 await page.waitForTimeout(1500)
 
-// The rail has no heading of its own by design — assert on a dot's link.
-check(
-  (await page.getByRole('link', { name: /OpenAlex/ }).count()) > 0,
-  'connections rail renders (a dot per dependency, no heading)',
-)
+// The rail has no heading of its own by design. The server decides which
+// subsystems appear, so assert on the chips it sent, not on a name.
+const brief = await page.evaluate(async () => (await fetch('/api/v1/home/brief')).json()).catch(() => null)
+const rail = page.locator('[data-tour="home-status"]')
+const expected = brief?.status?.length ?? 0
+check(expected > 0, `the brief carries status pills (${expected})`)
+for (const pill of brief?.status ?? []) {
+  check(
+    (await rail.getByText(pill.label, { exact: true }).count()) > 0,
+    `status rail shows ${pill.label}`,
+  )
+}
 check(
   (await page.getByRole('img', { name: /last 7 days|Nothing arrived in the last 7 days/ }).count()) > 0,
   'inflow strip renders as a cell of the scoreboard',
 )
 
 const inbox = page.locator('section[aria-labelledby="home-inbox"]')
-if (!(await inbox.count())) {
+const bars = inbox.locator('[data-testid="paper-actions"]')
+check((await inbox.count()) === 1, 'the Inbox section is on the page, empty or not')
+if (!(await bars.count())) {
   console.log('  SKIP  Inbox is empty — triage assertions did NOT run')
 } else {
   // The count pill must not be folded into the heading's accessible name.
@@ -70,7 +80,6 @@ if (!(await inbox.count())) {
     'Inbox heading is still named exactly "Inbox"',
   )
 
-  const bars = inbox.locator('[data-testid="paper-actions"]')
   const before = await bars.count()
   check(before > 0, `Inbox renders ${before} tiles carrying triage controls`)
 
@@ -92,6 +101,11 @@ if (!(await inbox.count())) {
     .innerText()
     .catch(() => '')
   check(/kept in your corpus/i.test(toast), `✕ confirmed what it did ("${toast.trim()}")`)
+
+  await page.locator('[data-sonner-toast]').first().getByRole('button', { name: 'Undo' }).click()
+  await page.waitForTimeout(2500)
+  check(actionPosts.length === 2 && actionPosts[1] === 200, `Undo posted once, 200 (${actionPosts})`)
+  check((await bars.count()) === before, 'Undo brought the tile back')
 }
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ') || 'none'})`)
