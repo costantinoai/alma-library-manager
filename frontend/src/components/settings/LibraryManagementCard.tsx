@@ -335,7 +335,7 @@ export function LibraryManagementCard() {
                   {libraryInfoQuery.data.backups.map((backup: BackupInfo) => (
                     <div
                       key={backup.name}
-                      className="flex items-center justify-between rounded-card bg-control-well border border-divider px-3 py-2"
+                      className="flex items-center justify-between "
                     >
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium text-slate-700">{backup.name}</p>

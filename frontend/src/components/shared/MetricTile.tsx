@@ -1,5 +1,6 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { cn, formatNumber } from '@/lib/utils'
+import { useSurfaceLevel } from '@/components/ui/surface-level'
 
 export type MetricTileTone =
   | 'neutral'
@@ -98,6 +99,7 @@ export function MetricTile({
   onClick,
   className,
 }: MetricTileProps) {
+  const host = useSurfaceLevel()
   const formatted = typeof value === 'number' ? formatNumber(value) : value
 
   // Shared interactive contract so both variants drill the same way: button
@@ -145,6 +147,8 @@ export function MetricTile({
 
   const isCentered = align === 'center'
   const isBare = variant === 'bare'
+  // Inside a card a figure needs no box of its own: whitespace holds it.
+  const isBoxed = !isBare && host === 0
   return (
     <div
       className={cn(
@@ -154,13 +158,13 @@ export function MetricTile({
         // brighter than its host. min-w-0 + truncate guards against the
         // narrow-column overflow that the v2 tiles suffered from on
         // sub-400px grids.
-        !isBare && 'rounded-card border border-divider bg-surface-2 p-3',
+        isBoxed && 'rounded-card border border-divider bg-surface-2 p-3',
         // Interactive (drilldown) tiles get the folio accent on hover/focus —
         // the single interactive identity (no new color). A bare tile has no
         // border to tint, so it moves its numeral instead.
         onClick &&
           'cursor-pointer transition-colors focus-ring',
-        onClick && !isBare && 'hover:border-alma-folio',
+        onClick && isBoxed && 'hover:border-alma-folio',
         onClick && isBare && 'group rounded-control',
         className,
       )}

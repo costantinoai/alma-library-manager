@@ -526,7 +526,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   {p.abstract.length > 200 ? p.abstract.slice(1) : p.abstract}
                 </Card>
               ) : (
-                <div className="rounded-card border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
+                <div className="text-xs italic text-slate-400">
                   No abstract available for this paper.
                 </div>
               )}
@@ -992,7 +992,7 @@ function RelatedWorksSection({
             <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
           </div>
         ) : works.length === 0 ? (
-          <div className="rounded-card border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
+          <div className="text-xs italic text-slate-400">
             {emptyCopy}
           </div>
         ) : (

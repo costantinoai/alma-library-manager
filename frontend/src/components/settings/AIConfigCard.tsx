@@ -279,10 +279,10 @@ function ResolutionStep({
   return (
     <div
       className={cn(
-        'rounded-card border p-3',
+        ' ',
         muted
-          ? 'border-divider bg-control-quiet'
-          : 'border-divider bg-control-well shadow-paper-sm',
+          ? 'opacity-90'
+          : '',
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -993,7 +993,7 @@ export function AIConfigCard() {
                   )}
                   {status.dependency_setup_suggestions &&
                     status.dependency_setup_suggestions.length > 0 && (
-                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-card border border-control-edge bg-control-well p-3 text-xs text-alma-900">
+                      <ol className="mt-2 list-inside list-decimal space-y-1 border-control-edge text-xs text-alma-900">
                         {status.dependency_setup_suggestions.map((step, idx) => (
                           <li key={`${idx}-${step}`} className="font-mono text-caption">
                             {step}
