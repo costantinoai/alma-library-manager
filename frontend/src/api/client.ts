@@ -891,7 +891,7 @@ export interface PaperComponent {
   title?: string | null
   doi?: string | null
   url?: string | null
-  component_type: 'figure' | 'supplementary' | 'peer_review' | 'dataset'
+  component_type: 'figure' | 'supplementary' | 'peer_review' | 'dataset' | 'correction'
   work_type?: string | null
 }
 
@@ -907,6 +907,16 @@ export interface PreprintVersion {
   url?: string | null
   year?: number | null
   preprint_source?: string | null
+  /** What this row is to the paper shown. */
+  kind?: 'preprint' | 'deposit' | 'abstract' | 'duplicate'
+}
+
+/** A paper the user said is not this one. */
+export interface KeptSeparatePaper {
+  id: string
+  title?: string | null
+  doi?: string | null
+  kind: 'not_same' | 'not_component'
 }
 
 export interface Settings {
@@ -1446,6 +1456,36 @@ export interface DetachPaperResult {
  */
 export function detachPaper(paperId: string): Promise<DetachPaperResult> {
   return api.post<DetachPaperResult>(`/papers/${encodeURIComponent(paperId)}/detach`, {})
+}
+
+/** Take back a split, so a repair may join the two again. */
+export function removeKeptSeparate(paperId: string, otherId: string): Promise<{ removed: boolean }> {
+  return api.delete<{ removed: boolean }>(
+    `/papers/${encodeURIComponent(paperId)}/kept-separate/${encodeURIComponent(otherId)}`,
+  )
+}
+
+/** The user says these two rows are one work. */
+export function joinPapers(paperId: string, otherId: string): Promise<{ joined: boolean; root_id: string }> {
+  return api.post(`/papers/${encodeURIComponent(paperId)}/same-as`, { other_id: otherId })
+}
+
+export interface AuthorMerge {
+  id: string
+  alt_author_id: string | null
+  alt_openalex_id: string | null
+  alt_name: string | null
+  papers_moved: number
+  merged_at: string
+  undone_at: string | null
+}
+
+export function listAuthorMerges(authorId: string): Promise<{ merges: AuthorMerge[] }> {
+  return api.get<{ merges: AuthorMerge[] }>(`/authors/${encodeURIComponent(authorId)}/merges`)
+}
+
+export function undoAuthorMerge(mergeId: string): Promise<{ papers_returned: number }> {
+  return api.post(`/authors/merges/${encodeURIComponent(mergeId)}/undo`, {})
 }
 
 export function listPapers(params?: {

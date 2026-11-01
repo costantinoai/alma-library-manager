@@ -184,10 +184,19 @@ its preprint's saved state, reading state, ratings and notes; the preprint remai
 as a version pointer. Components donate no user state. Child records cannot
 independently affect Library counts, calibration or recommendation evaluation.
 
-Title/year matches merge automatically only when each side has one plausible
-partner **and both carry a DOI** — a shared title and year alone is how two
-different papers become one. Ambiguous matches remain separate and are listed in
-Activity with the relevant paper IDs.
+Two rows are one work on evidence, strongest first: the same DOI, the same
+OpenAlex id, versions of one DOI (`_v2`, `.v2`, eLife `.2`), a relation bioRxiv or
+Crossref registered, a Semantic Scholar id confirmed by title and authors, a
+journal paper's preprints, then the same title and authors. Several preprints of
+one paper merge; a preprint that fits two published works stays separate and is
+listed in Activity. A repository copy or meeting abstract joins its paper. The
+newest version shows when nothing is published. Merges at ingest appear in
+Activity.
+
+**A split holds.** "Not a duplicate" and "Not a child" record a verdict that every
+repair honours, shown under "Kept separate" with Allow merge to take it back. The
+user's own state stays on the paper it moved to. "Same paper as" joins two rows
+nothing links.
 
 **Preview before you repair.** Health and Settings both offer a preview: it
 reads exactly what a pass would act on — relationships to repair, components to

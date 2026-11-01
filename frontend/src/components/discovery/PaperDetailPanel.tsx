@@ -49,12 +49,16 @@ import {
   api,
   detachPaper,
   getDerivativeWorks,
+  joinPapers,
+  listPapers,
+  removeKeptSeparate,
   getPriorWorks,
   onlineImportSave,
   removeFromLibrary,
   resolveImportedPublicationsOpenAlex,
   updateReadingStatus,
   updateSavedPaper,
+  type KeptSeparatePaper,
   type PaperComponent,
   type PreprintVersion,
   type Publication,
@@ -97,6 +101,7 @@ interface PaperDetails extends Publication {
   referenced_works_count?: number
   components?: PaperComponent[] | null
   preprint_versions?: PreprintVersion[] | null
+  kept_separate?: KeptSeparatePaper[] | null
   pdf?: PaperPdfState | null
 }
 
@@ -111,7 +116,15 @@ const COMPONENT_GROUPS: ReadonlyArray<{
   { key: 'supplementary', label: 'Supplementary', icon: FileText },
   { key: 'dataset', label: 'Data', icon: Database },
   { key: 'peer_review', label: 'Peer review', icon: MessageSquare },
+  { key: 'correction', label: 'Corrections', icon: AlertTriangle },
 ]
+
+const VERSION_KIND_LABEL: Record<NonNullable<PreprintVersion['kind']>, string> = {
+  preprint: 'Preprint',
+  deposit: 'Repository copy',
+  abstract: 'Meeting abstract',
+  duplicate: 'Duplicate',
+}
 
 interface PaperDetailPanelProps {
   paper: Publication | null
@@ -209,6 +222,8 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
   const keywords = Array.isArray(p?.keywords) ? (p?.keywords as string[]).filter(Boolean) : []
   const components = (details?.components ?? []).filter((c) => c && c.id)
   const preprintVersions = (details?.preprint_versions ?? []).filter((p) => p && p.id)
+  const keptSeparate = (details?.kept_separate ?? []).filter((p) => p && p.id)
+  const isCorrected = components.some((c) => c.component_type === 'correction')
   const isLibraryPaper = p?.status === 'library'
   const hasUnsavedNotes = (p?.notes ?? '') !== notesDraft
 
@@ -300,11 +315,47 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
       toast({
         title: result.was_component ? 'Detached' : 'Split out',
         description: result.was_component
-          ? 'Promoted to a standalone paper.'
-          : 'No longer marked as a duplicate — it is its own paper now.',
+          ? 'Promoted to a standalone paper. It stays separate.'
+          : 'It is its own paper now, and repairs will leave it separate.',
       })
     },
     onError: () => errorToast('Error', 'Could not detach the paper.'),
+  })
+
+  const refreshGroup = () => {
+    if (p?.id) {
+      api
+        .get<PaperDetails>(`/papers/${encodeURIComponent(p.id)}/details`)
+        .then((data) => setDetails(data))
+        .catch(() => {})
+    }
+    void invalidateAfterPaperMutation(queryClient)
+    void invalidateQueries(queryClient, ['library-info'])
+  }
+
+  const allowMergeMutation = useMutation({
+    mutationFn: (otherId: string) => removeKeptSeparate(p!.id, otherId),
+    onSuccess: () => {
+      refreshGroup()
+      toast({ title: 'Allowed', description: 'A repair may join these two again.' })
+    },
+    onError: () => errorToast('Error', 'Could not change this.'),
+  })
+
+  const [sameSearch, setSameSearch] = useState('')
+  const sameResults = useQuery({
+    queryKey: ['paper-same-as', sameSearch.trim()],
+    queryFn: () => listPapers({ scope: 'all', search: sameSearch.trim(), limit: 5 }),
+    enabled: sameSearch.trim().length >= 4,
+  })
+  const joinMutation = useMutation({
+    mutationFn: (otherId: string) => joinPapers(p!.id, otherId),
+    onSuccess: () => {
+      setSameSearch('')
+      refreshGroup()
+      toast({ title: 'Joined', description: 'These are one paper now.' })
+    },
+    onError: () => errorToast('Error', 'Could not join these papers.'),
   })
 
   const refetchMutation = useMutation({
@@ -446,6 +497,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   Open access{p.oa_status ? ` · ${p.oa_status}` : ''}
                 </StatusBadge>
               )}
+              {isCorrected && <StatusBadge tone="warning" size="sm">Corrected</StatusBadge>}
               {p.is_retracted && (
                 <StatusBadge tone="negative" icon={AlertTriangle}>Retracted</StatusBadge>
               )}
@@ -663,12 +715,12 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
             {preprintVersions.length > 0 && (
               <section>
                 <EyebrowLabel tone="muted" className="mb-1">
-                  {preprintVersions.length > 1 ? 'Preprint versions' : 'Preprint version'}
+                  {preprintVersions.length > 1 ? 'Versions' : 'Version'}
                 </EyebrowLabel>
                 <ul className="space-y-1 text-xs">
                   {preprintVersions.map((pre) => {
                     const label = pre.title || pre.doi || 'Untitled preprint'
-                    const source = (pre.preprint_source || '').trim()
+                    const source = pre.kind ? VERSION_KIND_LABEL[pre.kind] : ''
                     return (
                       <li key={pre.id} className="flex items-start justify-between gap-2">
                         <span className="flex min-w-0 items-start gap-1.5">
@@ -707,6 +759,59 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     )
                   })}
                 </ul>
+              </section>
+            )}
+
+            {keptSeparate.length > 0 && (
+              <section>
+                <EyebrowLabel tone="muted" className="mb-1">Kept separate</EyebrowLabel>
+                <ul className="space-y-1 text-xs">
+                  {keptSeparate.map((other) => (
+                    <li key={other.id} className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 truncate text-slate-600">{other.title || other.doi}</span>
+                      <Button
+                        variant="muted"
+                        size="sm"
+                        className="h-6 shrink-0 px-1.5 text-caption"
+                        disabled={allowMergeMutation.isPending}
+                        onClick={() => allowMergeMutation.mutate(other.id)}
+                        title="Let a repair join these two again"
+                      >
+                        Allow merge
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {p?.id && (
+              <section>
+                <EyebrowLabel tone="muted" className="mb-1">Same paper as</EyebrowLabel>
+                <Input
+                  value={sameSearch}
+                  onChange={(event) => setSameSearch(event.target.value)}
+                  placeholder="Search by title or DOI"
+                  aria-label="Find the same paper by title or DOI"
+                />
+                {(sameResults.data ?? [])
+                  .filter((match) => match.id !== p.id)
+                  .map((match) => (
+                    <div key={match.id} className="mt-1 flex items-start justify-between gap-2 text-xs">
+                      <span className="min-w-0 truncate text-slate-600">
+                        {match.title} {match.year ? `(${match.year})` : ''}
+                      </span>
+                      <Button
+                        variant="muted"
+                        size="sm"
+                        className="h-6 shrink-0 px-1.5 text-caption"
+                        disabled={joinMutation.isPending}
+                        onClick={() => joinMutation.mutate(match.id)}
+                      >
+                        Same paper
+                      </Button>
+                    </div>
+                  ))}
               </section>
             )}
 

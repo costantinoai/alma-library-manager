@@ -24,7 +24,15 @@ from alma.application.pdfs import service as pdf_service
 from alma.application.pdfs import store as pdf_store
 from alma.core.db_write import run_write_unit
 from alma.core.operations.activity import record_foreground_action
-from alma.core.paper_groups import resolve_action_paper_id
+from alma.core.operations.activity import record_foreground_action
+from alma.core.paper_groups import (
+    PaperGroupIntegrityError,
+    is_meeting_abstract_row,
+    is_preprint_row,
+    is_repository_row,
+    remove_paper_split,
+    resolve_action_paper_id,
+)
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import normalize_doi
@@ -752,16 +760,19 @@ def get_paper_details(
     # standalone gate), but surfaced HERE so the user can see + open the
     # preprint that was absorbed into the published version. Distinct from
     # `components` (part-of) — a preprint is the SAME work at an earlier stage.
-    preprint_rows = db.execute(
+    version_rows = db.execute(
         """
-        SELECT id, title, doi, url, year, preprint_source
+        SELECT id, title, doi, url, year, preprint_source, journal, work_type
         FROM papers
         WHERE canonical_paper_id = ?
         ORDER BY COALESCE(year, 0) DESC, doi ASC
         """,
         (root_id,),
     ).fetchall()
-    paper["preprint_versions"] = [dict(r) for r in preprint_rows]
+    paper["preprint_versions"] = [
+        {**dict(row), "kind": _version_kind(row)} for row in version_rows
+    ]
+    paper["kept_separate"] = library_app.list_paper_splits(db, root_id)
 
     # The kept PDF (task 81): file meta + per-source attempts, a pure read.
     paper["pdf"] = pdf_service.pdf_status(db, root_id)
@@ -919,6 +930,58 @@ def delete_paper_pdf(
     return {"status": "removed", "paper_id": root_id, "rejected": reject, "job_id": job_id}
 
 
+class SameWorkRequest(BaseModel):
+    other_id: str
+
+
+@router.post(
+    "/{paper_id}/same-as",
+    summary="Join two rows the user knows are one work",
+    description=(
+        "Merges the two groups through the paper-group owner, so a journal row wins "
+        "over a preprint either way, and takes back any verdict against the pair."
+    ),
+)
+def join_papers_route(
+    paper_id: str,
+    body: SameWorkRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        result = run_write_unit(
+            db,
+            lambda: library_app.join_papers(db, paper_id, body.other_id),
+            label="join_papers",
+        )
+    except PaperGroupIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if result["joined"]:
+        _log_paper_action(db, "join", "Joined two papers as one work", result)
+    return result
+
+
+@router.delete(
+    "/{paper_id}/kept-separate/{other_id}",
+    summary="Take back a split, so a repair may join the two again",
+)
+def remove_kept_separate(
+    paper_id: str,
+    other_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    removed = run_write_unit(
+        db, lambda: remove_paper_split(db, paper_id, other_id), label="remove_paper_split"
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="No split between these papers")
+    _log_paper_action(db, "split_removed", "Allowed two papers to merge again", {"paper_id": paper_id})
+    return {"removed": True}
+
+
 @router.post(
     "/{paper_id}/detach",
     summary="Promote a merged duplicate / component back to a standalone paper",
@@ -943,7 +1006,31 @@ def detach_paper(
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Paper not found")
+    if result["detached"]:
+        _log_paper_action(db, "split", "Split a paper out of its group", {"paper_id": paper_id, **result})
     return result
+
+
+def _log_paper_action(db: sqlite3.Connection, action: str, message: str, data: dict) -> None:
+    """One Activity row for a change to a paper group, after its own write unit."""
+    record_foreground_action(
+        db,
+        operation_key=f"papers.action.{action}",
+        message=message,
+        result=data,
+        job_id=f"paper_action_{uuid.uuid4().hex[:10]}",
+    )
+
+
+def _version_kind(row: sqlite3.Row) -> str:
+    """What this row is to its root, in the words the popup uses."""
+    if is_preprint_row(row):
+        return "preprint"
+    if is_repository_row(row):
+        return "deposit"
+    if is_meeting_abstract_row(row):
+        return "abstract"
+    return "duplicate"
 
 
 _NETWORK_CACHE_TTL_HOURS = 24
