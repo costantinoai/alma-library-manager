@@ -1,11 +1,10 @@
-import { Check, Loader2, TrendingDown, TrendingUp, UserMinus, UserPlus } from 'lucide-react'
+import { Check, Loader2, UserMinus, UserPlus } from 'lucide-react'
 
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
-import { Meter } from '@/components/ui/meter'
 import { truncate } from '@/lib/utils'
 import { authorSuggestionSourceLabel } from './authorSuggestionEvidence'
 
@@ -77,7 +76,7 @@ export function SuggestedAuthorCard({
       onClick={onClick}
       className="group flex h-full flex-col gap-3 p-4 text-left"
     >
-      <header className="flex items-start justify-between gap-2">
+      <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-alma-800">{suggestion.name}</h3>
           {institution ? (
@@ -95,7 +94,7 @@ export function SuggestedAuthorCard({
             <StatusBadge
               tone="accent"
               size="sm"
-              className="max-w-full uppercase tracking-wide"
+              className="max-w-full"
               title={authorSuggestionSourceLabel(suggestion.suggestion_type)}
             >
               <span className="min-w-0 truncate">
@@ -112,29 +111,10 @@ export function SuggestedAuthorCard({
               // multi-source agreement looks identical wherever it appears.
               <SignalChip
                 kind="consensus"
-                className="uppercase tracking-wide"
                 title={(suggestion.consensus_buckets ?? []).join(' · ')}
               >
                 {suggestion.consensus_count} sources
               </SignalChip>
-            ) : null}
-            {/* Bucket calibration — only when the multiplier deviates
-                meaningfully from 1.0 (fresh DB returns 1.0 for every
-                bucket; a chip there would be noise). The multiplier is
-                already folded into `score`, so this is purely
-                provenance: "this bucket's recommendations have worked
-                out for you in the past" / "haven't". */}
-            {typeof suggestion.bucket_calibration_multiplier === 'number' &&
-            Math.abs(suggestion.bucket_calibration_multiplier - 1.0) >= 0.05 ? (
-              <StatusBadge
-                tone={suggestion.bucket_calibration_multiplier > 1.0 ? 'positive' : 'warning'}
-                size="sm"
-                icon={suggestion.bucket_calibration_multiplier > 1.0 ? TrendingUp : TrendingDown}
-                className="uppercase tracking-wide"
-                title="Per-bucket outcome calibration: how often you've followed vs rejected this bucket's suggestions"
-              >
-                bucket {suggestion.bucket_calibration_multiplier.toFixed(2)}×
-              </StatusBadge>
             ) : null}
             {/* Paper-feedback projection — surface only when the magnitude
                 cleared a small noise floor so neutral cards stay quiet. */}
@@ -144,7 +124,6 @@ export function SuggestedAuthorCard({
               // same registry kinds as Discovery's "Matches what you save".
               <SignalChip
                 kind={suggestion.paper_signal_adjustment > 0 ? 'taste-match' : 'taste-avoid'}
-                className="uppercase tracking-wide"
                 title="Net pull from your saved, rated, and removed papers in this area"
               >
                 {suggestion.paper_signal_adjustment > 0
@@ -159,6 +138,18 @@ export function SuggestedAuthorCard({
             ) : null}
           </div>
         </div>
+        {showScore ? (
+          <span
+            className="shrink-0 text-lede font-semibold tabular-nums text-slate-700"
+            title={
+              typeof suggestion.bucket_calibration_multiplier === 'number'
+                ? `Fit score ${Math.round(pct)} of 100, including your follow history with this kind of suggestion (×${suggestion.bucket_calibration_multiplier.toFixed(2)})`
+                : `Fit score ${Math.round(pct)} of 100`
+            }
+          >
+            {Math.round(pct)}
+          </span>
+        ) : null}
       </header>
 
       {suggestion.sample_titles.length > 0 ? (
@@ -177,12 +168,6 @@ export function SuggestedAuthorCard({
 
       {showScore ? (
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Meter value={pct} tone="neutral" size="xs" decorative />
-            <span className="shrink-0 text-caption font-semibold tabular-nums text-slate-700">
-              {Math.round(pct)}
-            </span>
-          </div>
           {signals.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {signals.map((signal, idx) => (
@@ -248,7 +233,7 @@ export function SuggestedAuthorCard({
         </Button>
         <Button
           size="sm"
-          variant="danger-quiet"
+          variant="muted"
           className="shrink-0"
           onClick={(e) => {
             e.stopPropagation()
