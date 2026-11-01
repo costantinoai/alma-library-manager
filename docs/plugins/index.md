@@ -28,7 +28,14 @@ plugin runs until you turn it on yourself.
 
 **Switching it on is what reveals its setup.** An off plugin shows one line
 saying what it would do and a switch. Turn the switch on and its fields appear,
-along with its **Test connection** button where it has one.
+along with its state and its **Check** button where it has one.
+
+**A saved value is not a working one.** Each plugin reads *Needs setting*, *Set,
+not checked*, *Working*, *Not working*, *Can't check* or *Off*. *Working* comes
+only from a check of the exact value saved now: saving runs that check, **Check**
+repeats it, and changing the value drops the old result. A check posts nothing
+and sends nothing. *Can't check* means no answer came (network off, rate limited,
+server unreachable), which is not the same as *Not working*.
 
 **Switching it off keeps its configuration.** Your token, addresses and
 recipients stay where they were, secrets included. An off plugin is excluded

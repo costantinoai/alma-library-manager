@@ -303,11 +303,12 @@ Names and purposes only. They live in the secret store and can also come from th
 <!-- inventory: secret -->
 | Control | Defined in | Default | Read by | Controls | Calibrate | Exposed | Status |
 |---|---|---|---|---|---|---|---|
-| `SECRET_OPENALEX_API_KEY` | `src/alma/core/secrets.py` | unset | `get_openalex_api_key` | OpenAlex API key. Without it, 100 credits a day. | Quota readout. | Settings: External APIs | live |
-| `SECRET_SEMANTIC_SCHOLAR_API_KEY` | `src/alma/core/secrets.py` | unset | `get_semantic_scholar_api_key` | Semantic Scholar API key. | Settings status check. | Settings: External APIs | live |
-| `SECRET_SLACK_BOT_TOKEN` | `src/alma/core/secrets.py` | unset | `get_slack_token` | Slack bot token. | Plugin Test button. | Settings: Plugins, Slack | live |
-| `SECRET_SMTP_PASSWORD` | `src/alma/core/secrets.py` | unset | `get_smtp_password` | Mail password. | Plugin Test button. | Settings: Plugins, Email, while Alerts is on | live |
+| `SECRET_OPENALEX_API_KEY` | `src/alma/core/secrets.py` | unset | `get_openalex_api_key` | OpenAlex API key. Without it, 100 credits a day, so Settings reads it as required while the backend is OpenAlex. | Settings connection state, on save or Check; quota readout. | Settings: External APIs | live |
+| `SECRET_SEMANTIC_SCHOLAR_API_KEY` | `src/alma/core/secrets.py` | unset | `get_semantic_scholar_api_key` | Semantic Scholar API key. | Settings connection state, on save or Check. | Settings: External APIs | live |
+| `SECRET_SLACK_BOT_TOKEN` | `src/alma/core/secrets.py` | unset | `get_slack_token` | Slack bot token. | Settings connection state, read-only `auth.test`. | Settings: Plugins, Slack | live |
+| `SECRET_SMTP_PASSWORD` | `src/alma/core/secrets.py` | unset | `get_smtp_password` | Mail password. | Settings connection state, SMTP login, no mail sent. | Settings: Plugins, Email, while Alerts is on | live |
 | `SECRET_ANNAS_ARCHIVE_KEY` | `src/alma/core/secrets.py` | unset | `plugins.shadow_libraries._settings` | Anna's Archive member key. | Plugin Test button. | Settings: Plugins, advanced | live |
+| `SECRET_CONNECTION_STAMP_SALT` | `src/alma/core/secrets.py` | created on first check | `application.connection_status.config_stamp` | Keys the digest that ties a check to the value it tested. Not set by hand. Losing it reads every row as Set, not checked. | Settings connection state. | internal | live |
 
 ## Environment variables
 
