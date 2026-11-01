@@ -4,9 +4,10 @@ Save the paper open in your browser straight into ALMa — like the Zotero
 connector, for your personal ALMa library.
 
 Click the toolbar button on any paper page and a popup shows what was
-detected (title, DOI/arXiv, authors). Pick a **rating** (Add 3★ / Like 4★
-/ Love 5★) and a **destination** (Library or Reading list) — these are
-selectors; **nothing is saved until you press Save** (Cancel closes). The
+detected (title, DOI/arXiv, authors). **Add** (3★) saves it, to the
+destination you pick (Library or Reading list). **Like** (4★) and **Love**
+(5★) only rate it: the paper stays out of your Library, and the button says
+so. Nothing is written until you press the button (Cancel closes). The
 connector sends the identifier to your local ALMa, which resolves full
 metadata via OpenAlex and saves the paper.
 

@@ -35,12 +35,15 @@
   const $detectedText = el("detected-text");
   const $savedRibbon = el("saved-ribbon"), $savedRibbonText = el("saved-ribbon-text"), $savedRating = el("saved-rating");
   const $savedOpen = el("saved-open");
-  const $rating = el("rating"), $dest = el("dest"), $result = el("result");
+  const $rating = el("rating"), $dest = el("dest"), $destLabel = el("dest-label"), $result = el("result");
   const $commitPre = el("commit-pre"), $commitPost = el("commit-post");
   const $cancel = el("cancel"), $saveBtn = el("save-btn"), $undoBtn = el("undo-btn"), $doneBtn = el("done-btn");
   const $settings = el("settings"), $serverManager = el("server-manager"), $settingsBack = el("settings-back");
   const $collLabel = el("coll-label"), $collRow = el("coll-row"), $collNew = el("coll-new");
   const $collChips = el("coll-chips");
+
+  // The save contract this popup speaks, the same number as content.js.
+  const CONTRACT = 2;
 
   let candidates = [], active = null, detected = null;
   let destination = "library", selectedRating = "add";
@@ -425,7 +428,7 @@
   }
   function renderCollections() {
     // Offline / still probing → no section (filing can't be offered).
-    const show = connected() && collectionsState !== "loading" && collectionsState !== "error";
+    const show = !rateOnly() && connected() && collectionsState !== "loading" && collectionsState !== "error";
     $collLabel.hidden = !show;
     $collRow.hidden = !show;
     if (!show) { collectionSel = ""; return; }
@@ -527,12 +530,35 @@
       $paper.classList.toggle("is-saved", !reading);
       selectRating(starsToRating(m.rating));
       setDestination(reading ? "reading_list" : "library");
-      $saveBtn.textContent = "Update";
+    } else if (m && m.found && m.rating >= 4) {
+      // Liked or Loved, not saved: the paper teaches ALMa but is not in the Library.
+      $savedRibbon.hidden = false;
+      $savedRibbon.className = "saved-ribbon";
+      $savedRibbonText.textContent = "Rated, not saved";
+      fillStars($savedRating, ratingToStars(m.rating));
+      $savedOpen.hidden = true;
+      $paper.classList.remove("is-saved", "is-reading");
+      selectRating(starsToRating(m.rating));
     } else {
       $savedRibbon.hidden = true;
       $paper.classList.remove("is-saved", "is-reading");
-      $saveBtn.textContent = "Save to ALMa";
     }
+    updatePrimaryAction();
+  }
+
+  // Add saves. Like and Love rate the paper and save nothing, so the button says
+  // which one will happen, and the destination and collection do not apply.
+  function rateOnly() { return selectedRating !== "add"; }
+  function verbLabel() { return selectedRating === "love" ? "Love" : "Like"; }
+  function updatePrimaryAction() {
+    const isMember = !!(membership && membership.found && membership.in_library);
+    const later = !connected() && saveable() && !!OB && !!active;
+    if (rateOnly()) $saveBtn.textContent = later ? verbLabel() + " for later" : verbLabel() + " in ALMa";
+    else if (later) $saveBtn.textContent = "Save for later";
+    else $saveBtn.textContent = isMember ? "Update" : "Save to ALMa";
+    $destLabel.hidden = rateOnly();
+    $dest.hidden = rateOnly();
+    renderCollections();
   }
 
   // -------------------------------------------------------------------
@@ -541,6 +567,7 @@
   function selectRating(r) {
     selectedRating = r;
     $rating.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.getAttribute("data-rating") === r)));
+    updatePrimaryAction();
   }
   function setDestination(d) {
     destination = d;
@@ -556,8 +583,7 @@
     // the offline queue (bound to that server's instance) rather than failing.
     const offlineQueueable = !connected() && saveable() && !!OB && !!active;
     $saveBtn.disabled = !((connected() && saveable()) || offlineQueueable);
-    if (offlineQueueable) $saveBtn.textContent = "Save for later";
-    else if ($saveBtn.textContent === "Save for later") $saveBtn.textContent = "Save to ALMa";
+    updatePrimaryAction();
     if (offlineQueueable) {
       result("info", "ALMa at " + S.shortHost(active.url) + " is down — Save will queue this and sync when it's back.",
         { link: { text: "Servers", action: showSettings } });
@@ -616,13 +642,14 @@
   function buildBody() {
     const coll = collectionChoice();
     return {
-      action: selectedRating, destination: destination,
+      action: selectedRating, contract: CONTRACT,
+      destination: rateOnly() ? "library" : destination,
       doi: detected.doi || null, openalex_id: detected.openalexId || null,
       title: detected.title || null, url: detected.url || null,
       authors: detected.authors || null, year: detected.year || null,
       journal: detected.journal || null, abstract: detected.abstract || null,
-      collection_id: coll.collection_id || null,
-      collection_name: coll.collection_name || null,
+      collection_id: rateOnly() ? null : coll.collection_id || null,
+      collection_name: rateOnly() ? null : coll.collection_name || null,
     };
   }
 
@@ -657,7 +684,7 @@
     // failing. The user clicked "Save for later".
     if (!connected()) { return queueForLater(body, false); }
     $saveBtn.disabled = true;
-    result("loading", "Saving to " + destLabel(destination) + " on " + S.shortHost(active.url) + "…");
+    result("loading", (rateOnly() ? "Rating" : "Saving to " + destLabel(destination)) + " on " + S.shortHost(active.url) + "…");
     try {
       const res = await fetch(active.url + "/api/v1/extension/save", { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
       let data = {}; try { data = await res.json(); } catch (e) { /* ignore */ }
@@ -672,7 +699,8 @@
           const c = collections.find((x) => x.id === body.collection_id);
           if (c) collNote = " · in “" + c.name + "”";
         }
-        result("success", "Saved to " + destLabel(data.destination || destination) + (rating ? " · " + rating : "") + collNote + " on " + S.shortHost(active.url),
+        const receipt = data.status === "library" ? "Saved to " + destLabel(data.destination || destination) : verbLabel() + "d, not saved";
+        result("success", receipt + (rating ? " · " + rating : "") + collNote + " on " + S.shortHost(active.url),
           { title: data.title || detected.title || "", link: { text: "Open ALMa", href: active.url + "/" } });
         enterCommitted();
         loadCollections(); // a just-created collection should be in the list on Undo/next render
@@ -710,7 +738,7 @@
       if (res.ok) {
         undoToken = null; undoTarget = null;
         exitCommitted();
-        result("info", "Undone — this paper is no longer saved.");
+        result("info", "Undone.");
         refreshMembership();
       } else { result("error", "Couldn't undo (" + res.status + ")."); $undoBtn.disabled = false; }
     } catch (e) { result("error", "Couldn't reach ALMa at " + S.shortHost(target.url) + " to undo."); $undoBtn.disabled = false; }

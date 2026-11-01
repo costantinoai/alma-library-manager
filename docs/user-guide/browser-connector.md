@@ -9,7 +9,7 @@ The ALMa connector is a small Firefox extension that saves the paper
 open in your browser straight into ALMa — the same idea as the Zotero
 connector. Click the toolbar button on any paper page and a popup shows
 what was detected (title, DOI / arXiv, authors); choose a destination
-and a rating, and the paper lands in your Library.
+and Add saves the paper to your Library; Like and Love rate it.
 
 It talks **only** to your own running ALMa (by default a local install at
 `http://localhost:8000`). Nothing is sent anywhere else.
@@ -72,16 +72,18 @@ That's it — open a paper page and click the **ALMa** button.
 2. Click the **ALMa** toolbar button. The popup reads the page and shows
    the detected paper, with a small "Detected via…" line so you can see
    how it was identified.
-3. Choose a **Rating** — **Add** (3★) · **Like** (4★) · **Love** (5★) —
-   and a **destination**:
+3. Choose **Add** (3★), **Like** (4★) or **Love** (5★). With **Add**, also
+   pick a **destination**:
       * **Library** — saved, untriaged.
       * **Reading list** — saved **and** added to your reading list
         (reading status `reading`).
 
-    These are selectors — **nothing is saved yet**. (The ratings are the
-    same [save verbs](saving-papers.md) used everywhere else in ALMa.)
-4. Click **Save to ALMa** to commit, or **Cancel** to close without doing
-   anything.
+    **Like** and **Love** only rate the paper. It joins your corpus as a
+    tracked paper and teaches Discovery, but it is **not saved**, as
+    [everywhere else in ALMa](saving-papers.md). Nothing is written yet.
+4. Click the button to commit, or **Cancel** to close without doing
+   anything. It reads **Save to ALMa** for Add, **Like in ALMa** or **Love
+   in ALMa** for a rating.
 
 The connector sends the DOI (preferred) to ALMa, which resolves full
 canonical metadata via OpenAlex and saves the paper with
@@ -94,6 +96,11 @@ too).
     Library ✓"** (or **"On your Reading list"**) ribbon with its current
     rating, the rating/destination are pre-selected to match, and the
     button reads **Update** instead of Save.
+
+!!! note "A connector older than this"
+    An older connector cannot say what a Like does now, so ALMa refuses its
+    Like and Love with a message and changes nothing. Add still works.
+    Update the connector.
 
 !!! note "Undo"
     Right after a save, the popup shows an **Undo** button that reverses

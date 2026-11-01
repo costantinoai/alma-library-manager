@@ -133,6 +133,7 @@ html, body {
   box-shadow: var(--shadow);
 }
 .srv-menu[hidden] { display: none; }
+.segment[hidden], .section-label[hidden] { display: none; }
 .srv-item {
   appearance: none;
   width: 100%;

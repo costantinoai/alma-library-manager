@@ -302,7 +302,7 @@ export function LibraryPage() {
           the Library and Feed surfaces read as the same product.
       ─────────────────────────────────────────────────────────────────── */}
       <Tabs
-        value={activeTab === 'analytics' || activeTab === 'imports' ? 'saved' : activeTab}
+        value={activeTab === 'analytics' ? '' : activeTab === 'imports' ? 'saved' : activeTab}
         onValueChange={(value) => {
           setActiveTab(value as typeof activeTab)
           window.location.hash = buildHashRoute('library', { tab: value })
@@ -328,7 +328,8 @@ export function LibraryPage() {
 
       {workflowQuery.isError && <ErrorState message="Library summary is unavailable." actionLabel="Retry" onAction={() => { void workflowQuery.refetch() }} />}
 
-      {(activeTab === 'saved' || activeTab === 'imports' || activeTab === 'analytics') && (
+      {/* Analytics is a fold under this list: a link to it shows it, not the list. */}
+      {(activeTab === 'saved' || activeTab === 'imports') && (
         <SavedTab
           onOpenDetails={(p) => { setSelectedPaper(p); setDetailOpen(true) }}
         />
