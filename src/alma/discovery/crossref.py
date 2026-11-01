@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
-from alma.core.utils import normalize_doi
+from alma.core.utils import canonical_lookup_doi, normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,24 @@ _REJECTED_STATUSES = frozenset({400, 414, 422})
 def _strip_jats(text: str) -> str:
     cleaned = _JATS_TAG_RE.sub(" ", text or "")
     return " ".join(cleaned.split()).strip()
+
+
+#: Crossref relations that say two DOIs are one work at different stages.
+SAME_WORK_RELATIONS = ("is-preprint-of", "has-preprint", "is-version-of", "has-version")
+
+
+def same_work_dois(relation: object) -> list[tuple[str, str]]:
+    """``(relation, doi)`` for each same-work link in a Crossref ``relation`` block."""
+    if not isinstance(relation, dict):
+        return []
+    found: list[tuple[str, str]] = []
+    for name in SAME_WORK_RELATIONS:
+        for entry in relation.get(name) or []:
+            if isinstance(entry, dict) and str(entry.get("id-type") or "").lower() == "doi":
+                doi = canonical_lookup_doi(str(entry.get("id") or ""))
+                if doi:
+                    found.append((name, doi))
+    return found
 
 
 def parent_doi_from_relation(relation: object) -> str | None:
@@ -144,6 +162,7 @@ def _crossref_to_candidate(item: dict, score: float) -> dict | None:
         # Part-of signal: the parent paper this work supplements, if Crossref
         # declares it (alma.core.components links datasets / supplements here).
         "parent_doi": parent_doi_from_relation(item.get("relation")),
+        "same_work_dois": same_work_dois(item.get("relation")),
         "score": round(float(score), 4),
         "source_api": "crossref",
     }

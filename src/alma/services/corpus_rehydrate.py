@@ -2465,6 +2465,7 @@ def _apply_crossref_candidate(
 ) -> list[str]:
     """Fill-only paper UPDATE from a Crossref candidate dict."""
     from alma.core.components import resolve_component
+    from alma.core.paper_groups import record_paper_relations
     from alma.core.paper_updates import fill_only_update_paper
     from alma.core.utils import normalize_doi
 
@@ -2516,6 +2517,7 @@ def _apply_crossref_candidate(
         fill_null_fields={"year": year, "parent_paper_id": parent_paper_id},
         max_int_fields={"cited_by_count": cited_by_count},
     )
+    record_paper_relations(conn, paper_id, candidate.get("same_work_dois"), source="crossref")
     # Settle the group like every other writer that touches these two columns.
     # Without this, a row Crossref newly classified as a component kept its
     # vectors, clusters, feed rows, enrichment status and preference rows —
