@@ -82,34 +82,30 @@
   --color-edge-3: #EBE5D9;
   --color-edge-4: #EFEAE1;   /* faintest, on white */
 
-  /* ── Control ink ladder — controls are ink, surfaces are paper ─────────
+  /* ── Control ladder — translucent, so a control fits every paper ─────────
    * The surface ladder above belongs to CONTAINERS (desk, card, panel,
    * popover). A CONTROL — button, field, chip, toggle, rail — never takes a
    * step on it. It fills instead with a translucent `alma-800` wash that
    * composites over whatever paper it happens to sit on.
    *
-   * Why translucent ink rather than another set of solid hexes: a control
-   * appears at every elevation. Pinned to a fixed cream (the old
-   * `bg-surface-0` on Input) it reads as a well inside a Card and as a dark
-   * slab inside a near-white popover, and a control that borrows its host's
-   * own cream dissolves into it outright. One wash yields the SAME relative
-   * contrast step everywhere, with no per-elevation variants. This is the
-   * rule the chip layer already adopted (StatusBadge `neutral`); these
-   * tokens carry it through the rest of the control layer.
-   *
-   * Base is alma-800 #14233A = rgb(20 35 58).
+   * Two translucent families, so a control is the same object at every
+   * elevation with no per-surface variants:
+   *   - a FIELD or a resting button is a thin sheet of lighter paper, so it
+   *     reads clean on the desk, on a card and on a tinted banner;
+   *   - a RAIL or a quiet fill is the paper's own shade, warm umber. Navy ink
+   *     was tried first and fails: blue over cream cancels to grey-brown, so
+   *     every rail and field on the desk looked dirty and disabled.
    *
    * The ONE exception is the RAISED KNOB — switch thumb, slider thumb,
    * active segment of a segmented rail. Those sit at the TOP of the paper
-   * ladder (`bg-surface-4` + `shadow-paper-sm`): a white knob on an ink
-   * rail is maximum legibility and reads as a physical control resting on
-   * the page. */
-  --color-control-well:        rgb(20 35 58 / 0.045); /* field rest fill        */
-  --color-control-quiet:       rgb(20 35 58 / 0.07);  /* secondary btn, kbd     */
-  --color-control-quiet-hover: rgb(20 35 58 / 0.12);  /* hover: quiet / ghost   */
-  --color-control-track:       rgb(20 35 58 / 0.14);  /* rails, switch off      */
-  --color-control-edge:        rgb(20 35 58 / 0.22);  /* control hairline       */
-  --color-control-edge-strong: rgb(20 35 58 / 0.38);  /* hover / focus hairline */
+   * ladder (`bg-surface-4` + `shadow-paper-sm`). */
+  --color-control-well:        rgb(255 255 255 / 0.60);  /* field rest fill        */
+  --color-control-well-hover:  rgb(255 255 255 / 0.85);  /* outline button hover   */
+  --color-control-quiet:       rgb(74 60 38 / 0.06);     /* secondary btn, kbd     */
+  --color-control-quiet-hover: rgb(74 60 38 / 0.10);     /* hover: quiet / ghost   */
+  --color-control-track:       rgb(74 60 38 / 0.10);     /* rails, switch off      */
+  --color-control-edge:        rgb(74 60 38 / 0.24);     /* control hairline       */
+  --color-control-edge-strong: rgb(74 60 38 / 0.42);     /* hover / focus hairline */
 
   /* ── Activity surface variant — the ONE deliberate exception ──────────
    * The Activity panel is system telemetry, not editorial reading, so it
@@ -124,9 +120,9 @@
    *   cool-1  left column — the operation / job list rows (white paper)
    *   cool-2  right column — detail + record items (lighter paper)
    *   cool-3  deepest nested boxes / chips / code blocks (white) */
-  --color-surface-cool-0: #E7E3DB;   /* elephant musk — warm greige frame */
-  --color-surface-cool-1: #F4F1EB;   /* white-paper list rows             */
-  --color-surface-cool-2: #FBF9F4;   /* lighter paper — detail items      */
+  --color-surface-cool-0: #F4F0E7;   /* elephant musk — warm greige frame */
+  --color-surface-cool-1: #FAF7F0;   /* white-paper list rows             */
+  --color-surface-cool-2: #FDFBF7;   /* lighter paper — detail items      */
   --color-surface-cool-3: #FFFFFF;   /* white — deepest boxes / chips     */
 
   /* ── Folio binding blue (accent) ───────────────────────────────────────
@@ -159,6 +155,12 @@
    * (the cardstock sidebar, navy primary buttons, toast action button).
    * The only "alma-cream" survivor; it is a text color, not a surface. */
   --color-alma-cream: #FFF9F0;
+
+  /* The one heavy button fill. A step lighter than the cover's navy, so a
+   * primary action has weight without being the blackest thing on the page. */
+  --color-primary:        #233B5E;
+  --color-primary-hover:  #1B2F4C;
+  --color-primary-active: #14233A;
 
   /* The one scrim behind every modal layer: brand navy, never black. */
   --color-scrim: rgb(20 35 58 / 0.55);
@@ -291,6 +293,13 @@
   --color-info-800: #075985;
   --color-info-900: #0c4a6e;
 
+  /* State paper: opaque, so a banner is the same sheet on the desk and on a
+   * card. A translucent wash over the desk turned warning into terracotta. */
+  --color-state-critical: color-mix(in srgb, var(--color-critical-700) 6%, var(--color-surface-1));
+  --color-state-warning:  color-mix(in srgb, var(--color-warning-500) 12%, var(--color-surface-1));
+  --color-state-success:  color-mix(in srgb, var(--color-success-700) 6%, var(--color-surface-1));
+  --color-state-info:     color-mix(in srgb, var(--color-info-700) 6%, var(--color-surface-1));
+
   /* ── Fonts ──────────────────────────────────────────────────────────────
    * Display / brand → Merriweather Semibold. UI / body → Inter.
    * `--font-brand` is the legacy alias used by `font-brand` Tailwind
@@ -343,8 +352,12 @@
     inset 0 0 0 1px rgb(217 203 175 / 0.18);
 
   --shadow-paper-inset-cool:
-    inset 0 1px 2px 0 rgb(15 23 42 / 0.05),
-    inset 0 0 0 1px rgb(226 232 240 / 0.55);
+    inset 0 1px 1px 0 rgb(74 60 38 / 0.04);
+
+  /* Anything docked to the bottom edge casts its shadow up the page. */
+  --shadow-paper-up:
+    0 -1px 0 0 rgb(74 60 38 / 0.10),
+    0 -6px 16px -8px rgb(9 22 42 / 0.14);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -384,11 +397,10 @@
  *   sheet → level 1, popover/dropdown/menu → level 3, tooltip → off-ladder
  *   dark ink chip.
  *
- * CONTROLS ARE INK, SURFACES ARE PAPER. The ladder above is for containers
- * only. A control — button, field, chip, toggle, rail, meter — never wears a
- * step of it: it fills from the translucent `control-*` ink ladder, which
- * composites over any host paper and so is the identical object at every
- * elevation.
+ * The ladder above is for containers only. A control — button, field, chip,
+ * toggle, rail, meter — never wears a step of it: it fills from the translucent
+ * `control-*` ladder, lighter paper for fields and warm shade for rails, which
+ * composites over any host and so is the same object at every elevation.
  *
  *   control-well         field rest fill (input, textarea, select trigger,
  *                        checkbox, radio, outline button, toggle pill)

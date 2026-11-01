@@ -2918,6 +2918,17 @@ export interface AuthorNeedsAttentionRow {
   updated_at?: string | null
 }
 
+/** Record that these authors, who share a name, are different people. Permanent
+ *  (D17): the warning and every dedup detector skip the pair from now on. */
+export function rejectAuthorPair(
+  authorId: string,
+  altAuthorIds: string[],
+): Promise<{ author_id: string; rejected: string[] }> {
+  return api.post(`/authors/${encodeURIComponent(authorId)}/not-same-person`, {
+    alt_author_ids: altAuthorIds,
+  })
+}
+
 /** Merge alt OpenAlex profiles into a primary author. Each entry in
  *  `altAuthorIds` is an `authors.id` value (matches the
  *  `alt_profiles[].author_id` shape from /authors/needs-attention).
@@ -2972,6 +2983,10 @@ export interface DiscoverAliasesResponse {
     display_name: string
     institution: string
     works_count: number
+    /** An active local author: merges by row, never by OpenAlex id. */
+    local_author_id: string | null
+    /** You said this is not the same person: it cannot be merged. */
+    rejected: boolean
   }>
 }
 
@@ -3055,6 +3070,13 @@ export function acceptAuthorUnidentified(
  *  rails stop re-discovering them. */
 export function deleteAuthor(authorId: string): Promise<void> {
   return api.delete<void>(`/authors/${encodeURIComponent(authorId)}`)
+}
+
+/** Undo "can't identify": the author is an open identity gap again. */
+export function reopenAuthorIdentity(
+  authorId: string,
+): Promise<{ author_id: string; id_resolution_status: string }> {
+  return api.delete(`/authors/${encodeURIComponent(authorId)}/accept-unidentified`)
 }
 
 export function listAuthorsNeedsAttention(

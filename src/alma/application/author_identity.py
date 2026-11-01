@@ -387,6 +387,21 @@ def _lookup_s2_author_id(author_name: str, sample_titles: list[str]) -> str | No
 # -- Persistence ---------------------------------------------------------------
 
 
+def sticky_resolution_status(db: sqlite3.Connection, author_id: str, status: str) -> str:
+    """The status to write, keeping a user's "can't identify" verdict.
+
+    ``dismissed`` is the terminal answer to an identity gap. A later unattended
+    retry that finds nothing again must not reopen it, or the author comes back
+    to the attention list. Only a real identity replaces it.
+    """
+    if status in {"resolved_auto", "resolved_manual"}:
+        return status
+    row = db.execute(
+        "SELECT id_resolution_status FROM authors WHERE id = ?", (author_id,)
+    ).fetchone()
+    return "dismissed" if row and row[0] == "dismissed" else status
+
+
 def persist_identity_result(
     db: sqlite3.Connection,
     author_id: str,
@@ -447,7 +462,7 @@ def persist_identity_result(
     )
     params.extend(
         [
-            result.status,
+            sticky_resolution_status(db, author_id, result.status),
             result.method,
             float(result.confidence or 0.0),
             evidence_blob,

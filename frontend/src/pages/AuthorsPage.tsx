@@ -72,6 +72,7 @@ export function AuthorsPage() {
   const [selectedAuthor, setSelectedAuthor] = useState<Author | null>(null)
   const [selectedSuggestion, setSelectedSuggestion] = useState<AuthorSuggestion | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [detailTab, setDetailTab] = useState<'identifiers' | undefined>()
   const [addAuthorOpen, setAddAuthorOpen] = useState(false)
 
   const authorsQuery = useQuery({
@@ -92,7 +93,7 @@ export function AuthorsPage() {
   // with no second network request.
   const needsAttentionQuery = useQuery({
     queryKey: ['authors-needs-attention'],
-    queryFn: () => listAuthorsNeedsAttention(50),
+    queryFn: () => listAuthorsNeedsAttention(500),
     staleTime: 60_000,
   })
 
@@ -203,13 +204,17 @@ export function AuthorsPage() {
   // — they just don't have a card to decorate.
   const attentionByAuthor = useMemo(() => {
     const map = new Map<string, AuthorNeedsAttentionRow>()
-    for (const row of attentionRows) map.set(row.author_id, row)
+    // Rows come worst first: a card's triangle opens that one.
+    for (const row of attentionRows) {
+      if (!map.has(row.author_id)) map.set(row.author_id, row)
+    }
     return map
   }, [attentionRows])
 
-  const openDetail = (author: Author) => {
+  const openDetail = (author: Author, tab?: 'identifiers') => {
     setSelectedSuggestion(null)
     setSelectedAuthor(author)
+    setDetailTab(tab)
     setDetailOpen(true)
   }
 
@@ -350,7 +355,9 @@ export function AuthorsPage() {
           <Users className="h-4 w-4 text-alma-600" />
           <h2 className="text-sm font-semibold text-alma-800">Followed authors</h2>
           <span className="text-xs text-slate-500">
-            {followedAuthors.length} followed · monitors run on Feed refresh
+            {followedAuthorsQuery.data
+              ? `${followedAuthorsQuery.data.length} followed · monitors run on Feed refresh`
+              : 'Loading…'}
           </span>
         </header>
 
@@ -391,7 +398,12 @@ export function AuthorsPage() {
         )}
       </section>
 
-      <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />
+      <CorpusAuthorsTable
+        authors={authors}
+        followedIds={followedIds}
+        onSelect={openDetail}
+        isLoading={authorsQuery.isLoading}
+      />
 
       <div
         ref={needsAttentionRef}
@@ -405,8 +417,10 @@ export function AuthorsPage() {
       >
         <AuthorsNeedsAttentionSection
           rows={attentionRows}
+          total={needsAttentionQuery.data?.total ?? attentionRows.length}
           isLoading={needsAttentionQuery.isLoading}
           isError={needsAttentionQuery.isError}
+          onRetry={() => void needsAttentionQuery.refetch()}
           router={attentionRouter}
         />
       </div>
@@ -415,6 +429,7 @@ export function AuthorsPage() {
 
       <AuthorDetailPanel
         author={selectedAuthor}
+        initialTab={detailTab}
         suggestion={selectedSuggestion}
         isOwner={!!selectedAuthor && selectedAuthor.id === ownerId}
         open={detailOpen}

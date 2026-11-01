@@ -1394,7 +1394,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             inside the same shell. */}
         <RowButton
           onClick={() => setIsOpen(!isOpen)}
-          className="justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-sm hover:bg-surface-cool-1"
+          className="justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-up hover:bg-surface-cool-1"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />

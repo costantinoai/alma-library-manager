@@ -84,6 +84,7 @@ function rootsForOperation(operationKey?: string): string[] {
     return [
       'feed-inbox',
       'feed-monitors',
+      'authors-needs-attention',
       'insights-diagnostics',
     ]
   }
@@ -91,6 +92,9 @@ function rootsForOperation(operationKey?: string): string[] {
   if (key.startsWith('authors.')) {
     return [
       'authors',
+      'authors-needs-attention',
+      'home-brief',
+      'insights-diag',
       'library-followed-authors',
       'author-suggestions',
       'author-dossier',
@@ -254,7 +258,10 @@ export function useOperationToasts() {
       (op) =>
         (op.status === 'completed' || op.status === 'failed') &&
         !op.parent_job_id &&
-        !isBackgroundTriggerSource(op.trigger_source),
+        !isBackgroundTriggerSource(op.trigger_source) &&
+        // A foreground author action already toasted its own result; this row
+        // is its Activity record, not a second outcome.
+        !(op.operation_key ?? '').startsWith('authors.action.'),
     )
 
     for (const op of toToast.slice(0, 3)) {

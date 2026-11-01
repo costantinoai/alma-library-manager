@@ -14,7 +14,7 @@ describe('StatusBadge', () => {
     // Neutral is the QUIET chip, but it must never borrow the warm paper
     // ladder — a cream-on-cream chip disappears into its own card. It's a
     // translucent COOL INK wash instead (2026-07-25 colour contract).
-    expect(screen.getByText('Idle')).toHaveClass('bg-alma-800/[0.06]')
+    expect(screen.getByText('Idle')).toHaveClass('bg-control-quiet')
     expect(screen.getByText('Idle')).not.toHaveClass('bg-surface-2')
   })
 

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw, Wrench } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw, Search, Wrench } from 'lucide-react'
 
 import {
-  acceptAuthorUnidentified,
   api,
   discoverAuthorAliases,
+  getApiErrorMessage,
   getAuthorAffiliations,
+  mergeAuthorProfiles,
   pickAuthorAffiliation,
   resolveMergeConflict,
   setAuthorIdentifiers,
@@ -33,39 +34,41 @@ import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { SubPanel } from '@/components/ui/sub-panel'
+import { useAcceptUnidentified } from '@/components/authors/useAcceptUnidentified'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { ConfirmDialog } from '@/components/library'
 import { DeleteAuthorButton } from '@/components/authors/DeleteAuthorButton'
 import { resolvedBadgeSpec } from '@/components/authors/authorResolvedBadgeSpec'
 import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
 import { useToast, errorToast } from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { invalidateAfterAuthorChange } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
 import { RowButton } from '@/components/ui/row-button'
 
 interface AuthorsNeedsAttentionSectionProps {
   rows: AuthorNeedsAttentionRow[]
+  /** Every row there is: the list says so when `rows` is a part of them. */
+  total?: number
   isLoading: boolean
   isError: boolean
+  onRetry?: () => void
   router: AuthorAttentionRouter
 }
 
 /**
  * Authors page "Needs attention" section.
  *
- * Surfaces authors that the automatic resolver couldn't finish — error,
- * no_match, needs_manual_review, or followed-without-openalex. Each row
- * carries a friendly reason + a single primary action button.
- *
- * Reads from the `/authors/needs-attention` endpoint, which already
- * ranks by severity (error > no_match > review > unresolved). The
- * action button dispatches either the modal detail panel (so the user
- * can review candidates manually) or the per-author identity/profile
- * endpoint for retries.
+ * Every row of `/authors/needs-attention`: identity gaps, merge and affiliation
+ * conflicts, split profiles, degraded monitors and thin corpora, worst first.
+ * Each row says why it is here and offers one action; `router` opens that
+ * action's dialog or queues its job.
  */
 export function AuthorsNeedsAttentionSection({
   rows,
+  total = rows.length,
   isLoading,
   isError,
+  onRetry,
   router,
 }: AuthorsNeedsAttentionSectionProps) {
   if (isLoading) {
@@ -80,9 +83,14 @@ export function AuthorsNeedsAttentionSection({
     return (
       <section className="space-y-2">
         <SectionHeader total={null} />
-        <p className="text-xs text-critical-600">
-          Could not load needs-attention rows. Try reloading.
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs text-critical-600">Could not load needs-attention rows.</p>
+          {onRetry ? (
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              Retry
+            </Button>
+          ) : null}
+        </div>
       </section>
     )
   }
@@ -122,6 +130,11 @@ export function AuthorsNeedsAttentionSection({
           ) : null
         }
       />
+      {rows.length < total ? (
+        <p className="text-xs text-slate-500">
+          Showing the first {rows.length} of {total} rows. Fix these and the rest move up.
+        </p>
+      ) : null}
       <ul className="space-y-2">
         {rows.map((row) => (
           <NeedsAttentionRow
@@ -177,39 +190,41 @@ function NeedsAttentionRow({
   })
   const actionCode = row.suggested_action.code
 
-  // Icon picker for the action button — telegraph what kind of
-  // dialog will open before the user clicks.
-  const actionIcon =
-    actionCode === 'review_profiles' ? (
-      <GitMerge className="h-3.5 w-3.5" />
-    ) : actionCode === 'resolve_now' ? (
-      <ArrowRight className="h-3.5 w-3.5" />
-    ) : actionCode === 'review_candidates' || actionCode === 'manual_search' ? (
-      <ArrowRight className="h-3.5 w-3.5" />
-    ) : isRefreshing ? (
-      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-    ) : (
-      <RefreshCw className="h-3.5 w-3.5" />
-    )
+  // The icon tells what a click does: a job starts now, or a choice opens.
+  const startsJob = ['refresh', 'refresh_monitor', 'backfill_author'].includes(actionCode)
+  const actionIcon = isRefreshing ? (
+    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  ) : startsJob ? (
+    <RefreshCw className="h-3.5 w-3.5" />
+  ) : actionCode === 'review_profiles' ? (
+    <GitMerge className="h-3.5 w-3.5" />
+  ) : (
+    <ArrowRight className="h-3.5 w-3.5" />
+  )
 
   return (
     <li className="rounded-card border border-edge-1 bg-surface-1 p-3 shadow-paper-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
+        {/* basis-64: on a phone the buttons wrap below, and the name keeps the line. */}
+        <div className="min-w-0 flex-1 basis-64">
           <div className="flex items-center gap-2">
-            <StatusBadge tone={spec.tone} size="sm">
+            <StatusBadge tone={spec.tone} size="sm" title={spec.title} className="shrink-0">
               <spec.icon className="h-3 w-3" aria-hidden />
               <span>{spec.label}</span>
             </StatusBadge>
             <RowButton
-              className="block w-auto truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
+              title={row.author_name}
+              className="block w-auto min-w-0 truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
               onClick={onOpenAuthor}
             >
               {row.author_name}
             </RowButton>
           </div>
+          {row.reason_detail ? (
+            <p className="mt-1 break-words text-xs text-slate-500">{row.reason_detail}</p>
+          ) : null}
           {row.updated_at ? (
-            <p className="mt-1 text-2xs text-slate-400">Last seen {formatTimestamp(row.updated_at)}</p>
+            <p className="mt-1 text-2xs text-slate-400">Updated {formatTimestamp(row.updated_at)}</p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -233,16 +248,9 @@ function NeedsAttentionRow({
         </div>
       </div>
       {/* Warning bubble row, lower-right — same pattern as the Library
-          needs-attention list. The full reason_detail (resolver step
-          + confidence + OpenAlex-id presence) lives in the chip's
-          title attribute for hover-to-reveal context, keeping the
-          row scannable. */}
+          needs-attention list. The action's hint stays on hover. */}
       <div className="mt-2 flex flex-wrap justify-end gap-1.5">
-        <StatusBadge
-          tone="warning"
-          size="sm"
-          title={[row.reason_detail, row.suggested_action.hint].filter(Boolean).join(' — ')}
-        >
+        <StatusBadge tone="warning" size="sm" title={row.suggested_action.hint}>
           {row.reason}
         </StatusBadge>
       </div>
@@ -251,11 +259,10 @@ function NeedsAttentionRow({
 }
 
 /**
- * Review-profiles sub-dialog. Surfaces the alt OpenAlex IDs the
- * suggestion-rail dedup pass collapsed under the same canonical
- * name, so the user can confirm "yes, same human, please merge"
- * (deferred to a follow-up when the merge endpoint lands) or
- * "actually different humans, dismiss this warning" (also deferred).
+ * Review-profiles sub-dialog: the followed profiles sharing a canonical name.
+ * Two answers end the warning: merge them, or "not the same person" (D17,
+ * permanent). ORCID discovery can add profiles nobody followed; those merge by
+ * OpenAlex id, as an alias of the row's author.
  *
  * Built on the existing Dialog primitive — no new components.
  * Each alt-profile row is a flat `<li>` with the OpenAlex ID, the
@@ -276,6 +283,13 @@ export function ReviewProfilesDialog({
   // list with a distinct chip tone so the user can tell which alts
   // came from the local-followed cluster vs. an OpenAlex round-trip.
   const [orcidDiscovery, setOrcidDiscovery] = useState<DiscoverAliasesResponse | null>(null)
+  const queryClient = useQueryClient()
+
+  // The dialog stays mounted: one row's discovery must not show on the next.
+  const activeAuthorId = row?.author_id
+  useEffect(() => {
+    setOrcidDiscovery(null)
+  }, [activeAuthorId])
 
   const discoverMutation = useMutation({
     mutationFn: () => discoverAuthorAliases(row!.author_id),
@@ -299,18 +313,43 @@ export function ReviewProfilesDialog({
         })
       }
     },
-    onError: () => errorToast('Error', 'ORCID lookup failed.'),
+    onError: (err) => errorToast('ORCID lookup failed', getApiErrorMessage(err)),
   })
 
-  // Discovered aliases that are NOT already tracked locally — those
-  // can't be merged via authors.id (we have no row), but recording
-  // their openalex_id will be a future enhancement (preventive
-  // suppression). For now we render them as "untracked" so the user
-  // sees the full picture.
+  // An alias with no local row merges by OpenAlex id: an alias of the row's
+  // author, papers reattached. One with a row joins the merge list above, where
+  // fields can be compared. A rejected pair is shown and offers nothing.
   const localAltIds = new Set(baseAlts.map((a) => a.openalex_id.toLowerCase()))
   const orcidExtras = (orcidDiscovery?.aliases ?? []).filter(
     (a) => !localAltIds.has(a.openalex_id.toLowerCase()),
   )
+  const absorbable = orcidExtras.filter((alt) => !alt.local_author_id && !alt.rejected)
+  const localExtraIds = orcidExtras.flatMap((alt) =>
+    alt.local_author_id && !alt.rejected ? [alt.local_author_id] : [],
+  )
+  const [confirmingAbsorb, setConfirmingAbsorb] = useState(false)
+  const absorbExtrasMutation = useMutation({
+    mutationFn: () =>
+      mergeAuthorProfiles(
+        row!.author_id,
+        [],
+        undefined,
+        absorbable.map((alt) => alt.openalex_id),
+      ),
+    onSuccess: (data) => {
+      void invalidateAfterAuthorChange(queryClient, activeAuthorId)
+      setOrcidDiscovery(null)
+      setConfirmingAbsorb(false)
+      toast({
+        title: 'ORCID profiles merged',
+        description: `${data.alts_processed} profile${data.alts_processed === 1 ? '' : 's'} recorded · ${data.papers_reassigned} paper${data.papers_reassigned === 1 ? '' : 's'} reattached`,
+      })
+    },
+    onError: (err) => {
+      setConfirmingAbsorb(false)
+      errorToast('Could not merge the ORCID profiles', getApiErrorMessage(err))
+    },
+  })
   const primaryAuthor: Author | null = row
     ? {
         id: row.author_id,
@@ -320,13 +359,23 @@ export function ReviewProfilesDialog({
     : null
 
   return (
+    <>
+    <ConfirmDialog
+      open={confirmingAbsorb}
+      onOpenChange={setConfirmingAbsorb}
+      variant="default"
+      title={`Merge ${absorbable.length} ORCID profile${absorbable.length === 1 ? '' : 's'}?`}
+      description={`Same ORCID, same person. ${absorbable.map((alt) => alt.display_name || alt.openalex_id).join(', ')} become aliases of ${row?.author_name ?? 'this author'} and their papers reattach. A merge has no undo.`}
+      isPending={absorbExtrasMutation.isPending}
+      onConfirm={() => absorbExtrasMutation.mutate()}
+    />
     <AuthorMergeDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) onClose()
       }}
       primaryAuthor={primaryAuthor}
-      allowedTargetIds={baseAlts.map((alt) => alt.author_id)}
+      allowedTargetIds={[...baseAlts.map((alt) => alt.author_id), ...localExtraIds]}
       initialTargetId={baseAlts[0]?.author_id ?? null}
       title="Review duplicate profiles"
       description={
@@ -339,6 +388,7 @@ export function ReviewProfilesDialog({
       }
       emptyCandidateMessage="No followed alternate profiles are available to merge from this warning."
       onMerged={onClose}
+      offerNotSamePerson
       contextSlot={
         <SubPanel variant="flat" padded={false} className="px-3 py-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -371,7 +421,11 @@ export function ReviewProfilesDialog({
                     tone="orcid"
                     openalexId={alt.openalex_id}
                     label={alt.display_name || alt.openalex_id}
-                    title={`Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`}
+                    title={
+                      alt.rejected
+                        ? 'You marked this as a different person'
+                        : `Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`
+                    }
                   />
                 ))}
               </>
@@ -391,10 +445,28 @@ export function ReviewProfilesDialog({
               )}
               Discover via ORCID
             </Button>
+            {absorbable.length > 0 ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmingAbsorb(true)}
+                disabled={absorbExtrasMutation.isPending}
+                className="h-7 px-2 text-caption"
+                title="Same ORCID, same person. Records these as aliases of this author and reattaches their papers."
+              >
+                {absorbExtrasMutation.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <GitMerge className="h-3.5 w-3.5" />
+                )}
+                Merge {absorbable.length} ORCID profile{absorbable.length === 1 ? '' : 's'}
+              </Button>
+            ) : null}
           </div>
         </SubPanel>
       }
     />
+    </>
   )
 }
 
@@ -467,15 +539,17 @@ function ProfileRow({
         <p className="mt-1 truncate text-sm font-medium text-alma-800">{displayName}</p>
         <p className="truncate font-mono text-caption text-slate-500">{openalexId}</p>
       </div>
-      <a
-        href={`https://openalex.org/${openalexId}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 rounded-control border border-control-edge bg-control-well px-2 py-1 text-caption text-alma-700 hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-800"
-      >
-        Open
-        <ExternalLink className="h-3 w-3" />
-      </a>
+      {openalexId ? (
+        <a
+          href={`https://openalex.org/${openalexId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-control border border-control-edge bg-control-well px-2 py-1 text-caption text-alma-700 hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-800"
+        >
+          Open
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      ) : null}
     </Card>
   )
 }
@@ -489,14 +563,19 @@ function ProfileRow({
  * clears the needs-attention flag on the next refresh.
  *
  * All three identifier types are accepted; the backend uses
- * whatever subset arrives. Saved on submit, dialog closes.
+ * whatever subset arrives. A malformed or already-owned identifier comes back
+ * as the server's message and the dialog stays open on the typed text.
+ * While a call is running the dialog cannot close, so its result always lands.
  */
 export function AddIdentifierDialog({
   row,
   onClose,
+  onSearchCandidates,
 }: {
   row: AuthorNeedsAttentionRow | null
   onClose: () => void
+  /** Leaves this dialog for the author's real OpenAlex and Scholar candidate search. */
+  onSearchCandidates?: (row: AuthorNeedsAttentionRow) => void
 }) {
   const open = row !== null
   const queryClient = useQueryClient()
@@ -524,37 +603,25 @@ export function AddIdentifierDialog({
         openalex_id: openalexInput.trim() || undefined,
         scholar_id: scholar.trim() || undefined,
       }),
-    onSuccess: () => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['author-detail', row!.author_id],
+    onSuccess: (saved) => {
+      void invalidateAfterAuthorChange(queryClient, activeAuthorId)
+      toast(
+        saved.openalex_id
+          ? { title: 'Identifiers saved', description: row?.author_name ?? '' }
+          : {
+              title: 'Saved, still no OpenAlex ID',
+              description: `${row?.author_name ?? 'This author'} stays on the list until an OpenAlex ID is found: papers are fetched with it.`,
+            },
       )
-      toast({ title: 'Identifiers saved', description: row?.author_name ?? '' })
       onClose()
     },
-    onError: () => errorToast('Error', 'Could not save identifiers.'),
+    onError: (err) => errorToast('Could not save identifiers', getApiErrorMessage(err)),
   })
 
   // Terminal "give up gracefully": some authors are genuinely not in any index
   // (students, industry, non-indexed). Accepting marks them dismissed so they
   // stop nagging — the blocking fix — without fabricating an identifier.
-  const acceptMutation = useMutation({
-    mutationFn: () => acceptAuthorUnidentified(row!.author_id),
-    onSuccess: () => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['author-detail', row!.author_id],
-        ['health'],
-      )
-      toast({ title: 'Marked as unidentifiable', description: row?.author_name ?? '' })
-      onClose()
-    },
-    onError: () => errorToast('Error', 'Could not update the author.'),
-  })
+  const acceptMutation = useAcceptUnidentified(onClose)
 
   // Auto path: re-run the hierarchical resolver. Cheap, and the right first try
   // for a transient `error`; for a true `no_match` it usually fails again, which
@@ -563,24 +630,18 @@ export function AddIdentifierDialog({
     mutationFn: () =>
       api.post(`/authors/${encodeURIComponent(row!.author_id)}/identity-profile-refresh`),
     onSuccess: () => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['activity-operations'],
-        ['author-detail', row!.author_id],
-      )
+      void invalidateAfterAuthorChange(queryClient, activeAuthorId)
       toast({ title: 'Refresh queued', description: 'Auto-resolution is re-running.' })
       onClose()
     },
-    onError: () => errorToast('Error', 'Could not queue the refresh.'),
+    onError: (err) => errorToast('Could not queue the refresh', getApiErrorMessage(err)),
   })
 
   const busy = mutation.isPending || acceptMutation.isPending || retryMutation.isPending
   const canSubmit = !!(orcid.trim() || openalexInput.trim() || scholar.trim())
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && !busy && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Resolve identity</DialogTitle>
@@ -592,16 +653,24 @@ export function AddIdentifierDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <SubPanel className="flex items-center justify-between gap-2 p-2.5">
-            <span className="text-xs text-slate-500">Try the automatic resolver again first</span>
-            <Button variant="outline" size="sm" onClick={() => retryMutation.mutate()} disabled={busy}>
-              {retryMutation.isPending ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              )}
-              Retry auto-resolve
-            </Button>
+          <SubPanel className="flex flex-wrap items-center justify-between gap-2 p-2.5">
+            <span className="text-xs text-slate-500">Try these first</span>
+            <div className="flex flex-wrap justify-end gap-2">
+              {onSearchCandidates && row ? (
+                <Button variant="outline" size="sm" onClick={() => onSearchCandidates(row)} disabled={busy}>
+                  <Search className="mr-1 h-3.5 w-3.5" />
+                  Search candidates
+                </Button>
+              ) : null}
+              <Button variant="outline" size="sm" onClick={() => retryMutation.mutate()} disabled={busy}>
+                {retryMutation.isPending ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                )}
+                Retry auto-resolve
+              </Button>
+            </div>
           </SubPanel>
           <div className="space-y-1">
             <Label htmlFor="add-id-orcid">ORCID iD</Label>
@@ -640,8 +709,8 @@ export function AddIdentifierDialog({
           <div className="flex items-center gap-1">
             <Button
               variant="muted"
-              onClick={() => acceptMutation.mutate()}
-              disabled={busy}
+              onClick={() => acceptMutation.mutate({ id: row!.author_id, name: row!.author_name })}
+              disabled={busy || !row}
             >
               {acceptMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
               Can&apos;t identify
@@ -740,7 +809,7 @@ export function AffiliationPickerDialog({
     if (open && activeAuthorId) setCustom('')
   }, [activeAuthorId, open])
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['author-affiliations', row?.author_id],
     queryFn: () => getAuthorAffiliations(row!.author_id),
     enabled: open,
@@ -750,18 +819,11 @@ export function AffiliationPickerDialog({
     mutationFn: (institution_name: string) =>
       pickAuthorAffiliation(row!.author_id, { institution_name }),
     onSuccess: (res) => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['author-detail', row!.author_id],
-        ['author-affiliations', row!.author_id],
-        ['health'],
-      )
+      void invalidateAfterAuthorChange(queryClient, activeAuthorId)
       toast({ title: 'Affiliation set', description: res.affiliation ?? row?.author_name ?? '' })
       onClose()
     },
-    onError: () => errorToast('Error', 'Could not set the affiliation.'),
+    onError: (err) => errorToast('Could not set the affiliation', getApiErrorMessage(err)),
   })
 
   const options = useMemo(() => groupAffiliationOptions(data?.items ?? []), [data])
@@ -770,7 +832,7 @@ export function AffiliationPickerDialog({
   const picking = pending ? (mutation.variables as string) : null
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && !pending && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Choose affiliation</DialogTitle>
@@ -789,6 +851,15 @@ export function AffiliationPickerDialog({
         <div className="min-w-0 space-y-2">
           {isLoading ? (
             <LoadingState message="Loading affiliation evidence..." />
+          ) : isError ? (
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 text-xs text-critical-600">
+                Could not load the evidence: {getApiErrorMessage(error)}
+              </p>
+              <Button size="sm" variant="outline" className="shrink-0" onClick={() => void refetch()}>
+                Retry
+              </Button>
+            </div>
           ) : options.length === 0 ? (
             <p className="text-xs text-slate-500">No affiliation evidence on file — type one below.</p>
           ) : (
@@ -815,24 +886,22 @@ export function AffiliationPickerDialog({
                         )}
                       </div>
                     </div>
-                    {isCurrent ? (
-                      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-alma-folio-600">
-                        <Check className="h-3.5 w-3.5" /> Selected
-                      </span>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="shrink-0"
-                        onClick={() => mutation.mutate(opt.institution_name)}
-                        disabled={pending}
-                      >
-                        {picking === opt.institution_name && (
-                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                        )}
-                        Use this
-                      </Button>
-                    )}
+                    {/* The shown value is a choice too: keeping it settles the
+                        conflict just as a new pick does. */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => mutation.mutate(opt.institution_name)}
+                      disabled={pending}
+                    >
+                      {picking === opt.institution_name ? (
+                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      ) : isCurrent ? (
+                        <Check className="mr-1 h-3.5 w-3.5" />
+                      ) : null}
+                      {isCurrent ? 'Keep this' : 'Use this'}
+                    </Button>
                   </SubPanel>
                 )
               })}
@@ -846,6 +915,9 @@ export function AffiliationPickerDialog({
                 placeholder="e.g. Harvard University"
                 value={custom}
                 onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && custom.trim() && !pending) mutation.mutate(custom.trim())
+                }}
                 autoComplete="off"
               />
               <Button
@@ -893,12 +965,7 @@ export function ResolveConflictDialog({
     mutationFn: (choice: 'primary' | 'alt' | 'dismiss') =>
       resolveMergeConflict(row!.conflict_id!, choice),
     onSuccess: (_data, choice) => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['author-detail', row!.author_id],
-      )
+      void invalidateAfterAuthorChange(queryClient, row?.author_id)
       toast({
         title: 'Conflict resolved',
         description:
@@ -910,11 +977,13 @@ export function ResolveConflictDialog({
       })
       onClose()
     },
-    onError: () => errorToast('Error', 'Could not resolve conflict.'),
+    onError: (err) => errorToast('Could not resolve the conflict', getApiErrorMessage(err)),
   })
+  const picking = mutation.isPending ? mutation.variables : null
+  const spinner = <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && !mutation.isPending && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Resolve merge conflict</DialogTitle>
@@ -944,7 +1013,9 @@ export function ResolveConflictDialog({
             variant="ghost"
             onClick={() => mutation.mutate('dismiss')}
             disabled={mutation.isPending}
+            title="Keep the row as it is and stop flagging this."
           >
+            {picking === 'dismiss' && spinner}
             Dismiss
           </Button>
           <Button
@@ -952,13 +1023,14 @@ export function ResolveConflictDialog({
             onClick={() => mutation.mutate('alt')}
             disabled={mutation.isPending}
           >
+            {picking === 'alt' && spinner}
             Use alt's value
           </Button>
           <Button
             onClick={() => mutation.mutate('primary')}
             disabled={mutation.isPending}
           >
-            {mutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            {picking === 'primary' && spinner}
             Keep primary's value
           </Button>
         </DialogFooter>
