@@ -498,7 +498,7 @@ export function HomePage() {
             bare
             masthead
             rule
-            // The gold medallion + gold lede are Home's identity hue doing what
+            // The blue medallion + blue lede are Home's identity hue doing what
             // it does on every other page's masthead — here it also separates a
             // greeting from the section headings under it.
             icon={greetingIcon()}

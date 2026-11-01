@@ -23,7 +23,7 @@
  * Home category → title, pill, sticky-note, and chart families.
  *
  * These are categorical, not status colours: green always means Inbox,
- * violet Reading list, gold the editorial Picked shelf, teal Discovery, and
+ * violet Reading list, blue the editorial Picked shelf, teal Discovery, and
  * magenta Feed. Every consumer derives from this registry.
  */
 export type HomeSectionThemeKey =
@@ -57,7 +57,7 @@ export interface HomeSectionTheme {
    * than the `hue-700` of this theme's text and chip wash. A bar is bare colour
    * with nothing around it to establish the hue, so it carries one step more
    * than a wash sitting behind words. These used to be a private per-theme
-   * guess (`success-500`, `violet-500`, `gold-400`, `cyan-600`, `fuchsia-500`):
+   * guess (`success-500`, `violet-500`, a gold, `cyan-600`, `fuchsia-500`):
    * five different steps, so Home's inflow columns and the "Feed + Discovery"
    * caption under them were visibly different colours.
    */
@@ -86,14 +86,14 @@ export const HOME_SECTION_THEMES: Record<HomeSectionThemeKey, HomeSectionTheme> 
     series: 'bg-violet-600',
   },
   picked: {
-    title: 'text-gold-700',
-    icon: 'text-gold-600',
-    chip: 'border-gold-700/10 bg-gold-700/10 text-gold-700',
-    noteChip: 'border-gold-700/20 bg-gold-700/[0.17] text-gold-700',
-    noteSurface: '!border-gold-700/20 !bg-gold-700/[0.075]',
-    notePlate: '!border-gold-700/20 !bg-gold-700/[0.115]',
-    noteFold: 'border-t-gold-700/25',
-    series: 'bg-gold-600',
+    title: 'text-blue-800',
+    icon: 'text-blue-700',
+    chip: 'border-blue-700/10 bg-blue-700/10 text-blue-800',
+    noteChip: 'border-blue-700/20 bg-blue-700/[0.17] text-blue-800',
+    noteSurface: '!border-blue-700/20 !bg-blue-700/[0.075]',
+    notePlate: '!border-blue-700/20 !bg-blue-700/[0.115]',
+    noteFold: 'border-t-blue-700/25',
+    series: 'bg-blue-600',
   },
   discovery: {
     title: 'text-cyan-800',
@@ -167,9 +167,9 @@ export interface PageTheme {
 export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
   home: {
     icon: HOME_SECTION_THEMES.picked.icon,
-    medallion: 'bg-gold-700/10',
+    medallion: 'bg-blue-700/10',
     chip: HOME_SECTION_THEMES.picked.chip,
-    masthead: HOME_SECTION_THEMES.picked.title,
+    masthead: 'text-blue-900',
   },
   feed: {
     icon: HOME_SECTION_THEMES.feed.icon,
