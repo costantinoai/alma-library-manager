@@ -35,6 +35,7 @@ from alma.api.models import (
 )
 from alma.application import authors as authors_app
 from alma.application.author_identity import sticky_resolution_status
+from alma.application.author_merge import MergeRefused
 from alma.application.followed_authors import (
     apply_follow_state,
     schedule_followed_author_historical_backfill,
@@ -2639,6 +2640,8 @@ def merge_author_profiles_route(
 
     try:
         summary = run_write_unit(db, _do_merge, label="merge_author_profiles")
+    except MergeRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -2828,7 +2831,7 @@ def discover_author_aliases(
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    from alma.application.author_merge import discover_aliases_via_orcid
+    from alma.application.author_merge import annotate_discovered_aliases, discover_aliases_via_orcid
 
     row = db.execute(
         "SELECT id, name, openalex_id FROM authors WHERE id = ?", (author_id,),
@@ -2842,6 +2845,7 @@ def discover_author_aliases(
             detail="Author has no OpenAlex ID — set one first via /identifiers",
         )
     summary = discover_aliases_via_orcid(primary_oid)
+    summary["aliases"] = annotate_discovered_aliases(db, author_id, summary["aliases"])
     summary["primary_author_id"] = author_id
     summary["primary_display_name"] = str(row["name"] or "")
     return summary

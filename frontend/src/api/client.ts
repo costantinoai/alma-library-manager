@@ -2972,6 +2972,10 @@ export interface DiscoverAliasesResponse {
     display_name: string
     institution: string
     works_count: number
+    /** An active local author: merges by row, never by OpenAlex id. */
+    local_author_id: string | null
+    /** You said this is not the same person: it cannot be merged. */
+    rejected: boolean
   }>
 }
 

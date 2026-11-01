@@ -89,6 +89,7 @@ composing the same backend primitives the rest of the app uses:
 | **No OpenAlex match / followed without an id** | Resolve identity | Retry the auto-resolver, paste an authoritative ORCID / OpenAlex / Scholar id, or — if the person genuinely isn't in any index — **accept that they can't be identified**. |
 | **Candidates too close to decide** | Review candidates | Opens the author detail panel on Identifiers, with the candidates, the paste fields and **Can't identify**. |
 | **Split profiles (same person, many ids)** | Review profiles | The merge dialog, alternate preselected: merge them, or say **not the same person**, which is permanent. |
+| **Same ORCID, profile not followed** | Review profiles, Discover via ORCID | A profile with no local author merges as an alias after a confirm. One with a local author joins the merge list. A pair marked as different people is refused everywhere. |
 | **Merge kept a conflicting identifier** | Resolve conflict | Pick which value sticks, or dismiss. |
 | **Affiliation evidence disagrees across sources** | Choose affiliation | Pick which institution to display (the author moved labs), including the one shown now. |
 | **Feed monitor failing** | Refresh monitor | Queues a refresh. A monitor with no OpenAlex id has no row of its own: its identity row owns the fix. |

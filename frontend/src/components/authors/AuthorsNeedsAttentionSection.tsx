@@ -36,6 +36,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { SubPanel } from '@/components/ui/sub-panel'
 import { useAcceptUnidentified } from '@/components/authors/useAcceptUnidentified'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { ConfirmDialog } from '@/components/library'
 import { DeleteAuthorButton } from '@/components/authors/DeleteAuthorButton'
 import { resolvedBadgeSpec } from '@/components/authors/authorResolvedBadgeSpec'
 import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
@@ -315,29 +316,39 @@ export function ReviewProfilesDialog({
     onError: (err) => errorToast('ORCID lookup failed', getApiErrorMessage(err)),
   })
 
-  // Discovered aliases that are NOT already tracked locally have no authors.id,
-  // so they merge by OpenAlex id: an alias of the row's author, papers reattached.
+  // An alias with no local row merges by OpenAlex id: an alias of the row's
+  // author, papers reattached. One with a row joins the merge list above, where
+  // fields can be compared. A rejected pair is shown and offers nothing.
   const localAltIds = new Set(baseAlts.map((a) => a.openalex_id.toLowerCase()))
   const orcidExtras = (orcidDiscovery?.aliases ?? []).filter(
     (a) => !localAltIds.has(a.openalex_id.toLowerCase()),
   )
+  const absorbable = orcidExtras.filter((alt) => !alt.local_author_id && !alt.rejected)
+  const localExtraIds = orcidExtras.flatMap((alt) =>
+    alt.local_author_id && !alt.rejected ? [alt.local_author_id] : [],
+  )
+  const [confirmingAbsorb, setConfirmingAbsorb] = useState(false)
   const absorbExtrasMutation = useMutation({
     mutationFn: () =>
       mergeAuthorProfiles(
         row!.author_id,
         [],
         undefined,
-        orcidExtras.map((alt) => alt.openalex_id),
+        absorbable.map((alt) => alt.openalex_id),
       ),
     onSuccess: (data) => {
       void invalidateAfterAuthorChange(queryClient, activeAuthorId)
       setOrcidDiscovery(null)
+      setConfirmingAbsorb(false)
       toast({
         title: 'ORCID profiles merged',
         description: `${data.alts_processed} profile${data.alts_processed === 1 ? '' : 's'} recorded · ${data.papers_reassigned} paper${data.papers_reassigned === 1 ? '' : 's'} reattached`,
       })
     },
-    onError: (err) => errorToast('Could not merge the ORCID profiles', getApiErrorMessage(err)),
+    onError: (err) => {
+      setConfirmingAbsorb(false)
+      errorToast('Could not merge the ORCID profiles', getApiErrorMessage(err))
+    },
   })
   const primaryAuthor: Author | null = row
     ? {
@@ -348,13 +359,23 @@ export function ReviewProfilesDialog({
     : null
 
   return (
+    <>
+    <ConfirmDialog
+      open={confirmingAbsorb}
+      onOpenChange={setConfirmingAbsorb}
+      variant="default"
+      title={`Merge ${absorbable.length} ORCID profile${absorbable.length === 1 ? '' : 's'}?`}
+      description={`Same ORCID, same person. ${absorbable.map((alt) => alt.display_name || alt.openalex_id).join(', ')} become aliases of ${row?.author_name ?? 'this author'} and their papers reattach. A merge has no undo.`}
+      isPending={absorbExtrasMutation.isPending}
+      onConfirm={() => absorbExtrasMutation.mutate()}
+    />
     <AuthorMergeDialog
       open={open}
       onOpenChange={(next) => {
         if (!next) onClose()
       }}
       primaryAuthor={primaryAuthor}
-      allowedTargetIds={baseAlts.map((alt) => alt.author_id)}
+      allowedTargetIds={[...baseAlts.map((alt) => alt.author_id), ...localExtraIds]}
       initialTargetId={baseAlts[0]?.author_id ?? null}
       title="Review duplicate profiles"
       description={
@@ -400,7 +421,11 @@ export function ReviewProfilesDialog({
                     tone="orcid"
                     openalexId={alt.openalex_id}
                     label={alt.display_name || alt.openalex_id}
-                    title={`Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`}
+                    title={
+                      alt.rejected
+                        ? 'You marked this as a different person'
+                        : `Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`
+                    }
                   />
                 ))}
               </>
@@ -420,11 +445,11 @@ export function ReviewProfilesDialog({
               )}
               Discover via ORCID
             </Button>
-            {orcidExtras.length > 0 ? (
+            {absorbable.length > 0 ? (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => absorbExtrasMutation.mutate()}
+                onClick={() => setConfirmingAbsorb(true)}
                 disabled={absorbExtrasMutation.isPending}
                 className="h-7 px-2 text-caption"
                 title="Same ORCID, same person. Records these as aliases of this author and reattaches their papers."
@@ -434,13 +459,14 @@ export function ReviewProfilesDialog({
                 ) : (
                   <GitMerge className="h-3.5 w-3.5" />
                 )}
-                Merge {orcidExtras.length} ORCID profile{orcidExtras.length === 1 ? '' : 's'}
+                Merge {absorbable.length} ORCID profile{absorbable.length === 1 ? '' : 's'}
               </Button>
             ) : null}
           </div>
         </SubPanel>
       }
     />
+    </>
   )
 }
 
