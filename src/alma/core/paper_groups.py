@@ -63,6 +63,9 @@ _REPOSITORY_DOI_PREFIXES = (
     "10.5281/", "10.17605/", "10.6084/", "10.17863/", "10.25673/", "10.17169/", "10.21942/",
     "10.17615/", "10.5167/", "10.15496/", "10.34657/", "10.6082/", "10.3204/", "10.48620/",
 )
+# Institutional figshare: one short token, then the deposit number, as in
+# `10.21942/uva.32090389` and `10.82444/warw.33599713`. New prefixes appear yearly.
+_INSTITUTIONAL_DEPOSIT_DOI_RE = re.compile(r"^10\.\d{4,9}/[a-z]{2,10}\.\d{8,9}(?:\.v\d+)?$")
 # Meeting abstracts: Journal of Vision (VSS) and Cognitive Computational Neuroscience.
 _ABSTRACT_DOI_PREFIXES = ("10.1167/", "10.32470/")
 
@@ -200,8 +203,14 @@ def is_preprint_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
 def is_repository_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
     """A deposited copy: real, but never the version a group should show."""
     doi = str(_value(row, "doi") or "").strip().lower()
+    if any(doi.startswith(prefix) for prefix in PREPRINT_DOI_PREFIXES):
+        return False
     venue = str(_value(row, "journal") or "")
-    return doi.startswith(_REPOSITORY_DOI_PREFIXES) or bool(_REPOSITORY_VENUE_RE.search(venue))
+    return (
+        doi.startswith(_REPOSITORY_DOI_PREFIXES)
+        or bool(_INSTITUTIONAL_DEPOSIT_DOI_RE.match(doi))
+        or bool(_REPOSITORY_VENUE_RE.search(venue))
+    )
 
 
 def is_meeting_abstract_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
@@ -216,23 +225,45 @@ def is_component_row(row: Mapping[str, Any] | sqlite3.Row) -> bool:
     return str(_value(row, "work_type") or "").strip().lower() in COMPONENT_WORK_TYPES
 
 
+#: Who shows for a work: a journal row, a meeting abstract, a preprint server, a deposit.
+RANK_PUBLISHED = 300
+RANK_ABSTRACT = 250
+RANK_PREPRINT = 100
+RANK_DEPOSIT = 50
+
+
 def _root_rank(row: Mapping[str, Any] | sqlite3.Row) -> int:
-    """Published beats a meeting abstract, a deposit and a preprint. Components never root."""
+    """A component never roots, and a deposit never beats a preprint server (P3)."""
     if is_component_row(row):
         return 0
-    if is_preprint_row(row):
-        return 100
     if is_repository_row(row):
-        return 200
+        return RANK_DEPOSIT
+    if is_preprint_row(row):
+        return RANK_PREPRINT
     if is_meeting_abstract_row(row):
-        return 250
-    return 300
+        return RANK_ABSTRACT
+    return RANK_PUBLISHED
 
 
-def _title_reads_as_a_title(row: Mapping[str, Any] | sqlite3.Row) -> bool:
-    """A capture that fell back on its link, or a publisher's file name, never shows."""
-    title = str(_value(row, "title") or "").strip().lower()
-    return bool(title) and not title.startswith("10.") and "accepted manuscript" not in title
+_PLACEHOLDER_TITLE_RE = re.compile(
+    r"^(?:\W*$|untitled\b|no title\b|https?://|www\.|doi:|10\.\d{4,9}/|(?:\w+ )?accepted manuscript\b)",
+    re.IGNORECASE,
+)
+
+
+def is_placeholder_title(title: str | None) -> bool:
+    """A capture that fell back on its link, or a publisher's file name."""
+    return bool(_PLACEHOLDER_TITLE_RE.match(str(title or "").strip()))
+
+
+def better_title(current: str | None, other: str | None) -> str | None:
+    """The title a merged work shows: never a placeholder, and the fuller of two."""
+    if is_placeholder_title(other):
+        return current
+    if is_placeholder_title(current):
+        return other
+    short, long = normalize_title_key(current), normalize_title_key(other)
+    return other if len(short) >= 8 and len(long) > len(short) and short in long else current
 
 
 def _version_rank(row: Mapping[str, Any] | sqlite3.Row) -> float:
@@ -371,7 +402,7 @@ def choose_paper_group_root(
         ).strip()
         return (
             _root_rank(row),
-            int(_title_reads_as_a_title(row)),
+            int(not is_placeholder_title(_value(row, "title"))),
             _version_rank(row),
             1 if standalone else 0,
             1 if pid == preferred_id else 0,
@@ -652,11 +683,40 @@ def _carry_user_scalars(
     root_status = str(_value(live_root, "status") or "")
     loser_status = str(_value(loser, "status") or "")
     status = _strongest({root_status, loser_status}, _MEMBERSHIP_RANK)
+    saved_earlier = (
+        status == root_status == loser_status == "library"
+        and str(_value(loser, "added_at") or "9") < str(_value(live_root, "added_at") or "9")
+    )
     if status != root_status:
         updates["status"] = status
+    if status != root_status or saved_earlier:
         for field in ("added_at", "added_from"):
             if _value(loser, field):
                 updates[field] = _value(loser, field)
+    return updates
+
+
+_FILLED_FROM_TWIN = (
+    "authors", "abstract", "keywords", "tldr", "url", "doi", "year", "publication_date", "journal",
+)
+
+
+def merged_metadata(
+    live_root: Mapping[str, Any] | sqlite3.Row, loser: Mapping[str, Any] | sqlite3.Row
+) -> dict[str, Any]:
+    """What a twin fills in on the root. The root's own values stand, year included."""
+    updates: dict[str, Any] = {}
+    title = better_title(_value(live_root, "title"), _value(loser, "title"))
+    if title != _value(live_root, "title"):
+        updates["title"] = title
+    same_standing = _root_rank(loser) == _root_rank(live_root)
+    for field in _FILLED_FROM_TWIN:
+        # A deposit's DOI or venue would make a journal paper read as the deposit.
+        if field in ("doi", "journal") and not same_standing:
+            continue
+        value = _value(loser, field)
+        if value not in (None, "") and _value(live_root, field) in (None, ""):
+            updates[field] = value
     return updates
 
 
@@ -667,8 +727,10 @@ def _upgrade_root_scalars(
     root_id = str(root["id"])
     live_root = conn.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone() or root
     updates: dict[str, Any] = {}
+    if _is_duplicate_of_root(loser, root) or _absorbs_into_root(loser, root):
+        updates.update(merged_metadata(live_root, loser))
     if _absorbs_into_root(loser, root):
-        for field in ("authors", "abstract", "keywords", "tldr", "added_at", "added_from"):
+        for field in ("added_at", "added_from"):
             root_value = _value(live_root, field)
             loser_value = _value(loser, field)
             if (root_value is None or str(root_value).strip() == "") and loser_value not in (None, ""):
@@ -684,6 +746,14 @@ def _upgrade_root_scalars(
         f"UPDATE papers SET {assignments} WHERE id = ?",
         [*updates.values(), root_id],
     )
+
+
+def _repoint_capture_ledger(conn: sqlite3.Connection, loser_id: str, root_id: str) -> None:
+    """A capture points at the paper it became. The ledger keeps messages, never drops one."""
+    try:
+        conn.execute("UPDATE inbox_messages SET paper_id = ? WHERE paper_id = ?", (root_id, loser_id))
+    except sqlite3.OperationalError:
+        pass
 
 
 def _invalidate_paper_caches(conn: sqlite3.Connection, paper_id: str) -> int:
@@ -1046,6 +1116,7 @@ def absorb_paper_group(
         if pid == root_id:
             continue
         _upgrade_root_scalars(conn, row, root)
+        _repoint_capture_ledger(conn, pid, root_id)
         if is_component_row(row):
             cleaned += purge_orphan_subordinate_state(conn, pid)
             continue
@@ -1214,6 +1285,19 @@ def titles_alike(first: str | None, second: str | None) -> bool:
     )
 
 
+#: Published this far apart, one Semantic Scholar id is an edition, not a twin.
+EDITION_GAP_YEARS = 5
+
+
+def s2_edition_gap(first: Mapping[str, Any] | sqlite3.Row, second: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """Two published rows years apart: a person decides. Encyclopedias reissue entries."""
+    one, two = _value(first, "year"), _value(second, "year")
+    return (
+        bool(one) and bool(two) and abs(int(one) - int(two)) >= EDITION_GAP_YEARS
+        and _root_rank(first) == RANK_PUBLISHED and _root_rank(second) == RANK_PUBLISHED
+    )
+
+
 def _settle_same_work(conn: sqlite3.Connection, paper_id: str) -> int:
     """Merge what identifiers alone prove to be this work. Returns the merges.
 
@@ -1224,7 +1308,9 @@ def _settle_same_work(conn: sqlite3.Connection, paper_id: str) -> int:
     from alma.core.sql_helpers import standalone_paper_sql
 
     row = conn.execute(
-        "SELECT id, doi, title, authors, semantic_scholar_id FROM papers WHERE id = ?", (paper_id,)
+        "SELECT id, doi, title, authors, year, journal, work_type, preprint_source, component_type, "
+        "semantic_scholar_id FROM papers WHERE id = ?",
+        (paper_id,),
     ).fetchone()
     if row is None:
         return 0
@@ -1252,11 +1338,16 @@ def _settle_same_work(conn: sqlite3.Connection, paper_id: str) -> int:
     s2_id = str(row["semantic_scholar_id"] or "").strip()
     if s2_id:
         for other in conn.execute(
-            f"SELECT p.id, p.title, p.authors FROM papers p "
+            f"SELECT p.id, p.doi, p.title, p.authors, p.year, p.journal, p.work_type, "
+            f"p.preprint_source, p.component_type FROM papers p "
             f"WHERE p.semantic_scholar_id = ? AND {standalone}",
             (s2_id,),
         ):
-            if titles_alike(row["title"], other["title"]) and authors_agree(row["authors"], other["authors"]):
+            if (
+                titles_alike(row["title"], other["title"])
+                and authors_agree(row["authors"], other["authors"])
+                and not s2_edition_gap(row, other)
+            ):
                 matches.setdefault(str(other["id"]), "semantic_scholar")
     matches.pop(paper_id, None)
     merged = 0
@@ -1382,7 +1473,7 @@ def paper_group_defect_map(
                 flag(pid, "chains")
             if is_component_row(target):
                 flag(pid, "component_roots")
-            if canonical and not is_preprint_row(row) and is_preprint_row(target):
+            if canonical and _root_rank(row) > _root_rank(target):
                 flag(pid, "published_under_preprint")
         if is_component_row(row) and not parent and pid not in kept_as_papers:
             flag(pid, "orphan_components")

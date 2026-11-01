@@ -20,6 +20,7 @@ import logging
 import re
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,14 @@ from alma.application.feed_monitors import sync_author_monitors
 from alma.core.author_identity import merged_author_redirects
 from alma.core.components import classify_component
 from alma.core.sqlite_config import apply_busy_timeout
-from alma.core.paper_groups import not_component_ids, paper_group_defect_map, resolve_paper_root_id
+from alma.core.paper_groups import (
+    _MEMBERSHIP_RANK,
+    _strongest,
+    better_title,
+    not_component_ids,
+    paper_group_defect_map,
+    resolve_paper_root_id,
+)
 from alma.core.time import utcnow
 from alma.core.utils import bare_openalex_work_id, normalize_doi, normalize_title_key
 from alma.library.deduplication import _keeper_score, plan_same_work
@@ -35,6 +43,8 @@ from alma.services.paper_group_reconcile import preview_paper_group_repairs, rec
 
 logger = logging.getLogger(__name__)
 
+#: Merging fills a title or a DOI, which can reveal one more twin.
+_MERGE_PASSES = 3
 #: The user's own profile, merged both ways on 2026-06-17 and 2026-07-29 (A4).
 OWNER_SURVIVOR = "A5042972527"
 OWNER_MERGED_ROW = "A5114957962"
@@ -170,7 +180,7 @@ _LOOSEST_FIRST = (
 LIST_COLUMNS = (
     "repair", "reason", "title_similarity", "surviving_title", "merged_title", "surviving_year",
     "merged_year", "surviving_doi", "merged_doi", "surviving_status", "merged_status",
-    "surviving_id", "merged_id",
+    "final_status", "surviving_id", "merged_id",
 )
 
 
@@ -188,20 +198,28 @@ def _merge_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         keeper = max(group, key=_keeper_score)["id"]
         root_id = choose_paper_group_root(full, preferred_id=keeper)
         root = full[root_id]
+        # What the root reads once the whole group landed, in the order the merge folds it.
+        title = root["title"]
+        statuses = {str(row["status"] or "") for row in full.values()}
+        for paper_id, row in full.items():
+            if paper_id != root_id:
+                title = better_title(title, row["title"])
+        final_status = _strongest(statuses, _MEMBERSHIP_RANK)
         for paper_id, row in full.items():
             if paper_id == root_id:
                 continue
             ratio = difflib.SequenceMatcher(
-                None, normalize_title_key(row["title"])[:200], normalize_title_key(root["title"])[:200]
+                None, normalize_title_key(row["title"])[:200], normalize_title_key(title)[:200]
             ).ratio()
             rows.append({
                 "repair": "same_work_merge",
                 "reason": plan_result["reasons"].get(paper_id, ""),
                 "title_similarity": round(ratio, 2),
-                "surviving_title": root["title"], "merged_title": row["title"],
+                "surviving_title": title, "merged_title": row["title"],
                 "surviving_year": root["year"], "merged_year": row["year"],
                 "surviving_doi": root["doi"], "merged_doi": row["doi"],
                 "surviving_status": root["status"], "merged_status": row["status"],
+                "final_status": final_status,
                 "surviving_id": root_id, "merged_id": paper_id,
             })
     rank = {reason: index for index, reason in enumerate(_LOOSEST_FIRST)}
@@ -248,6 +266,15 @@ def _other_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
                 "merged_status": row["status"], "merged_id": paper_id,
             })
+    for item in plan_same_work(conn)["editions"]:
+        row, other = _paper_row(conn, item["paper_id"]), _paper_row(conn, item["candidate_id"])
+        rows.append({
+            "repair": "review_edition", "reason": "one Semantic Scholar id, published 5+ years apart",
+            "surviving_title": other["title"], "surviving_year": other["year"], "surviving_doi": other["doi"],
+            "surviving_status": other["status"], "surviving_id": other["id"],
+            "merged_title": row["title"], "merged_year": row["year"], "merged_doi": row["doi"],
+            "merged_status": row["status"], "merged_id": row["id"],
+        })
     kept = not_component_ids(conn)
     for row in conn.execute("SELECT * FROM papers WHERE component_type IS NULL").fetchall():
         component, _ = classify_component(row["doi"], row["work_type"], row["title"])
@@ -260,9 +287,36 @@ def _other_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return rows
 
 
-def write_list(conn: sqlite3.Connection, path: Path) -> dict[str, int]:
-    """The whole repair as one sheet, loosest merges first. Writes no database row."""
-    rows = [*_merge_rows(conn), *_other_rows(conn)]
+def _merges_as_apply_finds_them(source: Path) -> list[dict[str, Any]]:
+    """Replay the repair on a throwaway copy, so the sheet lists what `apply` will do.
+
+    The steps before the merges change what the ladder sees: a normalised DOI joins
+    two rows, a restored orphan is a row again, a filled title meets its twin.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        copy = Path(folder) / "scholar.db"
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as live, sqlite3.connect(copy) as target:
+            live.backup(target)
+        conn = sqlite3.connect(copy, isolation_level=None, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            _prepare(conn)
+            reconcile_paper_groups(conn, same_work=False)
+            rows: list[dict[str, Any]] = []
+            for _ in range(_MERGE_PASSES):
+                found = _merge_rows(conn)
+                if not found:
+                    break
+                rows.extend(found)
+                reconcile_paper_groups(conn)
+            return rows
+        finally:
+            conn.close()
+
+
+def write_list(conn: sqlite3.Connection, path: Path, *, source: Path) -> dict[str, int]:
+    """The whole repair as one sheet, loosest merges first. Writes nothing to ``source``."""
+    rows = [*_merges_as_apply_finds_them(source), *_other_rows(conn)]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=LIST_COLUMNS)
         writer.writeheader()
@@ -309,8 +363,8 @@ def _return_authorships(conn: sqlite3.Connection) -> int:
     return moved
 
 
-def apply(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Run every repair, one committed unit each, then the reconcile pass."""
+def _prepare(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Everything before the merges, one committed unit each."""
     now = utcnow().isoformat()
     report: dict[str, Any] = {}
     with conn:
@@ -335,9 +389,22 @@ def apply(conn: sqlite3.Connection) -> dict[str, Any]:
     with conn:
         _repair_owner(conn)
         report["authorships_returned"] = _return_authorships(conn)
-    result = reconcile_paper_groups(conn)
-    report["paper_groups"] = result["message"]
-    report["errors"] = result["errors_total"]
+    return report
+
+
+def apply(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Run every repair, then reconcile until nothing is left to merge."""
+    report = _prepare(conn)
+    merged = errors = 0
+    for _ in range(_MERGE_PASSES):
+        result = reconcile_paper_groups(conn)
+        report["paper_groups"] = result["message"]
+        errors += result["errors_total"]
+        merged += result["preprints"]["preprint_twins_merged"]
+        if not plan_same_work(conn)["merges"]:
+            break
+    report["merges"] = merged
+    report["errors"] = errors
     return report
 
 
@@ -354,7 +421,7 @@ def main() -> int:
     conn.row_factory = sqlite3.Row
     apply_busy_timeout(conn)
     if args.list:
-        json.dump(write_list(conn, args.list), sys.stdout, indent=2)
+        json.dump(write_list(conn, args.list, source=args.db), sys.stdout, indent=2)
     else:
         json.dump(apply(conn) if args.apply else plan(conn), sys.stdout, indent=2, default=str)
     print()
