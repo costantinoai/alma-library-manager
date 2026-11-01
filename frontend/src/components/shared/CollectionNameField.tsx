@@ -30,7 +30,7 @@ export function CollectionNameField({
         htmlFor={id}
         className={
           compact
-            ? 'text-[11px] font-medium text-slate-600'
+            ? 'text-caption font-medium text-slate-600'
             : 'mb-1 block text-sm font-medium text-slate-700'
         }
       >

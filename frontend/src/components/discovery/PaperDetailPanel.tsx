@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { RowButton } from '@/components/ui/row-button'
 import { Card } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -346,9 +347,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <Button
                     type="button"
                     size="icon-sm"
-                    variant="ghost"
+                    variant="muted"
                     aria-label="More actions"
-                    className="shrink-0 text-slate-500 hover:text-alma-700"
+                    className="shrink-0"
                   >
                     <MoreHorizontal className="h-4 w-4" />
                   </Button>
@@ -371,7 +372,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <DropdownMenuItem
                     onClick={() => setRemoveConfirmOpen(true)}
                     disabled={!isLibraryPaper}
-                    className="text-critical-700 focus:bg-critical-50 focus:text-critical-700"
+                    className="text-critical-700 focus:bg-critical-700/10 focus:text-critical-700"
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove from Library
@@ -401,7 +402,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                       <AuthorHoverCard name={name}>
                         <a
                           href={buildHashRoute('authors', { q: name })}
-                          className="rounded-sm px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
+                          className="rounded-control px-0.5 transition-colors hover:bg-alma-folio/10 hover:text-alma-folio"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {name}
@@ -516,7 +517,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 <Card className="max-h-96 overflow-auto whitespace-pre-wrap p-4 leading-relaxed text-alma-900">
                   {p.abstract.length > 200 && (
                     <span
-                      className="float-left mr-2 mt-1 font-brand text-[44px] font-semibold leading-none text-alma-800"
+                      className="float-left mr-2 mt-1 font-brand text-figure-lg font-semibold leading-none text-alma-800"
                       aria-hidden
                     >
                       {p.abstract[0]}
@@ -525,7 +526,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   {p.abstract.length > 200 ? p.abstract.slice(1) : p.abstract}
                 </Card>
               ) : (
-                <div className="rounded-md border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
+                <div className="rounded-card border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
                   No abstract available for this paper.
                 </div>
               )}
@@ -578,7 +579,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                       >
                         {t.term}
                         {t.score != null && (
-                          <span className="ml-1 text-[10px] tabular-nums opacity-70">
+                          <span className="ml-1 text-2xs tabular-nums opacity-70">
                             {(Number(t.score) * 100).toFixed(0)}
                           </span>
                         )}
@@ -638,9 +639,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                                   <span className="min-w-0 truncate text-slate-600">{label}</span>
                                 )}
                                 <Button
-                                  variant="ghost"
+                                  variant="muted"
                                   size="sm"
-                                  className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                                  className="h-6 shrink-0 px-1.5 text-caption"
                                   disabled={detachMutation.isPending}
                                   onClick={() => detachMutation.mutate(c.id)}
                                   title="This is not a part of this paper — make it a standalone paper"
@@ -697,9 +698,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                           </span>
                         </span>
                         <Button
-                          variant="ghost"
+                          variant="muted"
                           size="sm"
-                          className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                          className="h-6 shrink-0 px-1.5 text-caption"
                           disabled={detachMutation.isPending}
                           onClick={() => detachMutation.mutate(pre.id)}
                           title="This is a different paper, not a duplicate — split it back out as its own item"
@@ -718,7 +719,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               <section>
                 <div className="mb-1 flex items-center justify-between">
                   <EyebrowLabel tone="muted">Notes</EyebrowLabel>
-                  {hasUnsavedNotes && <span className="text-[10px] font-normal italic text-warning-600">Unsaved changes</span>}
+                  {hasUnsavedNotes && <span className="text-2xs font-normal italic text-warning-600">Unsaved changes</span>}
                 </div>
                 <Textarea
                   value={notesDraft}
@@ -729,7 +730,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   // grayish off-white so the notes box reads as a
                   // neutral input field, distinct from the warm paper
                   // surfaces around it.
-                  className="bg-surface-2 text-sm text-slate-700"
+                  className="text-sm text-slate-700"
                 />
                 <div className="mt-2 flex items-center justify-end gap-2">
                   <Button
@@ -753,7 +754,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
             ) : (
               p.notes && (
                 <section>
-                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="mb-1 text-caption font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </div>
                   <Card className="p-3 text-slate-700 whitespace-pre-wrap">
@@ -807,7 +808,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     rows={6}
                     value={editAbstract}
                     onChange={(e) => setEditAbstract(e.target.value)}
-                    className="bg-surface-2 text-sm text-slate-700"
+                    className="text-sm text-slate-700"
                   />
                 </div>
               </>
@@ -820,7 +821,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   value={editAbstract}
                   onChange={(e) => setEditAbstract(e.target.value)}
                   placeholder="Paste the paper's abstract here…"
-                  className="bg-surface-2 text-sm text-slate-700"
+                  className="text-sm text-slate-700"
                 />
               </div>
             )}
@@ -871,7 +872,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 e.preventDefault()
                 removeMutation.mutate()
               }}
-              className="bg-critical-600 text-on-fill hover:bg-critical-700"
+              variant="destructive"
               disabled={removeMutation.isPending}
             >
               {removeMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
@@ -900,6 +901,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
           <AlertDialogFooter>
             <AlertDialogCancel disabled={refetchMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="default"
               onClick={(e) => {
                 e.preventDefault()
                 refetchMutation.mutate()
@@ -959,13 +961,10 @@ function RelatedWorksSection({
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className="group/rel flex h-auto w-full items-center justify-between gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left font-normal shadow-none hover:border-control-edge-strong hover:bg-control-quiet"
+        <RowButton className="group/rel justify-between rounded-control border border-control-edge bg-control-well px-3 py-2 hover:border-control-edge-strong hover:bg-control-quiet"
         >
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            <span className="text-caption font-semibold uppercase tracking-wide text-slate-500">
               {heading}
             </span>
             {(isLoading || count > 0 || localCount > 0) && (
@@ -977,7 +976,7 @@ function RelatedWorksSection({
                     : String(localCount)}
               </StatusBadge>
             )}
-            <span className="truncate text-[11px] text-slate-400">{sublabel}</span>
+            <span className="truncate text-caption text-slate-400">{sublabel}</span>
           </div>
           <ChevronDown
             className={cn(
@@ -985,7 +984,7 @@ function RelatedWorksSection({
               open && 'rotate-180',
             )}
           />
-        </Button>
+        </RowButton>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2 space-y-2">
         {isLoading ? (
@@ -993,7 +992,7 @@ function RelatedWorksSection({
             <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
           </div>
         ) : works.length === 0 ? (
-          <div className="rounded-md border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
+          <div className="rounded-card border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
             {emptyCopy}
           </div>
         ) : (

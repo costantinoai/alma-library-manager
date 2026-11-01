@@ -210,7 +210,7 @@ export function PageSection({
         )}
       >
         {collapsible ? (
-          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-control text-left focus-ring">
             <ChevronDown
               aria-hidden
               className={cn(
@@ -271,7 +271,7 @@ export function PageSection({
               trigger: an "Open reading list" button nested in a toggle button is
               invalid markup and unclickable. */}
           <div className="flex flex-col items-start gap-2 px-5 pb-3 pt-4 sm:flex-row sm:items-end sm:justify-between sm:gap-3">
-            <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio">
+            <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-control text-left focus-ring">
               <ChevronDown
                 aria-hidden
                 className={cn(

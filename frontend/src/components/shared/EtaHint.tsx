@@ -37,9 +37,9 @@ export function EtaHint({ eta, className }: EtaHintProps) {
           type="button"
           aria-label={`Estimated time ${eta.label}. How is this computed?`}
           className={cn(
-            'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] font-medium text-slate-500',
+            'inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-caption font-medium text-slate-500',
             'transition-colors hover:bg-control-quiet hover:text-slate-700',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio/50',
+            'focus-ring',
             className,
           )}
         >
@@ -51,7 +51,7 @@ export function EtaHint({ eta, className }: EtaHintProps) {
       <PopoverContent side="top" align="start" className="w-72 max-w-xs p-3 text-xs leading-relaxed">
         <p className="text-sm font-semibold text-alma-800">Estimated time · {eta.label}</p>
         <p className="mt-1.5 text-slate-600">{eta.basis}</p>
-        <p className="mt-2 text-[11px] text-slate-500">{keyNote}</p>
+        <p className="mt-2 text-caption text-slate-500">{keyNote}</p>
       </PopoverContent>
     </Popover>
   )

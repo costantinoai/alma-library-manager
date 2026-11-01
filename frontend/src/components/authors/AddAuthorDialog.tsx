@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Alert } from '@/components/ui/alert'
 
 // ── Schema ────────────────────────────────────────────────────────────────
 // Name is optional but we always trim it on submit. At least one of the
@@ -189,12 +190,12 @@ export function AddAuthorDialog({
             {/* Mutation error (backend 4xx/5xx) — surfaces the backend's
                 specific reason when available. */}
             {isError && (
-              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <Alert variant="negative" layout="row">
                 <AlertCircle className="h-4 w-4 shrink-0 text-critical-500" />
                 <span className="text-sm text-critical-700">
                   {errorMessage || 'Failed to add author. Please check the provided identifier and try again.'}
                 </span>
-              </div>
+              </Alert>
             )}
           </form>
         </Form>

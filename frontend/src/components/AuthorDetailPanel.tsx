@@ -43,7 +43,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/LoadingState'
@@ -69,6 +68,7 @@ import { reactionFromRating } from '@/lib/reactions'
 import { invalidateAfterPaperMutation, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
 import { formatPercent, formatYearMonth } from '@/lib/format'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface AuthorDetailPanelProps {
   author: Author | null
@@ -207,7 +207,7 @@ function OpenAlexWorkRow({
   const savedInLibrary = work.already_in_db && work.local_status === 'library'
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-100 bg-surface-2 p-3 shadow-sm">
+    <SubPanel variant="flat" padded={false}  className="space-y-2 p-3 shadow-paper-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-alma-800">
@@ -256,7 +256,7 @@ function OpenAlexWorkRow({
             href={work.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="shrink-0 rounded-md p-1 text-slate-400 hover:text-alma-600"
+            className="shrink-0 rounded-control p-1 text-slate-400 hover:text-alma-600"
             aria-label="Open work on OpenAlex"
           >
             <ExternalLink className="h-3.5 w-3.5" />
@@ -274,7 +274,7 @@ function OpenAlexWorkRow({
           disabled={pending}
         />
       </div>
-    </div>
+    </SubPanel>
   )
 }
 
@@ -519,7 +519,7 @@ export function AuthorDetailPanel({
       {/* Flex column capped at the viewport: header + footer stay put while the
           active tab is the one scrolling region. `w-[calc(100vw-2rem)]` keeps
           the dialog inside narrow windows (the primitive centres it), and
-          `overflow-hidden` clips the rounded corners around the scroll area. */}
+          `overflow-hidden` clips the rounded-card corners around the scroll area. */}
       <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-2rem)] max-w-3xl flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           {/* `pr-12` on the inner row leaves clearance for the Dialog
@@ -638,15 +638,15 @@ export function AuthorDetailPanel({
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {topTopics.length > 0 ? (
                       topTopics.map((t) => (
-                        <Badge key={t.term} variant="outline">
+                        <StatusBadge key={t.term} tone="outline">
                           {t.term} · {t.papers}
-                        </Badge>
+                        </StatusBadge>
                       ))
                     ) : isSuggestionOnly && suggestion && suggestion.shared_topics.length > 0 ? (
                       suggestion.shared_topics.map((t) => (
-                        <Badge key={t} variant="outline">
+                        <StatusBadge key={t} tone="outline">
                           {t}
-                        </Badge>
+                        </StatusBadge>
                       ))
                     ) : (
                       <span className="text-sm text-slate-400">No topic profile yet.</span>
@@ -745,9 +745,9 @@ export function AuthorDetailPanel({
                     <Button
                       key={value}
                       size="sm"
-                      // Selected filter = accent (the contract's one "active /
-                      // selected / on" colour); the rest are neutral outlines.
-                      variant={scope === value ? 'accent' : 'outline'}
+                      // Selected filter = accent (the one active or
+                      // selected colour); the rest are neutral outlines.
+                      variant={scope === value ? 'default' : 'outline'}
                       onClick={() => setScope(value)}
                       disabled={disabled}
                       title={disabled ? 'Not in your DB yet — follow first, or use OpenAlex' : undefined}
@@ -758,7 +758,7 @@ export function AuthorDetailPanel({
                 })}
               </div>
               {openalexQuery.data?.total != null && scope === 'openalex' ? (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-caption text-slate-500">
                   Showing {openalexQuery.data.results.length} of {formatNumber(openalexQuery.data.total)}
                   {' '}works from OpenAlex
                 </p>
@@ -772,12 +772,12 @@ export function AuthorDetailPanel({
                   <span className="ml-2 text-sm text-slate-500">Fetching from OpenAlex...</span>
                 </div>
               ) : openalexQuery.isError ? (
-                <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+                <Alert variant="negative" layout="row" className="px-3 py-4">
                   <AlertCircle className="h-4 w-4 text-critical-500" />
                   <span className="text-sm text-critical-700">
                     Failed to fetch OpenAlex bibliography. This author may not have an OpenAlex ID.
                   </span>
-                </div>
+                </Alert>
               ) : (openalexQuery.data?.results ?? []).length === 0 ? (
                 <div className="py-6 text-center">
                   <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
@@ -807,10 +807,10 @@ export function AuthorDetailPanel({
                 <span className="ml-2 text-sm text-slate-500">Loading publications...</span>
               </div>
             ) : pubsQuery.isError ? (
-              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+              <Alert variant="negative" layout="row" className="px-3 py-4">
                 <AlertCircle className="h-4 w-4 text-critical-500" />
                 <span className="text-sm text-critical-700">Failed to load publications.</span>
-              </div>
+              </Alert>
             ) : publications.length === 0 ? (
               <div className="py-6 text-center">
                 <BookOpen className="mx-auto h-8 w-8 text-slate-300" />
@@ -886,10 +886,9 @@ export function AuthorDetailPanel({
           <div className="ml-auto">
             <Button
               size="sm"
-              variant="ghost"
+              variant="danger-quiet"
               onClick={() => setConfirmingDelete(true)}
               disabled={deleteMutation.isPending}
-              className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

@@ -12,7 +12,7 @@ export function PdfAttemptItem({ attempt }: { attempt: PaperPdfAttempt }) {
     <li>
       {describeAttempt(attempt)}
       {places.length > 0 && (
-        <ul className="mt-0.5 space-y-0.5 pl-3 text-[11px] text-slate-500">
+        <ul className="mt-0.5 space-y-0.5 pl-3 text-caption text-slate-500">
           {places.map((place) => (
             <li key={place} className="break-words">{place}</li>
           ))}

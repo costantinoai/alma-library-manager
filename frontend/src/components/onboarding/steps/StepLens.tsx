@@ -82,7 +82,7 @@ export function StepLens({ state, patch, next, back }: StepContext) {
 
         {lensReady ? (
           <SubPanel variant="accent" className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio text-alma-cream">
               <Check className="h-5 w-5" aria-hidden />
             </span>
             <div>
@@ -97,7 +97,7 @@ export function StepLens({ state, patch, next, back }: StepContext) {
         ) : (
           <SubPanel className="flex flex-col items-start gap-3">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio-soft text-alma-folio">
+              <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-control bg-alma-folio-soft text-alma-folio">
                 <Compass className="h-5 w-5" aria-hidden />
               </span>
               <div>

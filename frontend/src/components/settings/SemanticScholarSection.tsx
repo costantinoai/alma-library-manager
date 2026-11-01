@@ -17,6 +17,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const s2Schema = z.object({
   semantic_scholar_api_key: z.string(),
@@ -98,7 +99,7 @@ export function SemanticScholarSection({
           {/* The green/red pill lives in the section header (visible collapsed);
               this box reveals the specific probe reason + the Re-check action,
               which can't sit in the header (it's a button inside the trigger). */}
-          <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2">
+          <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-2 px-3 py-2">
             <span className="text-xs text-slate-500">
               {statusQuery.data?.detail ?? 'Checking connection…'}
             </span>
@@ -113,7 +114,7 @@ export function SemanticScholarSection({
             >
               Re-check
             </AsyncButton>
-          </div>
+          </SubPanel>
 
           <FormField
             control={form.control}

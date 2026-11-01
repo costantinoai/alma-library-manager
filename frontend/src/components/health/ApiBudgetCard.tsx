@@ -14,6 +14,7 @@ import { MetricTile } from '@/components/shared/MetricTile'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Switch } from '@/components/ui/switch'
 import { formatTimestamp, parseAlmaTimestamp } from '@/lib/utils'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
@@ -65,7 +66,7 @@ export function ApiBudgetCard({
         }
       />
       {policy ? (
-        <div className="flex items-center justify-between gap-4 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2.5">
+        <SubPanel variant="flat" padded={false}  className="flex items-center justify-between gap-4 px-3 py-2.5">
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-800">External network access</p>
             <p className="text-xs text-slate-500">
@@ -82,7 +83,7 @@ export function ApiBudgetCard({
             onCheckedChange={onNetworkChange}
             aria-label="Allow external network access from Health"
           />
-        </div>
+        </SubPanel>
       ) : null}
       {policy?.enabled === false ? (
         <Alert variant="warning">

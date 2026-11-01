@@ -178,8 +178,8 @@ export function ToggleRow({
   return (
     <label
       className={cn(
-        'flex items-center justify-between gap-3 rounded-lg border px-3 py-2',
-        isWarning ? 'border-warning-500/40 bg-warning-50' : 'border-[var(--color-border)]',
+        'flex items-center justify-between gap-3 rounded-card border px-3 py-2',
+        isWarning ? 'border-warning-500/40 bg-warning-700/[0.06]' : 'border-divider',
         disabled && 'opacity-70',
         className,
       )}
@@ -253,9 +253,9 @@ export function OptionCard({
   return (
     <label
       className={cn(
-        'flex items-start gap-3 rounded-lg border p-3 transition-colors',
+        'flex items-start gap-3 rounded-card border p-3 transition-colors',
         disabled
-          ? 'cursor-not-allowed border-[var(--color-border)] bg-surface-2 opacity-70'
+          ? 'cursor-not-allowed border-divider bg-surface-2 opacity-70'
           : selected
             ? 'cursor-pointer border-alma-folio bg-accent-soft'
             : 'cursor-pointer border-control-edge hover:bg-control-quiet',
@@ -429,7 +429,7 @@ export interface KeyValueRowProps {
 export function KeyValueRow({ label, value, className }: KeyValueRowProps) {
   return (
     <div className={cn('flex items-start justify-between gap-3', className)}>
-      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <span className="shrink-0 text-2xs font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </span>
       <span className="min-w-0 flex-1 text-right text-slate-700">{value}</span>
@@ -462,7 +462,7 @@ export function PackageChip({
     <StatusBadge tone={tone} size="default" title={title} className={cn('gap-1.5', className)}>
       {icon}
       <span className="font-mono">{label}</span>
-      {suffix ? <span className="text-[10px] opacity-80">{suffix}</span> : null}
+      {suffix ? <span className="text-2xs opacity-80">{suffix}</span> : null}
     </StatusBadge>
   )
 }
@@ -503,15 +503,15 @@ export function SettingsSection({
       // with an inset shadow so the nesting reads as visible depth, not a
       // flat cream-on-cream sandwich.
       className={cn(
-        'rounded-sm border border-edge-2 bg-surface-2 shadow-paper-inset',
+        'rounded-card border border-edge-2 bg-surface-2 shadow-paper-inset',
         className,
       )}
     >
       <CollapsibleTrigger
         className={cn(
-          'group flex w-full items-center justify-between gap-3 rounded-t-sm px-4 py-3 text-left',
-          'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
-          'data-[state=closed]:rounded-b-sm',
+          'group flex w-full items-center justify-between gap-3 rounded-t-card px-4 py-3 text-left',
+          'hover:bg-control-quiet focus-ring',
+          'data-[state=closed]:rounded-b-control',
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -520,7 +520,7 @@ export function SettingsSection({
         </div>
         {trailing ? <div className="flex shrink-0 items-center gap-2">{trailing}</div> : null}
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-[var(--color-border)] px-4 py-4">
+      <CollapsibleContent className="border-t border-divider px-4 py-4">
         {description ? (
           <p className="mb-3 text-xs text-slate-500">{description}</p>
         ) : null}

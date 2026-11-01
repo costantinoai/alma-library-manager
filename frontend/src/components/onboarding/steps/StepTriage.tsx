@@ -14,6 +14,7 @@ import {
 } from '@/api/client'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type Reaction = 'like' | 'love' | 'dislike' | null
 type Kind = 'add' | 'like' | 'love' | 'dislike' | 'dismiss'
@@ -130,9 +131,9 @@ export function StepTriage({ state, next, back }: StepContext) {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading your recommendations…
           </div>
         ) : recs.length === 0 ? (
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-10 text-center text-sm text-slate-500">
+          <SubPanel variant="flat" padded={false}  className="px-4 py-10 text-center text-sm text-slate-500">
             No recommendations to show yet. You can always run Discovery again from the Discovery page.
-          </div>
+          </SubPanel>
         ) : (
           <RevealList className="space-y-3">
             {recs.map((rec, i) => (

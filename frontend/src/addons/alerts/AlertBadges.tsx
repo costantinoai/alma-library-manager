@@ -1,49 +1,49 @@
 import { CheckCircle, Clock, XCircle } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge as Pill } from '@/components/ui/status-badge'
 
 export function RuleTypeBadge({ type }: { type: string }) {
-  const variantMap: Record<string, 'default' | 'secondary' | 'warning'> = {
-    author: 'default',
-    collection: 'default',
+  const variantMap: Record<string, 'neutral' | 'warning'> = {
+    author: 'neutral',
+    collection: 'neutral',
     keyword: 'warning',
-    topic: 'secondary',
-    similarity: 'secondary',
-    discovery_lens: 'default',
-    feed_monitor: 'default',
-    branch: 'secondary',
+    topic: 'neutral',
+    similarity: 'neutral',
+    discovery_lens: 'neutral',
+    feed_monitor: 'neutral',
+    branch: 'neutral',
     library_workflow: 'warning',
   }
-  return <Badge variant={variantMap[type] ?? 'secondary'}>{type}</Badge>
+  return <Pill tone={variantMap[type] ?? 'neutral'}>{type}</Pill>
 }
 
 export function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case 'sent':
       return (
-        <Badge variant="success">
+        <Pill tone="positive">
           <CheckCircle className="mr-1 h-3 w-3" />
           Sent
-        </Badge>
+        </Pill>
       )
     case 'failed':
       return (
-        <Badge variant="destructive">
+        <Pill tone="negative">
           <XCircle className="mr-1 h-3 w-3" />
           Failed
-        </Badge>
+        </Pill>
       )
     case 'pending':
       return (
-        <Badge variant="warning">
+        <Pill tone="warning">
           <Clock className="mr-1 h-3 w-3" />
           Pending
-        </Badge>
+        </Pill>
       )
     case 'empty':
-      return <Badge variant="secondary">No new papers</Badge>
+      return <Pill tone="neutral">No new papers</Pill>
     case 'skipped':
-      return <Badge variant="secondary">Skipped</Badge>
+      return <Pill tone="neutral">Skipped</Pill>
     default:
-      return <Badge variant="secondary">{status}</Badge>
+      return <Pill tone="neutral">{status}</Pill>
   }
 }

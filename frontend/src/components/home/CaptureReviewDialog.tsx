@@ -58,7 +58,7 @@ function CaptureRecord({
   const formId = `capture-retry-${message.id}`
 
   return (
-    <Surface className="space-y-4 rounded-sm p-4">
+    <Surface className="space-y-4 rounded-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -86,7 +86,7 @@ function CaptureRecord({
       </div>
 
       {message.error && (
-        <p className="rounded-sm border border-warning-700/20 bg-warning-700/[0.06] px-3 py-2 text-xs text-warning-900">
+        <p className="rounded-card border border-warning-700/20 bg-warning-700/[0.06] px-3 py-2 text-xs text-warning-900">
           {message.error}
         </p>
       )}

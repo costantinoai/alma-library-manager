@@ -81,7 +81,7 @@ export function SuggestedAuthorCard({
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-alma-800">{suggestion.name}</h3>
           {institution ? (
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">{institution}</p>
+            <p className="mt-0.5 truncate text-caption text-slate-500">{institution}</p>
           ) : null}
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
             {/* Provenance chip uses the Folio-blue translucent tone:
@@ -153,7 +153,7 @@ export function SuggestedAuthorCard({
               </SignalChip>
             ) : null}
             {suggestion.local_paper_count ? (
-              <span className="text-[11px] text-slate-500">
+              <span className="text-caption text-slate-500">
                 {suggestion.local_paper_count} in DB
               </span>
             ) : null}
@@ -162,7 +162,7 @@ export function SuggestedAuthorCard({
       </header>
 
       {suggestion.sample_titles.length > 0 ? (
-        <ul className="space-y-1 text-[11px] text-slate-600">
+        <ul className="space-y-1 text-caption text-slate-600">
           {suggestion.sample_titles.slice(0, 2).map((title) => (
             <li key={title} className="line-clamp-1">
               {truncate(title, 80)}
@@ -170,16 +170,16 @@ export function SuggestedAuthorCard({
           ))}
         </ul>
       ) : titlesLoading ? (
-        <p className="text-[11px] italic text-slate-400">Loading top papers…</p>
+        <p className="text-caption italic text-slate-400">Loading top papers…</p>
       ) : (
-        <p className="text-[11px] italic text-slate-400">No sample titles yet.</p>
+        <p className="text-caption italic text-slate-400">No sample titles yet.</p>
       )}
 
       {showScore ? (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Meter value={pct} tone="neutral" size="xs" decorative />
-            <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
+            <span className="shrink-0 text-caption font-semibold tabular-nums text-slate-700">
               {Math.round(pct)}
             </span>
           </div>
@@ -198,7 +198,7 @@ export function SuggestedAuthorCard({
               ))}
             </div>
           ) : legacyCaption ? (
-            <p className="text-[11px] text-slate-500">shares {legacyCaption}</p>
+            <p className="text-caption text-slate-500">shares {legacyCaption}</p>
           ) : null}
         </div>
       ) : null}
@@ -248,8 +248,8 @@ export function SuggestedAuthorCard({
         </Button>
         <Button
           size="sm"
-          variant="ghost"
-          className="shrink-0 text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
+          variant="danger-quiet"
+          className="shrink-0"
           onClick={(e) => {
             e.stopPropagation()
             if (!alreadyFollowed) onReject()

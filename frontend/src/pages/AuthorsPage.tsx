@@ -357,7 +357,7 @@ export function AuthorsPage() {
         {isLoading ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-40 rounded-lg" />
+              <Skeleton key={i} className="h-40 rounded-card" />
             ))}
           </div>
         ) : followedAuthors.length === 0 ? (
@@ -367,7 +367,7 @@ export function AuthorsPage() {
             description="Follow a suggestion above or add an author by OpenAlex / ORCID."
           />
         ) : (
-          <RevealList className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <RevealList className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {followedAuthors.map((author, i) => (
               <RevealItem
                 key={author.id}
@@ -397,7 +397,7 @@ export function AuthorsPage() {
         ref={needsAttentionRef}
         id="authors-needs-attention"
         className={cn(
-          'scroll-mt-6 rounded-lg transition-shadow',
+          'scroll-mt-6 rounded-card transition-shadow',
           // Transient accent ring on arrival from a Health drilldown, so the
           // just-scrolled section is unmistakable. Brand accent = folio.
           highlightAttention && 'ring-2 ring-alma-folio ring-offset-2 ring-offset-surface-1',

@@ -111,12 +111,12 @@ export function InflowStrip({ trend, className }: InflowStripProps) {
           )
         })}
         {/* The cell's number, baseline-aligned with the bars it describes. */}
-        <span className="ml-2 self-end font-brand text-[1.75rem] font-normal leading-none tabular-nums text-alma-800">
+        <span className="ml-2 self-end font-brand text-figure-sm font-normal leading-none tabular-nums text-alma-800">
           {windowTotal}
         </span>
       </div>
       <p className="mt-1.5 truncate text-xs text-slate-600">in the last 7 days</p>
-      <p className="mt-0.5 text-[11px]">
+      <p className="mt-0.5 text-caption">
         <span className={HOME_SECTION_THEMES.feed.title}>Feed</span>
         <span className="text-slate-400"> + </span>
         <span className={HOME_SECTION_THEMES.discovery.title}>Discovery</span>

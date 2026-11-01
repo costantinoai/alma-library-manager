@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { IdentityChip, PaperCard } from '@/components/shared'
@@ -74,6 +74,9 @@ import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
+import { RowButton } from '@/components/ui/row-button'
+import { Alert } from '@/components/ui/alert'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type ViewMode = 'cards' | 'compact'
 type CompactSortKey =
@@ -573,7 +576,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             const isSelected = selectedKeys.has(like.id)
             return (
             <RevealItem key={like.id} index={i}>
-            <div className="relative rounded-sm">
+            <div className="relative rounded-control">
               <PaperCard
                 selection={{
                   checked: isSelected,
@@ -603,10 +606,10 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     "Added" column in the compact table. */}
                 {/* Notes */}
                 {like.notes && (
-                  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-warning-50 px-3 py-2">
+                  <Alert variant="warning" layout="row" className="mt-2 items-start gap-1.5 px-3 py-2">
                     <StickyNote className="mt-0.5 h-3 w-3 shrink-0 text-warning-500" />
                     <p className="text-xs text-warning-700">{like.notes}</p>
-                  </div>
+                  </Alert>
                 )}
                 {/* Quick actions */}
                 <div className="mt-2 flex items-center gap-1">
@@ -663,14 +666,14 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="sticky bottom-3 z-30 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
+        <SubPanel variant="flat" padded={false}  className="sticky bottom-dock z-sticky flex flex-wrap items-center gap-2 px-4 py-3 shadow-paper-md">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>
           <Button size="sm" variant="outline" onClick={selectAll}>
             Select Loaded
           </Button>
-          <Button size="sm" variant="gold" onClick={() => handleDiscoverSimilar()}>
+          <Button size="sm" variant="outline" onClick={() => handleDiscoverSimilar()}>
             <Sparkles className="h-4 w-4" />
             Similar
           </Button>
@@ -694,8 +697,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           </Button>
           <Button
             size="sm"
-            variant="outline"
-            className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
+            variant="danger-quiet"
             onClick={() => setBulkDeleteOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -707,7 +709,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           <Button size="sm" variant="ghost" onClick={clearSelection} aria-label="Clear selection">
             <X className="h-4 w-4" />
           </Button>
-        </div>
+        </SubPanel>
       )}
 
       {/* Similar Results Dialog */}
@@ -784,7 +786,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
               </p>
             ) : (
               collections.map((coll) => (
-                <button
+                <RowButton
                   key={coll.id}
                   onClick={() => {
                     if (addToCollectionKey) {
@@ -795,7 +797,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     }
                   }}
                   disabled={addToCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-control border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div
                     className="h-3 w-3 rounded-full shrink-0"
@@ -807,8 +809,8 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                       <p className="text-xs text-slate-500">{truncate(coll.description, 50)}</p>
                     )}
                   </div>
-                  <Badge variant="secondary">{coll.item_count} items</Badge>
-                </button>
+                  <StatusBadge tone="neutral">{coll.item_count} items</StatusBadge>
+                </RowButton>
               ))
             )}
           </div>
@@ -834,18 +836,18 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
               </p>
             ) : (
               collections.map((coll) => (
-                <button
+                <RowButton
                   key={coll.id}
                   onClick={() => bulkCollectionMutation.mutate({ ids: Array.from(selectedKeys), collectionId: coll.id })}
                   disabled={bulkCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
+                  className="gap-3 rounded-control border border-control-edge px-4 py-3 hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: coll.color }} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-alma-800">{coll.name}</p>
                   </div>
-                  <Badge variant="secondary">{coll.item_count} items</Badge>
-                </button>
+                  <StatusBadge tone="neutral">{coll.item_count} items</StatusBadge>
+                </RowButton>
               ))
             )}
           </div>
@@ -1016,7 +1018,7 @@ function SavedCompactTable({
         if (raw == null || raw <= 0) {
           return (
             <span
-              className="block text-center text-[11px] tabular-nums text-slate-300"
+              className="block text-center text-caption tabular-nums text-slate-300"
               title="Not yet scored — sort by Ranking once to populate."
             >
               —

@@ -15,7 +15,6 @@ import {
   X,
   Square,
 } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -29,7 +28,10 @@ import { isBackgroundTriggerSource, runDisplayStatus } from '@/lib/activity'
 import { formatDayTime } from '@/lib/format'
 import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { SCRIM } from '@/components/ui/scrim'
 import { api } from '@/api/client'
+import { RowButton } from '@/components/ui/row-button'
+import { Button } from '@/components/ui/button'
 
 // ── Types ──
 
@@ -424,21 +426,19 @@ function OperationsView({
     const duration = terminal ? formatDuration(op.started_at, op.finished_at) : null
 
     return (
-      <button
+      <RowButton
         key={op.job_id}
-        type="button"
         onClick={() => onSelect(op.job_id)}
         className={cn(
-          'flex w-full min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
+          'min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 hover:bg-surface-cool-2',
           statusAccent(runDisplayStatus(op.status, op.result?.batch)),
           isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
         )}
       >
         {isExpandableParent ? (
-          <button
-            type="button"
-            className="mt-0.5 rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
+          <Button variant="muted" size="icon-xs"
+            className="mt-0.5"
             onClick={(e) => {
               e.stopPropagation()
               setExpandedParents((prev) => ({
@@ -449,7 +449,7 @@ function OperationsView({
             title={isExpanded ? 'Collapse subtasks' : 'Expand subtasks'}
           >
             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          </button>
+          </Button>
         ) : (
           <span className={cn('mt-1 w-4 shrink-0', isChild && 'w-2')} />
         )}
@@ -485,9 +485,7 @@ function OperationsView({
                   "cancelling", the graceful button disables; the hard X stays
                   live as an escalation. */}
               {terminal ? (
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
+                <Button variant="muted" size="icon-xs"
                   title="Dismiss operation"
                   aria-label="Dismiss operation"
                   onClick={(e) => {
@@ -496,12 +494,10 @@ function OperationsView({
                   }}
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-warning-600 hover:bg-warning-700/12 hover:text-warning-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  <Button variant="warning-quiet" size="icon-xs"
                     title={
                       op.status === 'cancelling'
                         ? 'Stopping — finishing current batch'
@@ -515,10 +511,8 @@ function OperationsView({
                     }}
                   >
                     <Square className="h-3.5 w-3.5" strokeWidth={2.5} />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded p-0.5 text-critical-500 hover:bg-critical-700/10 hover:text-critical-700"
+                  </Button>
+                  <Button variant="danger-quiet" size="icon-xs"
                     title="Kill now (interrupts worker thread; in-flight batch may be lost)"
                     aria-label="Kill operation"
                     onClick={(e) => {
@@ -527,7 +521,7 @@ function OperationsView({
                     }}
                   >
                     <X className="h-3.5 w-3.5" strokeWidth={2.5} />
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
@@ -563,7 +557,7 @@ function OperationsView({
                 <span className="min-w-0 truncate">{op.trigger_source}</span>
               </StatusBadge>
             )}
-            <span className="font-mono text-[10px] text-slate-400">
+            <span className="font-mono text-2xs text-slate-400">
               {op.job_id.length > 12 ? `${op.job_id.slice(0, 12)}...` : op.job_id}
             </span>
           </div>
@@ -573,7 +567,7 @@ function OperationsView({
             <p
               className={cn(
                 'break-words text-xs text-critical-700',
-                op.status === 'failed' && 'rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1',
+                op.status === 'failed' && 'rounded-control border border-critical-100 bg-critical-50/70 px-2 py-1',
               )}
             >
               {op.error}
@@ -589,7 +583,7 @@ function OperationsView({
 
           {/* Terminal summary: counts \u00b7 duration \u00b7 finished timestamp */}
           {terminal && (op.processed != null || op.started_at || duration) && (
-            <p className="flex flex-wrap items-center gap-x-2 text-[11px] tabular-nums text-slate-500">
+            <p className="flex flex-wrap items-center gap-x-2 text-caption tabular-nums text-slate-500">
               {op.processed != null && op.total != null && op.total > 0 && (
                 <span className="text-slate-600">
                   {op.processed}/{op.total}
@@ -604,10 +598,10 @@ function OperationsView({
 
           {/* Active/unknown: just started timestamp */}
           {!terminal && op.started_at && (
-            <p className="text-[11px] text-slate-400">Started {formatTimestamp(op.started_at)}</p>
+            <p className="text-caption text-slate-400">Started {formatTimestamp(op.started_at)}</p>
           )}
         </div>
-      </button>
+      </RowButton>
     )
   }
 
@@ -643,10 +637,9 @@ function OperationsView({
           operations the user actually started. */}
       {backgroundParents.length > 0 && (
         <div className="bg-surface-cool-1">
-          <button
-            type="button"
+          <RowButton
             onClick={() => setShowBackground((v) => !v)}
-            className="flex w-full min-w-0 items-center gap-2 px-4 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-surface-cool-2 hover:text-slate-600"
+            className="min-w-0 px-4 py-2 text-xs font-medium text-slate-400 hover:bg-surface-cool-2 hover:text-slate-600"
             title={showBackground ? 'Hide background activity' : 'Show background activity'}
           >
             {showBackground ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -655,7 +648,7 @@ function OperationsView({
               {backgroundParents.length}
             </span>
             <span className="ml-1 min-w-0 truncate font-normal text-slate-400">cache &amp; maintenance — runs on its own</span>
-          </button>
+          </RowButton>
           {showBackground && (
             <div className="divide-y divide-slate-100 opacity-60">
               {backgroundParents.map(renderParentBlock)}
@@ -685,7 +678,7 @@ function renderMetricChips(record: Record<string, unknown> | null) {
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
       {entries.map(([key, value]) => (
-        <span key={key} className="rounded-sm bg-surface-cool-3 px-2 py-1 text-[10px] text-slate-600 ring-1 ring-slate-200">
+        <span key={key} className="rounded-control bg-surface-cool-3 px-2 py-1 text-2xs text-slate-600 ring-1 ring-slate-200">
           {key.replace(/_/g, ' ')}: {formatMetric(value)}
         </span>
       ))}
@@ -705,15 +698,15 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">External Lanes</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">External Lanes</p>
           {renderMetricChips(asRecord(data.external_lanes))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Cache</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Graph Cache</p>
           {renderMetricChips(asRecord(data.graph_cache))}
         </div>
       </SubPanel>
@@ -726,22 +719,22 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Fallback</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Graph Fallback</p>
           {renderMetricChips(graphFallback)}
         </div>
         {laneRuns.length > 0 && (
           <div className="space-y-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">External Lane Runs</p>
+            <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">External Lane Runs</p>
             {laneRuns.map((lane, idx) => {
               const record = asRecord(lane)
               if (!record) return null
               return (
-                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
-                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-700">
+                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-control border border-slate-200 bg-surface-cool-2 px-2 py-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-2xs text-slate-700">
                     <span className="font-medium">{String(record.lane_type ?? 'lane')}</span>
                     {'query' in record && <span>{String(record.query)}</span>}
                     {'branch_label' in record && <span className="text-slate-500">({String(record.branch_label)})</span>}
-                    {'result_count' in record && <span className="rounded-sm bg-surface-cool-3 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
+                    {'result_count' in record && <span className="rounded-control bg-surface-cool-3 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
                   </div>
                 </div>
               )
@@ -775,15 +768,15 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Score Range</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Score Range</p>
           {renderMetricChips(asRecord(data.score_range))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Similarity</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Similarity</p>
           {renderMetricChips(asRecord(data.raw_similarity))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Modes</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Modes</p>
           {renderMetricChips({
             ...((asRecord(data.text_similarity_modes) ?? {})),
             ...Object.fromEntries(
@@ -800,14 +793,14 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     if (topCandidates.length === 0) return null
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-1 p-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top Ranked Candidates</p>
+        <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Top Ranked Candidates</p>
         {topCandidates.map((item, idx) => {
           const record = asRecord(item)
           if (!record) return null
           return (
-            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
-              <div className="text-[11px] font-medium text-slate-700">{String(record.title ?? '')}</div>
-              <div className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-control border border-slate-200 bg-surface-cool-2 px-2 py-1">
+              <div className="text-caption font-medium text-slate-700">{String(record.title ?? '')}</div>
+              <div className="mt-0.5 flex flex-wrap gap-1.5 text-2xs text-slate-500">
                 {'score' in record && <span>score {String(record.score)}</span>}
                 {'source_type' in record && <span>{String(record.source_type)}</span>}
                 {'branch_label' in record && Boolean(record.branch_label) && <span>{String(record.branch_label)}</span>}
@@ -823,11 +816,11 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     return (
       <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Timings</p>
+          <p className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Timings</p>
           {renderMetricChips(asRecord(data.timings_ms))}
         </div>
       </SubPanel>
@@ -1008,7 +1001,7 @@ function OperationDetailView({
         )}
 
         {(terminal || (!active && job.started_at)) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption tabular-nums text-slate-500">
             {terminal && job.processed != null && job.total != null && job.total > 0 && (
               <span className="font-medium text-slate-700">
                 {job.processed}/{job.total}
@@ -1021,12 +1014,12 @@ function OperationDetailView({
         )}
 
         {job.error && (
-          <p className="rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1 text-xs text-critical-700">
+          <p className="rounded-control border border-critical-100 bg-critical-50/70 px-2 py-1 text-xs text-critical-700">
             {job.error}
           </p>
         )}
 
-        <p className="break-all font-mono text-[10px] text-slate-400">{job.job_id}</p>
+        <p className="break-all font-mono text-2xs text-slate-400">{job.job_id}</p>
       </div>
 
       {stoppedWithReason && (
@@ -1062,7 +1055,7 @@ function OperationDetailView({
         <div className="border-b border-slate-100 px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <EyebrowLabel tone="muted">Result</EyebrowLabel>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-2xs text-slate-400">
               {resultKeys.length} field{resultKeys.length === 1 ? '' : 's'}
             </span>
           </div>
@@ -1082,11 +1075,11 @@ function OperationDetailView({
             </div>
           )}
           <details className="group mt-2">
-            <summary className="flex cursor-pointer select-none items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
+            <summary className="flex cursor-pointer select-none items-center gap-1 text-2xs font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
               <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
               Raw JSON
             </summary>
-            <pre className="mt-2 max-h-96 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-3 text-[11px] leading-relaxed text-slate-700 shadow-paper-inset-cool">
+            <pre className="mt-2 max-h-96 overflow-auto rounded-card border border-slate-200 bg-surface-cool-2 p-3 text-caption leading-relaxed text-slate-700 shadow-paper-inset-cool">
               {JSON.stringify(job.result, null, 2)}
             </pre>
           </details>
@@ -1094,9 +1087,9 @@ function OperationDetailView({
       )}
 
       {/* ── LOG STREAM TOOLBAR ── */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
+      <div className="sticky top-0 z-local flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
         <EyebrowLabel tone="muted">Log stream</EyebrowLabel>
-        <span className="text-[11px] tabular-nums text-slate-400">
+        <span className="text-caption tabular-nums text-slate-400">
           {filteredLogs.length}/{logs.length}
         </span>
         {errorsPlus > 0 && (
@@ -1174,10 +1167,10 @@ function OperationDetailView({
                   <>
                     {renderDiscoveryLogData(entry.step, entry.data)}
                     <details className="mt-2">
-                      <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
+                      <summary className="cursor-pointer select-none text-2xs font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
                         Raw data
                       </summary>
-                      <pre className="mt-2 max-h-48 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-2 font-mono text-[10px] leading-4 text-slate-600 shadow-paper-inset-cool">
+                      <pre className="mt-2 max-h-48 overflow-auto rounded-card border border-slate-200 bg-surface-cool-2 p-2 font-mono text-2xs leading-4 text-slate-600 shadow-paper-inset-cool">
                         {JSON.stringify(entry.data, null, 2)}
                       </pre>
                     </details>
@@ -1194,7 +1187,7 @@ function OperationDetailView({
 
 function QueryErrorView({ title, message }: { title: string; message: string }) {
   return (
-    <div className="m-3 rounded border border-critical-100 bg-critical-50 px-3 py-2 text-xs text-critical-700">
+    <div className="m-3 rounded-card border border-critical-100 bg-critical-50 px-3 py-2 text-xs text-critical-700">
       <p className="font-medium">{title}</p>
       <p className="mt-1 break-all">{message}</p>
     </div>
@@ -1370,7 +1363,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
       {isOpen && (
         <div
           onClick={() => setIsOpen(false)}
-          className="fixed inset-0 z-30 bg-scrim lg:hidden"
+          className={cn(SCRIM, 'z-dock-scrim lg:hidden')}
           aria-hidden
         />
       )}
@@ -1381,7 +1374,7 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
           with everything else instead of leaving a dead gutter. */}
       <div
         className={cn(
-          'fixed bottom-0 left-0 right-0 z-40 transition-[left] duration-200',
+          'fixed bottom-0 left-0 right-0 z-dock transition-[left] duration-200',
           sidebarInset(SIDEBAR_DOCK_INSET, sidebarCollapsed),
         )}
       >
@@ -1390,17 +1383,17 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
             visually detaching it from the warm cream/parchment reading
             surfaces. The dev/utility tone reads as a separate "console"
             inside the same shell. */}
-        <button
+        <RowButton
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-sm hover:bg-surface-cool-1"
+          className="justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-paper-sm hover:bg-surface-cool-1"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />
             <span className="text-sm font-medium text-slate-700">Activity</span>
             {activeOps.length > 0 && (
-              <Badge className="bg-slate-700 text-on-fill text-xs">
+              <StatusBadge className="bg-slate-700 text-on-fill text-xs">
                 {activeOps.length} running
-              </Badge>
+              </StatusBadge>
             )}
           </div>
           {isOpen ? (
@@ -1408,14 +1401,14 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
           ) : (
             <ChevronUp className="h-4 w-4 text-slate-400" />
           )}
-        </button>
+        </RowButton>
 
         {/* Expanded panel.
             On mobile we cap at 75vh so the bottom bar + drawer never clip the page's
             top area; on desktop we respect the user-resizable panelHeight. */}
         {isOpen && (
           <div
-            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-0 shadow-2xl lg:max-h-none"
+            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-0 shadow-paper-lg lg:max-h-none"
             style={{ height: `${panelHeight}px` }}
           >
           {/* Resize handle */}
@@ -1441,9 +1434,9 @@ export function ActivityPanel({ sidebarCollapsed = false }: ActivityPanelProps =
                   <Activity className="h-3.5 w-3.5" />
                   Operations
                   {activeOps.length > 0 && (
-                    <Badge className="ml-1 bg-slate-700 text-on-fill text-[10px] px-1.5 py-0">
+                    <StatusBadge className="ml-1 bg-slate-700 text-on-fill text-2xs px-1.5 py-0">
                       {activeOps.length}
-                    </Badge>
+                    </StatusBadge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger

@@ -16,7 +16,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -30,6 +30,7 @@ import {
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { ConfirmDialog } from './ConfirmDialog'
+import { RowButton } from '@/components/ui/row-button'
 
 interface TopicsTabProps {
   /** Deep-link target (global search → `#/library?topic=<term>`): filter the
@@ -203,9 +204,9 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <span>{topics.length} canonical topic{topics.length !== 1 ? 's' : ''}</span>
-            <Badge variant="outline" className="text-xs">
+            <StatusBadge tone="outline" className="text-xs">
               {topics.reduce((sum, t) => sum + t.aliases.length, 0)} aliases
-            </Badge>
+            </StatusBadge>
           </div>
           <p className="text-xs text-slate-500">
             Topics are official source-backed concepts from OpenAlex and related scholarly metadata, with canonical names and aliases for cleanup.
@@ -258,73 +259,67 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
                 return (
                   <div key={domain.name} className="text-sm">
                     <div className="flex items-center gap-2 py-1">
-                      <button
+                      <RowButton
                         onClick={() => toggleDomain(domain.name)}
-                        className="flex items-center gap-1 hover:text-alma-600"
+                        className="w-auto gap-1 hover:text-alma-600"
                       >
                         {isDomainExpanded ? (
                           <ChevronDown className="h-4 w-4" />
                         ) : (
                           <ChevronRight className="h-4 w-4" />
                         )}
-                      </button>
-                      <button
+                      </RowButton>
+                      <RowButton
                         onClick={() => selectHierarchyNode(domain.name)}
-                        className={`flex-1 text-left font-medium hover:text-alma-600 ${
-                          hierarchyFilter === domain.name ? 'text-alma-700' : 'text-slate-800'
-                        }`}
+                        className={`block flex-1 font-medium hover:text-alma-600 ${hierarchyFilter === domain.name ? 'text-alma-700' : 'text-slate-800'}`}
                       >
                         {domain.name}
-                      </button>
-                      <Badge variant="secondary" className="text-xs">
+                      </RowButton>
+                      <StatusBadge tone="neutral" className="text-xs">
                         {domain.paper_count}
-                      </Badge>
+                      </StatusBadge>
                     </div>
                     {isDomainExpanded && domain.fields.length > 0 && (
-                      <div className="ml-6 space-y-1 border-l border-[var(--color-border)] pl-3">
+                      <div className="ml-6 space-y-1 border-l border-divider pl-3">
                         {domain.fields.map((field) => {
                           const fieldKey = `${domain.name}::${field.name}`
                           const isFieldExpanded = expandedFields.has(fieldKey)
                           return (
                             <div key={fieldKey}>
                               <div className="flex items-center gap-2 py-0.5">
-                                <button
+                                <RowButton
                                   onClick={() => toggleField(fieldKey)}
-                                  className="flex items-center gap-1 hover:text-alma-600"
+                                  className="w-auto gap-1 hover:text-alma-600"
                                 >
                                   {isFieldExpanded ? (
                                     <ChevronDown className="h-3.5 w-3.5" />
                                   ) : (
                                     <ChevronRight className="h-3.5 w-3.5" />
                                   )}
-                                </button>
-                                <button
+                                </RowButton>
+                                <RowButton
                                   onClick={() => selectHierarchyNode(field.name)}
-                                  className={`flex-1 text-left hover:text-alma-600 ${
-                                    hierarchyFilter === field.name ? 'text-alma-700' : 'text-slate-700'
-                                  }`}
+                                  className={`block flex-1 hover:text-alma-600 ${hierarchyFilter === field.name ? 'text-alma-700' : 'text-slate-700'}`}
                                 >
                                   {field.name}
-                                </button>
-                                <Badge variant="outline" className="text-xs">
+                                </RowButton>
+                                <StatusBadge tone="outline" className="text-xs">
                                   {field.paper_count}
-                                </Badge>
+                                </StatusBadge>
                               </div>
                               {isFieldExpanded && field.subfields.length > 0 && (
                                 <div className="ml-6 space-y-0.5 border-l border-slate-100 pl-3">
                                   {field.subfields.map((subfield) => (
                                     <div key={subfield.name} className="flex items-center gap-2 py-0.5">
-                                      <button
+                                      <RowButton
                                         onClick={() => selectHierarchyNode(subfield.name)}
-                                        className={`flex-1 text-left text-xs hover:text-alma-600 ${
-                                          hierarchyFilter === subfield.name ? 'text-alma-700' : 'text-slate-600'
-                                        }`}
+                                        className={`block flex-1 text-xs hover:text-alma-600 ${hierarchyFilter === subfield.name ? 'text-alma-700' : 'text-slate-600'}`}
                                       >
                                         {subfield.name}
-                                      </button>
-                                      <Badge variant="outline" className="text-xs">
+                                      </RowButton>
+                                      <StatusBadge tone="outline" className="text-xs">
                                         {subfield.paper_count}
-                                      </Badge>
+                                      </StatusBadge>
                                     </div>
                                   ))}
                                 </div>
@@ -373,30 +368,29 @@ export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
               )
             })
             .map((topic) => (
-            <Card key={topic.canonical} className="transition-shadow hover:shadow-md">
+            <Card key={topic.canonical} className="transition-shadow hover:shadow-paper-sheet-hover">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium text-alma-800">{topic.canonical}</h3>
-                      <Badge variant="secondary">{topic.paper_count} papers</Badge>
+                      <StatusBadge tone="neutral">{topic.paper_count} papers</StatusBadge>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {topic.aliases.length === 0 ? (
                         <span className="text-xs text-slate-400">No aliases</span>
                       ) : (
                         topic.aliases.map((alias) => (
-                          <Badge key={alias} variant="outline" className="text-xs pr-1">
+                          <StatusBadge key={alias} tone="outline" className="text-xs pr-1">
                             <span>{alias}</span>
-                            <button
-                              type="button"
-                              className="ml-1 rounded-sm text-slate-500 hover:text-critical-600"
+                            <Button variant="danger-muted" size="inline"
+                              className="ml-1"
                               onClick={() => setDeleteAlias(alias)}
                               title="Delete alias"
                             >
                               <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
+                            </Button>
+                          </StatusBadge>
                         ))
                       )}
                     </div>

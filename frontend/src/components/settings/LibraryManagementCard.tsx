@@ -32,6 +32,8 @@ import { formatBytes } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { describeMaintenanceLaunch } from '@/lib/maintenance'
 import { parseAlmaTimestamp } from '@/lib/utils'
+import { DisclosurePanel } from '@/components/ui/disclosure-panel'
+import { Alert } from '@/components/ui/alert'
 
 export function LibraryManagementCard() {
   const queryClient = useQueryClient()
@@ -220,7 +222,7 @@ export function LibraryManagementCard() {
             <div className="space-y-3">
               <div className="space-y-0.5">
                 <h4 className="text-xs font-semibold text-slate-700">Unified Database</h4>
-                <p className="truncate font-mono text-[11px] text-slate-500" title={libraryDatabase.path}>
+                <p className="truncate font-mono text-caption text-slate-500" title={libraryDatabase.path}>
                   {libraryDatabase.path}
                 </p>
               </div>
@@ -301,7 +303,7 @@ export function LibraryManagementCard() {
                   {libraryInfoQuery.data.backups.map((backup: BackupInfo) => (
                     <div
                       key={backup.name}
-                      className="flex items-center justify-between rounded-sm border border-[var(--color-border)] px-3 py-2"
+                      className="flex items-center justify-between rounded-card border border-divider px-3 py-2"
                     >
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium text-slate-700">{backup.name}</p>
@@ -343,22 +345,18 @@ export function LibraryManagementCard() {
                 actions don't dominate the card. Two side-by-side rows
                 of (description, button) keep the buttons aligned to
                 the right edge instead of stacking under the prose. */}
-            <details className="group rounded-lg border border-critical-500 bg-critical-50">
-              <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="h-4 w-4 text-critical-600" />
-                  <h4 className="text-sm font-semibold text-critical-700">Danger Zone</h4>
-                </div>
-                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-critical-700 group-open:hidden">Show</span>
-                <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-critical-700 group-open:inline">Hide</span>
-              </summary>
-              <div className="space-y-3 border-t border-critical-100 px-4 pb-4 pt-3">
+            <DisclosurePanel
+              tone="danger"
+              title="Danger Zone"
+              icon={ShieldAlert}
+              contentClassName="space-y-3"
+            >
                 <p className="text-xs text-critical-700">
                   Destructive actions here are queued in Activity so you can track the job, but they
                   rewrite the database in place. Take a fresh backup first if you're not sure.
                 </p>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Reset all feedback learning.</span> Wipes feedback events,
                     lens weights, author dismissals, author centroids, suggestion cache, and
                     recommendation actions. Library, followed authors, lenses, and corpus stay.
@@ -381,8 +379,8 @@ export function LibraryManagementCard() {
                     onConfirm={() => resetFeedbackLearningMutation.mutate()}
                   />
                 </div>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Delete saved embeddings.</span> Wipes cached
                     paper vectors, author centroids, and per-paper vector fetch markers only.
                     Papers, Library state, feedback, tags, collections, monitors, and sources stay.
@@ -405,8 +403,8 @@ export function LibraryManagementCard() {
                     onConfirm={() => resetEmbeddingsMutation.mutate()}
                   />
                 </div>
-                <div className="flex items-start justify-between gap-3 border-t border-critical-100 pt-3">
-                  <p className="flex-1 text-xs text-critical-700">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-critical-100 pt-3">
+                  <p className="min-w-48 flex-1 text-xs text-critical-700">
                     <span className="font-medium">Reset publications database.</span> Deletes every
                     paper, author, and feed item. Saved collections, tags, and topics are kept.
                     Backups are not touched. Optional: also reset learned feedback in the same step.
@@ -431,7 +429,7 @@ export function LibraryManagementCard() {
                       are not touched.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
-                  <div className="flex items-start gap-2 rounded-md border border-critical-100 bg-critical-50 p-3">
+                  <Alert variant="negative" layout="row" className="items-start">
                     <Checkbox
                       id="reset-also-feedback"
                       checked={alsoResetSignal}
@@ -445,7 +443,7 @@ export function LibraryManagementCard() {
                       >
                         Also reset learned feedback
                       </Label>
-                      <p className="text-[11px] leading-snug text-critical-700/80">
+                      <p className="text-caption leading-snug text-critical-700/80">
                         Wipes feedback events, lens weights, author
                         dismissals, author centroids, suggestion cache,
                         and recommendation actions. The ranker starts
@@ -453,12 +451,12 @@ export function LibraryManagementCard() {
                         preserved.
                       </p>
                     </div>
-                  </div>
+                  </Alert>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       onClick={() => resetMutation.mutate({ alsoSignal: alsoResetSignal })}
-                      className="bg-critical-600 text-on-fill hover:bg-critical-700"
+                      variant="destructive"
                     >
                       {alsoResetSignal ? 'Reset DB + feedback' : 'Yes, reset DB only'}
                     </AlertDialogAction>
@@ -466,8 +464,8 @@ export function LibraryManagementCard() {
                 </AlertDialogContent>
               </AlertDialog>
                 </div>
-              </div>
-            </details>
+              
+            </DisclosurePanel>
           </>
         )}
       </SettingsCard>
@@ -515,7 +513,7 @@ function ConfirmAction({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
-            className={destructive ? 'bg-critical-600 text-on-fill hover:bg-critical-700' : undefined}
+            variant={destructive ? 'destructive' : 'default'}
           >
             {confirmLabel}
           </AlertDialogAction>

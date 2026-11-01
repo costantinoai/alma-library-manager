@@ -38,8 +38,8 @@ export function StepVision({ next, back }: StepContext) {
       <ul className="space-y-3">
         {POINTS.map((p, i) => (
           <RevealItem key={p.title} index={i}>
-            <li className="flex items-start gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-4 py-3">
-              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-sm bg-alma-folio-soft text-alma-folio">
+            <li className="flex items-start gap-3 rounded-card border border-divider bg-surface-2 px-4 py-3">
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-control bg-alma-folio-soft text-alma-folio">
                 <p.icon className="h-4 w-4" aria-hidden />
               </span>
               <div className="min-w-0">

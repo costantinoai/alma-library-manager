@@ -43,9 +43,9 @@ function ComponentRow({ component }: { component: AuthorSignalComponent }) {
   const sign = component.tone === 'negative' ? '−' : ''
   return (
     <div className="flex items-center gap-2">
-      <span className="w-[4.5rem] shrink-0 text-[11px] text-slate-500">{component.label}</span>
+      <span className="w-[4.5rem] shrink-0 text-caption text-slate-500">{component.label}</span>
       <Meter value={width} tone={componentTone(component.tone)} size="xs" decorative />
-      <span className="w-6 shrink-0 text-right text-[11px] tabular-nums text-slate-600">
+      <span className="w-6 shrink-0 text-right text-caption tabular-nums text-slate-600">
         {sign}
         {Math.round(component.score)}
       </span>
@@ -78,7 +78,7 @@ export function AuthorSignalBar({
 }: AuthorSignalBarProps) {
   if (!signal) {
     return (
-      <div className={cn('inline-flex items-center gap-2 text-[11px] text-slate-400', className)}>
+      <div className={cn('inline-flex items-center gap-2 text-caption text-slate-400', className)}>
         <Meter value={0} size="xs" className="w-14" decorative />
         <span>no signal yet</span>
       </div>
@@ -93,7 +93,7 @@ export function AuthorSignalBar({
     <div className={cn('space-y-1', className)}>
       <div className="flex items-center gap-2">
         <Meter value={pct} tone={tone} size="xs" decorative />
-        <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
+        <span className="shrink-0 text-caption font-semibold tabular-nums text-slate-700">
           {Math.round(pct)}
         </span>
         {hasBreakdown && breakdown === 'hover' ? (
@@ -105,7 +105,7 @@ export function AuthorSignalBar({
                 // The card itself is clickable — keep hovering/clicking the
                 // info dot from opening the detail dialog.
                 onClick={(event) => event.stopPropagation()}
-                className="shrink-0 text-slate-400 transition hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="shrink-0 text-slate-400 transition hover:text-accent focus-ring"
               >
                 <Info className="h-3.5 w-3.5" aria-hidden />
               </TooltipTrigger>
@@ -121,7 +121,7 @@ export function AuthorSignalBar({
         ) : null}
       </div>
       {showCaption ? (
-        <p className="text-[11px] text-slate-500">
+        <p className="text-caption text-slate-500">
           {signal.library_papers} lib / {signal.total_papers} total
           {signal.avg_rating != null ? ` · ★${signal.avg_rating.toFixed(1)}` : null}
         </p>

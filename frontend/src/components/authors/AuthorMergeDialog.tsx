@@ -27,6 +27,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { RowButton } from '@/components/ui/row-button'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 type MergeFieldKey =
   | 'name'
@@ -293,7 +295,7 @@ export function AuthorMergeDialog({
               <EyebrowLabel tone="muted">
                 {absorbMode ? 'Choose surviving author' : 'Choose duplicate'}
               </EyebrowLabel>
-              <span className="truncate text-[10px] text-slate-400">
+              <span className="truncate text-2xs text-slate-400">
                 {fixed
                   ? absorbMode
                     ? `absorbing ${fixed.name}`
@@ -314,16 +316,15 @@ export function AuthorMergeDialog({
               {authorsQuery.isLoading ? (
                 <LoadingState message="Loading authors..." />
               ) : mergeCandidates.length === 0 ? (
-                <div className="rounded-sm border border-dashed border-edge-2 bg-surface-2 p-4 text-sm text-slate-500">
+                <SubPanel variant="flat" padded={false}  className="border-dashed p-4 text-sm text-slate-500">
                   {emptyCandidateMessage}
-                </div>
+                </SubPanel>
               ) : (
                 mergeCandidates.map((candidate) => {
                   const isSelected = candidate.id === mergeTargetId
                   return (
-                    <button
+                    <RowButton
                       key={candidate.id}
-                      type="button"
                       onClick={() => {
                         setMergeTargetId(candidate.id)
                         // Recompute defaults survivor-vs-absorbed for the new pick.
@@ -331,7 +332,7 @@ export function AuthorMergeDialog({
                         const a = absorbMode ? fixed : candidate
                         if (p && a) setMergeChoices(defaultMergeChoices(p, a))
                       }}
-                      className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
+                      className={`block rounded-card border p-3 shadow-paper-sm ${
                         isSelected
                           ? 'border-accent bg-accent-soft'
                           : 'border-control-edge bg-control-well hover:border-control-edge-strong'
@@ -350,7 +351,7 @@ export function AuthorMergeDialog({
                       <p className="mt-1 line-clamp-1 text-xs text-slate-500">
                         {candidate.affiliation || candidate.openalex_id || 'No affiliation on record'}
                       </p>
-                    </button>
+                    </RowButton>
                   )
                 })
               )}
@@ -363,7 +364,7 @@ export function AuthorMergeDialog({
                 {absorbOpenAlexOnly ? 'What the merge does' : 'Pick winning values'}
               </EyebrowLabel>
               {selected ? (
-                <span className="truncate text-[10px] text-slate-400">← {selected.name}</span>
+                <span className="truncate text-2xs text-slate-400">← {selected.name}</span>
               ) : null}
             </div>
             {primary && alt && absorbOpenAlexOnly ? (
@@ -415,7 +416,7 @@ export function AuthorMergeDialog({
                               <label
                                 key={side}
                                 htmlFor={itemId}
-                                className={`flex cursor-pointer items-start gap-2 rounded-sm border p-2 text-sm transition ${
+                                className={`flex cursor-pointer items-start gap-2 rounded-control border p-2 text-sm transition ${
                                   isSelected
                                     ? 'border-accent bg-accent-soft'
                                     : 'border-control-edge bg-control-well hover:border-control-edge-strong'
@@ -429,7 +430,7 @@ export function AuthorMergeDialog({
                                 />
                                 <span className="min-w-0">
                                   <span
-                                    className={`block text-[11px] font-medium uppercase tracking-wide ${
+                                    className={`block text-caption font-medium uppercase tracking-wide ${
                                       isSelected ? 'text-accent' : 'text-slate-500'
                                     }`}
                                   >
@@ -449,11 +450,11 @@ export function AuthorMergeDialog({
                 </div>
               )
             ) : (
-              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-edge-2 bg-surface-2 p-6 text-center text-sm text-slate-500">
+              <SubPanel variant="flat" padded={false}  className="flex min-h-[240px] items-center justify-center border-dashed p-6 text-center text-sm text-slate-500">
                 {absorbMode
                   ? 'Select the surviving author to compare metadata before merging.'
                   : 'Select an author from the corpus to compare metadata before merging.'}
-              </div>
+              </SubPanel>
             )}
           </div>
         </div>

@@ -178,10 +178,10 @@ function ActionButton({
         // Route through the Button primitive, keeping the per-tone chip
         // language. Shape matches every other button in the app: `rounded-sm`
         // letterpress corner, control hairline, ink well at rest.
-        'gap-1.5 whitespace-nowrap rounded-sm border font-medium',
+        'gap-1.5 whitespace-nowrap rounded-control border font-medium',
         'focus-visible:ring-offset-1',
         'disabled:opacity-40',
-        compact ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-3 text-xs',
+        compact ? 'h-7 px-2.5 text-caption' : 'h-8 px-3 text-xs',
         active
           ? activeClass
           : cn('border-control-edge bg-control-well text-alma-900', hover),

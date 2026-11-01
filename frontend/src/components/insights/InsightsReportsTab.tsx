@@ -22,7 +22,6 @@ import type {
   TopicDriftData,
   WeeklyBriefData,
 } from '@/api/client'
-import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -199,9 +198,9 @@ export function InsightsReportsTab({
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">Trending Topics</h4>
                 <div className="flex flex-wrap gap-2">
                   {weeklyBrief.trending_topics.map((t) => (
-                    <Badge key={t.topic} variant="secondary">
+                    <StatusBadge key={t.topic} tone="neutral">
                       {t.topic} ({t.papers})
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
               </div>
@@ -211,14 +210,14 @@ export function InsightsReportsTab({
                 <h4 className="mb-2 text-sm font-semibold text-slate-700">Active Authors</h4>
                 <div className="flex flex-wrap gap-2">
                   {weeklyBrief.active_authors.map((a) => (
-                    <Badge key={a.name} variant="outline">
+                    <StatusBadge key={a.name} tone="outline">
                       {a.name} ({a.new_papers} new)
-                    </Badge>
+                    </StatusBadge>
                   ))}
                 </div>
               </div>
             )}
-            <div className="rounded-sm border border-[var(--color-border)] p-3">
+            <div className="rounded-card border border-divider p-3">
               <h4 className="mb-2 text-sm font-semibold text-slate-700">Recommendation Engagement</h4>
               <div className="flex gap-4 text-sm">
                 <span className="text-slate-500">
@@ -260,7 +259,7 @@ export function InsightsReportsTab({
                 so a busy window can't dominate by volume; insufficient state. */}
             <div className="grid gap-4 lg:grid-cols-3">
               {topicDriftData.windows.map((w) => (
-                <div key={w.label} className="rounded-sm border border-[var(--color-border)] p-3">
+                <div key={w.label} className="rounded-card border border-divider p-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <h4 className="text-sm font-semibold text-slate-700 capitalize">{w.label}</h4>
                     {!w.sufficient && <StatusBadge tone="neutral" size="sm">thin</StatusBadge>}
@@ -292,7 +291,7 @@ export function InsightsReportsTab({
               <div className="flex flex-wrap gap-4">
                 {topicDriftData.emerging_topics.length > 0 && (
                   <div>
-                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
+                    <h4 className="mb-2 text-caption font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {topicDriftData.emerging_topics.map((t) => (
                         <StatusBadge
@@ -308,7 +307,7 @@ export function InsightsReportsTab({
                 )}
                 {topicDriftData.fading_topics.length > 0 && (
                   <div>
-                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
+                    <h4 className="mb-2 text-caption font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {topicDriftData.fading_topics.map((t) => (
                         <StatusBadge

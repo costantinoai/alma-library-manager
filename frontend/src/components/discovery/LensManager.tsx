@@ -37,6 +37,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
+import { RowButton } from '@/components/ui/row-button'
 
 interface LensManagerProps {
   lenses: Lens[]
@@ -81,14 +82,14 @@ function SortableLensChip({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 10 : undefined,
+    zIndex: isDragging ? 'var(--z-index-local)' : undefined,
   }
   return (
     <div
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
+        'group inline-flex items-stretch overflow-hidden rounded-card border transition-colors',
         isActive
           ? 'border-alma-folio bg-alma-folio-soft'
           : 'border-control-edge bg-control-well hover:border-control-edge-strong',
@@ -106,11 +107,10 @@ function SortableLensChip({
           <GripVertical className="h-3.5 w-3.5" />
         </button>
       )}
-      <button
-        type="button"
+      <RowButton
         onClick={onSelect}
         className={cn(
-          'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium',
+          'w-auto gap-1.5 px-3 py-1.5 text-sm font-medium',
           isActive ? 'text-alma-folio' : 'text-alma-800',
         )}
         aria-pressed={isActive}
@@ -122,21 +122,20 @@ function SortableLensChip({
       >
         {isActive && <Check className="h-3.5 w-3.5" aria-hidden />}
         {lens.name}
-      </button>
-      <button
-        type="button"
+      </RowButton>
+      <RowButton
         onClick={onDelete}
         className={cn(
-          'inline-flex items-center justify-center border-l px-2 transition-colors',
+          'w-auto justify-center border-l px-2',
           isActive
             ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-700/10 hover:text-critical-700'
-            : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
+            : 'border-divider text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
         )}
         aria-label={`Delete ${lens.name}`}
         title={`Delete ${lens.name}`}
       >
         <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      </RowButton>
     </div>
   )
 }
@@ -287,7 +286,7 @@ export function LensManager({
     <section
       className={cn(
         'space-y-3',
-        !bare && 'rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sheet',
+        !bare && 'rounded-card border border-divider bg-surface-1 p-4 shadow-paper-sheet',
       )}
     >
       {/* A host that frames this (the Discovery "Lenses" band) has already
@@ -335,7 +334,7 @@ export function LensManager({
       </div>
 
       {showCreateForm && (
-        <div className="grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_auto_1fr_auto]">
+        <div className="grid gap-2 border-t border-divider pt-3 md:grid-cols-[1fr_auto_1fr_auto]">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -421,7 +420,7 @@ export function LensManager({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
-              className="bg-critical-600 text-on-fill hover:bg-critical-700"
+              variant="destructive"
             >
               Delete lens
             </AlertDialogAction>

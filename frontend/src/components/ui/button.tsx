@@ -11,11 +11,8 @@ import { cn } from '@/lib/utils'
  * Button — ALMa v2 brand button primitive.
  *
  * Design rationale (post-rebrand, 2026-04-25):
- * - **Shape** — `rounded-sm` (2px) letterpress edge. The earlier
- *   `rounded-md` (6px) still felt too soft; paper buttons want a
- *   crisp, almost-square corner. The ALMa identity is "strength of
- *   knowledge + softness of a library", not sportswear pill.
- * - **Filled variants** (default / accent / destructive / success / gold)
+ * - **Shape** — `rounded-control`, the one radius of everything you press.
+ * - **Filled variants** (default / accent / destructive / success)
  *   keep a cool flat fill with a faint paper-warm shadow at rest
  *   (`shadow-paper-sm`) and lift slightly on hover (`shadow-paper-md`).
  *   No colored-glow halo, no inset white ring, no gradient. The fill
@@ -35,10 +32,8 @@ import { cn } from '@/lib/utils'
  *   suggested-author card and navy in the author hover card (fixed
  *   2026-07-25). Filled `accent` buttons are for surfaces that are ALL
  *   accent by design — the onboarding flow's step CTAs.
- * - **Gold** is reserved for fine accents / premium actions (export,
- *   citation copy, decorative CTAs). It is NOT a default CTA.
- * - **Focus** — teal halo (the v2 accent) on the warm paper offset, so
- *   keyboard navigation feels editorial, not generic-blue.
+ * - **Gold** is trim, so no button wears it.
+ * - **Focus** — `focus-ring`, the one ring, folio on the paper offset.
  * - Auto-icon sizing + `loading` spinner unchanged from the previous
  *   primitive contract.
  */

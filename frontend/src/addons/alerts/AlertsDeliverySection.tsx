@@ -23,7 +23,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -38,6 +37,10 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate } from '@/lib/utils'
 import { StatusBadge } from './AlertBadges'
+import { RowButton } from '@/components/ui/row-button'
+import { Alert as AlertBox } from '@/components/ui/alert'
+import { StatusBadge as Pill } from '@/components/ui/status-badge'
+import { SubPanel } from '@/components/ui/sub-panel'
 
 interface AlertsDeliverySectionProps {
   /** Open the History tab pre-filtered to one digest. */
@@ -383,57 +386,56 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
             const assignedRuleIds = (alert.rules ?? []).map((r) => r.id)
             const availableRules = allRules.filter((r) => !assignedRuleIds.includes(r.id))
             return (
-              <Card key={alert.id} className="transition-shadow hover:shadow-md">
+              <Card key={alert.id} className="transition-shadow hover:shadow-paper-sheet-hover">
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <h3 className="font-medium text-alma-800">{alert.name}</h3>
                         {!alert.enabled && (
-                          <Badge variant="secondary">Disabled</Badge>
+                          <Pill tone="neutral">Disabled</Pill>
                         )}
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">{alert.schedule}</Badge>
+                        <Pill tone="outline">{alert.schedule}</Pill>
                         {typeof alert.schedule_config?.day === 'string' && (
-                          <Badge variant="outline">{alert.schedule_config.day}</Badge>
+                          <Pill tone="outline">{alert.schedule_config.day}</Pill>
                         )}
                         {typeof alert.schedule_config?.time === 'string' && (
-                          <Badge variant="outline">{alert.schedule_config.time} UTC</Badge>
+                          <Pill tone="outline">{alert.schedule_config.time} UTC</Pill>
                         )}
                         {alert.channels.map((ch) => (
-                          <Badge key={ch} variant="outline">
+                          <Pill key={ch} tone="outline">
                             <Hash className="mr-1 h-3 w-3" />
                             {ch}
-                          </Badge>
+                          </Pill>
                         ))}
                         {alert.channels.length === 0 && (
-                          <Badge variant="warning">
+                          <Pill tone="warning">
                             <AlertCircle className="mr-1 h-3 w-3" />
                             No channels — nothing will be delivered
-                          </Badge>
+                          </Pill>
                         )}
                       </div>
                       {alert.rules && alert.rules.length > 0 && (
                         <div className="mt-2 flex flex-wrap items-center gap-1">
                           <span className="text-xs text-slate-400">Rules:</span>
                           {alert.rules.map((rule) => (
-                            <button
+                            <RowButton
                               key={rule.id}
-                              type="button"
                               aria-label={`Unassign ${rule.name}`}
                               title="Click to unassign"
                               onClick={() =>
                                 unassignRuleMutation.mutate({ alertId: alert.id, ruleId: rule.id })
                               }
                               disabled={unassignRuleMutation.isPending}
-                              className="cursor-pointer"
+                              className="w-auto"
                             >
-                              <Badge variant="default">
+                              <Pill tone="neutral">
                                 {rule.name}
                                 <X className="ml-1 h-3 w-3" />
-                              </Badge>
-                            </button>
+                              </Pill>
+                            </RowButton>
                           ))}
                         </div>
                       )}
@@ -465,15 +467,14 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                           <span className="flex items-center gap-1.5 text-xs text-slate-400">
                             Last evaluated: {formatDate(alert.last_evaluated_at)}
                             {alert.last_outcome && (
-                              <button
-                                type="button"
+                              <RowButton
                                 onClick={() => onShowHistory?.(alert.id)}
                                 title="View this digest's history"
                                 aria-label={`View history for ${alert.name}`}
-                                className="cursor-pointer"
+                                className="w-auto"
                               >
                                 <StatusBadge status={alert.last_outcome} />
-                              </button>
+                              </RowButton>
                             )}
                           </span>
                         )}
@@ -551,10 +552,10 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
           </DialogHeader>
           {alertFormContent}
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <AlertBox variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to create alert.</span>
-            </div>
+            </AlertBox>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -580,10 +581,10 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
           </DialogHeader>
           {alertFormContent}
           {updateMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+            <AlertBox variant="negative" layout="row">
               <AlertCircle className="h-4 w-4 text-critical-500" />
               <span className="text-sm text-critical-700">Failed to update alert.</span>
-            </div>
+            </AlertBox>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => { setEditingAlert(null); resetForm() }}>Cancel</Button>
@@ -633,33 +634,33 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
           {evalResult && (
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Papers Found</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_found}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">New Papers</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_new}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Papers Sent</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_sent}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Failed Sends</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_failed ?? 0}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Matched Rules</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.matched_rules ?? 0}</p>
-                </div>
-                <div className="rounded-lg bg-surface-2 p-3">
+                </SubPanel>
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="text-xs text-slate-500">Channels</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.channels.join(', ') || 'None'}</p>
-                </div>
+                </SubPanel>
               </div>
               {evalResult.channel_results && (
-                <div className="rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Channel Results</p>
                   <div className="space-y-1">
                     {Object.entries(evalResult.channel_results).map(([channel, result]) => (
@@ -672,10 +673,10 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                       </div>
                     ))}
                   </div>
-                </div>
+                </SubPanel>
               )}
               {evalResult.papers && evalResult.papers.length > 0 && (
-                <div className="max-h-48 overflow-y-auto rounded-lg bg-surface-2 p-3">
+                <SubPanel variant="flat" padded={false}  className="max-h-48 overflow-y-auto p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Papers:</p>
                   <ul className="space-y-2">
                     {evalResult.papers.map((paper, i) => {
@@ -703,7 +704,7 @@ export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionPr
                       )
                     })}
                   </ul>
-                </div>
+                </SubPanel>
               )}
             </div>
           )}
