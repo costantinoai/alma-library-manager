@@ -26,13 +26,13 @@ const alertVariants = cva(
         // Use for anti-affordance content (top negative preferences, suppressed
         // entities, dislike summaries) and every failed state.
         negative:
-          "border-critical-700/20 bg-state-critical text-critical-800 [&>svg]:text-critical-700",
+          "border-transparent bg-state-critical text-critical-800 [&>svg]:text-critical-700",
         warning:
-          "border-warning-500/35 bg-state-warning text-warning-800 [&>svg]:text-warning-700",
+          "border-transparent bg-state-warning text-warning-800 [&>svg]:text-warning-700",
         success:
-          "border-success-700/20 bg-state-success text-success-800 [&>svg]:text-success-700",
+          "border-transparent bg-state-success text-success-800 [&>svg]:text-success-700",
         info:
-          "border-info-700/20 bg-state-info text-info-800 [&>svg]:text-info-700",
+          "border-transparent bg-state-info text-info-800 [&>svg]:text-info-700",
       },
     },
     defaultVariants: {

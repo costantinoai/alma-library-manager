@@ -166,8 +166,11 @@ landing page. Rules of thumb:
   and quiet fills are the paper's own warm shade (`control-quiet`,
   `control-track`), banners are opaque state paper (`bg-state-*`). Navy
   washes are not used on paper: blue over cream turns grey-brown.
-* Nesting alternates above the card: level 2 is a well, level 3 a sheet in
-  that well. `SettingsSection` provides its level, so children climb.
+* One box per level. Inside a card, `Card`, `SubPanel`, `DisclosurePanel`,
+  `ConceptCallout` and `MetricTile` drop their chrome, and a section is a
+  heading and at most one hairline. A surface stays where it does work: an
+  input, a popover, a dialog, a clickable object in a list, a danger zone.
+  Pass `level` or `interactive` to keep a box on purpose.
 * Light only. Gold is trim, never a button. Activity's cool ladder is the
   one documented exception to the surface rule.
 * Tabular numerics where it matters (counts, scores, citations).

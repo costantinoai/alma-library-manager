@@ -41,19 +41,25 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
     const host = useSurfaceLevel()
     const isFlat = resolvedVariant === 'flat'
     const isElevated = resolvedVariant === 'elevated'
+    // One box per level. A card inside a card is not a second box: it keeps its
+    // content and loses its chrome, unless it is a clickable object in a list
+    // or a caller names a level on purpose. Its header and body lose their
+    // indent too, so the text lines up with the host.
+    const isPlain = host >= 1 && !interactive && level === undefined
 
     return (
       <Surface
         ref={ref}
         // flat paints nothing and adds no depth — render at the host level so
         // descendants don't climb; otherwise lift one rung (or honor `level`).
-        level={isFlat ? host : level ?? nextLevel(host)}
-        filled={!isFlat}
-        bordered
+        level={isFlat || isPlain ? host : level ?? nextLevel(host)}
+        filled={!isFlat && !isPlain}
+        bordered={!isPlain}
         className={cn(
           'relative rounded-card transition-[box-shadow,transform] duration-200 ease-out',
-          !isFlat && !isElevated && 'shadow-paper-sheet',
-          isElevated && 'shadow-paper-sheet-lg',
+          isPlain && 'rounded-none [&>div]:px-0',
+          !isFlat && !isElevated && !isPlain && 'shadow-paper-sheet',
+          isElevated && !isPlain && 'shadow-paper-sheet-lg',
           // Interactive: lifts off the desk on hover, presses back flush on
           // click (tactile paper feel). The transform/shadow transition is
           // already declared above; press is a touch quicker via active:.

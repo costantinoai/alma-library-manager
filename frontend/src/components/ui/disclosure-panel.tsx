@@ -81,13 +81,18 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
     const isOpen = open ?? internalOpen
     const danger = tone === 'danger'
     const host = useSurfaceLevel()
+    const plain = host >= 1 && !danger
 
     return (
       <Surface
         ref={ref}
+        asChildLevel={plain}
+        filled={!plain}
+        bordered={!plain}
         className={cn(
-          'overflow-hidden rounded-card',
-          // On the desk it is a sheet; inside a card it is a well, and casts nothing.
+          // On the desk it is a sheet. Inside a card it is a heading over a
+          // hairline, so the fold is not a box in a box. Only danger stays boxed.
+          plain ? 'border-t border-divider first:border-t-0' : 'overflow-hidden rounded-card',
           host === 0 && 'shadow-paper-sm',
           danger && 'border-critical-700/30 bg-state-critical',
           className,
@@ -102,7 +107,12 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
             onOpenChange?.(next)
           }}
         >
-          <summary className="flex cursor-pointer select-none list-none items-start justify-between gap-4 px-4 py-3 text-left [&::-webkit-details-marker]:hidden">
+          <summary
+            className={cn(
+              'flex cursor-pointer select-none list-none items-start justify-between gap-4 py-3 text-left [&::-webkit-details-marker]:hidden',
+              !plain && 'px-4',
+            )}
+          >
             <div className="flex min-w-0 items-start gap-3">
               {Icon && (
                 <span
@@ -147,8 +157,8 @@ export const DisclosurePanel = forwardRef<HTMLDivElement, DisclosurePanelProps>(
           </summary>
           <div
             className={cn(
-              'border-t p-4',
-              danger ? 'border-critical-700/15' : 'border-divider',
+              plain ? 'pb-4 pt-1' : 'border-t p-4',
+              danger ? 'border-critical-700/15' : !plain && 'border-divider',
               contentClassName,
             )}
           >

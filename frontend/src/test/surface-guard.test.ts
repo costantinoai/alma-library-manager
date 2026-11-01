@@ -393,6 +393,39 @@ describe('button-guard', () => {
  * one documented exception. `BranchExplorerPanel` loses its raw fold in G3.6.
  * ─────────────────────────────────────── */
 const ACTIVITY = 'components/ActivityPanel.tsx'
+/** May draw a box by hand: floating layers (tour, toast, tooltip, autocomplete),
+ *  scroll regions, drop zones, things you click or choose in a list, and the
+ *  paper and author cards, which are their own object. */
+const HAND_BOX_OWNERS = new Set([
+  ACTIVITY,
+  'addons/alerts/AlertTemplatesSection.tsx',
+  'components/ImportDialog.tsx',
+  'components/authors/AuthorMergeDialog.tsx',
+  'components/authors/AuthorsNeedsAttentionSection.tsx',
+  'components/authors/FollowedAuthorCard.tsx',
+  'components/authors/SuggestedAuthorCard.tsx',
+  'components/connector/ConnectorToastCard.tsx',
+  'components/discovery/BranchExplorerPanel.tsx',
+  'components/discovery/LensManager.tsx',
+  'components/discovery/PaperActionBar.tsx',
+  'components/health/RepairCard.tsx',
+  'components/health/RepairConfirmDialog.tsx',
+  'components/home/CaptureReviewDialog.tsx',
+  'components/insights/InsightsOverviewTab.tsx',
+  'components/library/ReadingListTab.tsx',
+  'components/onboarding/OnboardingTour.tsx',
+  'components/onboarding/steps/StepKeywords.tsx',
+  'components/onboarding/steps/StepVision.tsx',
+  'components/onboarding/steps/StepWelcome.tsx',
+  'components/settings/FeedMonitorTermsCard.tsx',
+  'components/settings/primitives.tsx',
+  'components/shared/FileDropZone.tsx',
+  'components/shared/MetricTile.tsx',
+  'components/shared/PaperCard.tsx',
+  'components/shared/StatusRow.tsx',
+  'components/shared/VenueAutocomplete.tsx',
+  'pages/FeedPage.tsx',
+])
 /** May name a paper step: chrome, portals with no surface context (tour, toast,
  *  chart tooltip, autocomplete), shared tiles, list rows that must stay an `<li>`
  *  or a conditional state, and the three files G3 removes or rewrites. */
@@ -429,9 +462,10 @@ function scanPrimitives(): string[] {
       if (/\bbg-surface-[0-3]\b/.test(line) && !rel.startsWith('components/ui/') && !PAPER_OWNERS.has(rel)) {
         hits.push(`${at}  paper step, use Card or SubPanel`)
       }
-      // A bordered box with no fill takes its host's cream: cream on cream.
-      if (rel.startsWith('components/settings/') && /rounded-card\b.*\bborder\b/.test(line) && !/\bbg-/.test(line) && !/\$\{|'\s*,?\s*$/.test(line)) {
-        hits.push(`${at}  unfilled box in Settings`)
+      // One box per level: a box comes from Card, SubPanel or DisclosurePanel,
+      // which drop their chrome inside a card. A box by hand cannot.
+      if (/\brounded-card\b.*\bborder\b|\bborder\b.*\brounded-card\b/.test(line) && !rel.startsWith('components/ui/') && !HAND_BOX_OWNERS.has(rel)) {
+        hits.push(`${at}  hand-made box, a section is whitespace and a hairline`)
       }
       if (/<Badge\b/.test(line)) hits.push(`${at}  <Badge>, use StatusBadge`)
       if (/<details\b/.test(line) && !FOLD_OWNERS.has(rel)) hits.push(`${at}  <details>, use DisclosurePanel`)

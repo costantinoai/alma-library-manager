@@ -67,22 +67,22 @@ export function ConceptCallout({
   flush = false,
   className,
 }: ConceptCalloutProps) {
-  const level = nextLevel(useSurfaceLevel())
+  const host = useSurfaceLevel()
+  const level = nextLevel(host)
+  // Inside a card it is a line and a fold, not a box in a box.
+  const plain = !flush && host >= 1
   return (
     <Collapsible defaultOpen={defaultOpen} className={cn('w-full', className)}>
       <div
         className={cn(
-          // A fold welded to an intro is a band; a free one sits one step on.
-          flush ? 'bg-surface-2' : SURFACE_BG[level],
-          flush
-            ? 'border-t border-divider'
-            : 'rounded-card border border-divider',
+          flush && 'border-t border-divider',
+          !flush && !plain && cn(SURFACE_BG[level], 'rounded-card border border-divider'),
         )}
       >
         <CollapsibleTrigger
           className={cn(
-            'group flex w-full cursor-pointer select-none items-start gap-3 px-4 py-3 text-left',
-            'transition-colors hover:bg-control-quiet',
+            'group flex w-full cursor-pointer select-none items-start gap-3 py-3 text-left',
+            plain ? 'hover:text-alma-800' : 'px-4 transition-colors hover:bg-control-quiet',
             'focus-ring',
           )}
         >
@@ -99,7 +99,12 @@ export function ConceptCallout({
           />
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-2 border-t border-divider px-4 py-3 text-sm leading-relaxed text-slate-600">
+          <div
+            className={cn(
+              'space-y-2 text-sm leading-relaxed text-slate-600',
+              plain ? 'pb-3 pl-7' : 'border-t border-divider px-4 py-3',
+            )}
+          >
             {children}
           </div>
         </CollapsibleContent>

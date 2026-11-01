@@ -204,6 +204,8 @@ export function PageSection({
     // across its foot would read as a divider to nothing.
     const bandHeader = (
       <Surface
+        filled={false}
+        asChildLevel
         className={cn(
           'flex flex-col items-start gap-2 rounded-none border-x-0 border-t-0 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4',
           collapsible && !open && 'border-b-0',

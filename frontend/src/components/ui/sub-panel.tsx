@@ -42,6 +42,22 @@ const SubPanel = React.forwardRef<HTMLDivElement, SubPanelProps>(
 
     // Cool variant is off the warm ladder (Activity panel telemetry): a cool
     // recessed box. Rendered directly rather than via the (warm) Surface.
+    // One box per level: inside a card a panel is a group, not a frame. It keeps
+    // its content, drops fill, border and padding, and a hairline parts it from
+    // a sibling. `accent` stays a tint because it says something. `level` opts out.
+    if (!cool && !isAccent && host >= 1 && level === undefined) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            className,
+            'rounded-none border-0 border-t border-divider bg-transparent p-0 pt-3 shadow-none first:border-t-0 first:pt-0',
+          )}
+          {...props}
+        />
+      )
+    }
+
     if (cool) {
       return (
         <div
