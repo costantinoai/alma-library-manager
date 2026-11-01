@@ -16,7 +16,7 @@ import time
 import requests
 
 from alma.config import get_api_call_delay
-from alma.core.author_names import is_name_suffix as _is_name_suffix
+from alma.core.author_names import first_last_name as _canonical_author_name
 from alma.core.author_names import parse_author_names as _parse_author_names
 from alma.core.db_write import write_section
 from alma.core.operations.batch_outcome import batch_outcome
@@ -146,9 +146,8 @@ def _preprint_hints(pub: dict) -> dict:
 
 
 def _author_tokens(authors_raw: str) -> set[str]:
-    names = [p.strip() for p in (authors_raw or "").split(",") if p.strip()]
     tokens: set[str] = set()
-    for name in names[:8]:
+    for name in _parse_author_names(authors_raw)[:8]:
         parts = [p for p in re.split(r"\s+", name) if p]
         if not parts:
             continue
@@ -938,21 +937,6 @@ def _rewire_publication_authorship_owner(
     except sqlite3.OperationalError:
         # Table may not exist yet on older/partial databases.
         return 0
-
-
-def _canonical_author_name(name: str) -> str:
-    text = " ".join((name or "").replace("\n", " ").split()).strip(" ,;")
-    if not text:
-        return ""
-    if "," in text:
-        parts = [p.strip() for p in text.split(",") if p.strip()]
-        if len(parts) >= 2:
-            base = f"{parts[1]} {parts[0]}".strip()
-            suffix = " ".join(parts[2:]).strip()
-            if suffix and _is_name_suffix(suffix):
-                base = f"{base} {suffix}".strip()
-            return base
-    return text
 
 
 def _find_author_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:

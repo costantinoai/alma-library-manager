@@ -67,6 +67,7 @@ import { PaperPdfSection } from '@/components/pdf/PaperPdfSection'
 import type { PaperPdfState } from '@/api/client'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
+import { parseAuthorNames } from '@/lib/authorNames'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { reactionFromRating } from '@/lib/reactions'
 import {
@@ -389,14 +390,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               // Library / Feed / Discovery rows. Click navigates to
                // the Authors page filtered by the name; hover shows
               // the dossier (h-index, citations, top topics) with a
-              // Follow button. Names parsed by splitting on commas;
-              // OpenAlex's canonical separator.
+              // Follow button.
               <div className="flex flex-wrap gap-x-1 gap-y-0.5 text-slate-700">
-                {p.authors
-                  .split(',')
-                  .map((n) => n.trim())
-                  .filter(Boolean)
-                  .map((name, idx, arr) => (
+                {parseAuthorNames(p.authors).map((name, idx, arr) => (
                     <span key={`${name}-${idx}`} className="inline-flex items-center">
                       <AuthorHoverCard name={name}>
                         <a

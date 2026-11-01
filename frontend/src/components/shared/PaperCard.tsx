@@ -14,6 +14,7 @@ import { PaperActionBar, type PaperReaction } from '@/components/discovery/Paper
 import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
 import { addPaperToCollections, trackInteraction, type ScoreBreakdown } from '@/api/client'
+import { uniqueAuthorNames } from '@/lib/authorNames'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
 import { formatPaperDate } from '@/lib/format'
@@ -174,25 +175,6 @@ interface PaperCardProps {
   }
 }
 
-function parseAuthorNames(value?: string | null): string[] {
-  const raw = String(value || '').trim()
-  if (!raw) return []
-  const parts = raw
-    .split(/,|;|\sand\s|\s&\s/gi)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0 && item.toLowerCase() !== 'et al.')
-
-  const unique: string[] = []
-  const seen = new Set<string>()
-  for (const part of parts) {
-    const normalized = normalizeAuthorName(part)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    unique.push(part)
-  }
-  return unique
-}
-
 // ── Main card ──
 
 // Minimum dwell time (ms) before we consider abstract engagement intentional
@@ -314,7 +296,7 @@ export function PaperCard({
   const padding = isCompact ? 'p-3' : 'p-4'
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
-  const authorNames = parseAuthorNames(paper.authors)
+  const authorNames = uniqueAuthorNames(paper.authors)
   const canFollowAuthors = !!(paper.id && onFollowAuthor)
   const canFollowVenue = !!(paper.journal && onFollowVenue)
 

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any
 
+from alma.core.author_names import parse_author_names
 from alma.core.identifier_resolution import (
     normalize_orcid,
     resolve_scholar_candidates_from_sources,
@@ -800,7 +801,7 @@ def _preprint_hints(pub: dict[str, Any]) -> dict[str, Any]:
 
 def _author_tokens(authors_raw: str) -> set[str]:
     tokens: set[str] = set()
-    for name in [part.strip() for part in (authors_raw or "").split(",") if part.strip()][:8]:
+    for name in parse_author_names(authors_raw)[:8]:
         pieces = [piece for piece in re.split(r"\s+", name) if piece]
         if not pieces:
             continue

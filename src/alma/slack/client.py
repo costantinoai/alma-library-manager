@@ -17,6 +17,7 @@ import re
 import os
 from datetime import datetime, timezone
 
+from alma.core.author_names import parse_author_names
 from alma.core.url_safety import web_link
 
 logger = logging.getLogger(__name__)
@@ -616,7 +617,7 @@ class SlackNotifier:
         if authors:
             # Abbreviate long author lists, mirroring scholar-slack-bot's
             # "First, [+N], Last" shape.
-            author_list = [a.strip() for a in str(authors).split(",") if a.strip()]
+            author_list = parse_author_names(str(authors))
             if len(author_list) > 4:
                 authors_text = (
                     f"{author_list[0]}, [+{len(author_list) - 2}], "

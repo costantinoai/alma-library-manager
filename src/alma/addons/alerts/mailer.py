@@ -23,6 +23,7 @@ from email.utils import formataddr
 from html import escape
 
 from alma.config import get_setting
+from alma.core.author_names import parse_author_names
 from alma.core.url_safety import web_link
 
 logger = logging.getLogger(__name__)
@@ -176,7 +177,7 @@ class EmailNotifier:
     @staticmethod
     def _authors_text(paper: dict) -> str:
         authors = str(paper.get("authors") or "").strip()
-        parts = [a.strip() for a in authors.split(",") if a.strip()]
+        parts = parse_author_names(authors)
         if len(parts) > 4:
             return f"{parts[0]}, [+{len(parts) - 2}], {parts[-1]}"
         return ", ".join(parts)

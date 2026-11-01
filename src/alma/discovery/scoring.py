@@ -39,6 +39,7 @@ from alma.application.signal_projection import (
     load_projected_paper_signals,
 )
 from alma.core import topics
+from alma.core.author_names import parse_author_names
 from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import (
     clamp as _clamp,
@@ -66,42 +67,6 @@ _FEEDBACK_SEMANTIC_SHARE = 0.6
 # None → no provider available". Lets the hot loop hoist the subprocess-backed
 # `get_active_provider` out of the per-candidate path.
 _PROVIDER_UNSET = object()
-
-# ---------------------------------------------------------------------------
-# Author name parsing (shared with engine.py)
-# ---------------------------------------------------------------------------
-
-def parse_author_names(authors_str: str) -> list[str]:
-    """Parse author strings from multiple formats into normalized display names.
-
-    Supports:
-    - ``"First Last, First Last"``
-    - ``"Last, First, Last, First"`` (common BibTeX import style)
-    - ``"First Last; First Last"``
-    - ``"First Last and First Last"``
-    """
-    s = (authors_str or "").strip()
-    if not s:
-        return []
-
-    if ";" in s:
-        raw = [p.strip() for p in s.split(";") if p.strip()]
-    elif re.search(r"\band\b", s, flags=re.IGNORECASE):
-        raw = [p.strip() for p in re.split(r"\band\b", s, flags=re.IGNORECASE) if p.strip()]
-    else:
-        segs = [p.strip() for p in s.split(",") if p.strip()]
-        if len(segs) >= 4 and len(segs) % 2 == 0:
-            even = segs[0::2]
-            even_short_ratio = sum(1 for x in even if len(x.split()) <= 2) / max(len(even), 1)
-            if even_short_ratio >= 0.8:
-                raw = [f"{segs[i + 1]} {segs[i]}".strip() for i in range(0, len(segs), 2)]
-            else:
-                raw = segs
-        else:
-            raw = segs
-
-    return [" ".join(name.split()) for name in raw if name.strip()]
-
 
 def author_affinity_keys(name: str) -> set[str]:
     """Return robust match keys for author affinity matching."""

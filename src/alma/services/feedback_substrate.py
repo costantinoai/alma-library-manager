@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from alma.core.author_names import parse_author_names
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
@@ -1230,10 +1231,10 @@ def get_preference_affinity_signal(
                 pass
 
     if not author_names:
-        # Fallback to comma-separated authors string
+        # Fallback to the stored authors string
         authors_str = (candidate.get("authors") or candidate.get("recommended_authors") or "").strip()
         if authors_str:
-            author_names = [a.strip().lower() for a in authors_str.split(",") if a.strip()]
+            author_names = [a.lower() for a in parse_author_names(authors_str)]
 
     if author_names:
         if profiles_map is not None:
