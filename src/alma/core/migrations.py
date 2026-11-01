@@ -2009,6 +2009,15 @@ def _m_0055_phantom_followed_authors(conn: sqlite3.Connection) -> None:
         logger.info("phantom follows: demoted %d authors", demoted)
 
 
+def _m_0056_author_merges(conn: sqlite3.Connection) -> None:
+    """The ledger an author merge writes, and the name of a row-less candidate."""
+    from alma.core.author_identity import AUTHOR_MERGES_DDL, AUTHOR_MERGES_INDEX_DDL
+
+    conn.execute(AUTHOR_MERGES_DDL)
+    conn.execute(AUTHOR_MERGES_INDEX_DDL)
+    _add_columns(conn, "author_merge_candidates", {"alt_name": "TEXT"})
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -2065,6 +2074,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (53, "followed_authors_are_active", _m_0053_followed_authors_are_active),
     (54, "retire_hosted_embedding_provider", _m_0054_retire_hosted_embedding_provider),
     (55, "phantom_followed_authors", _m_0055_phantom_followed_authors),
+    (56, "author_merges", _m_0056_author_merges),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

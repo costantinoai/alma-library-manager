@@ -523,9 +523,14 @@ def init_db_schema() -> None:
                     discovered_at TEXT,
                     source TEXT DEFAULT 'orcid',
                     confidence TEXT,
+                    alt_name TEXT,
                     UNIQUE (primary_author_id, alt_author_id)
                 )"""
             )
+            from alma.core.author_identity import AUTHOR_MERGES_DDL, AUTHOR_MERGES_INDEX_DDL
+
+            conn.execute(AUTHOR_MERGES_DDL)
+            conn.execute(AUTHOR_MERGES_INDEX_DDL)
 
             # Rejected merge pairs (migration 26): a user "no, not the same person"
             # is permanent — every detector skips the unordered pair forever, so a

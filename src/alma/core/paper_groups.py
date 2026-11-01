@@ -391,6 +391,11 @@ def _strongest(values: Iterable[str], rank: tuple[str, ...]) -> str:
     return min(values, key=lambda value: rank.index(value) if value in rank else len(rank))
 
 
+def strongest_feed_status(statuses: Iterable[str | None]) -> str:
+    """The verdict one Feed row keeps when several rows become one."""
+    return _strongest({str(status or "new") for status in statuses}, _FEED_STATUS_RANK)
+
+
 def _settle_feed_status_before_repoint(
     conn: sqlite3.Connection, loser_id: str, root_id: str
 ) -> None:
