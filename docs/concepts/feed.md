@@ -212,8 +212,8 @@ Each card carries the standard rating vocabulary:
 | Action | What it does |
 |---|---|
 | **Save** | Transitions the paper to `library`, default rating 3. |
-| **Like** | Saves with rating 4. |
-| **Love** | Saves with rating 5. |
+| **Like** | Rates the paper 4. It stays out of the Library; only Save adds it. |
+| **Love** | Rates the paper 5, same rule as Like. |
 | **Dislike** | Down-weights the paper — records a negative signal and stamps rating 1. The paper **stays visible** in the Feed; chronological truth is preserved. |
 | **Dismiss** | **Hides the paper from the Feed for good** — settles every `feed_items` row for the paper to `status = 'dismissed'`, which the list query excludes permanently. It changes no rating or preference signal and offers an **undo** right after. |
 | **Queue** (reading status select) | Adds the paper to the Reading list. Independent of saving. |
@@ -253,8 +253,8 @@ returns immediately — and while it's running, an in-page
 refresh is in flight without watching the Activity panel.
 
 Near the top of the Feed, a collapsed **ConceptCallout** explains the
-action contract in one place: Add / Like / Love save the paper (Love
-rates it 5★), Dislike down-weights it but keeps it visible, and Dismiss
+action contract in one place: Add saves the paper, Like and Love rate it
+(4★, 5★) without saving, Dislike down-weights it but keeps it visible, and Dismiss
 hides it for good (with undo). This keeps the Dislike-vs-Dismiss split
 discoverable without per-button tooltips.
 

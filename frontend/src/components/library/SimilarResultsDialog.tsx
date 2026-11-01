@@ -32,7 +32,7 @@ interface SimilarResultsDialogProps {
   data: SimilarityResponse | null
   isLoading: boolean
   onRefresh: () => void
-  onLike: (item: SimilarityResultItem) => void
+  onSave: (item: SimilarityResultItem) => void
 }
 
 export function SimilarResultsDialog({
@@ -41,7 +41,7 @@ export function SimilarResultsDialog({
   data,
   isLoading,
   onRefresh,
-  onLike,
+  onSave,
 }: SimilarResultsDialogProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -137,7 +137,7 @@ export function SimilarResultsDialog({
                         </a>
                       )}
                       <Button variant="muted" size="icon-sm"
-                        onClick={() => onLike(item)}
+                        onClick={() => onSave(item)}
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />

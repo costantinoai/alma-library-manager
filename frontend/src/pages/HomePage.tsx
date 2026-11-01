@@ -56,6 +56,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { errorToast, toast } from '@/hooks/useToast'
 import { useOfferUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
 import {
   CAPTURE_CHANNEL_LABEL,
   HOME_SECTION_THEMES,
@@ -320,8 +321,8 @@ function MonitorMix({ mix }: { mix: HomeBrief['activity']['feed']['by_monitor_ty
  */
 const TRIAGE_CONFIRMATION: Partial<Record<OnboardingPaperAction, string>> = {
   add: 'Saved to your library',
-  like: 'Liked and saved to your library',
-  love: 'Loved and saved to your library',
+  like: 'Liked — still in your Inbox until you Save it',
+  love: 'Loved — still in your Inbox until you Save it',
   dislike: 'Noted — you will see less like this',
   defer: 'Cleared from your Inbox, kept in your corpus',
 }
@@ -408,7 +409,8 @@ export function HomePage() {
   // Inbox triage (D13). Every verb goes through the ONE canonical route,
   // `POST /papers/{id}/action`, with `surface: 'inbox'` so feedback provenance
   // says where the user actually acted. Refetching the brief is what makes the
-  // tile leave the section: every action moves the paper off `status='inbox'`.
+  // tile leave the section once Save or Not now moved the paper off
+  // `status='inbox'`. A verdict rates it where it stands.
   const { offerUndo } = useOfferUndo()
   const triage = useMutation({
     mutationFn: ({ paperId, action }: { paperId: string; action: OnboardingPaperAction }) =>
@@ -718,6 +720,7 @@ export function HomePage() {
                   compact
                   showLabels={false}
                   disabled={triage.isPending}
+                  reaction={reactionFromRating(paper.rating)}
                   onAdd={act(paper.id, 'add')}
                   onLike={act(paper.id, 'like')}
                   onLove={act(paper.id, 'love')}

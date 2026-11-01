@@ -80,8 +80,8 @@ export function StepReact({ next, back }: StepContext) {
       setSaved(paperId, false)
       setReactions((r) => ({ ...r, [paperId]: 'dislike' }))
     } else {
-      // add / like / love all save to the library (rating 3 / 4 / 5).
-      setSaved(paperId, true)
+      // Add saves; Like and Love rate the paper where it stands.
+      if (kind === 'add') setSaved(paperId, true)
       setReactions((r) => ({ ...r, [paperId]: kind === 'add' ? null : kind }))
     }
 

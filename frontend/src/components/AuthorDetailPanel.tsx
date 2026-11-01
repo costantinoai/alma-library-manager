@@ -458,7 +458,7 @@ export function AuthorDetailPanel({
       void invalidateQueries(queryClient, ['author-publications', resolved?.id], ['likes'])
       toast({ title: SAVED_ACTION_LABELS[action], action: offerUndo(paperId) })
     },
-    onError: (err) => errorToast('Could not save the paper', getApiErrorMessage(err)),
+    onError: (err) => errorToast('Could not apply that', getApiErrorMessage(err)),
   })
 
   const saveOpenAlexMutation = useMutation({

@@ -120,8 +120,11 @@ that ALMa derives from the rating verb you used when saving:
 * Rating 5 is a **+2** positive signal.
 
 The rating is **monotonic** when re-saving: re-saving a Loved (5)
-paper with a plain Save will not downgrade it to 3. Only an explicit
-Dislike or a manual rating change can lower it.
+paper with a plain Save will not downgrade it to 3. An opinion is not
+monotonic: Like, Love, Dislike and a manual rating change set the stars they name.
+
+Only Save changes membership. Like and Love rate the paper where it stands, on
+every surface, and a rated paper teaches Discovery whether or not you saved it.
 
 ## How states transition
 
@@ -131,16 +134,16 @@ stateDiagram-v2
     [*] --> tracked: monitor / backfill
     [*] --> inbox: capture (Slack / any channel)
     tracked --> inbox: capture
-    inbox --> library: Save · Like · Love
+    inbox --> library: Save
     inbox --> tracked: Defer (the X button)
-    tracked --> library: Save · Like · Love
+    tracked --> library: Save
     tracked --> dismissed: Hide
     library --> removed: Remove from Library
     removed --> library: Re-save
     removed --> inbox: capture (reconsidering)
     dismissed --> library: Save (overrides)
     dismissed --> inbox: capture (reconsidering)
-    library --> library: Like / Love / rating change
+    library --> library: rating change
 ```
 
 A capture never demotes a `library` paper — re-sending something you already

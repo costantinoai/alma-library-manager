@@ -438,25 +438,24 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     }
   }, [selectedKeys])
 
-  // "Like" on a similar paper is the `like` action — 4★ plus its feedback
-  // signal — like everywhere else. It used to POST the metadata to
-  // `/library/saved` at 0★ with no signal. A local candidate goes through the
-  // one paper-action route; a network-only candidate through the Find & Add
-  // save route, which resolves it and applies the same contract.
-  const handleLikeSimilar = useCallback((item: SimilarityResultItem) => {
+  // "Save to library" on a similar paper is the `add` action, as everywhere
+  // else. A local candidate goes through the one paper-action route; a
+  // network-only candidate through the Find & Add save route, which resolves it
+  // and applies the same contract.
+  const handleSaveSimilar = useCallback((item: SimilarityResultItem) => {
     const save = item.paper_id
-      ? applyPaperAction(item.paper_id, 'like', { surface: 'library' })
-      : onlineImportSave({ action: 'like', doi: item.doi, link: item.url, title: item.title })
+      ? applyPaperAction(item.paper_id, 'add', { surface: 'library' })
+      : onlineImportSave({ action: 'add', doi: item.doi, link: item.url, title: item.title })
     save.then((result) => {
       void invalidateAfterPaperMutation(queryClient)
       const paperId = item.paper_id ?? result.paper_id
       toast({
-        title: 'Liked',
+        title: 'Saved to Library',
         description: `"${item.title}" added to the library.`,
         action: paperId ? offerUndo(paperId) : undefined,
       })
     }).catch((err: unknown) => {
-      errorToast('Could not like the paper', getApiErrorMessage(err))
+      errorToast('Could not save the paper', getApiErrorMessage(err))
     })
   }, [offerUndo, queryClient, toast])
 
@@ -720,7 +719,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
         data={similarData}
         isLoading={similarLoading}
         onRefresh={() => handleDiscoverSimilar(true)}
-        onLike={handleLikeSimilar}
+        onSave={handleSaveSimilar}
       />
 
       {/* Edit Dialog */}

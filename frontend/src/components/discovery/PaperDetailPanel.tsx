@@ -1085,7 +1085,11 @@ function RelatedWorkRow({
             ? resp.status === 'library'
               ? 'Signal recorded'
               : 'Dismissed'
-            : 'Saved to Library',
+            : action === 'like'
+              ? 'Liked'
+              : action === 'love'
+                ? 'Loved'
+                : 'Saved to Library',
         description: resp.title || work.title,
         action: resp.paper_id
           ? {

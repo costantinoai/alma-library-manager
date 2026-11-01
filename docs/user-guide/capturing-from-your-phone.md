@@ -66,7 +66,8 @@ Each card carries the normal actions:
 
 | Action | What it does |
 |---|---|
-| **Save / Like / Love** | Moves it into your Library (3★ / 4★ / 5★) |
+| **Save** | Moves it into your Library (3★) |
+| **Like / Love** | Rates it 4★ / 5★. It stays in the Inbox until you Save it or choose Not now |
 | **Dislike** | Records a negative preference |
 | **Not now** (the ✕) | Removes it from the Inbox, keeps it in your corpus, and records **no opinion at all** |
 

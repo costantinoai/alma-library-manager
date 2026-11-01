@@ -4690,6 +4690,7 @@ export interface HomePaper {
   url?: string | null
   doi?: string | null
   status?: string | null
+  rating?: number | null
   /** Best available timestamp for reading-list ordering. */
   added_at?: string | null
   /** Capture provenance — Inbox items only, `null` for a paper that reached

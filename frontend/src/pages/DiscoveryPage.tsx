@@ -548,10 +548,10 @@ export function DiscoveryPage() {
     mutationFn: (vars: RecAction) => recAction(vars, 'like'),
     onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
-        patchRecommendationPaper(rec, { rating: 4, status: 'library' }),
+        patchRecommendationPaper(rec, { rating: 4 }),
       ),
     onSuccess: (_result, { paperId }) => {
-      toast({ title: 'Liked', description: 'Saved to Library with a +1 preference signal.', action: offerUndo(paperId) })
+      toast({ title: 'Liked', description: 'Recorded a +1 preference signal.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
@@ -638,10 +638,10 @@ export function DiscoveryPage() {
     mutationFn: (vars: RecAction) => recAction(vars, 'love'),
     onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
-        patchRecommendationPaper(rec, { rating: 5, status: 'library' }),
+        patchRecommendationPaper(rec, { rating: 5 }),
       ),
     onSuccess: (_result, { paperId }) => {
-      toast({ title: 'Loved', description: 'Saved to Library with a +2 preference signal.', action: offerUndo(paperId) })
+      toast({ title: 'Loved', description: 'Recorded a +2 preference signal.', action: offerUndo(paperId) })
       reconcileReactionObservers()
     },
     onError: (error, _recId, snapshots) => {
