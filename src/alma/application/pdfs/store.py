@@ -523,6 +523,24 @@ def read_pdf(conn: sqlite3.Connection, paper_id: str) -> StoredPdf | None:
     return _row_to_pdf(row) if row else None
 
 
+def held_paper_ids(conn: sqlite3.Connection) -> list[str]:
+    """Every paper with a kept PDF that is really on disk.
+
+    One read for a whole page of cards, so no list route has to join this table.
+    A row whose file has gone is not a PDF the reader can open, so it is left
+    out. Plugins play no part: a kept file opens with every source switched off.
+    """
+    rows = conn.execute(f"SELECT paper_id, rel_path FROM {PDFS_TABLE}").fetchall()
+    held: list[str] = []
+    for row in rows:
+        try:
+            if absolute_path(str(row[1])).is_file():
+                held.append(str(row[0]))
+        except UnsafeStorePathError:
+            continue
+    return held
+
+
 def upsert_pdf(conn: sqlite3.Connection, record: StoredPdf) -> StoredPdf | None:
     """Point ``record.paper_id`` at ``record``'s file; return the row it replaced.
 

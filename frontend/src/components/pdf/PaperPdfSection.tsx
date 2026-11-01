@@ -45,7 +45,12 @@ export function PaperPdfSection({ paperId, pdf }: PaperPdfSectionProps) {
   const fileInput = useRef<HTMLInputElement>(null)
   const pdfQuery = usePaperPdf(paperId, pdf)
   const state = pdfQuery.data?.pdf
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['paper-pdf', paperId] })
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['paper-pdf', paperId] }),
+      queryClient.invalidateQueries({ queryKey: ['paper-pdf', 'held'] }),
+    ])
+  }
 
   const find = async () => {
     try {

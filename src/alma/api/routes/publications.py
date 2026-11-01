@@ -796,6 +796,21 @@ def _pdf_root_or_404(db: sqlite3.Connection, paper_id: str) -> tuple[str, str]:
 
 
 @router.get(
+    "/pdfs/held",
+    summary="Papers with a PDF on file",
+    description=(
+        "Ids of every paper whose kept PDF is on disk, so a page of cards can mark "
+        "them with one read. A pure read, independent of any PDF source plugin."
+    ),
+)
+def list_held_pdfs(
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    return {"paper_ids": pdf_store.held_paper_ids(db)}
+
+
+@router.get(
     "/{paper_id}/pdf",
     summary="Serve the paper's stored PDF",
     description=(

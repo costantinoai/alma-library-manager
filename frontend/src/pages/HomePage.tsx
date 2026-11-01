@@ -258,6 +258,7 @@ function PaperSection({
       collapsedRows={COLLAPSED_ROWS}
       renderTile={(paper) => (
         <PaperTile
+          paperId={paper.id}
           href={hrefFor(paper)}
           title={paper.title}
           byline={paperByline(paper)}
@@ -710,6 +711,7 @@ export function HomePage() {
           collapsedRows={COLLAPSED_ROWS}
           renderTile={(paper) => (
             <PaperTile
+              paperId={paper.id}
               href={buildHashRoute('library', { paper: paper.id })}
               title={paper.title}
               byline={paperByline(paper)}
@@ -770,6 +772,7 @@ export function HomePage() {
             const noteTheme = highlight.kind === 'discovery_paper' ? 'discovery' : 'feed'
             return (
             <PaperTile
+              paperId={highlight.paper.id}
               href={highlightHref(highlight)}
               title={highlight.paper.title}
               byline={paperByline(highlight.paper)}

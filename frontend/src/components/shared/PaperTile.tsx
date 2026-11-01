@@ -8,9 +8,13 @@ import {
   HOME_SECTION_THEMES,
   type HomeSectionThemeKey,
 } from '@/lib/palette'
+import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
+import { useHasPdf } from '@/hooks/usePaperPdf'
 import { cn } from '@/lib/utils'
 
 export interface PaperTileProps {
+  /** The paper, so the tile can show a PDF on file. */
+  paperId?: string
   /** Where the tile hands the paper off — always the surface that OWNS it.
    *  Omit with `onSelect` (a selection tile navigates nowhere), or omit both
    *  for a tile whose paper is the subject of a question and whose only
@@ -71,6 +75,7 @@ export interface PaperTileProps {
  * ratings, collections and a score breakdown, use `PaperCard` instead.
  */
 export function PaperTile({
+  paperId,
   href,
   onSelect,
   title,
@@ -84,6 +89,7 @@ export function PaperTile({
   noteTheme,
   className,
 }: PaperTileProps) {
+  const hasPdf = useHasPdf(paperId)
   const hasFooter = Boolean(reason || explanation)
   const note = noteTheme ? HOME_SECTION_THEMES[noteTheme] : null
   return (
@@ -108,10 +114,13 @@ export function PaperTile({
         />
       )}
       <div className="flex flex-1 flex-col gap-2 p-4">
-        {(eyebrow || score != null) && (
+        {(eyebrow || score != null || hasPdf) && (
           <div className="flex items-start justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">{eyebrow}</div>
-            {score != null && <ScoreMeter score={score} className="shrink-0" />}
+            <div className="relative z-local flex shrink-0 items-center gap-2">
+              {hasPdf && <PaperPdfLink paperId={paperId} iconClassName="h-3.5 w-3.5" />}
+              {score != null && <ScoreMeter score={score} className="shrink-0" />}
+            </div>
           </div>
         )}
         <h3 className="font-brand text-sm font-semibold leading-snug text-alma-800">
