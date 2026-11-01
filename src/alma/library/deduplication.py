@@ -19,6 +19,10 @@ from collections.abc import Iterable
 
 from alma.core.db_write import write_section
 from alma.core.paper_groups import (
+    RANK_ABSTRACT,
+    RANK_DEPOSIT,
+    RANK_PREPRINT,
+    RANK_PUBLISHED,
     PaperGroupIntegrityError,
     PreprintTitleIndex,
     _root_rank,
@@ -27,6 +31,7 @@ from alma.core.paper_groups import (
     is_component_row,
     is_preprint_row,
     rejected_paper_pairs,
+    s2_edition_gap,
     titles_alike,
 )
 from alma.core.sql_helpers import standalone_paper_sql
@@ -276,12 +281,12 @@ def _join_lesser_copies(groups: _WorkGroups, rows: list[sqlite3.Row]) -> None:
     for bucket in buckets.values():
         if len(bucket) < 2:
             continue
-        papers = [row for row in bucket if _root_rank(row) == 300]
+        papers = [row for row in bucket if _root_rank(row) == RANK_PUBLISHED]
         if len({doi_work_stem(row["doi"]) or row["id"] for row in papers}) == 1:
             for row in bucket:
-                if 100 < _root_rank(row) < 300 and _same_authors(row, papers[0]):
+                if _root_rank(row) in (RANK_DEPOSIT, RANK_ABSTRACT) and _same_authors(row, papers[0]):
                     groups.join(papers[0]["id"], row["id"], "deposit_or_abstract")
-        copies = [row for row in bucket if is_preprint_row(row) or _root_rank(row) == 200]
+        copies = [row for row in bucket if _root_rank(row) in (RANK_PREPRINT, RANK_DEPOSIT)]
         for index, first in enumerate(copies):
             for second in copies[index + 1:]:
                 near = first["year"] and second["year"] and abs(first["year"] - second["year"]) <= 2
@@ -329,12 +334,17 @@ def plan_same_work(conn: sqlite3.Connection) -> dict:
         pass
 
     by_s2: dict[str, sqlite3.Row] = {}
+    editions: list[dict[str, str]] = []
     for row in papers:
         s2_id = str(row["semantic_scholar_id"] or "").strip()
         if not s2_id:
             continue
         first = by_s2.setdefault(s2_id, row)
-        if first is not row and titles_alike(first["title"], row["title"]) and _same_authors(first, row):
+        if first is row or not titles_alike(first["title"], row["title"]) or not _same_authors(first, row):
+            continue
+        if s2_edition_gap(first, row):
+            editions.append({"paper_id": row["id"], "title": row["title"] or "", "candidate_id": first["id"]})
+        else:
             groups.join(first["id"], row["id"], "semantic_scholar")
 
     index = PreprintTitleIndex(list(papers), rejected)
@@ -360,6 +370,7 @@ def plan_same_work(conn: sqlite3.Connection) -> dict:
         "reasons": groups.reasons,
         "ambiguous": [pair for pair in pairs if pair["ambiguous"]],
         "review": review,
+        "editions": editions,
     }
 
 

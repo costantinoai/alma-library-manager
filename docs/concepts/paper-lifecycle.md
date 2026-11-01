@@ -193,6 +193,13 @@ listed in Activity. A repository copy or meeting abstract joins its paper. The
 newest version shows when nothing is published. Merges at ingest appear in
 Activity.
 
+The root is the journal row, then a preprint server, then a deposit, and its year
+stands. A twin fills what the root lacks: a real title over a placeholder, the
+fuller of two titles, an abstract or authors. Membership takes the strongest of
+Library, Inbox, then removed, and two Library rows keep the earlier date and the
+higher rating. Two published rows five or more years apart stay separate for review:
+one Semantic Scholar id there is an edition, not a twin.
+
 **A split holds.** "Not a duplicate" and "Not a child" record a verdict that every
 repair honours, shown under "Kept separate" with Allow merge to take it back. The
 user's own state stays on the paper it moved to. "Same paper as" joins two rows
