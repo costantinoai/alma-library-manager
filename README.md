@@ -37,28 +37,36 @@ what you keep, **Control** how it runs.
 - **Library** — every paper you've saved, with notes, ratings, tags,
   collections and a reading list; **Analytics** inside it charts how the
   library is spread across years, topics and journals.
-- **Alerts** — scheduled digests of what matched while you were away.
 
 **Control**
 
 - **Health** — what the background jobs are doing, what is missing, and
   one-click repairs for the gaps.
-- **Settings** — connections, ranking weights, AI provider, scheduling.
+- **Settings** — connections, add-ons, ranking weights, AI provider,
+  scheduling.
+
+**Add-ons**
+
+Optional features you switch on in **Settings → Add-ons**. The surfaces
+above work without them. Today that is **Alerts**, scheduled digests of
+what matched while you were away, and the **Auto tagger**, tag
+suggestions for your Library. An add-on is off until you use it.
+Switching it off keeps its data; **Remove** takes a backup, then deletes
+it.
 
 <p align="center">
   <img src="docs/screenshots/desktop-home.png" alt="Home" width="49%">
-  <img src="docs/screenshots/desktop-discovery.png" alt="Discovery" width="49%">
-</p>
-<p align="center">
-  <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
-  <img src="docs/screenshots/desktop-health.png" alt="Health" width="49%">
-</p>
-<p align="center">
   <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
-  <img src="docs/screenshots/desktop-authors.png" alt="Authors" width="49%">
 </p>
 <p align="center">
+  <img src="docs/screenshots/desktop-discovery.png" alt="Discovery" width="49%">
+  <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/desktop-authors.png" alt="Authors" width="49%">
   <img src="docs/screenshots/desktop-health.png" alt="Health" width="49%">
+</p>
+<p align="center">
   <img src="docs/screenshots/desktop-settings.png" alt="Settings" width="49%">
 </p>
 
@@ -75,7 +83,7 @@ judged on what is actually known about it.
 Every suggestion carries a full breakdown: click **Why** on any paper and
 the rows you see add up, exactly, to the score beside them — each one
 expandable to the raw measurements underneath. You can retune the weights
-in **Settings → Discovery**. See
+in **Settings → Discovery weights**. See
 [scoring formulas](docs/reference/scoring.md) for the arithmetic.
 
 ## Why ALMa
@@ -129,6 +137,8 @@ irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/set
 Then open <http://localhost:8000>. To update later, re-run the same
 command — the installer pulls the new image first, keeps your settings in
 `~/alma-docker/.env`, and your data lives in named volumes, so nothing is lost.
+Upgrades migrate the database forward only, so
+[take a backup](docs/operations/backups.md) first.
 
 > **More options:** running the same `docker-compose.yml` by hand, the three
 > image flavors (`:stable` / `:stable-gpu` / `:stable-lite`), Watchtower,
@@ -169,7 +179,7 @@ Full walkthrough: [first-run checklist](docs/getting-started/first-run.md).
 
 ## Configuration
 
-Most settings — Discovery weights, AI provider, clustering — live in the
+Most settings — Discovery weights, monitor terms, AI provider — live in the
 database and are tuned from the **Settings** page. The `.env` file holds
 secrets (API keys, Slack tokens) and a few deployment knobs. The full
 reference is in
