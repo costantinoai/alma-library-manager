@@ -65,6 +65,8 @@ import { RecommendationEngagement } from '@/components/discovery/RecommendationE
 import { LostLanesNotice, type LostLane } from '@/components/discovery/LostLanesNotice'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
+import { provenanceRarityKeys, type ProvenanceSignals } from '@/components/discovery/provenanceChips'
+import { countChipKeys } from '@/components/shared/signalKinds'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
 import { PaperPdfLink } from '@/components/pdf/PaperPdfLink'
@@ -179,6 +181,59 @@ function patchRecommendationPaper(
 // economical while letting the curious dig into the full 50.
 // `exploration.FIRST_SCREEN_CARDS`: the backend keeps every active branch in these.
 const DEFAULT_VISIBLE_RECS = 20
+
+/** Reads a recommendation's stored breakdown into what its chips show. */
+function provenanceSignals(rec: LensRecommendation): ProvenanceSignals {
+  const breakdown = (rec.score_breakdown ?? null) as Record<string, unknown> | null
+  const readStringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? (value as unknown[]).filter(
+          (t): t is string => typeof t === 'string' && t.trim().length > 0,
+        )
+      : []
+  const readNumber = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  const readString = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim().length > 0 ? value : null
+  // T4: numeric provenance lives under `breakdown.provenance` when the
+  // row was scored by the post-2026-04-24 refresh. Legacy rows have
+  // these fields scattered at the top level (semantic_similarity_raw,
+  // etc.) — fall back to those so nothing looks newly empty.
+  const provenance = (breakdown?.provenance ?? null) as
+    | Record<string, unknown>
+    | null
+  const specterCosine =
+    readNumber(provenance?.specter_cosine) ??
+    readNumber(breakdown?.semantic_similarity_raw)
+  const lexicalSimilarity =
+    readNumber(provenance?.lexical_similarity) ??
+    readNumber(breakdown?.lexical_similarity_raw)
+  return {
+      branchLabel: rec.branch_label ?? null,
+      branchMode: rec.branch_mode ?? null,
+      sourceType: rec.source_type ?? null,
+      sourceApi: rec.source_api ?? null,
+      matchedQuery:
+        typeof breakdown?.matched_query === 'string'
+          ? (breakdown.matched_query as string)
+          : null,
+      branchCoreTopics: readStringArray(breakdown?.branch_core_topics),
+      branchExploreTopics: readStringArray(breakdown?.branch_explore_topics),
+      specterCosine,
+      lexicalSimilarity,
+      sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
+      sharedAuthorsSample: readString(provenance?.shared_authors_sample),
+      negativeHit: readNumber(provenance?.negative_hit),
+      branchFloor: provenance?.branch_floor === true,
+      firstScreenLift: provenance?.first_screen_lift === true,
+      consensusCount: readNumber(breakdown?.consensus_count),
+      projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
+      couplingCount: readNumber(breakdown?.coupling_count),
+      couplingPartnerTitle: readString(breakdown?.coupling_partner_title),
+      cocitationCount: readNumber(breakdown?.cocitation_count),
+      cocitationPartnerTitle: readString(breakdown?.cocitation_partner_title),
+    }
+}
 
 export function DiscoveryPage() {
   const queryClient = useQueryClient()
@@ -741,6 +796,10 @@ export function DiscoveryPage() {
       return dateB.localeCompare(dateA)
     })
   }, [allRecommendations, dismissedIds, sort])
+  const provenanceChipCounts = useMemo(
+    () => countChipKeys(recommendations.map((rec) => provenanceRarityKeys(provenanceSignals(rec)))),
+    [recommendations],
+  )
 
   const fetchExplanation = (recId: string) => {
     if (recId in explanations) return // already fetched or in-flight
@@ -875,62 +934,13 @@ export function DiscoveryPage() {
   const renderProvenance = (
     rec: LensRecommendation,
     options: { variant?: 'panel' | 'inline' } = {},
-  ) => {
-    const breakdown = (rec.score_breakdown ?? null) as Record<string, unknown> | null
-    const readStringArray = (value: unknown): string[] =>
-      Array.isArray(value)
-        ? (value as unknown[]).filter(
-            (t): t is string => typeof t === 'string' && t.trim().length > 0,
-          )
-        : []
-    const readNumber = (value: unknown): number | null =>
-      typeof value === 'number' && Number.isFinite(value) ? value : null
-    const readString = (value: unknown): string | null =>
-      typeof value === 'string' && value.trim().length > 0 ? value : null
-    // T4: numeric provenance lives under `breakdown.provenance` when the
-    // row was scored by the post-2026-04-24 refresh. Legacy rows have
-    // these fields scattered at the top level (semantic_similarity_raw,
-    // etc.) — fall back to those so nothing looks newly empty.
-    const provenance = (breakdown?.provenance ?? null) as
-      | Record<string, unknown>
-      | null
-    const specterCosine =
-      readNumber(provenance?.specter_cosine) ??
-      readNumber(breakdown?.semantic_similarity_raw)
-    const lexicalSimilarity =
-      readNumber(provenance?.lexical_similarity) ??
-      readNumber(breakdown?.lexical_similarity_raw)
-    return (
-      <RecommendationProvenance
-        variant={options.variant}
-        signals={{
-          branchLabel: rec.branch_label ?? null,
-          branchMode: rec.branch_mode ?? null,
-          sourceType: rec.source_type ?? null,
-          sourceApi: rec.source_api ?? null,
-          matchedQuery:
-            typeof breakdown?.matched_query === 'string'
-              ? (breakdown.matched_query as string)
-              : null,
-          branchCoreTopics: readStringArray(breakdown?.branch_core_topics),
-          branchExploreTopics: readStringArray(breakdown?.branch_explore_topics),
-          specterCosine,
-          lexicalSimilarity,
-          sharedAuthorsCount: readNumber(provenance?.shared_authors_count),
-          sharedAuthorsSample: readString(provenance?.shared_authors_sample),
-          negativeHit: readNumber(provenance?.negative_hit),
-          branchFloor: provenance?.branch_floor === true,
-          firstScreenLift: provenance?.first_screen_lift === true,
-          consensusCount: readNumber(breakdown?.consensus_count),
-          projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
-          couplingCount: readNumber(breakdown?.coupling_count),
-          couplingPartnerTitle: readString(breakdown?.coupling_partner_title),
-          cocitationCount: readNumber(breakdown?.cocitation_count),
-          cocitationPartnerTitle: readString(breakdown?.cocitation_partner_title),
-        }}
-      />
-    )
-  }
+  ) => (
+    <RecommendationProvenance
+      variant={options.variant}
+      signals={provenanceSignals(rec)}
+      chipCounts={provenanceChipCounts}
+    />
+  )
 
   const renderSeededSimilarityCard = (item: SimilarityResultItem) => {
     // `paper_id` is populated for dense-fallback matches (real papers.id)

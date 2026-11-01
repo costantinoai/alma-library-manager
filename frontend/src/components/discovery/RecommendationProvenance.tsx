@@ -1,221 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Sparkles } from 'lucide-react'
 
-import { SignalChip, type SignalKind } from '@/components/shared/SignalChip'
+import { SignalChip } from '@/components/shared/SignalChip'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-
-/** Shape read from `recommendation.score_breakdown`. All fields optional —
- * the component renders nothing when every "why" signal is missing. */
-export interface ProvenanceSignals {
-  branchLabel?: string | null
-  branchMode?: string | null
-  /** The ranked selection left this card out; the branch's reserved slot kept
-   *  it. Stated on the card so its place is not read as merit. */
-  branchFloor?: boolean
-  firstScreenLift?: boolean
-  sourceType?: string | null
-  sourceApi?: string | null
-  matchedQuery?: string | null
-  branchCoreTopics?: string[] | null
-  branchExploreTopics?: string[] | null
-  // T4 numeric provenance (stamped into `score_breakdown.provenance`
-  // at retrieval time). All optional — the component skips any chip
-  // whose value is missing or zero, so legacy pre-T4 rows render
-  // silently without ghost chips.
-  specterCosine?: number | null
-  lexicalSimilarity?: number | null
-  sharedAuthorsCount?: number | null
-  sharedAuthorsSample?: string | null
-  /** True when the candidate's embedding landed close to a
-   *  disliked / removed seed. Rendered as a warning-tone
-   *  chip so the user can weigh the hit. */
-  negativeHit?: number | null
-  /** Number of independent retrieval sources that surfaced this
-   *  candidate (channels + distinct external source APIs). Renders as
-   *  a "Suggested by N sources" chip when N ≥ 2. */
-  consensusCount?: number | null
-  /** Signed projected-feedback adjustment in [-1, 1]: net pull from
-   *  the user's saved / disliked / removed papers, their authors, topics,
-   *  venues, etc. Positive → "matches what you keep"; negative →
-   *  "near things you've rejected". Rendered only when the
-   *  magnitude clears a small noise floor. */
-  projectedFeedbackRaw?: number | null
-  /** Citation fabric (task 47 §7). Number of references this candidate shares
-   *  with a saved/loved paper (bibliographic coupling) + that partner's title,
-   *  and the number of papers that cite it together with a saved/loved paper
-   *  (co-citation) + that partner's title. Each renders a chip only when the
-   *  count is ≥ 1, with the evidence string on hover. */
-  couplingCount?: number | null
-  couplingPartnerTitle?: string | null
-  cocitationCount?: number | null
-  cocitationPartnerTitle?: string | null
-}
-
-interface Chip {
-  key: string
-  label: string
-  /** Semantic category from the shared registry — decides colour AND glyph.
-   *  Never hand-pick a tone here; the registry is the single owner of what a
-   *  chip's colour means across the whole app. */
-  kind: SignalKind
-  /** Exact underlying figure, surfaced on hover so the humanized label stays
-   *  inspectable/truthful (the full per-signal breakdown lives in the panel). */
-  title?: string
-}
-
-/** Map a [0,1] similarity to a plain-language band (U-11). The raw cosine is
- *  kept in the chip's hover title; the full numeric breakdown is in the panel. */
-function similarityBand(v: number): string {
-  if (v >= 0.8) return 'very close'
-  if (v >= 0.6) return 'close'
-  if (v >= 0.4) return 'related'
-  return 'loosely related'
-}
-
-function buildChips(signals: ProvenanceSignals): Chip[] {
-  const chips: Chip[] = []
-
-  // First: it changes how every other chip on this card should be read.
-  if (signals.branchFloor) {
-    chips.push({
-      key: 'branch-floor',
-      label: 'Reserved branch slot',
-      kind: 'branch',
-      title:
-        'The ranked selection left this one out. Every active branch keeps its best cards, so it stayed. Its score is unchanged.',
-    })
-  } else if (signals.firstScreenLift) {
-    chips.push({
-      key: 'first-screen-lift',
-      label: 'Moved up for its branch',
-      kind: 'branch',
-      title:
-        'Every active branch shows one card before Show all, and this is the best of its branch. Its score is unchanged.',
-    })
-  }
-
-  // Lead with the consensus chip — multi-source agreement is the
-  // strongest "why this surfaced" signal we have. When N≥2 distinct
-  // retrieval channels independently surface the same candidate, we
-  // want the user to see that *first*, then the per-signal scores.
-  if (typeof signals.consensusCount === 'number' && signals.consensusCount >= 2) {
-    chips.push({
-      key: 'consensus',
-      label: `Found by ${signals.consensusCount} sources`,
-      kind: 'consensus',
-    })
-  }
-
-  // Numeric "why" chips (T4) — truthful evidence users want.
-  // Rendered only when the underlying signal cleared its threshold at
-  // scoring time.
-  if (typeof signals.specterCosine === 'number' && signals.specterCosine > 0) {
-    chips.push({
-      key: 'specter',
-      label: `${similarityBand(signals.specterCosine)} topic`,
-      kind: 'topic',
-      title: `SPECTER2 embedding cosine ${signals.specterCosine.toFixed(2)}`,
-    })
-  }
-  if (typeof signals.lexicalSimilarity === 'number' && signals.lexicalSimilarity > 0.05) {
-    chips.push({
-      key: 'lexical',
-      label: `${similarityBand(signals.lexicalSimilarity)} wording`,
-      kind: 'wording',
-      title: `lexical (keyword) similarity ${signals.lexicalSimilarity.toFixed(2)}`,
-    })
-  }
-  if (
-    typeof signals.sharedAuthorsCount === 'number' &&
-    signals.sharedAuthorsCount > 0
-  ) {
-    const sample = (signals.sharedAuthorsSample || '').trim()
-    const label =
-      signals.sharedAuthorsCount === 1 && sample
-        ? `co-author: ${sample}`
-        : `${signals.sharedAuthorsCount} shared authors`
-    chips.push({ key: 'authors', label, kind: 'authors' })
-  }
-  if (typeof signals.negativeHit === 'number' && signals.negativeHit >= 0.35) {
-    chips.push({
-      key: 'neg-hit',
-      label: 'Near a disliked paper',
-      kind: 'taste-avoid',
-      title: `negative-neighbour proximity ${signals.negativeHit.toFixed(2)}`,
-    })
-  }
-  // (Consensus chip moved to lead position above.)
-  // Projected feedback: the signed pull from the user's per-paper
-  // history (saves / ratings / removals → authors / topics / venues
-  // / keywords / tags / semantic + citation neighbours). Threshold of
-  // 0.05 keeps the chip silent when the signal is essentially zero.
-  if (
-    typeof signals.projectedFeedbackRaw === 'number' &&
-    Math.abs(signals.projectedFeedbackRaw) >= 0.05
-  ) {
-    const positive = signals.projectedFeedbackRaw > 0
-    chips.push({
-      key: 'projected',
-      label: positive ? 'Matches what you save' : 'Near things you pass on',
-      kind: positive ? 'taste-match' : 'taste-avoid',
-      title: `projected-feedback pull ${positive ? '+' : ''}${signals.projectedFeedbackRaw.toFixed(2)}`,
-    })
-  }
-
-  // Citation fabric: shared references (coupling) + cited-together (co-citation)
-  // with the user's saved/loved papers. Evidence string names the best-matching
-  // partner on hover; chip is silent when the candidate shares no citations.
-  if (typeof signals.couplingCount === 'number' && signals.couplingCount >= 1) {
-    const withTitle = signals.couplingPartnerTitle
-      ? ` with “${signals.couplingPartnerTitle}”`
-      : ' with your library'
-    chips.push({
-      key: 'coupling',
-      label: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}`,
-      kind: 'coupling',
-      title: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}${withTitle}`,
-    })
-  }
-  if (typeof signals.cocitationCount === 'number' && signals.cocitationCount >= 1) {
-    const withTitle = signals.cocitationPartnerTitle
-      ? ` with “${signals.cocitationPartnerTitle}”`
-      : ' with a saved paper'
-    chips.push({
-      key: 'cocitation',
-      label: `Cited together ×${signals.cocitationCount}`,
-      kind: 'cocitation',
-      title: `Cited together${withTitle} in ${signals.cocitationCount} paper${signals.cocitationCount === 1 ? '' : 's'}`,
-    })
-  }
-
-  // Retrieval plumbing — WHICH branch pursued it, HOW it was fetched, and
-  // WHERE from. Quiet by design: these explain the machinery, not the merit,
-  // so they sit visually under the evidence chips above.
-  if (signals.branchLabel) {
-    chips.push({ key: 'branch', label: signals.branchLabel, kind: 'branch' })
-  }
-  if (signals.branchMode) {
-    chips.push({
-      key: 'mode',
-      label: signals.branchMode.replace(/_/g, ' '),
-      kind: 'channel',
-      title: `Branch mode: ${signals.branchMode.replace(/_/g, ' ')}`,
-    })
-  }
-  if (signals.sourceType) {
-    chips.push({
-      key: 'source',
-      label: signals.sourceType.replace(/_/g, ' '),
-      kind: 'channel',
-      title: `Retrieval lane: ${signals.sourceType.replace(/_/g, ' ')}`,
-    })
-  }
-  if (signals.sourceApi) {
-    chips.push({ key: 'api', label: signals.sourceApi, kind: 'source' })
-  }
-  return chips
-}
+import { buildChips, orderChips, type ProvenanceSignals } from './provenanceChips'
 
 /** Minimal wrapper that wires a Tooltip around the query text only when the
  * rendered line overflows. Keeps the surface silent when there's nothing
@@ -308,9 +97,12 @@ export function RecommendationProvenance({
   signals,
   className,
   variant = 'panel',
+  chipCounts,
 }: {
   signals: ProvenanceSignals
   className?: string
+  /** How many cards in the visible list carry each chip (`countChipKeys`). */
+  chipCounts?: Map<string, number>
   /** `panel` (default) — full bordered section with header label and a
    *  detail block underneath. Used in Discovery extended view + the paper
    *  detail popup. `inline` — a single chip row (no header, no detail
@@ -318,7 +110,7 @@ export function RecommendationProvenance({
    *  normal view to keep the card dense without losing the why-signal. */
   variant?: 'panel' | 'inline'
 }) {
-  const chips = buildChips(signals)
+  const chips = orderChips(buildChips(signals), chipCounts)
   const query = (signals.matchedQuery || '').trim()
   const coreTopics = (signals.branchCoreTopics || []).filter(
     (t) => typeof t === 'string' && t.trim().length > 0,
@@ -346,7 +138,7 @@ export function RecommendationProvenance({
         className={cn('flex flex-wrap items-center gap-1.5', className)}
       >
         {chips.map((chip) => (
-          <SignalChip key={chip.key} kind={chip.kind} size="sm" title={chip.title}>
+          <SignalChip key={chip.key} kind={chip.kind} size="sm" explain={chip.explain}>
             {chip.label}
           </SignalChip>
         ))}
@@ -372,7 +164,7 @@ export function RecommendationProvenance({
       {chips.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {chips.map((chip) => (
-            <SignalChip key={chip.key} kind={chip.kind} size="sm" title={chip.title}>
+            <SignalChip key={chip.key} kind={chip.kind} size="sm" explain={chip.explain}>
               {chip.label}
             </SignalChip>
           ))}

@@ -4,9 +4,9 @@ import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SignalChip } from '@/components/shared/SignalChip'
-import { StatusBadge } from '@/components/ui/status-badge'
+import { byRarity } from '@/components/shared/signalKinds'
 import { truncate } from '@/lib/utils'
-import { authorSuggestionSourceLabel } from './authorSuggestionEvidence'
+import { authorSuggestionChips } from './authorSuggestionEvidence'
 
 interface SuggestedAuthorCardProps {
   suggestion: AuthorSuggestion
@@ -32,6 +32,8 @@ interface SuggestedAuthorCardProps {
    *  background request — show a quiet placeholder instead of the
    *  "no titles" empty state. */
   titlesLoading?: boolean
+  /** How many cards in the list carry each chip (`countChipKeys`). */
+  chipCounts?: Map<string, number>
 }
 
 /**
@@ -52,6 +54,7 @@ export function SuggestedAuthorCard({
   showScore = true,
   institution,
   titlesLoading,
+  chipCounts,
 }: SuggestedAuthorCardProps) {
   const pct = Math.max(0, Math.min(100, suggestion.score))
 
@@ -82,61 +85,6 @@ export function SuggestedAuthorCard({
           {institution ? (
             <p className="mt-0.5 truncate text-caption text-slate-500">{institution}</p>
           ) : null}
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-            {/* Provenance chip uses the Folio-blue translucent tone:
-                the card sits on warm off-white paper, so saturated
-                semantic tones (emerald / amber) fight the surface;
-                the brand accent at low alpha reads as "metadata
-                stamp" rather than "alarm" while still being clearly
-                a chip and not body text. `max-w-full` + an inner
-                truncate keep a long label (e.g. "Cited by your ★4+
-                papers") inside the card when it's narrow. */}
-            <StatusBadge
-              tone="accent"
-              size="sm"
-              className="max-w-full"
-              title={authorSuggestionSourceLabel(suggestion.suggestion_type)}
-            >
-              <span className="min-w-0 truncate">
-                {authorSuggestionSourceLabel(suggestion.suggestion_type)}
-              </span>
-            </StatusBadge>
-            {/* Consensus chip — only when ≥2 independent buckets agree.
-                The bonus is band-relative (+12 / +17 / +21 / +24 for
-                2 / 3 / 4 / 5 buckets) and is already folded into the
-                progress bar score; this chip explains *why* the score
-                climbed when no single bucket would justify it. */}
-            {suggestion.consensus_count && suggestion.consensus_count >= 2 ? (
-              // Same registry kind as Discovery's "Found by N sources" chip, so
-              // multi-source agreement looks identical wherever it appears.
-              <SignalChip
-                kind="consensus"
-                title={(suggestion.consensus_buckets ?? []).join(' · ')}
-              >
-                {suggestion.consensus_count} sources
-              </SignalChip>
-            ) : null}
-            {/* Paper-feedback projection — surface only when the magnitude
-                cleared a small noise floor so neutral cards stay quiet. */}
-            {typeof suggestion.paper_signal_adjustment === 'number' &&
-            Math.abs(suggestion.paper_signal_adjustment) >= 1 ? (
-              // Your own feedback loop speaking — same green/amber pairing and
-              // same registry kinds as Discovery's "Matches what you save".
-              <SignalChip
-                kind={suggestion.paper_signal_adjustment > 0 ? 'taste-match' : 'taste-avoid'}
-                title="Net pull from your saved, rated, and removed papers in this area"
-              >
-                {suggestion.paper_signal_adjustment > 0
-                  ? `+${suggestion.paper_signal_adjustment.toFixed(1)} from saves`
-                  : `${suggestion.paper_signal_adjustment.toFixed(1)} from rejects`}
-              </SignalChip>
-            ) : null}
-            {suggestion.local_paper_count ? (
-              <span className="text-caption text-slate-500">
-                {suggestion.local_paper_count} in DB
-              </span>
-            ) : null}
-          </div>
         </div>
         {showScore ? (
           <span
@@ -166,27 +114,21 @@ export function SuggestedAuthorCard({
         <p className="text-caption italic text-slate-400">No sample titles yet.</p>
       )}
 
-      {showScore ? (
-        <div className="space-y-1">
-          {signals.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {signals.map((signal, idx) => (
-                <StatusBadge
-                  key={`${signal.kind}-${idx}`}
-                  tone="accent"
-                  size="sm"
-                  className="max-w-full"
-                  title={signal.subject || signal.label}
-                >
-                  <span className="min-w-0 truncate">{truncate(signal.label, 28)}</span>
-                </StatusBadge>
-              ))}
-            </div>
-          ) : legacyCaption ? (
-            <p className="text-caption text-slate-500">shares {legacyCaption}</p>
-          ) : null}
-        </div>
-      ) : null}
+      {/* One row, rarest first across the rail: what sets this person apart
+          from the card beside them, then what they all share. */}
+      <div className="flex flex-wrap items-center gap-1">
+        {byRarity(authorSuggestionChips(suggestion), (chip) => chip.rarityKey, chipCounts).map((chip) => (
+          <SignalChip key={chip.key} kind={chip.kind} explain={chip.explain}>
+            {chip.label}
+          </SignalChip>
+        ))}
+        {legacyCaption && showScore ? (
+          <span className="text-caption text-slate-500">shares {legacyCaption}</span>
+        ) : null}
+        {suggestion.local_paper_count ? (
+          <span className="text-caption text-slate-500">{suggestion.local_paper_count} in DB</span>
+        ) : null}
+      </div>
 
       {/* Secondary row: shared topics as Folio-blue translucent
           chips. Hidden when the signal chips already cover topic
