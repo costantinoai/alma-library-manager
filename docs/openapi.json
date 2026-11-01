@@ -1116,6 +1116,169 @@
         }
       }
     },
+    "/api/v1/authors/{author_id}/merges": {
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Profiles merged into this author, newest first",
+        "operationId": "list_author_merges_endpoint_api_v1_authors__author_id__merges_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/merges/{merge_id}/undo": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Take one author merge back",
+        "description": "Returns the papers, Feed rows, follow and evidence the merge moved, removes the alias, and records 'not the same person', which can be removed later. 409 when the survivor was itself merged or removed since. Merges made before the ledger have no row here.",
+        "operationId": "undo_author_merge_endpoint_api_v1_authors_merges__merge_id__undo_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "merge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Merge Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/conflicts/{conflict_id}/resolve": {
       "post": {
         "tags": [
@@ -1165,6 +1328,268 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/not-same-person": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Record that authors sharing a name are different people",
+        "description": "The other answer to a split-profile warning, next to merge. Stores the unordered pair in `author_merge_rejections` (D17: permanent), so neither the warning nor any dedup detector proposes it again.",
+        "operationId": "not_same_person_api_v1_authors__author_id__not_same_person_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotSamePersonRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "The authors this one was marked as a different person from",
+        "operationId": "list_not_same_person_api_v1_authors__author_id__not_same_person_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/not-same-person/{alt_author_id}": {
+      "delete": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Undo a not-the-same-person verdict",
+        "description": "The pair can be merged again, and split-profile warnings may ask about it again.",
+        "operationId": "undo_not_same_person_api_v1_authors__author_id__not_same_person__alt_author_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "alt_author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Alt Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2884,6 +3309,86 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Undo accepting an author as unidentifiable",
+        "description": "Reopens the identity gap: the author is `unresolved` and back on Needs attention.",
+        "operationId": "reopen_author_identity_api_v1_authors__author_id__accept_unidentified_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/authors/{author_id}/identity-profile-refresh": {
@@ -4266,6 +4771,188 @@
         }
       }
     },
+    "/api/v1/papers/{paper_id}/same-as": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Join two rows the user knows are one work",
+        "description": "Merges the two groups through the paper-group owner, so a journal row wins over a preprint either way, and takes back any verdict against the pair.",
+        "operationId": "join_papers_route_api_v1_papers__paper_id__same_as_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SameWorkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/papers/{paper_id}/kept-separate/{other_id}": {
+      "delete": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Take back a split, so a repair may join the two again",
+        "operationId": "remove_kept_separate_api_v1_papers__paper_id__kept_separate__other_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "other_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Other Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/papers/{paper_id}/detach": {
       "post": {
         "tags": [
@@ -4537,8 +5224,8 @@
         "tags": [
           "papers"
         ],
-        "summary": "Delete a paper",
-        "description": "Remove a specific paper from the database.",
+        "summary": "Remove a paper",
+        "description": "Soft-remove a paper (D3): status becomes `removed` and a negative signal is recorded. The row stays, and the action can be undone.",
         "operationId": "delete_publication_api_v1_papers__paper_id__delete",
         "security": [
           {
@@ -4964,7 +5651,7 @@
           "plugins"
         ],
         "summary": "Test an integration",
-        "description": "Runs the integration manifest's registered connectivity test through the Activity envelope and the same transport used in production. 409 when the plugin is switched off \u2014 the test really does reach the service (it posts a message, it sends mail), so it is not something a deactivated plugin may do.",
+        "description": "Runs the integration manifest's registered connectivity test through the Activity envelope and the same transport used in production. It posts and sends nothing, and its verdict is what Settings and Home show for this plugin. 409 when the plugin is switched off or the network is off, because the test really does reach the service.",
         "operationId": "test_plugin_connection_api_v1_plugins__plugin_id__test_post",
         "security": [
           {
@@ -5298,7 +5985,7 @@
           "settings"
         ],
         "summary": "Export Data Snapshot",
-        "description": "Export a full JSON snapshot for backup/migration use.\n\nIncludes sanitized settings and core DB tables.",
+        "description": "Export a full JSON snapshot for backup/migration use.\n\nIncludes sanitized settings and core DB tables. Activity history\n(`operation_status`, `operation_logs`) stays out: it is a log of this\ninstall, nothing reads it back, and it was a third of a 131 MB export. The\ndatabase snapshot behind `/backup` still holds it.",
         "operationId": "export_data_snapshot_api_v1_settings_export_get",
         "security": [
           {
@@ -5385,6 +6072,135 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/connections": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Connections",
+        "description": "Every dependency's state and each section's worst one. A pure local read:\nit never probes a service. Checks run through the POST below.",
+        "operationId": "get_connections_api_v1_settings_connections_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Connections Api V1 Settings Connections Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/connections/{connection_id}/check": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Check Connection",
+        "description": "Run one real, read-only check as an Activity job. Posts and sends nothing.",
+        "operationId": "check_connection_api_v1_settings_connections__connection_id__check_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Check Connection Api V1 Settings Connections  Connection Id  Check Post"
+                }
               }
             }
           },
@@ -15983,7 +16799,7 @@
           "onboarding"
         ],
         "summary": "Set Onboarding Profile",
-        "description": "Store the user's display name (local greeting; no external call).",
+        "description": "Store the user's display name; a blank name clears it (local, no external call).",
         "operationId": "set_onboarding_profile_api_v1_onboarding_profile_post",
         "security": [
           {
@@ -18480,135 +19296,6 @@
         "responses": {
           "204": {
             "description": "Successful Response"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/settings/connections": {
-      "get": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Get Connections",
-        "description": "Every dependency's state and each section's worst one. A pure local read:\nit never probes a service. Checks run through the POST below.",
-        "operationId": "get_connections_api_v1_settings_connections_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Connections Api V1 Settings Connections Get"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/settings/connections/{connection_id}/check": {
-      "post": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Check Connection",
-        "description": "Run one real, read-only check as an Activity job. Posts and sends nothing.",
-        "operationId": "check_connection_api_v1_settings_connections__connection_id__check_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "connection_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Connection Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Check Connection Api V1 Settings Connections  Connection Id  Check Post"
-                }
-              }
-            }
           },
           "401": {
             "description": "Unauthorized"
@@ -21594,8 +22281,14 @@
           "action": {
             "type": "string",
             "title": "Action",
-            "description": "add | like | love \u2192 3/4/5 stars",
+            "description": "add saves at 3 stars | like, love rate 4/5 stars and save nothing",
             "default": "add"
+          },
+          "contract": {
+            "type": "integer",
+            "title": "Contract",
+            "description": "The connector's save contract. A build older than 2 sends none.",
+            "default": 1
           },
           "destination": {
             "type": "string",
@@ -22746,6 +23439,24 @@
         ],
         "title": "NotDuplicateRequest"
       },
+      "NotSamePersonRequest": {
+        "properties": {
+          "alt_author_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Alt Author Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "alt_author_ids"
+        ],
+        "title": "NotSamePersonRequest",
+        "description": "Body for `POST /authors/{id}/not-same-person`: the `authors.id` values\nthe user says are different people from the path author."
+      },
       "OnboardingStatusResponse": {
         "properties": {
           "completed": {
@@ -23850,7 +24561,6 @@
           "name": {
             "type": "string",
             "maxLength": 120,
-            "minLength": 1,
             "title": "Name"
           }
         },
@@ -24456,6 +25166,19 @@
         "type": "object",
         "title": "RunMaintenanceRequest",
         "description": "Atomic run controls. The visible values travel with the Run click."
+      },
+      "SameWorkRequest": {
+        "properties": {
+          "other_id": {
+            "type": "string",
+            "title": "Other Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "other_id"
+        ],
+        "title": "SameWorkRequest"
       },
       "SemanticPaperSearchRequest": {
         "properties": {
