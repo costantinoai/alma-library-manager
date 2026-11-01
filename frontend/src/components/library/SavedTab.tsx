@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
+  Compass,
   Heart,
   FolderOpen,
   Search,
@@ -12,6 +13,7 @@ import {
   HeartOff,
   ChevronDown,
   ExternalLink,
+  ThumbsUp,
 } from 'lucide-react'
 import {
   api,
@@ -54,14 +56,16 @@ import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
-import { useOfferUndo } from '@/hooks/usePaperUndo'
+import { useOfferUndo, usePaperUndo } from '@/hooks/usePaperUndo'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { formatPaperSource, plural } from '@/lib/format'
-import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
+import { navigateTo } from '@/lib/hashRoute'
+import { reactionFromRating } from '@/lib/reactions'
+import { cn, formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
 import { RowButton } from '@/components/ui/row-button'
@@ -286,6 +290,28 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     },
   })
 
+  const undoMutation = usePaperUndo()
+
+  // Like and Love are the `like` / `love` actions, as on every other surface:
+  // the one action route owns the rating and records the verb. The star widget
+  // and the edit dialog stay on `updateLikeMutation`, because an explicit star
+  // value is a `rate`, not a reaction.
+  const reactMutation = useMutation({
+    mutationFn: ({ paperId, action }: { paperId: string; action: 'like' | 'love' }) =>
+      applyPaperAction(paperId, action, { surface: 'library' }),
+    onSuccess: (_data, { paperId, action }) => {
+      void invalidateAfterPaperMutation(queryClient)
+      toast({
+        title: action === 'love' ? 'Loved' : 'Liked',
+        description: 'Rating updated.',
+        action: offerUndo(paperId),
+      })
+    },
+    onError: (err: unknown, { action }) => {
+      errorToast(`Could not ${action} the paper`, getApiErrorMessage(err))
+    },
+  })
+
   const addToCollectionMutation = useMutation({
     mutationFn: ({ collectionId, pubKey }: { collectionId: string; pubKey: string }) =>
       api.post(`/library/collections/${collectionId}/items`, { paper_id: pubKey }),
@@ -458,6 +484,8 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           onSortChange={(key, dir) => { setCompactSortKey(key); setCompactSortDir(dir) }}
           onRate={(paperId, rating) => updateLikeMutation.mutate({ pubKey: paperId, rating })}
           onReadingStatus={(paperId, readingStatus) => readingStatusMutation.mutate({ paperId, readingStatus })}
+          onReact={(paperId, action) => reactMutation.mutate({ paperId, action })}
+          onUndoRating={(paperId) => undoMutation.mutate({ paperId, aspect: 'rating' })}
           onEdit={openEdit}
           onAddToCollection={setAddToCollectionKey}
           onOpenDetails={onOpenDetails}
@@ -716,6 +744,8 @@ interface SavedCompactTableProps {
   onSortChange: (key: CompactSortKey, dir: SortDir) => void
   onRate: (paperId: string, rating: number) => void
   onReadingStatus: (paperId: string, readingStatus: ReadingStatus) => void
+  onReact: (paperId: string, action: 'like' | 'love') => void
+  onUndoRating: (paperId: string) => void
   onEdit: (paper: Publication) => void
   onAddToCollection: (paperId: string) => void
   onOpenDetails?: (paper: Publication) => void
@@ -731,6 +761,8 @@ function SavedCompactTable({
   onSortChange,
   onRate,
   onReadingStatus,
+  onReact,
+  onUndoRating,
   onEdit,
   onAddToCollection,
   onOpenDetails,
@@ -920,12 +952,43 @@ function SavedCompactTable({
     {
       id: 'actions',
       header: () => <span className="sr-only">Actions</span>,
-      size: 96,
+      size: 176,
       enableSorting: false,
       enableHiding: false,
       meta: { cellOverflow: 'none' },
-      cell: ({ row }) => (
+      cell: ({ row }) => {
+        const reaction = reactionFromRating(row.original.rating)
+        return (
         <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => (reaction === 'like' ? onUndoRating(row.original.id) : onReact(row.original.id, 'like'))}
+            title={reaction === 'like' ? 'Remove Like' : 'Like: a positive signal'}
+            aria-label="Like"
+            aria-pressed={reaction === 'like'}
+          >
+            <ThumbsUp className={cn('size-3.5 text-success-600', reaction === 'like' && 'fill-current')} />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => (reaction === 'love' ? onUndoRating(row.original.id) : onReact(row.original.id, 'love'))}
+            title={reaction === 'love' ? 'Remove Love' : 'Love: a strong positive signal'}
+            aria-label="Love"
+            aria-pressed={reaction === 'love'}
+          >
+            <Heart className={cn('size-3.5 text-success-600', reaction === 'love' && 'fill-current')} />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => navigateTo('discovery', { seed: row.original.id, seedTitle: row.original.title })}
+            title="Discover similar papers"
+            aria-label="Discover similar papers"
+          >
+            <Compass className="size-3.5" />
+          </Button>
           <Button
             size="icon-sm"
             variant="ghost"
@@ -945,9 +1008,10 @@ function SavedCompactTable({
             <FolderOpen className="size-3.5" />
           </Button>
         </div>
-      ),
+        )
+      },
     },
-  ], [onRate, onReadingStatus, onEdit, onAddToCollection])
+  ], [onRate, onReadingStatus, onReact, onUndoRating, onEdit, onAddToCollection])
 
   return (
     <DataTable<Publication>
