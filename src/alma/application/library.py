@@ -535,6 +535,7 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
         parent_paper_id=str(parent_paper_id) if parent_paper_id else None,
         doi=kwargs.get("doi"),
         reason="paper_create_component",
+        is_new=True,
     )
     return paper_id
 

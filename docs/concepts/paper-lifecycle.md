@@ -215,3 +215,8 @@ component of that paper like any other. The repair reports actual merges, failur
 title matches. Its limit applies to new title matches; existing relationship
 repair scans the corpus. Each group commits independently, so Library actions
 remain available and a failed group does not undo successful repairs.
+
+**Existing rows wait for a hand-run repair.** Only a row that did not exist before
+merges at ingest. A re-delivered row merges nothing, and Reconcile stays off for
+automatic runs in this release. The merges an existing corpus is owed run from
+`python -m alma.services.merge_repairs`, after a backup and after reading `--list`.

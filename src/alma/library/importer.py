@@ -1957,6 +1957,7 @@ def settle_imported_paper_groups(conn: sqlite3.Connection, paper_ids: list[str])
                 parent_paper_id=parent_paper_id,
                 doi=row["doi"],
                 reason="import_enrichment",
+                is_new=True,
             )
             settled += 1
             components += int(component_type is not None)

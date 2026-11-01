@@ -498,7 +498,8 @@ def save_updated_cache(
             if not root_id:
                 purge_orphan_subordinate_state(conn, paper_id)
                 continue
-            promote_matching_preprints(conn, root_id)
+            if not existing_paper_id:
+                promote_matching_preprints(conn, root_id)
             paper_id = resolve_paper_root_id(conn, root_id, strict=False)
 
             conn.execute(

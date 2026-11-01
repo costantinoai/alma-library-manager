@@ -910,10 +910,11 @@ def record_paper_relations(
     *,
     source: str,
 ) -> int:
-    """Store registered same-work links, then let them merge what is already here.
+    """Store registered same-work links. Storing merges nothing.
 
-    The other DOI is often not in the corpus yet, so the link waits here and
-    `_settle_same_work` finds it when that paper arrives. Inside a write unit.
+    A link to a paper that arrives later merges then, through `_settle_same_work`.
+    One between two rows already here waits for the repair the user runs, so a
+    background lookup can never make a merge on its own. Inside a write unit.
     """
     now = utcnow().isoformat()
     written = 0
@@ -925,8 +926,6 @@ def record_paper_relations(
                 "(paper_id, relation, related_doi, source, created_at) VALUES (?, ?, ?, ?, ?)",
                 (paper_id, relation, stem, source, now),
             ).rowcount
-    if written:
-        _settle_same_work(conn, resolve_paper_root_id(conn, paper_id, strict=False))
     return written
 
 
@@ -1128,6 +1127,7 @@ def settle_new_paper_group(
     parent_paper_id: str | None = None,
     doi: str | None = None,
     reason: str,
+    is_new: bool = False,
 ) -> str:
     """Place a freshly-written paper row into its group. Returns the ROOT id.
 
@@ -1171,11 +1171,15 @@ def settle_new_paper_group(
     # Promote on the ROOT, not on whatever id we were handed: a row that is
     # already subordinate must not become a second root of its own group.
     root_id = resolve_paper_root_id(conn, pid, strict=False)
-    merged = _settle_same_work(conn, root_id)
-    merged += int(promote_matching_preprints(conn, root_id)["merged"])
-    root_id = resolve_paper_root_id(conn, root_id, strict=False)
-    if merged:
-        _note_ingest_merge(conn, root_id, merged, reason)
+    # Only a row that did not exist before merges here. A refresh re-delivers old
+    # rows all day, and merging on that would run a corpus-wide repair nobody
+    # chose, one paper at a time. Old twins wait for the repair the user runs.
+    if is_new:
+        merged = _settle_same_work(conn, root_id)
+        merged += int(promote_matching_preprints(conn, root_id)["merged"])
+        root_id = resolve_paper_root_id(conn, root_id, strict=False)
+        if merged:
+            _note_ingest_merge(conn, root_id, merged, reason)
     # Adopt against the ROOT's own DOI: after a promotion the surviving row may
     # not be the one we were handed, and its DOI is what the orphans' suffixes
     # derive from.

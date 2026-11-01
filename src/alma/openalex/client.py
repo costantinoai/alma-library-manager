@@ -773,6 +773,7 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
         year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.strip().isdigit()) else None,
     )
 
+    is_new_row = existing_paper_id is None
     # Canonical isoformat (no Z) — matches `core.utils.utcnow_iso` and
     # the rest of the codebase. Avoids the half-Z / half-isoformat split
     # that used to land in `papers.fetched_at` (Z) and `papers.updated_at`
@@ -912,7 +913,7 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
 
     delivered_id = str(paper_id)
     paper_id = settle_new_paper_group(
-        conn, delivered_id, doi=None, reason="openalex_ingest"
+        conn, delivered_id, doi=None, reason="openalex_ingest", is_new=is_new_row
     )
     # A re-delivered preprint describes the preprint: its topics and references
     # must not replace those of the published root it resolved to.
