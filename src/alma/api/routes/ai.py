@@ -39,14 +39,7 @@ class AIConfigureRequest(BaseModel):
     """Request body for POST /configure."""
 
     provider: str | None = Field(
-        None, description="Embedding provider name: none, local, or one an add-on brings"
-    )
-    provider_api_key: str | None = Field(
-        None,
-        description=(
-            "API key for the provider named in `provider`, or for the stored one. "
-            "An empty value deletes it."
-        ),
+        None, description="Embedding provider name: none or local"
     )
     local_model: str | None = Field(
         None, description="Local embedding model key (specter2-base)"
@@ -145,10 +138,7 @@ def _build_dependency_setup_suggestions(
             "Fix the environment path/type first so checks stop falling back to the server environment."
         )
 
-    from alma.ai.providers import addon_providers
-
     provider = (provider_name or "none").strip().lower()
-    addon_provider = addon_providers().get(provider)
     # Provider-specific install guidance (more reliable than piecemeal installs).
     if provider == "local":
         provider_install_line = (
@@ -159,8 +149,6 @@ def _build_dependency_setup_suggestions(
         suggestions.append(
             "Selected provider is 'local': install the full SPECTER2 stack in ONE command to avoid binary mismatches."
         )
-    elif addon_provider is not None:
-        provider_install_line = addon_provider.INSTALL_LINE
     else:
         missing_pkg_list = " ".join(sorted(missing))
         provider_install_line = f"pip install {missing_pkg_list}"
@@ -644,11 +632,9 @@ def ai_status(
         configured_provider_name,
         get_active_provider,
         list_available_providers,
-        selectable_providers,
-        switched_off_provider,
     )
     from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
-    from alma.discovery.similarity import get_active_embedding_model, storage_model_key
+    from alma.discovery.similarity import get_active_embedding_model
 
     dependency_env = activate_dependency_environment(db)
     dependencies, dependency_check_warning = check_packages_in_environment(
@@ -660,9 +646,6 @@ def ai_status(
     # Providers
     providers_info = list_available_providers(db)
     configured_provider = configured_provider_name(db)
-    provider_off = switched_off_provider(db)
-    if configured_provider not in selectable_providers():
-        configured_provider = "none"
     active_provider = get_active_provider(db)
 
     for info in providers_info:
@@ -675,12 +658,10 @@ def ai_status(
     except sqlite3.OperationalError:
         pub_count = 0
 
-    # Storage keys: a remote provider's vectors live under a versioned key, so the
-    # raw model id would match none of them.
     configured_embedding_model = get_active_embedding_model(db)
-    expected_embedding_model = configured_embedding_model
-    if active_provider is not None:
-        expected_embedding_model = storage_model_key(active_provider.model_name)
+    expected_embedding_model = (
+        active_provider.model_name if active_provider is not None else configured_embedding_model
+    )
 
     # Headline coverage comes from the canonical definition shared with the
     # Health snapshot (assess_corpus), so the two surfaces can never report a
@@ -914,7 +895,6 @@ def ai_status(
 
     return {
         "providers": providers_info,
-        "provider_off": provider_off,
         "embeddings": embeddings_info,
         "capability_tiers": {
             "tier1_embeddings": {
@@ -978,22 +958,16 @@ def ai_configure(
     def _persist_ai_settings() -> None:
         from alma.ai.providers import (
             LOCAL_MODELS,
-            addon_providers,
-            configured_provider_name,
-            selectable_providers,
+            PROVIDERS,
             sync_embedding_model,
         )
 
         if body.provider is not None:
             provider = (body.provider or "").strip().lower()
-            selectable = selectable_providers()
-            if provider not in selectable:
+            if provider not in PROVIDERS:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "Invalid embedding provider. "
-                        f"Expected one of: {', '.join(sorted(selectable))}"
-                    ),
+                    detail=f"Invalid embedding provider. Expected one of: {', '.join(PROVIDERS)}",
                 )
             _write_setting(db, "ai.provider", provider)
 
@@ -1005,24 +979,10 @@ def ai_configure(
                 )
             _write_setting(db, "ai.local_model", body.local_model)
 
-        if body.provider_api_key is not None:
-            provider_class = addon_providers().get(configured_provider_name(db))
-            if provider_class is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="The selected embedding provider takes no API key.",
-                )
-            provider_class.save_credential(body.provider_api_key.strip())
-
         # `embedding_model` is the single string every read path filters
-        # publication_embeddings by, so any change that decides which provider
-        # can run re-derives it, a saved key included. With no provider running
-        # it is SPECTER2, the vectors Semantic Scholar keeps sending.
-        if (
-            body.provider is not None
-            or body.local_model is not None
-            or body.provider_api_key is not None
-        ):
+        # publication_embeddings by, so a provider or model change re-derives
+        # it. With no provider it is SPECTER2, what Semantic Scholar keeps sending.
+        if body.provider is not None or body.local_model is not None:
             sync_embedding_model(db)
 
         if env_type_updated or env_path_updated:
@@ -1225,14 +1185,9 @@ def delete_inactive_embeddings(
     _user: dict = Depends(get_current_user),
 ) -> DeleteInactiveEmbeddingsResponse:
     """Delete vectors for models other than the active embedding model."""
-    from alma.ai.providers import get_active_provider
-    from alma.discovery.similarity import get_active_embedding_model, storage_model_key
+    from alma.discovery.similarity import get_active_embedding_model
 
-    # The storage key, or a remote provider would delete its own vectors here.
     active_model = get_active_embedding_model(db)
-    active_provider = get_active_provider(db)
-    if active_provider is not None:
-        active_model = storage_model_key(active_provider.model_name)
 
     try:
         def _delete_inactive() -> int:

@@ -101,9 +101,6 @@ def describe() -> int:
                     "jobs": [spec.job_id for spec in addon.jobs],
                     "tables": list(addon.tables),
                     "plugins": [manifest.id for manifest in addon.plugins()],
-                    "embedding_provider": (
-                        addon.embedding_provider().name if addon.embedding_provider else None
-                    ),
                 }
                 for addon in addons.present()
             }
@@ -211,9 +208,6 @@ def check(args: argparse.Namespace) -> int:
         status = client.get("/api/v1/ai/status").json()
         if status.get("embeddings", {}).get("model") != "allenai/specter2_base":
             failures.append(f"readers are not on SPECTER2: {status.get('embeddings', {}).get('model')}")
-        listed_providers = {entry["name"] for entry in status.get("providers", [])}
-        if expected["embedding_provider"] in listed_providers:
-            failures.append(f"provider {expected['embedding_provider']} is still listed")
 
         queued = client.post("/api/v1/library-mgmt/deduplicate")
         if queued.status_code >= 300:

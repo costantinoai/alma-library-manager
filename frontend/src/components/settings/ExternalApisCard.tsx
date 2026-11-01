@@ -43,7 +43,7 @@ export function ExternalApisCard({
         description={
           formData.network_access_enabled
             ? 'On — ALMa may contact configured publication APIs and integration transports.'
-            : 'Off — outbound API, Slack, email, and hosted-AI calls are blocked at their transports.'
+            : 'Off — outbound API, Slack, and email calls are blocked at their transports.'
         }
         control={
           <Switch

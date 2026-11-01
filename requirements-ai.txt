@@ -39,9 +39,8 @@
 #     device and `TORCH_VARIANT=cuda` (the default).
 #
 # What you LOSE in `lite`:
-#   - Local embeddings only. The lite variant can still use the
-#     OpenAI cloud embedding provider, or import vectors fetched from
-#     Semantic Scholar — and clustering / projections / TF-IDF
+#   - Local embeddings only. The lite variant can still import vectors
+#     fetched from Semantic Scholar — and clustering / projections / TF-IDF
 #     similarity all run as long as some vectors exist (they live in
 #     `requirements-core.txt`).
 #

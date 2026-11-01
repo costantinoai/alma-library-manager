@@ -55,7 +55,7 @@ tests = ["test_core_control_inventory_contract.py", "test_find_add_source_settin
 sources = ["src/alma/openalex/**", "src/alma/application/openalex_manual.py", "src/alma/services/corpus_rehydrate.py", "src/alma/services/*source*.py", "src/alma/services/preprint_abstract.py", "src/alma/core/fetcher.py", "src/alma/core/url_safety.py", "src/alma/services/pdf*.py"]
 
 [groups.plugins]
-tests = ["test_core_control_inventory_contract.py", "test_addons_*.py", "test_plugin_*.py", "test_integration_plugins_*.py", "test_channel_registry.py", "test_alerts_*.py", "test_auto_tagger_*.py", "test_openai_*.py", "test_pdf_*.py", "test_shadow_libraries.py", "test_open_access_sources.py", "test_redaction_*.py", "test_slack_resolve_errors.py", "test_core_map_extraction_contract.py", "test_signal_lab_extraction_contract.py"]
+tests = ["test_core_control_inventory_contract.py", "test_addons_*.py", "test_plugin_*.py", "test_integration_plugins_*.py", "test_channel_registry.py", "test_alerts_*.py", "test_auto_tagger_*.py", "test_pdf_*.py", "test_shadow_libraries.py", "test_open_access_sources.py", "test_redaction_*.py", "test_slack_resolve_errors.py", "test_core_map_extraction_contract.py", "test_signal_lab_extraction_contract.py"]
 sources = ["src/alma/core/addons.py", "src/alma/addons/**", "scripts/addon_smoke.py", "src/alma/api/routes/addons.py", "src/alma/plugins/**", "src/alma/application/pdf_schema.py", "src/alma/application/pdfs/**", "src/alma/services/pdf*.py", "src/alma/services/inbox_channels/**", "src/alma/slack/**", "src/alma/api/routes/plugins.py"]
 
 [groups.core]

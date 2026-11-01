@@ -18745,19 +18745,7 @@
               }
             ],
             "title": "Provider",
-            "description": "Embedding provider name: none, local, or one an add-on brings"
-          },
-          "provider_api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider Api Key",
-            "description": "API key for the provider named in `provider`, or for the stored one. An empty value deletes it."
+            "description": "Embedding provider name: none or local"
           },
           "local_model": {
             "anyOf": [
@@ -23320,7 +23308,9 @@
               "membership",
               "rating",
               "reading",
-              "all"
+              "all",
+              "last",
+              "inbox"
             ],
             "title": "Undo Aspect",
             "default": "all"

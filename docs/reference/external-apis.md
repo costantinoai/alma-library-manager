@@ -387,12 +387,6 @@ fetches.
   scrapes; expect occasional rate-limiting / breakage when Google
   changes the page. Set `SCHOLAR_RETRY_DELAYS` to tune backoff.
 
-## OpenAI
-
-OpenAI is an add-on and currently used as an embedding provider. Switch it on
-in **Settings → Add-ons**, then configure it in **Settings → Intelligence → AI
-provider** and store the key in `.env` or the secret store. See [AI capabilities](../concepts/ai.md).
-
 ## Slack
 
 [Slack Web API](https://api.slack.com/web), bot-token based.

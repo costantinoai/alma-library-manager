@@ -1091,8 +1091,7 @@ def _refresh_lens_recommendations(
     user_topic_embeddings: dict[str, Any] | None = None
     user_topic_weights = profile.get("topic_weights") or {}
     # Topic remains an explicit lexical/ontology family in online scoring.
-    # Do not invoke an embedding provider here: a configured OpenAI provider
-    # would put HTTP back on the refresh path, while cold local SPECTER2
+    # Do not invoke an embedding provider here: cold local SPECTER2
     # inference took minutes and duplicated the candidate-level semantic
     # family already computed from stored exact-model vectors.
     _topic_provider = None
@@ -1133,7 +1132,7 @@ def _refresh_lens_recommendations(
         if candidate_topic_terms:
             # Bound the batch size so the embedding provider's own
             # request budget isn't exceeded on huge refreshes. 256 is
-            # a safe default for OpenAI / SPECTER2; bump later if we
+            # a safe default for SPECTER2; bump later if we
             # see throughput headroom.
             terms = sorted(candidate_topic_terms)
             for chunk_start in range(0, len(terms), 256):

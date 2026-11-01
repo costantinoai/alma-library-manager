@@ -118,7 +118,7 @@ export function HealthPage() {
           : 'External network access disabled',
         description: policy.enabled
           ? 'Network repair operations and integrations may connect again.'
-          : 'Outbound API, integration, and hosted-AI calls are now blocked.',
+          : 'Outbound API and integration calls are now blocked.',
       })
     },
     onError: (err) => errorToast('Could not update network access', String(err)),

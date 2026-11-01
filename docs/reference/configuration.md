@@ -56,7 +56,6 @@ and Node environments.
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | Optional OpenAI embedding provider key. Read while the OpenAI add-on is on, and keeps it on through an upgrade. |
 
 Local SPECTER2 is configured through **Settings → Intelligence → AI
 provider**, including the dependency environment path.
@@ -163,7 +162,6 @@ Settings cards (so they never land in `settings.json`):
 | `smtp.password` | Settings → Plugins → Email | SMTP auth password (overridable by `SMTP_PASSWORD`). |
 | `semantic_scholar.api_key` | Settings → External APIs | Semantic Scholar API key. |
 | `openalex.api_key` | Settings → External APIs | OpenAlex API key. |
-| `openai.api_key` | Settings → Intelligence → AI provider, while the OpenAI add-on is on | OpenAI embedding key. |
 | `zotero.api_key` | Settings → External APIs | Zotero API key. |
 
 ## `.env.example`

@@ -90,7 +90,7 @@ export function ApiBudgetCard({
           <AlertDescription>
             {policy.forced_off_by_env
               ? 'External network access is disabled by an operations override. Remove the ALMA_DISABLE_NETWORK override to use this switch.'
-              : 'External network access is off. API, integration, and hosted-AI operations are blocked until enabled with the switch above.'}
+              : 'External network access is off. API and integration operations are blocked until enabled with the switch above.'}
           </AlertDescription>
         </Alert>
       ) : null}

@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 SECRET_SLACK_BOT_TOKEN = "slack.bot_token"
 SECRET_SMTP_PASSWORD = "smtp.password"
 SECRET_SEMANTIC_SCHOLAR_API_KEY = "semantic_scholar.api_key"
-SECRET_OPENAI_API_KEY = "openai.api_key"
 SECRET_ZOTERO_API_KEY = "zotero.api_key"
 # OpenAlex was briefly removed from the secret store (2026-04-24) over a
 # test-isolation concern (shared store stomping on real keys). Re-added
@@ -36,7 +35,6 @@ _SECRET_KEYS = {
     SECRET_SLACK_BOT_TOKEN,
     SECRET_SMTP_PASSWORD,
     SECRET_SEMANTIC_SCHOLAR_API_KEY,
-    SECRET_OPENAI_API_KEY,
     SECRET_ZOTERO_API_KEY,
     SECRET_OPENALEX_API_KEY,
     SECRET_ANNAS_ARCHIVE_KEY,
@@ -206,20 +204,3 @@ def bootstrap_secret_store(conn: sqlite3.Connection) -> None:
 
     if moved_settings_keys:
         delete_settings_keys(moved_settings_keys)
-
-    try:
-        row = conn.execute(
-            "SELECT value FROM discovery_settings WHERE key = 'ai.openai_api_key'"
-        ).fetchone()
-        openai_key = (row["value"] if row and isinstance(row, sqlite3.Row) else (row[0] if row else "")) or ""
-        openai_key = str(openai_key).strip()
-        if openai_key and not get_secret(SECRET_OPENAI_API_KEY):
-            set_secret(SECRET_OPENAI_API_KEY, openai_key)
-        if openai_key:
-            conn.execute(
-                "UPDATE discovery_settings SET value = '', updated_at = ? WHERE key = 'ai.openai_api_key'",
-                ("1970-01-01T00:00:00",),
-            )
-            conn.commit()
-    except Exception as exc:
-        logger.warning("OpenAI key migration to secret store failed: %s", exc)

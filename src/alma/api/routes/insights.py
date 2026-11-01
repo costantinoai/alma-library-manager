@@ -1405,26 +1405,6 @@ def _build_operational_snapshot(
             }
         )
 
-    # Core reports this one: the add-on that would own it is off, or gone.
-    from alma.ai.providers import switched_off_provider
-
-    provider_off = switched_off_provider(db)
-    if provider_off:
-        states.append(
-            {
-                "id": "embedding_provider_off",
-                "label": "No embedding provider",
-                "severity": "warning",
-                "detail": (
-                    f"The selected provider, {provider_off}, is switched off, so nothing "
-                    "computes new vectors. Semantic Scholar vectors keep arriving, and "
-                    "Discovery reads those until a provider runs again."
-                ),
-                "page": "settings",
-                "params": {"section": "ai"},
-            }
-        )
-
     # Add-ons report their own degraded states, tagged with their id.
     states.extend(addons.health_checks(db))
 

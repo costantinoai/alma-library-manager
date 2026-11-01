@@ -18,32 +18,15 @@ logger = logging.getLogger(__name__)
 FETCH_SOURCE_SEMANTIC_SCHOLAR = "semantic_scholar"
 
 
-def prepare_publication_embedding_text(
-    title: str,
-    abstract: str,
-    *,
-    is_local_specter2: bool,
-    max_tokens: int,
-) -> str:
-    """Build the text sent to the active embedding provider.
+def prepare_publication_embedding_text(title: str, abstract: str) -> str:
+    """Build the text sent to SPECTER2: canonical `title + [SEP] + abstract`.
 
-    Task 10 established that noisy OpenAlex taxonomy labels must not alter the
-    embedding substrate — structured topics remain ranking/display evidence, not
-    vector text. (The former `topics` guardrail kwarg was dead at the only call
-    site and is dropped; the format change is now enforced via the versioned
-    storage key — see `storage_model_key` / 43.6.)
+    Noisy OpenAlex taxonomy labels stay out of it, as task 10 established:
+    structured topics are ranking and display evidence, not vector text.
     """
-    from alma.discovery.similarity import prepare_text, prepare_text_specter2
+    from alma.discovery.similarity import prepare_text_specter2
 
-    if is_local_specter2:
-        # SPECTER2 expects canonical `title + [SEP] + abstract` (HF model card).
-        return prepare_text_specter2(title or "", abstract or "")
-    return prepare_text(
-        title or "",
-        abstract or "",
-        max_tokens=max_tokens,
-        is_query=False,
-    )
+    return prepare_text_specter2(title or "", abstract or "")
 
 
 def run_embedding_computation(
@@ -151,26 +134,12 @@ def run_embedding_computation(
             message=f"Computing embeddings with {provider.name} ({scope})",
         )
 
-        model_config = getattr(provider, "model_config", None)
-        max_tokens = model_config.max_tokens if model_config else 256
         model_hf_id = provider.model_name
-        is_local_specter2 = provider.name == "local" and model_hf_id == "allenai/specter2_base"
-        # Storage key = the versioned model identity written to / read from
-        # publication_embeddings (43.6). SPECTER2 is unchanged; remote providers
-        # get the text-format version suffix so a format change invalidates old
-        # vectors instead of silently mixing them. `model_hf_id` stays RAW for
-        # model loading + the is_local_specter2 text branch.
-        from alma.discovery.similarity import storage_model_key
-
-        storage_model = storage_model_key(model_hf_id)
-        local_specter2_text_filter = (
-            """
+        storage_model = model_hf_id
+        local_specter2_text_filter = """
                 AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
                 AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
             """
-            if is_local_specter2
-            else ""
-        )
         # Never embed a subordinate row: a dedup twin (preprint merged upward)
         # or a part-of component (figure / SI / dataset / peer-review) is an
         # inert appendix, not a paper to vectorize. One gate, every scope.
@@ -270,35 +239,34 @@ def run_embedding_computation(
             )
             return
 
-        if is_local_specter2:
-            try:
-                local_fill_rows = conn.execute(
-                    """
-                    SELECT status, COUNT(*) AS c
-                    FROM publication_embedding_fetch_status
-                    WHERE model = ?
-                      AND source = ?
-                      AND status IN ('unmatched', 'missing_vector')
-                    GROUP BY status
-                    """,
-                    (model_hf_id, FETCH_SOURCE_SEMANTIC_SCHOLAR),
-                ).fetchall()
-                local_fill_counts = {str(row["status"]): int(row["c"] or 0) for row in local_fill_rows}
-            except sqlite3.OperationalError:
-                local_fill_counts = {}
-            add_job_log(
-                job_id,
-                "Local SPECTER2 will compute cached vectors for papers still missing after S2 fetch",
-                step="local_specter2_fill",
-                data={
-                    "candidate_papers": total,
-                    "s2_terminal_misses": local_fill_counts,
-                    "requires_title_and_abstract": True,
-                    "manual_user_action": True,
-                    "target_paper_ids": target_ids,
-                    "limit": limit,
-                },
-            )
+        try:
+            local_fill_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS c
+                FROM publication_embedding_fetch_status
+                WHERE model = ?
+                  AND source = ?
+                  AND status IN ('unmatched', 'missing_vector')
+                GROUP BY status
+                """,
+                (model_hf_id, FETCH_SOURCE_SEMANTIC_SCHOLAR),
+            ).fetchall()
+            local_fill_counts = {str(row["status"]): int(row["c"] or 0) for row in local_fill_rows}
+        except sqlite3.OperationalError:
+            local_fill_counts = {}
+        add_job_log(
+            job_id,
+            "Local SPECTER2 will compute cached vectors for papers still missing after S2 fetch",
+            step="local_specter2_fill",
+            data={
+                "candidate_papers": total,
+                "s2_terminal_misses": local_fill_counts,
+                "requires_title_and_abstract": True,
+                "manual_user_action": True,
+                "target_paper_ids": target_ids,
+                "limit": limit,
+            },
+        )
 
         processed = 0
         errors = 0
@@ -355,12 +323,7 @@ def run_embedding_computation(
             chunk = rows[i:i + batch_size]
             payload: list[tuple[sqlite3.Row, str]] = []
             for row in chunk:
-                text = prepare_publication_embedding_text(
-                    row["title"] or "",
-                    row["abstract"] or "",
-                    is_local_specter2=is_local_specter2,
-                    max_tokens=max_tokens,
-                )
+                text = prepare_publication_embedding_text(row["title"] or "", row["abstract"] or "")
                 if not text:
                     skipped_empty += 1
                     processed += 1

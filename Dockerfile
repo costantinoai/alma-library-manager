@@ -16,8 +16,7 @@
 #     adapters. Discovery branches (HDBSCAN/KMeans), the Insights
 #     Graph (UMAP/t-SNE), and TF-IDF similarity all still work — those
 #     deps live in core. What you lose is the local embedding encoder;
-#     in lite you'd configure embeddings via OpenAI in Settings (or
-#     rely on Semantic Scholar's cached vectors). Suitable for
+#     in lite you rely on Semantic Scholar's cached vectors. Suitable for
 #     Raspberry Pi or other low-memory hosts.
 #
 # Build:

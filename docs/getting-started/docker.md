@@ -298,7 +298,6 @@ app — only the bundled embedding stack differs.
 | Peak runtime memory | ~2 GB | ~3 GB (more on GPU init) | ~1 GB |
 | Local SPECTER2 encoder | yes (CPU) | yes (CUDA when host GPU is exposed; CPU otherwise) | no |
 | Semantic Scholar pre-computed vectors | yes | yes | yes |
-| OpenAI / cloud embedding provider | configurable | configurable | configurable |
 | Discovery / Insights graph / clustering | yes | yes | yes |
 | BibTeX / Zotero import | yes | yes | yes |
 | Architectures | amd64 + arm64 | amd64 only | amd64 + arm64 |

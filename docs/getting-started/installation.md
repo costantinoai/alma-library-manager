@@ -62,8 +62,7 @@ add `[ai]` if you want the local SPECTER2 encoder for embeddings.
 `umap-learn`, and `hdbscan` (~1.5 GB on disk). On Apple Silicon and
 Linux x86_64 the wheels install cleanly; on Windows expect to wait
 longer for `torch`. Without `[ai]`, embeddings still work — ALMa
-fetches Semantic Scholar's pre-computed SPECTER2 vectors, and you
-can switch on the OpenAI add-on and use it as an embedding provider. What you lose is the *local* encoder for papers Semantic
+fetches Semantic Scholar's pre-computed SPECTER2 vectors. What you lose is the *local* encoder for papers Semantic
 Scholar doesn't have a vector for.
 
 You can install AI extras later — ALMa will detect them and light up
@@ -130,7 +129,6 @@ The most useful keys to set:
 | `OPENALEX_API_KEY` | **Required** — keyless OpenAlex returns 100 credits/day then HTTP 409. Free at [openalex.org/settings/api](https://openalex.org/settings/api). |
 | `OPENALEX_EMAIL` | Optional contact email (polite pool retired; just sets a courteous User-Agent). |
 | `SEMANTIC_SCHOLAR_API_KEY` | **Strongly recommended** — avoids shared-pool 429s. Free at [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api). |
-| `OPENAI_API_KEY` | Optional OpenAI embedding provider. |
 | `SLACK_TOKEN` / `SLACK_CHANNEL` | Slack digest alerts. |
 | `API_KEY` | Optional shared key for API and connector use. Setting it breaks the web app, which sends no key. See [Deployment](../operations/deployment.md#api-key). |
 

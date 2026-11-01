@@ -118,14 +118,13 @@ def default_ai_provider() -> str:
     torch-capable box, while torch-less deployments stay S2-only. See
     tasks/PRODUCT_DECISIONS.md D19 (task 47 Phase 9).
 
-    ``ALMA_DEFAULT_AI_PROVIDER`` (``none``, ``local``, or a provider an add-on
-    brings) forces the default regardless of the environment — an ops escape
-    hatch (e.g. pin ``none`` on a torch-capable host) and what the test suite
-    sets for deterministic, host-independent runs. A name nothing provides
-    reads as a switched-off provider, which Health reports.
+    ``ALMA_DEFAULT_AI_PROVIDER`` (``none`` or ``local``) forces the default
+    regardless of the environment — an ops escape hatch (e.g. pin ``none`` on a
+    torch-capable host) and what the test suite sets for deterministic,
+    host-independent runs. Any other value is ignored.
     """
     override = os.environ.get("ALMA_DEFAULT_AI_PROVIDER", "").strip().lower()
-    if override:
+    if override in ("none", "local"):
         return override
     from alma.ai.import_state import module_available
 
@@ -1112,7 +1111,7 @@ def init_db_schema() -> None:
             # AI/ML: Embeddings + Clustering
             # ==============================================================
             # The PK is (paper_id, model) so multiple embedding models can
-            # coexist per paper (e.g. local SPECTER2 alongside OpenAI
+            # coexist per paper (e.g. local SPECTER2 alongside another model
             # vectors). Read paths filter by the active model from
             # discovery_settings.embedding_model; switching models does not
             # destroy vectors produced under the previous model.

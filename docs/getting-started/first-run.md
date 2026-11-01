@@ -190,8 +190,6 @@ at least one AI provider in **Settings → Intelligence → AI provider**:
   SPECTER2 vectors from S2 for any paper that has one.
 * **Local SPECTER2** — runs `allenai/specter2_base` locally. Good for
   papers S2 doesn't have. Requires the `[ai]` extras.
-* **OpenAI** — optional cloud embedding provider if you already use
-  OpenAI. Switch it on first in **Settings → Add-ons**.
 
 The settings page surfaces what's installed and what isn't, with
 "Recheck" buttons that re-introspect the chosen runtime.

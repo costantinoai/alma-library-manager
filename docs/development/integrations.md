@@ -202,8 +202,7 @@ instead, and needs no settings migration.
 
 An integration adapts one outside service. An add-on is a whole optional feature:
 its routes, jobs, tables, settings and page. Alerts is one, and its Email integration
-lives inside it. The Auto tagger has no page, and OpenAI has no tables and no
-frontend at all. The test for what belongs in core is mechanical (D27): delete the
+lives inside it. The Auto tagger has no page. The test for what belongs in core is mechanical (D27): delete the
 folder and Feed, Discovery, Authors and Library still work.
 
 One add-on is one folder, `src/alma/addons/<id>/`, whose `__init__.py` declares
@@ -223,7 +222,6 @@ while still importing: routes, jobs and hooks sit behind lazy callables.
 | `core_rows` | Rows it owns inside a core table, as `CoreRows(label, table, where, params)`. The Remove dialog names them, and Remove deletes exactly them. |
 | `on_remove`, `disable_warning` | Core state to correct inside Remove's write unit, and what switching off costs right now. A warning makes Settings confirm first. |
 | `on_tag_merged` | Runs inside a tag merge's write unit, on or off, while its tables exist. An error rolls the merge back. |
-| `embedding_provider` | A provider class (`AddonEmbeddingProvider` in `alma.ai.providers`). It exists for core only while the add-on is on. `embedding_model` follows it: when a provider goes, readers go to SPECTER2, which Semantic Scholar keeps filling. |
 | `settings_defaults`, `secret_keys`, `file_roots` | What Remove deletes. File roots must sit inside the data directory. |
 | `plugins` | Integrations that exist only while the add-on is on. |
 | `home_counts`, `home_pills`, `health_checks`, `nav_badge` | Read by Home, Health and the sidebar. A hook that raises costs its own entry, never the surface. |

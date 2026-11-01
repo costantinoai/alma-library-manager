@@ -1957,6 +1957,37 @@ def _m_0053_followed_authors_are_active(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m_0054_retire_hosted_embedding_provider(conn: sqlite3.Connection) -> None:
+    """Move an install off the OpenAI provider, which left this line.
+
+    ``ai.provider`` falls back to the environment's default and ``embedding_model``
+    returns to SPECTER2, the model Semantic Scholar keeps filling. The stored key
+    goes: nothing reads it any more. Vectors of the old model stay as inert rows
+    no reader selects; Settings' Delete inactive removes them. SPECTER2 rows are
+    not touched.
+    """
+    if _table_exists(conn, "discovery_settings"):
+        conn.execute("DELETE FROM discovery_settings WHERE key = 'ai.openai_api_key'")
+        row = conn.execute(
+            "SELECT value FROM discovery_settings WHERE key = 'ai.provider'"
+        ).fetchone()
+        if row is not None and str(row[0] or "").strip().lower() not in ("none", "local"):
+            from alma.api.deps import default_ai_provider
+
+            conn.execute(
+                "UPDATE discovery_settings SET value = ? WHERE key = 'ai.provider'",
+                (default_ai_provider(),),
+            )
+        conn.execute(
+            "UPDATE discovery_settings SET value = 'allenai/specter2_base' "
+            "WHERE key = 'embedding_model' AND value <> 'allenai/specter2_base'"
+        )
+
+    from alma.core.secrets import delete_secret
+
+    delete_secret("openai.api_key")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -2011,6 +2042,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (51, "periodic_feed_refresh_window", _m_0051_periodic_feed_refresh_window),
     (52, "drop_noop_discovery_settings", _m_0052_drop_noop_discovery_settings),
     (53, "followed_authors_are_active", _m_0053_followed_authors_are_active),
+    (54, "retire_hosted_embedding_provider", _m_0054_retire_hosted_embedding_provider),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

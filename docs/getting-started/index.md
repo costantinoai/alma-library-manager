@@ -86,8 +86,6 @@ server, no Redis, no message broker.
   pool and 429s often, which stalls Discovery's graph lane.
 * (Optional) A Slack bot token if you want digest alerts — see the
   [Slack plugin](../plugins/slack.md).
-* (Optional) An `OPENAI_API_KEY` if you want OpenAI as an embedding
-  provider. It is an add-on, switched on in Settings.
 
 None of these are blocking. ALMa runs without keys; missing
 capabilities are hidden in the UI rather than producing errors.
